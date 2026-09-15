@@ -43,3 +43,7 @@ Windows has no supported public API that enumerates every camera consumer by PID
 ## Platform scope
 
 The first release targets Windows 10 and Windows 11. Linux, macOS, and Android are possible future targets after the event model and Windows backend are stable.
+
+## License
+
+MIT
