@@ -40,6 +40,9 @@ pub struct WatchOptions {
     /// Polling interval in milliseconds
     #[arg(long, default_value_t = 750, value_parser = clap::value_parser!(u64).range(100..))]
     pub interval: u64,
+    /// Send Windows desktop toast notifications on access events
+    #[arg(long)]
+    pub notify: bool,
 }
 
 #[derive(Args, Debug, Default)]

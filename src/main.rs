@@ -1,5 +1,6 @@
 mod cli;
 mod model;
+mod notify;
 mod output;
 mod platform;
 mod updater;
@@ -37,6 +38,7 @@ fn run() -> Result<u8> {
                 &options.filter,
                 options.output.json,
                 Duration::from_millis(options.interval),
+                options.notify,
             )?;
             Ok(0)
         }

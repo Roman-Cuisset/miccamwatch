@@ -21,6 +21,7 @@ pub fn watch(
     filter: &Filter,
     json: bool,
     interval: Duration,
+    notify: bool,
 ) -> Result<()> {
     let running = Arc::new(AtomicBool::new(true));
     let signal = Arc::clone(&running);
@@ -29,15 +30,18 @@ pub fn watch(
 
     let initial = monitor.snapshot(filter)?;
     let mut previous = by_key(initial);
-    for access in previous.values().cloned() {
+    for access in previous.values() {
         output::print_event(
             &AccessEvent {
                 action: Action::Start,
                 observed_at: Utc::now(),
-                access,
+                access: access.clone(),
             },
             json,
         )?;
+        if notify {
+            crate::notify::notify_access(access, Action::Start);
+        }
     }
 
     while running.load(Ordering::SeqCst) {
@@ -54,6 +58,9 @@ pub fn watch(
                     },
                     json,
                 )?;
+                if notify {
+                    crate::notify::notify_access(access, Action::Start);
+                }
             }
         }
         for (key, access) in &previous {
@@ -66,6 +73,9 @@ pub fn watch(
                     },
                     json,
                 )?;
+                if notify {
+                    crate::notify::notify_access(access, Action::Stop);
+                }
             }
         }
 

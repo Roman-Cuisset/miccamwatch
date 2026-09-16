@@ -70,18 +70,32 @@ pub enum Detection {
 }
 
 #[derive(Clone, Debug, Serialize)]
+pub struct SignatureInfo {
+    pub verified: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signer: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
 pub struct Access {
     #[serde(skip)]
     pub key: String,
     pub resource: Resource,
     pub application: String,
     pub pid: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_pid: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_name: Option<String>,
     pub executable: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signature: Option<SignatureInfo>,
     pub device: Option<String>,
     pub started_at: Option<DateTime<Utc>>,
     pub detection: Detection,
 }
-
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Action {

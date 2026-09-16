@@ -66,11 +66,7 @@ fn print_access(access: &Access, action: &str) {
                 access.resource, action, access.application, pid, device, tag
             );
         }
-        Detection::Forensic {
-            threat,
-            modules,
-            reasons,
-        } => {
+        Detection::Forensic { threat, .. } => {
             let label = match (threat, action) {
                 (_, "STOP") => "CLEARED".to_owned(),
                 _ => threat.to_string(),
@@ -79,17 +75,38 @@ fn print_access(access: &Access, action: &str) {
                 "{}  {:<14}  {:<28}  {:<10}  {}  [forensic]",
                 access.resource, label, access.application, pid, device,
             );
-            if !modules.is_empty() {
-                println!("     modules: {}", modules.join(", "));
-            }
-            for reason in reasons {
-                println!("     reason: {reason}");
-            }
-            if *threat == ThreatLevel::Unauthorized {
-                println!(
-                    "     ⚠ Recommended: terminate process / inspect executable / disconnect camera."
-                );
-            }
+        }
+    }
+
+    if let (Some(parent_pid), Some(parent_name)) = (access.parent_pid, &access.parent_name) {
+        println!("     parent: {parent_name} (PID {parent_pid})");
+    }
+
+    if let Some(sig) = &access.signature {
+        if sig.verified {
+            let signer_display = sig.signer.as_deref().unwrap_or("trusted certificate");
+            println!("     signer: {signer_display} [verified]");
+        } else if let Some(err) = &sig.error {
+            println!("     signature: {err}");
+        }
+    }
+
+    if let Detection::Forensic {
+        threat,
+        modules,
+        reasons,
+    } = &access.detection
+    {
+        if !modules.is_empty() {
+            println!("     modules: {}", modules.join(", "));
+        }
+        for reason in reasons {
+            println!("     reason: {reason}");
+        }
+        if *threat == ThreatLevel::Unauthorized {
+            println!(
+                "     ⚠ Recommended: terminate process / inspect executable / disconnect camera."
+            );
         }
     }
 }
