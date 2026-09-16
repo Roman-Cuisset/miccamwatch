@@ -7,7 +7,7 @@
 - Enumerates active microphone sessions through Windows Core Audio/WASAPI.
 - Reports the owning PID, executable path, and capture device for microphone sessions.
 - Enumerates physical camera devices through Windows Media Foundation.
-- Combines Windows privacy activity with a forensic camera-stack scan for applications that bypass privacy tracking.
+- Multi-signal camera forensic analysis: classifies camera activity into `ACTIVE`, `READY`, `SUSPECT`, and `UNAUTHORIZED`.
 - Emits start/stop events continuously.
 - Supports human-readable and JSON output.
 - Updates itself from signed-by-checksum GitHub release assets.
@@ -53,9 +53,16 @@ The executable is created at `target/release/mcw.exe`.
 
 Microphone attribution uses the documented Windows audio-session API and is marked `confirmed`.
 
-Physical cameras are enumerated through Windows Media Foundation. Camera attribution first uses Capability Access Manager activity data and is marked `inferred`. For applications that bypass that mechanism, `mcw` scans known camera-client processes for loaded DirectShow and Media Foundation capture components. These entries are printed as `SUSPECT` with `[forensic]` confidence and the exact module evidence.
+Physical cameras are enumerated through Windows Media Foundation. Camera attribution combines Windows Capability Access Manager activity data with a forensic capture-pipeline scanner.
 
-Windows has no supported public API that universally returns every camera consumer PID. A forensic result proves that the process loaded an operational camera-capture stack, but not that frames are flowing at that exact millisecond; capture modules can remain loaded briefly or be preloaded. `mcw` deliberately labels this case `SUSPECT`, never `confirmed`.
+Access is classified into four distinct operational states:
+
+| State | Confidence | Meaning |
+|---|---|---|
+| `ACTIVE` | `confirmed` / `inferred` | Camera access is verified by live system APIs or active Windows privacy tracking. |
+| `READY` | `forensic` | Camera capture pipeline is loaded, expected for the application type (video-call apps, browsers without dedicated capture processes). No frame flow is proven. |
+| `SUSPECT` | `forensic` | Camera capture pipeline is active without correlated Windows privacy activity and with anomalous signals (e.g. browser `VideoCaptureService` running without an active user session, unknown binary, temporary path). |
+| `UNAUTHORIZED` | `forensic` | Camera capture pipeline is active while the Windows privacy permission is explicitly set to `Deny`. |
 
 ## Platform scope
 

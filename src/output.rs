@@ -1,4 +1,4 @@
-use crate::model::{Access, AccessEvent, Action, Device};
+use crate::model::{Access, AccessEvent, Action, Detection, Device, ThreatLevel};
 use anyhow::Result;
 use chrono::Local;
 
@@ -49,26 +49,47 @@ pub fn print_devices(devices: &[Device], json: bool) -> Result<()> {
 }
 
 fn print_access(access: &Access, action: &str) {
-    let action = match (access.confidence, action) {
-        (crate::model::Confidence::Forensic, "ACTIVE" | "START") => "SUSPECT",
-        (crate::model::Confidence::Forensic, "STOP") => "CLEARED",
-        _ => action,
-    };
     let pid = access
         .pid
         .map(|pid| format!("PID {pid}"))
         .unwrap_or_else(|| "PID ?".to_owned());
     let device = access.device.as_deref().unwrap_or("device unavailable");
-    let confidence = match access.confidence {
-        crate::model::Confidence::Confirmed => "confirmed",
-        crate::model::Confidence::Inferred => "inferred",
-        crate::model::Confidence::Forensic => "forensic",
-    };
-    println!(
-        "{}  {:<6}  {:<28}  {:<10}  {}  [{}]",
-        access.resource, action, access.application, pid, device, confidence
-    );
-    if let Some(evidence) = &access.evidence {
-        println!("     evidence: {evidence}");
+
+    match &access.detection {
+        Detection::Api { confidence } | Detection::PrivacyActivity { confidence } => {
+            let tag = match confidence {
+                crate::model::Confidence::Confirmed => "confirmed",
+                crate::model::Confidence::Inferred => "inferred",
+            };
+            println!(
+                "{}  {:<14}  {:<28}  {:<10}  {}  [{}]",
+                access.resource, action, access.application, pid, device, tag
+            );
+        }
+        Detection::Forensic {
+            threat,
+            modules,
+            reasons,
+        } => {
+            let label = match (threat, action) {
+                (_, "STOP") => "CLEARED".to_owned(),
+                _ => threat.to_string(),
+            };
+            println!(
+                "{}  {:<14}  {:<28}  {:<10}  {}  [forensic]",
+                access.resource, label, access.application, pid, device,
+            );
+            if !modules.is_empty() {
+                println!("     modules: {}", modules.join(", "));
+            }
+            for reason in reasons {
+                println!("     reason: {reason}");
+            }
+            if *threat == ThreatLevel::Unauthorized {
+                println!(
+                    "     ⚠ Recommended: terminate process / inspect executable / disconnect camera."
+                );
+            }
+        }
     }
 }

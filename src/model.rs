@@ -18,12 +18,55 @@ impl fmt::Display for Resource {
     }
 }
 
-#[derive(Clone, Copy, Debug, Serialize)]
+/// How certain we are that the access is real.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Confidence {
+    /// API-confirmed active access (e.g. WASAPI active session).
     Confirmed,
+    /// Windows privacy activity data says access is active.
     Inferred,
-    Forensic,
+}
+
+/// Threat level assigned to a forensic camera detection.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThreatLevel {
+    /// Camera capture stack is loaded; expected for the application type.
+    Ready,
+    /// Camera capture stack is loaded with no correlated Windows privacy
+    /// event and at least one anomalous signal.
+    Suspect,
+    /// Camera access appears to occur despite an explicit Windows permission
+    /// denial.
+    Unauthorized,
+}
+
+impl fmt::Display for ThreatLevel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Ready => "READY",
+            Self::Suspect => "SUSPECT",
+            Self::Unauthorized => "UNAUTHORIZED",
+        })
+    }
+}
+
+/// How the access was detected.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "snake_case", tag = "method")]
+pub enum Detection {
+    /// Live system API (microphone WASAPI, etc.).
+    Api { confidence: Confidence },
+    /// Windows Capability Access Manager privacy activity data.
+    PrivacyActivity { confidence: Confidence },
+    /// Loaded camera-capture modules in process memory.
+    Forensic {
+        threat: ThreatLevel,
+        modules: Vec<String>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        reasons: Vec<String>,
+    },
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -36,9 +79,7 @@ pub struct Access {
     pub executable: Option<String>,
     pub device: Option<String>,
     pub started_at: Option<DateTime<Utc>>,
-    pub confidence: Confidence,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub evidence: Option<String>,
+    pub detection: Detection,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]

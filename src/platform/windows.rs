@@ -1,6 +1,6 @@
 use crate::{
     cli::Filter,
-    model::{Access, Confidence, Device, Resource},
+    model::{Access, Confidence, Detection, Device, Resource, ThreatLevel},
 };
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -45,6 +45,14 @@ use winreg::{RegKey, enums::HKEY_CURRENT_USER};
 const CONSENT_STORE: &str =
     r"Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore";
 const WINDOWS_TO_UNIX_EPOCH_100NS: i128 = 116_444_736_000_000_000;
+
+/// DLLs whose presence proves an active camera-capture pipeline.
+const CAPTURE_MODULES: &[&str] = &[
+    "kswdmcap.ax",
+    "ksproxy.ax",
+    "mfcaptureengine.dll",
+    "mfsensorgroup.dll",
+];
 
 pub struct PlatformMonitor {
     enumerator: IMMDeviceEnumerator,
@@ -148,8 +156,9 @@ impl PlatformMonitor {
                     executable,
                     device: Some(name.clone()),
                     started_at: None,
-                    confidence: Confidence::Confirmed,
-                    evidence: None,
+                    detection: Detection::Api {
+                        confidence: Confidence::Confirmed,
+                    },
                 });
             }
         }
@@ -157,6 +166,10 @@ impl PlatformMonitor {
         Ok(accesses.into_values().collect())
     }
 }
+
+// ---------------------------------------------------------------------------
+// COM / Media Foundation lifecycle
+// ---------------------------------------------------------------------------
 
 struct ComGuard;
 
@@ -194,6 +207,10 @@ impl Drop for MediaFoundationGuard {
         let _ = unsafe { MFShutdown() };
     }
 }
+
+// ---------------------------------------------------------------------------
+// Camera device enumeration (Media Foundation)
+// ---------------------------------------------------------------------------
 
 fn camera_devices() -> Result<Vec<Device>> {
     let mut attributes = None;
@@ -240,6 +257,16 @@ fn mf_string(attributes: &IMFAttributes, key: &windows::core::GUID) -> Result<St
     Ok(result)
 }
 
+// ---------------------------------------------------------------------------
+// Camera access: registry privacy activity + forensic module scan
+// ---------------------------------------------------------------------------
+
+/// Collected per-application Windows privacy permission and activity state.
+struct CameraPermission {
+    /// The `Value` field under the ConsentStore key: Allow, Deny, Prompt, or absent.
+    consent: Option<String>,
+}
+
 fn camera_accesses() -> Result<Vec<Access>> {
     let root = RegKey::predef(HKEY_CURRENT_USER);
     let Ok(webcam) = root.open_subkey(format!(r"{CONSENT_STORE}\webcam")) else {
@@ -247,45 +274,82 @@ fn camera_accesses() -> Result<Vec<Access>> {
     };
     let processes = running_processes().unwrap_or_default();
     let mut accesses = Vec::new();
-    let mut forensic_candidates = HashMap::new();
+
+    // Maps lowercase application name → (executable path, CameraPermission).
+    let mut known_apps: HashMap<String, (String, CameraPermission)> = HashMap::new();
 
     for key_name in webcam.enum_keys().filter_map(|item| item.ok()) {
         if key_name.eq_ignore_ascii_case("NonPackaged") {
             let non_packaged = webcam.open_subkey(&key_name)?;
             for encoded_path in non_packaged.enum_keys().filter_map(|item| item.ok()) {
                 let executable = encoded_path.replace('#', r"\");
+                let sub_key = non_packaged.open_subkey(&encoded_path)?;
+                let consent = sub_key.get_value::<String, _>("Value").ok();
+                let active = is_privacy_active(&sub_key);
+
                 if let Some(application) = Path::new(&executable)
                     .file_name()
                     .and_then(OsStr::to_str)
                     .map(str::to_owned)
                 {
-                    forensic_candidates.insert(application.to_ascii_lowercase(), executable);
+                    known_apps.insert(
+                        application.to_ascii_lowercase(),
+                        (
+                            executable.clone(),
+                            CameraPermission {
+                                consent: consent.clone(),
+                            },
+                        ),
+                    );
                 }
-                let key = non_packaged.open_subkey(&encoded_path)?;
-                if let Some(access) = registry_access(&key, &encoded_path, true, &processes) {
+
+                if active
+                    && let Some(access) = registry_access(&sub_key, &encoded_path, true, &processes)
+                {
                     accesses.push(access);
                 }
             }
         } else {
-            let key = webcam.open_subkey(&key_name)?;
-            if let Some(access) = registry_access(&key, &key_name, false, &processes) {
+            let sub_key = webcam.open_subkey(&key_name)?;
+            let consent = sub_key.get_value::<String, _>("Value").ok();
+            let active = is_privacy_active(&sub_key);
+
+            known_apps.insert(
+                key_name.to_ascii_lowercase(),
+                (
+                    key_name.clone(),
+                    CameraPermission {
+                        consent: consent.clone(),
+                    },
+                ),
+            );
+
+            if active && let Some(access) = registry_access(&sub_key, &key_name, false, &processes)
+            {
                 accesses.push(access);
             }
         }
     }
 
-    for (application, executable) in forensic_candidates {
-        let Some(pids) = processes.get(&application) else {
+    // Forensic scan: inspect running processes that Windows knows about but
+    // that have no active privacy event.
+    for (application, (executable, permission)) in &known_apps {
+        let Some(pids) = processes.get(application.as_str()) else {
             continue;
         };
         for &pid in pids {
-            if accesses.iter().any(|access| access.pid == Some(pid)) {
+            if accesses.iter().any(|a| a.pid == Some(pid)) {
                 continue;
             }
-            let evidence = camera_stack_evidence(pid);
-            if evidence.is_empty() {
+            let modules = capture_modules_loaded(pid);
+            if modules.is_empty() {
                 continue;
             }
+
+            let cmd = process_command_line(pid);
+            let (threat, reasons) =
+                classify_forensic(application, executable, permission, &cmd, &modules);
+
             accesses.push(Access {
                 key: format!("camera:forensic:{pid}"),
                 resource: Resource::Camera,
@@ -294,16 +358,22 @@ fn camera_accesses() -> Result<Vec<Access>> {
                 executable: Some(executable.clone()),
                 device: None,
                 started_at: None,
-                confidence: Confidence::Forensic,
-                evidence: Some(format!(
-                    "capture stack loaded outside Windows privacy tracking: {}",
-                    evidence.join(", ")
-                )),
+                detection: Detection::Forensic {
+                    threat,
+                    modules,
+                    reasons,
+                },
             });
         }
     }
 
     Ok(accesses)
+}
+
+fn is_privacy_active(key: &RegKey) -> bool {
+    let start = key.get_value::<u64, _>("LastUsedTimeStart").unwrap_or(0);
+    let stop = key.get_value::<u64, _>("LastUsedTimeStop").unwrap_or(0);
+    start > 0 && stop == 0
 }
 
 fn registry_access(
@@ -312,12 +382,6 @@ fn registry_access(
     non_packaged: bool,
     processes: &HashMap<String, Vec<u32>>,
 ) -> Option<Access> {
-    let start = key.get_value::<u64, _>("LastUsedTimeStart").ok()?;
-    let stop = key.get_value::<u64, _>("LastUsedTimeStop").ok()?;
-    if start == 0 || stop != 0 {
-        return None;
-    }
-
     let executable = non_packaged.then(|| identity.replace('#', r"\"));
     let application = executable
         .as_deref()
@@ -331,6 +395,8 @@ fn registry_access(
         .unwrap_or_default();
     let pid = (matching_pids.len() == 1).then(|| matching_pids[0]);
 
+    let start = key.get_value::<u64, _>("LastUsedTimeStart").ok()?;
+
     Some(Access {
         key: format!("camera:{}", identity.to_ascii_lowercase()),
         resource: Resource::Camera,
@@ -339,31 +405,125 @@ fn registry_access(
         executable,
         device: None,
         started_at: filetime_to_utc(start),
-        confidence: Confidence::Inferred,
-        evidence: None,
+        detection: Detection::PrivacyActivity {
+            confidence: Confidence::Inferred,
+        },
     })
 }
 
-fn camera_stack_evidence(pid: u32) -> Vec<String> {
+// ---------------------------------------------------------------------------
+// Forensic classification
+// ---------------------------------------------------------------------------
+
+/// Known browser executable names (lowercase).
+const BROWSERS: &[&str] = &[
+    "msedge.exe",
+    "chrome.exe",
+    "firefox.exe",
+    "brave.exe",
+    "opera.exe",
+    "vivaldi.exe",
+    "chromium.exe",
+    "iexplore.exe",
+];
+
+/// Known video-call / streaming applications (lowercase).
+const VIDEO_APPS: &[&str] = &[
+    "teams.exe",
+    "zoom.exe",
+    "obs64.exe",
+    "obs32.exe",
+    "telegram.exe",
+    "discord.exe",
+    "slack.exe",
+    "skype.exe",
+    "whatsapp.exe",
+    "signal.exe",
+    "webex.exe",
+    "gotomeeting.exe",
+    "ktalk.exe",
+];
+
+fn classify_forensic(
+    application: &str,
+    executable: &str,
+    permission: &CameraPermission,
+    command_line: &Option<String>,
+    _modules: &[String],
+) -> (ThreatLevel, Vec<String>) {
+    let mut reasons = Vec::new();
+    let app_lower = application.to_ascii_lowercase();
+
+    // 1. Permission explicitly denied → UNAUTHORIZED
+    if let Some(consent) = &permission.consent
+        && consent.eq_ignore_ascii_case("Deny")
+    {
+        reasons.push("Windows camera permission is denied for this application.".to_string());
+        return (ThreatLevel::Unauthorized, reasons);
+    }
+
+    // 2. No active privacy event (always true here, otherwise we'd be Inferred).
+    reasons.push("No active Windows privacy event for this camera session.".to_owned());
+
+    // 3. Browser-specific: check for VideoCaptureService subprocess.
+    let is_browser = BROWSERS.contains(&app_lower.as_str());
+    if is_browser {
+        if let Some(cmd) = command_line
+            && (cmd.contains("video_capture") || cmd.contains("VideoCaptureService"))
+        {
+            reasons.push("Browser VideoCaptureService subprocess is running.".to_owned());
+            // No correlated privacy event + browser camera service = suspicious.
+            return (ThreatLevel::Suspect, reasons);
+        }
+        // Browser without VideoCaptureService but with capture modules loaded:
+        // less concerning, likely leftover.
+        reasons.push("Browser has capture modules loaded (may be residual).".to_owned());
+        return (ThreatLevel::Ready, reasons);
+    }
+
+    // 4. Known video-call app → READY (expected to load camera stack).
+    let is_video_app = VIDEO_APPS.contains(&app_lower.as_str());
+    if is_video_app {
+        reasons.push("Known video-call application; capture stack expected.".to_owned());
+        return (ThreatLevel::Ready, reasons);
+    }
+
+    // 5. Executable path heuristics.
+    let exe_lower = executable.to_ascii_lowercase();
+    let in_temp = exe_lower.contains(r"\temp\")
+        || exe_lower.contains(r"\tmp\")
+        || exe_lower.contains(r"\downloads\");
+    if in_temp {
+        reasons.push(format!(
+            "Executable is in a temporary/downloads directory: {executable}"
+        ));
+        return (ThreatLevel::Suspect, reasons);
+    }
+
+    // 6. Unknown application with capture stack → SUSPECT by default.
+    reasons.push("Unrecognized application with camera capture stack loaded.".to_owned());
+    (ThreatLevel::Suspect, reasons)
+}
+
+// ---------------------------------------------------------------------------
+// Process inspection helpers
+// ---------------------------------------------------------------------------
+
+fn capture_modules_loaded(pid: u32) -> Vec<String> {
     let modules = process_modules(pid);
     let has = |name: &str| {
         modules
             .iter()
             .any(|module| module.eq_ignore_ascii_case(name))
     };
-    let directshow_capture = has("kswdmcap.ax");
-    let media_foundation_capture =
+    let directshow = has("kswdmcap.ax");
+    let media_foundation =
         has("MFCaptureEngine.dll") && (has("mfsensorgroup.dll") || has("ksproxy.ax"));
 
-    if directshow_capture || media_foundation_capture {
+    if directshow || media_foundation {
         modules
             .into_iter()
-            .filter(|module| {
-                matches!(
-                    module.to_ascii_lowercase().as_str(),
-                    "kswdmcap.ax" | "ksproxy.ax" | "mfcaptureengine.dll" | "mfsensorgroup.dll"
-                )
-            })
+            .filter(|module| CAPTURE_MODULES.contains(&module.to_ascii_lowercase().as_str()))
             .collect()
     } else {
         Vec::new()
@@ -394,6 +554,26 @@ fn process_modules(pid: u32) -> Vec<String> {
     modules
 }
 
+fn process_command_line(pid: u32) -> Option<String> {
+    // WMI is expensive; use a quick Win32_Process query via command line.
+    let output = std::process::Command::new("wmic")
+        .args([
+            "process",
+            "where",
+            &format!("ProcessId={pid}"),
+            "get",
+            "CommandLine",
+            "/value",
+        ])
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    text.lines()
+        .find_map(|line| line.strip_prefix("CommandLine="))
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty())
+}
+
 fn wide_array_string(value: &[u16]) -> String {
     let length = value
         .iter()
@@ -401,6 +581,10 @@ fn wide_array_string(value: &[u16]) -> String {
         .unwrap_or(value.len());
     String::from_utf16_lossy(&value[..length])
 }
+
+// ---------------------------------------------------------------------------
+// Utility
+// ---------------------------------------------------------------------------
 
 fn filetime_to_utc(value: u64) -> Option<DateTime<Utc>> {
     let unix_100ns = i128::from(value) - WINDOWS_TO_UNIX_EPOCH_100NS;
@@ -456,12 +640,7 @@ fn running_processes() -> Result<HashMap<String, Vec<u32>>> {
 
     if unsafe { Process32FirstW(snapshot, &mut entry) }.is_ok() {
         loop {
-            let length = entry
-                .szExeFile
-                .iter()
-                .position(|character| *character == 0)
-                .unwrap_or(entry.szExeFile.len());
-            let name = String::from_utf16_lossy(&entry.szExeFile[..length]).to_ascii_lowercase();
+            let name = wide_array_string(&entry.szExeFile).to_ascii_lowercase();
             processes.entry(name).or_default().push(entry.th32ProcessID);
             if unsafe { Process32NextW(snapshot, &mut entry) }.is_err() {
                 break;
