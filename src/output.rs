@@ -39,12 +39,11 @@ pub fn print_devices(devices: &[Device], json: bool) -> Result<()> {
     if json {
         println!("{}", serde_json::to_string(devices)?);
     } else if devices.is_empty() {
-        println!("No active microphone capture device found.");
+        println!("No microphone or camera device found.");
     } else {
         for device in devices {
             println!("{}  {}  {}", device.resource, device.name, device.id);
         }
-        println!("CAM  Physical camera identity is unavailable from the privacy activity backend.");
     }
     Ok(())
 }

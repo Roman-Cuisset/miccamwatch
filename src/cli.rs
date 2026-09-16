@@ -17,8 +17,10 @@ pub enum Command {
     Status(Options),
     /// Print access start and stop events until Ctrl+C
     Watch(WatchOptions),
-    /// List active microphone capture devices
+    /// List microphone and camera devices
     Devices(OutputOptions),
+    /// Download and install the latest GitHub release
+    Update,
 }
 
 #[derive(Args, Debug)]

@@ -2,6 +2,7 @@ mod cli;
 mod model;
 mod output;
 mod platform;
+mod updater;
 mod watcher;
 
 use anyhow::Result;
@@ -22,15 +23,15 @@ fn main() -> ExitCode {
 
 fn run() -> Result<u8> {
     let cli = Cli::parse();
-    let monitor = PlatformMonitor::new()?;
-
     match cli.command {
         Command::Status(options) => {
+            let monitor = PlatformMonitor::new()?;
             let accesses = monitor.snapshot(&options.filter)?;
             output::print_status(&accesses, options.output.json)?;
             Ok(u8::from(!accesses.is_empty()))
         }
         Command::Watch(options) => {
+            let monitor = PlatformMonitor::new()?;
             watcher::watch(
                 &monitor,
                 &options.filter,
@@ -40,7 +41,12 @@ fn run() -> Result<u8> {
             Ok(0)
         }
         Command::Devices(options) => {
+            let monitor = PlatformMonitor::new()?;
             output::print_devices(&monitor.devices()?, options.json)?;
+            Ok(0)
+        }
+        Command::Update => {
+            updater::update()?;
             Ok(0)
         }
     }

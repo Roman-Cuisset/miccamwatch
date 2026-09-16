@@ -4,14 +4,23 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use std::{collections::HashMap, ffi::OsStr, mem::size_of, path::Path};
+use std::{collections::HashMap, ffi::OsStr, mem::size_of, path::Path, ptr, slice};
 use windows::{
     Win32::{
         Devices::FunctionDiscovery::PKEY_Device_FriendlyName,
         Foundation::CloseHandle,
-        Media::Audio::{
-            AudioSessionStateActive, DEVICE_STATE_ACTIVE, IAudioSessionControl2,
-            IAudioSessionManager2, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator, eCapture,
+        Media::{
+            Audio::{
+                AudioSessionStateActive, DEVICE_STATE_ACTIVE, IAudioSessionControl2,
+                IAudioSessionManager2, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator,
+                eCapture,
+            },
+            MediaFoundation::{
+                IMFActivate, IMFAttributes, MF_DEVSOURCE_ATTRIBUTE_FRIENDLY_NAME,
+                MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE, MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_GUID,
+                MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_SYMBOLIC_LINK, MF_VERSION,
+                MFCreateAttributes, MFEnumDeviceSources, MFSTARTUP_FULL, MFShutdown, MFStartup,
+            },
         },
         System::{
             Com::{
@@ -38,18 +47,21 @@ const WINDOWS_TO_UNIX_EPOCH_100NS: i128 = 116_444_736_000_000_000;
 
 pub struct PlatformMonitor {
     enumerator: IMMDeviceEnumerator,
+    _media_foundation: MediaFoundationGuard,
     _com: ComGuard,
 }
 
 impl PlatformMonitor {
     pub fn new() -> Result<Self> {
         let com = ComGuard::new()?;
+        let media_foundation = MediaFoundationGuard::new()?;
         let enumerator = unsafe {
             CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
                 .context("failed to create the Windows audio device enumerator")?
         };
         Ok(Self {
             enumerator,
+            _media_foundation: media_foundation,
             _com: com,
         })
     }
@@ -84,6 +96,7 @@ impl PlatformMonitor {
                 name,
             });
         }
+        devices.extend(camera_devices()?);
         Ok(devices)
     }
 
@@ -160,6 +173,69 @@ impl Drop for ComGuard {
     fn drop(&mut self) {
         unsafe { CoUninitialize() };
     }
+}
+
+struct MediaFoundationGuard;
+
+impl MediaFoundationGuard {
+    fn new() -> Result<Self> {
+        unsafe {
+            MFStartup(MF_VERSION, MFSTARTUP_FULL)
+                .context("failed to initialize Windows Media Foundation")?;
+        }
+        Ok(Self)
+    }
+}
+
+impl Drop for MediaFoundationGuard {
+    fn drop(&mut self) {
+        let _ = unsafe { MFShutdown() };
+    }
+}
+
+fn camera_devices() -> Result<Vec<Device>> {
+    let mut attributes = None;
+    unsafe { MFCreateAttributes(&mut attributes, 1)? };
+    let attributes = attributes.context("Media Foundation returned no attribute store")?;
+    unsafe {
+        attributes.SetGUID(
+            &MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE,
+            &MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_GUID,
+        )?;
+    }
+
+    let mut raw_activates: *mut Option<IMFActivate> = ptr::null_mut();
+    let mut count = 0;
+    unsafe { MFEnumDeviceSources(&attributes, &mut raw_activates, &mut count)? };
+    let activates = unsafe { slice::from_raw_parts_mut(raw_activates, count as usize) };
+    let mut devices = Vec::with_capacity(count as usize);
+    for activate in activates.iter_mut().filter_map(Option::take) {
+        let Ok(id) = mf_string(
+            &activate,
+            &MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_SYMBOLIC_LINK,
+        ) else {
+            continue;
+        };
+        let name = mf_string(&activate, &MF_DEVSOURCE_ATTRIBUTE_FRIENDLY_NAME)
+            .unwrap_or_else(|_| id.clone());
+        devices.push(Device {
+            resource: Resource::Camera,
+            id,
+            name,
+        });
+    }
+    unsafe { CoTaskMemFree(Some(raw_activates.cast())) };
+    Ok(devices)
+}
+
+fn mf_string(attributes: &IMFAttributes, key: &windows::core::GUID) -> Result<String> {
+    let mut value = PWSTR::null();
+    let mut length = 0;
+    unsafe { attributes.GetAllocatedString(key, &mut value, &mut length)? };
+    let result =
+        unsafe { String::from_utf16_lossy(slice::from_raw_parts(value.0, length as usize)) };
+    unsafe { CoTaskMemFree(Some(value.0.cast())) };
+    Ok(result)
 }
 
 fn camera_accesses() -> Result<Vec<Access>> {
