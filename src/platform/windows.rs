@@ -28,8 +28,9 @@ use windows::{
                 CoUninitialize, STGM_READ, StructuredStorage::PropVariantToStringAlloc,
             },
             Diagnostics::ToolHelp::{
-                CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
-                TH32CS_SNAPPROCESS,
+                CreateToolhelp32Snapshot, MODULEENTRY32W, Module32FirstW, Module32NextW,
+                PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPMODULE,
+                TH32CS_SNAPMODULE32, TH32CS_SNAPPROCESS,
             },
             Threading::{
                 OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
@@ -148,6 +149,7 @@ impl PlatformMonitor {
                     device: Some(name.clone()),
                     started_at: None,
                     confidence: Confidence::Confirmed,
+                    evidence: None,
                 });
             }
         }
@@ -245,11 +247,20 @@ fn camera_accesses() -> Result<Vec<Access>> {
     };
     let processes = running_processes().unwrap_or_default();
     let mut accesses = Vec::new();
+    let mut forensic_candidates = HashMap::new();
 
     for key_name in webcam.enum_keys().filter_map(|item| item.ok()) {
         if key_name.eq_ignore_ascii_case("NonPackaged") {
             let non_packaged = webcam.open_subkey(&key_name)?;
             for encoded_path in non_packaged.enum_keys().filter_map(|item| item.ok()) {
+                let executable = encoded_path.replace('#', r"\");
+                if let Some(application) = Path::new(&executable)
+                    .file_name()
+                    .and_then(OsStr::to_str)
+                    .map(str::to_owned)
+                {
+                    forensic_candidates.insert(application.to_ascii_lowercase(), executable);
+                }
                 let key = non_packaged.open_subkey(&encoded_path)?;
                 if let Some(access) = registry_access(&key, &encoded_path, true, &processes) {
                     accesses.push(access);
@@ -262,6 +273,36 @@ fn camera_accesses() -> Result<Vec<Access>> {
             }
         }
     }
+
+    for (application, executable) in forensic_candidates {
+        let Some(pids) = processes.get(&application) else {
+            continue;
+        };
+        for &pid in pids {
+            if accesses.iter().any(|access| access.pid == Some(pid)) {
+                continue;
+            }
+            let evidence = camera_stack_evidence(pid);
+            if evidence.is_empty() {
+                continue;
+            }
+            accesses.push(Access {
+                key: format!("camera:forensic:{pid}"),
+                resource: Resource::Camera,
+                application: application.clone(),
+                pid: Some(pid),
+                executable: Some(executable.clone()),
+                device: None,
+                started_at: None,
+                confidence: Confidence::Forensic,
+                evidence: Some(format!(
+                    "capture stack loaded outside Windows privacy tracking: {}",
+                    evidence.join(", ")
+                )),
+            });
+        }
+    }
+
     Ok(accesses)
 }
 
@@ -299,7 +340,66 @@ fn registry_access(
         device: None,
         started_at: filetime_to_utc(start),
         confidence: Confidence::Inferred,
+        evidence: None,
     })
+}
+
+fn camera_stack_evidence(pid: u32) -> Vec<String> {
+    let modules = process_modules(pid);
+    let has = |name: &str| {
+        modules
+            .iter()
+            .any(|module| module.eq_ignore_ascii_case(name))
+    };
+    let directshow_capture = has("kswdmcap.ax");
+    let media_foundation_capture =
+        has("MFCaptureEngine.dll") && (has("mfsensorgroup.dll") || has("ksproxy.ax"));
+
+    if directshow_capture || media_foundation_capture {
+        modules
+            .into_iter()
+            .filter(|module| {
+                matches!(
+                    module.to_ascii_lowercase().as_str(),
+                    "kswdmcap.ax" | "ksproxy.ax" | "mfcaptureengine.dll" | "mfsensorgroup.dll"
+                )
+            })
+            .collect()
+    } else {
+        Vec::new()
+    }
+}
+
+fn process_modules(pid: u32) -> Vec<String> {
+    let Ok(snapshot) =
+        (unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid) })
+    else {
+        return Vec::new();
+    };
+    let mut entry = MODULEENTRY32W {
+        dwSize: size_of::<MODULEENTRY32W>() as u32,
+        ..Default::default()
+    };
+    let mut modules = Vec::new();
+
+    if unsafe { Module32FirstW(snapshot, &mut entry) }.is_ok() {
+        loop {
+            modules.push(wide_array_string(&entry.szModule));
+            if unsafe { Module32NextW(snapshot, &mut entry) }.is_err() {
+                break;
+            }
+        }
+    }
+    let _ = unsafe { CloseHandle(snapshot) };
+    modules
+}
+
+fn wide_array_string(value: &[u16]) -> String {
+    let length = value
+        .iter()
+        .position(|character| *character == 0)
+        .unwrap_or(value.len());
+    String::from_utf16_lossy(&value[..length])
 }
 
 fn filetime_to_utc(value: u64) -> Option<DateTime<Utc>> {

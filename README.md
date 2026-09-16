@@ -7,7 +7,7 @@
 - Enumerates active microphone sessions through Windows Core Audio/WASAPI.
 - Reports the owning PID, executable path, and capture device for microphone sessions.
 - Enumerates physical camera devices through Windows Media Foundation.
-- Infers camera activity and its application from Windows privacy activity data.
+- Combines Windows privacy activity with a forensic camera-stack scan for applications that bypass privacy tracking.
 - Emits start/stop events continuously.
 - Supports human-readable and JSON output.
 - Updates itself from signed-by-checksum GitHub release assets.
@@ -53,7 +53,9 @@ The executable is created at `target/release/mcw.exe`.
 
 Microphone attribution uses the documented Windows audio-session API and is marked `confirmed`.
 
-Physical cameras are enumerated through Windows Media Foundation. Windows has no supported public API that enumerates every camera consumer by PID. Camera attribution therefore uses Capability Access Manager activity data and is marked `inferred`. It identifies applications that Windows records—including browsers, OBS, Telegram, and the Windows Camera app—but legacy or privacy-bypassing capture paths may remain invisible. A browser can be identified as the consumer, but not its individual tab or website.
+Physical cameras are enumerated through Windows Media Foundation. Camera attribution first uses Capability Access Manager activity data and is marked `inferred`. For applications that bypass that mechanism, `mcw` scans known camera-client processes for loaded DirectShow and Media Foundation capture components. These entries are printed as `SUSPECT` with `[forensic]` confidence and the exact module evidence.
+
+Windows has no supported public API that universally returns every camera consumer PID. A forensic result proves that the process loaded an operational camera-capture stack, but not that frames are flowing at that exact millisecond; capture modules can remain loaded briefly or be preloaded. `mcw` deliberately labels this case `SUSPECT`, never `confirmed`.
 
 ## Platform scope
 

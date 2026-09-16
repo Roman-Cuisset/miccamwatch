@@ -23,6 +23,7 @@ impl fmt::Display for Resource {
 pub enum Confidence {
     Confirmed,
     Inferred,
+    Forensic,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -36,6 +37,8 @@ pub struct Access {
     pub device: Option<String>,
     pub started_at: Option<DateTime<Utc>>,
     pub confidence: Confidence,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
