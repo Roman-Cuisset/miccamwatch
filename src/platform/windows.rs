@@ -1,14 +1,19 @@
 use crate::{
     cli::Filter,
-    model::{Access, Confidence, Detection, Device, Resource, SignatureInfo, ThreatLevel},
+    model::{
+        Access, Activity, Confidence, Device, Evidence, EvidenceKind, Resource, Risk, SignatureInfo,
+    },
 };
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use std::{collections::HashMap, ffi::OsStr, mem::size_of, path::Path, ptr, slice};
+use std::{
+    cell::RefCell, collections::HashMap, ffi::OsStr, fs, mem::size_of, path::Path, ptr, slice,
+    time::SystemTime,
+};
 use windows::{
     Win32::{
         Devices::FunctionDiscovery::PKEY_Device_FriendlyName,
-        Foundation::{CloseHandle, HANDLE, HWND, NTSTATUS},
+        Foundation::{CloseHandle, FILETIME, HANDLE, HWND, NTSTATUS},
         Media::{
             Audio::{
                 AudioSessionStateActive, DEVICE_STATE_ACTIVE, IAudioSessionControl2,
@@ -47,8 +52,8 @@ use windows::{
                 TH32CS_SNAPMODULE32, TH32CS_SNAPPROCESS,
             },
             Threading::{
-                OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
-                QueryFullProcessImageNameW,
+                GetProcessTimes, OpenProcess, PROCESS_NAME_WIN32,
+                PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
             },
         },
     },
@@ -60,7 +65,8 @@ const CONSENT_STORE: &str =
     r"Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore";
 const WINDOWS_TO_UNIX_EPOCH_100NS: i128 = 116_444_736_000_000_000;
 
-/// DLLs whose presence proves an active camera-capture pipeline.
+/// DLL combinations that indicate a camera-capable capture pipeline is loaded.
+/// They do not prove that frames are currently flowing.
 const CAPTURE_MODULES: &[&str] = &[
     "kswdmcap.ax",
     "ksproxy.ax",
@@ -114,6 +120,7 @@ windows::core::link!("ntdll.dll" "system" fn NtQueryInformationProcess(
 
 pub struct PlatformMonitor {
     enumerator: IMMDeviceEnumerator,
+    signature_cache: RefCell<HashMap<String, CachedSignature>>,
     _media_foundation: MediaFoundationGuard,
     _com: ComGuard,
 }
@@ -128,6 +135,7 @@ impl PlatformMonitor {
         };
         Ok(Self {
             enumerator,
+            signature_cache: RefCell::new(HashMap::new()),
             _media_foundation: media_foundation,
             _com: com,
         })
@@ -139,7 +147,7 @@ impl PlatformMonitor {
             accesses.extend(self.microphone_accesses()?);
         }
         if filter.includes_camera() {
-            accesses.extend(camera_accesses()?);
+            accesses.extend(self.camera_accesses()?);
         }
         accesses.sort_by(|left, right| left.key.cmp(&right.key));
         Ok(accesses)
@@ -212,12 +220,16 @@ impl PlatformMonitor {
                     None => (None, None),
                 };
 
-                let signature = executable.as_deref().map(verify_signature);
-
-                let key = format!("microphone:{id}:{pid}");
+                let signature = executable
+                    .as_deref()
+                    .map(|path| self.cached_signature(path));
+                let key = format!("microphone:{id}:{}", process_identity(pid));
                 accesses.entry(key.clone()).or_insert(Access {
                     key,
                     resource: Resource::Microphone,
+                    activity: Activity::Active,
+                    risk: Risk::Normal,
+                    confidence: Confidence::High,
                     application,
                     pid: Some(pid),
                     parent_pid,
@@ -226,15 +238,49 @@ impl PlatformMonitor {
                     signature,
                     device: Some(name.clone()),
                     started_at: None,
-                    detection: Detection::Api {
-                        confidence: Confidence::Confirmed,
-                    },
+                    modules: Vec::new(),
+                    evidence: vec![Evidence::new(
+                        EvidenceKind::LiveApi,
+                        "WASAPI",
+                        "An active capture audio session is attributed to this PID.",
+                    )],
                 });
             }
         }
 
         Ok(accesses.into_values().collect())
     }
+
+    fn cached_signature(&self, path: &str) -> SignatureInfo {
+        let modified = fs::metadata(path)
+            .and_then(|metadata| metadata.modified())
+            .ok();
+        let key = path.to_ascii_lowercase();
+        if let Some(cached) = self.signature_cache.borrow().get(&key)
+            && cached.modified == modified
+        {
+            return cached.info.clone();
+        }
+        let info = verify_signature(path);
+        self.signature_cache.borrow_mut().insert(
+            key,
+            CachedSignature {
+                modified,
+                info: info.clone(),
+            },
+        );
+        info
+    }
+
+    fn camera_accesses(&self) -> Result<Vec<Access>> {
+        camera_accesses(|path| self.cached_signature(path))
+    }
+}
+
+#[derive(Clone)]
+struct CachedSignature {
+    modified: Option<SystemTime>,
+    info: SignatureInfo,
 }
 
 // ---------------------------------------------------------------------------
@@ -335,14 +381,13 @@ struct CameraPermission {
     consent: Option<String>,
 }
 
-fn camera_accesses() -> Result<Vec<Access>> {
+fn camera_accesses(mut signature_for: impl FnMut(&str) -> SignatureInfo) -> Result<Vec<Access>> {
     let root = RegKey::predef(HKEY_CURRENT_USER);
     let Ok(webcam) = root.open_subkey(format!(r"{CONSENT_STORE}\webcam")) else {
         return Ok(Vec::new());
     };
     let processes = ProcessTable::load();
     let mut accesses = Vec::new();
-
     let mut known_apps: HashMap<String, (String, CameraPermission)> = HashMap::new();
 
     for key_name in webcam.enum_keys().filter_map(|item| item.ok()) {
@@ -352,8 +397,6 @@ fn camera_accesses() -> Result<Vec<Access>> {
                 let executable = encoded_path.replace('#', r"\");
                 let sub_key = non_packaged.open_subkey(&encoded_path)?;
                 let consent = sub_key.get_value::<String, _>("Value").ok();
-                let active = is_privacy_active(&sub_key);
-
                 if let Some(application) = Path::new(&executable)
                     .file_name()
                     .and_then(OsStr::to_str)
@@ -364,9 +407,14 @@ fn camera_accesses() -> Result<Vec<Access>> {
                         (executable.clone(), CameraPermission { consent }),
                     );
                 }
-
-                if active
-                    && let Some(access) = registry_access(&sub_key, &encoded_path, true, &processes)
+                if is_privacy_active(&sub_key)
+                    && let Some(access) = registry_access(
+                        &sub_key,
+                        &encoded_path,
+                        true,
+                        &processes,
+                        &mut signature_for,
+                    )
                 {
                     accesses.push(access);
                 }
@@ -374,57 +422,53 @@ fn camera_accesses() -> Result<Vec<Access>> {
         } else {
             let sub_key = webcam.open_subkey(&key_name)?;
             let consent = sub_key.get_value::<String, _>("Value").ok();
-            let active = is_privacy_active(&sub_key);
-
             known_apps.insert(
                 key_name.to_ascii_lowercase(),
                 (key_name.clone(), CameraPermission { consent }),
             );
-
-            if active && let Some(access) = registry_access(&sub_key, &key_name, false, &processes)
+            if is_privacy_active(&sub_key)
+                && let Some(access) =
+                    registry_access(&sub_key, &key_name, false, &processes, &mut signature_for)
             {
                 accesses.push(access);
             }
         }
     }
 
-    // Forensic scan: inspect running processes that Windows knows about but
-    // that have no active privacy event.
     for (application, (executable, permission)) in &known_apps {
         let Some(pids) = processes.by_name.get(application.as_str()) else {
             continue;
         };
         for &pid in pids {
-            if accesses.iter().any(|a| a.pid == Some(pid)) {
+            if accesses.iter().any(|access| access.pid == Some(pid)) {
                 continue;
             }
             let modules = capture_modules_loaded(pid);
             if modules.is_empty() {
                 continue;
             }
-
-            let cmd = process_command_line(pid);
+            let command_line = process_command_line(pid);
             let parent_info = processes.parent(pid);
-            let signature = verify_signature(executable);
-
-            let (threat, reasons) = classify_forensic(
+            let signature = signature_for(executable);
+            let assessment = classify_forensic(
                 application,
                 executable,
                 permission,
-                &cmd,
-                &parent_info,
+                command_line.as_deref(),
+                parent_info.as_ref(),
                 &signature,
                 &modules,
             );
-
             let (parent_pid, parent_name) = match parent_info {
-                Some((ppid, pname)) => (Some(ppid), Some(pname)),
+                Some((ppid, name)) => (Some(ppid), Some(name)),
                 None => (None, None),
             };
-
             accesses.push(Access {
-                key: format!("camera:forensic:{pid}"),
+                key: format!("camera:forensic:{}", process_identity(pid)),
                 resource: Resource::Camera,
+                activity: Activity::Ready,
+                risk: assessment.risk,
+                confidence: assessment.confidence,
                 application: application.clone(),
                 pid: Some(pid),
                 parent_pid,
@@ -433,15 +477,11 @@ fn camera_accesses() -> Result<Vec<Access>> {
                 signature: Some(signature),
                 device: None,
                 started_at: None,
-                detection: Detection::Forensic {
-                    threat,
-                    modules,
-                    reasons,
-                },
+                modules,
+                evidence: assessment.evidence,
             });
         }
     }
-
     Ok(accesses)
 }
 
@@ -456,6 +496,7 @@ fn registry_access(
     identity: &str,
     non_packaged: bool,
     processes: &ProcessTable,
+    signature_for: &mut impl FnMut(&str) -> SignatureInfo,
 ) -> Option<Access> {
     let executable = non_packaged.then(|| identity.replace('#', r"\"));
     let application = executable
@@ -470,18 +511,18 @@ fn registry_access(
         .map(Vec::as_slice)
         .unwrap_or_default();
     let pid = (matching_pids.len() == 1).then(|| matching_pids[0]);
-
-    let (parent_pid, parent_name) = match pid.and_then(|p| processes.parent(p)) {
-        Some((ppid, pname)) => (Some(ppid), Some(pname)),
+    let (parent_pid, parent_name) = match pid.and_then(|value| processes.parent(value)) {
+        Some((ppid, name)) => (Some(ppid), Some(name)),
         None => (None, None),
     };
-
-    let signature = executable.as_deref().map(verify_signature);
+    let signature = executable.as_deref().map(signature_for);
     let start = key.get_value::<u64, _>("LastUsedTimeStart").ok()?;
-
     Some(Access {
         key: format!("camera:{}", identity.to_ascii_lowercase()),
         resource: Resource::Camera,
+        activity: Activity::Active,
+        risk: Risk::Normal,
+        confidence: Confidence::Medium,
         application,
         pid,
         parent_pid,
@@ -490,9 +531,12 @@ fn registry_access(
         signature,
         device: None,
         started_at: filetime_to_utc(start),
-        detection: Detection::PrivacyActivity {
-            confidence: Confidence::Inferred,
-        },
+        modules: Vec::new(),
+        evidence: vec![Evidence::new(
+            EvidenceKind::PrivacyActivity,
+            "CapabilityAccessManager",
+            "Windows reports an open camera privacy activity interval.",
+        )],
     })
 }
 
@@ -500,45 +544,81 @@ fn registry_access(
 // Forensic classification with Authenticode and Parent analysis
 // ---------------------------------------------------------------------------
 
+struct Assessment {
+    risk: Risk,
+    confidence: Confidence,
+    evidence: Vec<Evidence>,
+}
+
 fn classify_forensic(
     application: &str,
     executable: &str,
     permission: &CameraPermission,
-    command_line: &Option<String>,
-    parent_info: &Option<(u32, String)>,
+    command_line: Option<&str>,
+    parent_info: Option<&(u32, String)>,
     signature: &SignatureInfo,
-    _modules: &[String],
-) -> (ThreatLevel, Vec<String>) {
-    let mut reasons = Vec::new();
+    modules: &[String],
+) -> Assessment {
+    let mut evidence = vec![Evidence::new(
+        EvidenceKind::CaptureModule,
+        "Toolhelp32",
+        format!(
+            "Camera-capable modules are loaded: {}. This does not prove frame flow.",
+            modules.join(", ")
+        ),
+    )];
     let app_lower = application.to_ascii_lowercase();
+    let is_browser = BROWSERS.contains(&app_lower.as_str());
+    let is_video_app = VIDEO_APPS.contains(&app_lower.as_str());
+    let mut risk = Risk::Unexplained;
 
-    // 1. Permission explicitly denied → UNAUTHORIZED
-    if let Some(consent) = &permission.consent
-        && consent.eq_ignore_ascii_case("Deny")
-    {
-        reasons.push("Windows camera permission is denied for this application.".to_string());
-        return (ThreatLevel::Unauthorized, reasons);
-    }
-
-    // 2. Add signature details to reasons
-    if signature.verified {
-        if let Some(signer) = &signature.signer {
-            reasons.push(format!("Verified digital signature: {signer}"));
-        } else {
-            reasons.push("Verified digital signature (trusted certificate).".to_owned());
-        }
-    } else if let Some(err) = &signature.error {
-        reasons.push(format!("Signature status: {err}"));
-    }
-
-    // 3. Parent process details
-    if let Some((parent_pid, parent_name)) = parent_info {
-        reasons.push(format!(
-            "Launched by parent process: {parent_name} (PID {parent_pid})"
+    if let Some(consent) = &permission.consent {
+        evidence.push(Evidence::new(
+            EvidenceKind::Permission,
+            "CapabilityAccessManager",
+            format!("Windows camera permission is {consent} for this application."),
         ));
-        let p_lower = parent_name.to_ascii_lowercase();
+        if consent.eq_ignore_ascii_case("Deny") {
+            return Assessment {
+                risk: Risk::Blocked,
+                confidence: Confidence::Low,
+                evidence,
+            };
+        }
+    }
+
+    if signature.verified {
+        evidence.push(Evidence::new(
+            EvidenceKind::Signature,
+            "WinVerifyTrust",
+            signature
+                .signer
+                .as_ref()
+                .map(|signer| format!("Trusted Authenticode signature: {signer}."))
+                .unwrap_or_else(|| {
+                    "Trusted Authenticode signature; signer identity unavailable.".to_owned()
+                }),
+        ));
+    } else {
+        risk = Risk::Suspicious;
+        evidence.push(Evidence::new(
+            EvidenceKind::Signature,
+            "WinVerifyTrust",
+            signature
+                .error
+                .clone()
+                .unwrap_or_else(|| "Signature verification failed.".to_owned()),
+        ));
+    }
+
+    if let Some((parent_pid, parent_name)) = parent_info {
+        evidence.push(Evidence::new(
+            EvidenceKind::ProcessLineage,
+            "Toolhelp32",
+            format!("Parent is {parent_name} (PID {parent_pid})."),
+        ));
         if matches!(
-            p_lower.as_str(),
+            parent_name.to_ascii_lowercase().as_str(),
             "cmd.exe"
                 | "powershell.exe"
                 | "pwsh.exe"
@@ -547,64 +627,50 @@ fn classify_forensic(
                 | "mshta.exe"
                 | "rundll32.exe"
         ) {
-            reasons.push(format!(
-                "Suspicious parent: started by script interpreter ({parent_name})."
-            ));
-            return (ThreatLevel::Suspect, reasons);
+            risk = Risk::Suspicious;
         }
     }
 
-    // 4. Impersonation detection:
-    // If the binary claims to be a known browser or video app, it MUST have a valid digital signature!
-    let is_browser = BROWSERS.contains(&app_lower.as_str());
-    let is_video_app = VIDEO_APPS.contains(&app_lower.as_str());
-
-    if (is_browser || is_video_app) && !signature.verified {
-        reasons.push(format!(
-            "CRITICAL: Binary is named '{application}' but lacks a valid digital signature (possible impersonation)!"
+    if let Some(command_line) = command_line
+        && (command_line.contains("video_capture") || command_line.contains("VideoCaptureService"))
+    {
+        evidence.push(Evidence::new(
+            EvidenceKind::CommandLine,
+            "NtQueryInformationProcess",
+            "A browser video-capture service is present, but current frame flow is unproven.",
         ));
-        return (ThreatLevel::Suspect, reasons);
     }
 
-    // 5. No active privacy event
-    reasons.push("No active Windows privacy event for this camera session.".to_owned());
-
-    // 6. Browser-specific analysis
-    if is_browser {
-        if let Some(cmd) = command_line
-            && (cmd.contains("video_capture") || cmd.contains("VideoCaptureService"))
-        {
-            reasons.push(
-                "Browser VideoCaptureService subprocess is running without active Windows privacy tracking."
-                    .to_owned(),
-            );
-            return (ThreatLevel::Suspect, reasons);
+    if is_browser || is_video_app {
+        evidence.push(Evidence::new(
+            EvidenceKind::ApplicationProfile,
+            "mcw profile",
+            if is_browser {
+                "Known browser; a loaded capture pipeline can be idle or residual."
+            } else {
+                "Known video application; a loaded capture pipeline is expected."
+            },
+        ));
+        if signature.verified && risk != Risk::Suspicious {
+            risk = Risk::Normal;
         }
-        reasons.push("Browser has capture modules loaded (may be residual).".to_owned());
-        return (ThreatLevel::Ready, reasons);
-    }
-
-    // 7. Known video-call app with verified signature → READY
-    if is_video_app {
-        reasons.push("Known video-call application; capture stack expected.".to_owned());
-        return (ThreatLevel::Ready, reasons);
-    }
-
-    // 8. Executable path heuristics
-    let exe_lower = executable.to_ascii_lowercase();
-    let in_temp = exe_lower.contains(r"\temp\")
-        || exe_lower.contains(r"\tmp\")
-        || exe_lower.contains(r"\downloads\");
-    if in_temp {
-        reasons.push(format!(
-            "Executable is in a temporary or downloads directory: {executable}"
+    } else if executable.to_ascii_lowercase().contains(r"\temp\")
+        || executable.to_ascii_lowercase().contains(r"\tmp\")
+        || executable.to_ascii_lowercase().contains(r"\downloads\")
+    {
+        risk = Risk::Suspicious;
+        evidence.push(Evidence::new(
+            EvidenceKind::FileLocation,
+            "filesystem path",
+            format!("Executable is in a temporary or downloads directory: {executable}"),
         ));
-        return (ThreatLevel::Suspect, reasons);
     }
 
-    // 9. Unknown application with capture stack → SUSPECT
-    reasons.push("Unrecognized application with camera capture stack loaded.".to_owned());
-    (ThreatLevel::Suspect, reasons)
+    Assessment {
+        risk,
+        confidence: Confidence::Low,
+        evidence,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -839,6 +905,26 @@ fn device_name(device: &IMMDevice) -> Result<String> {
     result
 }
 
+fn process_identity(pid: u32) -> String {
+    let Some(created) = process_creation_time(pid) else {
+        return pid.to_string();
+    };
+    format!("{pid}:{created}")
+}
+
+fn process_creation_time(pid: u32) -> Option<u64> {
+    let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()? };
+    let mut created = FILETIME::default();
+    let mut exited = FILETIME::default();
+    let mut kernel = FILETIME::default();
+    let mut user = FILETIME::default();
+    let result =
+        unsafe { GetProcessTimes(process, &mut created, &mut exited, &mut kernel, &mut user) };
+    let _ = unsafe { CloseHandle(process) };
+    result.ok()?;
+    Some((u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime))
+}
+
 fn process_path(pid: u32) -> Option<String> {
     let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()? };
     let mut buffer = vec![0u16; 32_768];
@@ -917,5 +1003,78 @@ impl ProcessTable {
             .map(|p| p.name.clone())
             .unwrap_or_else(|| format!("PID {}", node.parent_pid));
         Some((node.parent_pid, parent_name))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn signature(verified: bool) -> SignatureInfo {
+        SignatureInfo {
+            verified,
+            signer: verified.then(|| "Expected Publisher".to_owned()),
+            error: (!verified).then(|| "unsigned".to_owned()),
+        }
+    }
+
+    #[test]
+    fn denied_permission_is_blocked_not_unauthorized() {
+        let assessment = classify_forensic(
+            "camera.exe",
+            r"C:\camera.exe",
+            &CameraPermission {
+                consent: Some("Deny".to_owned()),
+            },
+            None,
+            None,
+            &signature(true),
+            &["mfcaptureengine.dll".to_owned()],
+        );
+        assert_eq!(assessment.risk, Risk::Blocked);
+        assert_eq!(assessment.confidence, Confidence::Low);
+    }
+
+    #[test]
+    fn trusted_browser_pipeline_is_normal_but_low_confidence() {
+        let assessment = classify_forensic(
+            "msedge.exe",
+            r"C:\Program Files\Microsoft\Edge\msedge.exe",
+            &CameraPermission { consent: None },
+            Some("--type=utility --utility-sub-type=VideoCaptureService"),
+            None,
+            &signature(true),
+            &["mfcaptureengine.dll".to_owned()],
+        );
+        assert_eq!(assessment.risk, Risk::Normal);
+        assert_eq!(assessment.confidence, Confidence::Low);
+    }
+
+    #[test]
+    fn unsigned_known_application_is_suspicious() {
+        let assessment = classify_forensic(
+            "zoom.exe",
+            r"C:\Apps\zoom.exe",
+            &CameraPermission { consent: None },
+            None,
+            None,
+            &signature(false),
+            &["kswdmcap.ax".to_owned()],
+        );
+        assert_eq!(assessment.risk, Risk::Suspicious);
+    }
+
+    #[test]
+    fn temporary_unknown_capture_binary_is_suspicious() {
+        let assessment = classify_forensic(
+            "capture.exe",
+            r"C:\Users\person\AppData\Local\Temp\capture.exe",
+            &CameraPermission { consent: None },
+            None,
+            Some(&(10, "explorer.exe".to_owned())),
+            &signature(true),
+            &["kswdmcap.ax".to_owned()],
+        );
+        assert_eq!(assessment.risk, Risk::Suspicious);
     }
 }

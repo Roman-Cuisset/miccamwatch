@@ -19,6 +19,8 @@ pub enum Command {
     Watch(WatchOptions),
     /// List microphone and camera devices
     Devices(OutputOptions),
+    /// Explain all evidence currently associated with one process
+    Explain(ExplainOptions),
     /// Download and install the latest GitHub release
     Update,
 }
@@ -43,6 +45,14 @@ pub struct WatchOptions {
     /// Send Windows desktop toast notifications on access events
     #[arg(long)]
     pub notify: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct ExplainOptions {
+    /// Process identifier to inspect
+    pub pid: u32,
+    #[command(flatten)]
+    pub output: OutputOptions,
 }
 
 #[derive(Args, Debug, Default)]

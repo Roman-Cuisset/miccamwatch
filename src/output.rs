@@ -1,20 +1,26 @@
-use crate::model::{Access, AccessEvent, Action, Detection, Device, ThreatLevel};
+use crate::model::{Access, AccessEvent, Action, Device, Risk, SCHEMA_VERSION, StatusDocument};
 use anyhow::Result;
 use chrono::Local;
 
 pub fn print_status(accesses: &[Access], json: bool) -> Result<()> {
     if json {
-        println!("{}", serde_json::to_string(accesses)?);
+        println!(
+            "{}",
+            serde_json::to_string(&StatusDocument {
+                schema_version: SCHEMA_VERSION,
+                accesses,
+            })?
+        );
         return Ok(());
     }
 
     if accesses.is_empty() {
-        println!("No microphone or camera access detected.");
+        println!("No microphone or camera activity detected.");
         return Ok(());
     }
 
     for access in accesses {
-        print_access(access, "ACTIVE");
+        print_access(access, None);
     }
     Ok(())
 }
@@ -25,13 +31,9 @@ pub fn print_event(event: &AccessEvent, json: bool) -> Result<()> {
         return Ok(());
     }
 
-    let action = match event.action {
-        Action::Start => "START",
-        Action::Stop => "STOP",
-    };
     let time = event.observed_at.with_timezone(&Local).format("%H:%M:%S");
     print!("{time}  ");
-    print_access(&event.access, action);
+    print_access(&event.access, Some(event.action));
     Ok(())
 }
 
@@ -48,35 +50,26 @@ pub fn print_devices(devices: &[Device], json: bool) -> Result<()> {
     Ok(())
 }
 
-fn print_access(access: &Access, action: &str) {
+pub fn print_explanation(accesses: &[Access], json: bool) -> Result<()> {
+    print_status(accesses, json)
+}
+
+fn print_access(access: &Access, action: Option<Action>) {
     let pid = access
         .pid
         .map(|pid| format!("PID {pid}"))
         .unwrap_or_else(|| "PID ?".to_owned());
     let device = access.device.as_deref().unwrap_or("device unavailable");
+    let state = match action {
+        Some(Action::Stop) => "STOPPED".to_owned(),
+        Some(Action::Update) => "UPDATED".to_owned(),
+        _ => access.activity.to_string(),
+    };
 
-    match &access.detection {
-        Detection::Api { confidence } | Detection::PrivacyActivity { confidence } => {
-            let tag = match confidence {
-                crate::model::Confidence::Confirmed => "confirmed",
-                crate::model::Confidence::Inferred => "inferred",
-            };
-            println!(
-                "{}  {:<14}  {:<28}  {:<10}  {}  [{}]",
-                access.resource, action, access.application, pid, device, tag
-            );
-        }
-        Detection::Forensic { threat, .. } => {
-            let label = match (threat, action) {
-                (_, "STOP") => "CLEARED".to_owned(),
-                _ => threat.to_string(),
-            };
-            println!(
-                "{}  {:<14}  {:<28}  {:<10}  {}  [forensic]",
-                access.resource, label, access.application, pid, device,
-            );
-        }
-    }
+    println!(
+        "{}  {:<10}  {:<12}  {:<28}  {:<10}  {}  [confidence: {}]",
+        access.resource, state, access.risk, access.application, pid, device, access.confidence,
+    );
 
     if let (Some(parent_pid), Some(parent_name)) = (access.parent_pid, &access.parent_name) {
         println!("     parent: {parent_name} (PID {parent_pid})");
@@ -84,29 +77,26 @@ fn print_access(access: &Access, action: &str) {
 
     if let Some(sig) = &access.signature {
         if sig.verified {
-            let signer_display = sig.signer.as_deref().unwrap_or("trusted certificate");
+            let signer_display = sig
+                .signer
+                .as_deref()
+                .unwrap_or("trusted certificate; signer unavailable");
             println!("     signer: {signer_display} [verified]");
         } else if let Some(err) = &sig.error {
             println!("     signature: {err}");
         }
     }
 
-    if let Detection::Forensic {
-        threat,
-        modules,
-        reasons,
-    } = &access.detection
-    {
-        if !modules.is_empty() {
-            println!("     modules: {}", modules.join(", "));
-        }
-        for reason in reasons {
-            println!("     reason: {reason}");
-        }
-        if *threat == ThreatLevel::Unauthorized {
-            println!(
-                "     ⚠ Recommended: terminate process / inspect executable / disconnect camera."
-            );
-        }
+    if !access.modules.is_empty() {
+        println!("     modules: {}", access.modules.join(", "));
+    }
+    for evidence in &access.evidence {
+        println!(
+            "     evidence: {:?} via {} — {}",
+            evidence.kind, evidence.source, evidence.detail
+        );
+    }
+    if access.risk >= Risk::Suspicious {
+        println!("     recommended: inspect the process and executable before taking action.");
     }
 }

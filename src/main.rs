@@ -47,6 +47,16 @@ fn run() -> Result<u8> {
             output::print_devices(&monitor.devices()?, options.json)?;
             Ok(0)
         }
+        Command::Explain(options) => {
+            let monitor = PlatformMonitor::new()?;
+            let accesses: Vec<_> = monitor
+                .snapshot(&Default::default())?
+                .into_iter()
+                .filter(|access| access.pid == Some(options.pid))
+                .collect();
+            output::print_explanation(&accesses, options.output.json)?;
+            Ok(u8::from(accesses.is_empty()))
+        }
         Command::Update => {
             updater::update()?;
             Ok(0)

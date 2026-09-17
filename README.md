@@ -1,21 +1,19 @@
 # miccamwatch
 
-`mcw` is a lightweight Windows command-line monitor that shows which applications are using the microphone or camera.
+`mcw` is a lightweight Windows command-line monitor that attributes microphone and camera signals to local processes and explains the evidence behind each assessment.
 
 ## Current capabilities
 
 - Enumerates active microphone sessions through Windows Core Audio/WASAPI.
-- Reports the owning PID, parent PID/process, executable path, and capture device for microphone sessions.
+- Reports PID, stable process instance, parent process, executable, signature, and capture device.
 - Enumerates physical camera devices through Windows Media Foundation.
-- Multi-signal camera forensic analysis: classifies camera activity into `ACTIVE`, `READY`, `SUSPECT`, and `UNAUTHORIZED`.
-- Authenticode digital signature verification: validates executable signatures and signer certificates directly via WinTrust.
-- Process lineage tracking: maps parent processes to identify which launcher/script invoked the capture service.
-- Native NT inspection: queries command lines directly via `NtQueryInformationProcess` without external helpers (`wmic`).
-- Desktop toast notifications: optional desktop alerts on capture events via `mcw watch --notify`.
-- Emits start/stop events continuously.
-- Supports human-readable and structured JSON output for SIEM/logging pipelines.
-- Updates itself from signed-by-checksum GitHub release assets.
+- Correlates camera privacy activity, loaded capture modules, process lineage, command line, permission, file location, and Authenticode status.
+- Separates observable activity from security risk and confidence.
+- Caches Authenticode verification by executable path and modification time.
+- Emits deduplicated start, update, and stop events.
+- Supports human-readable and versioned JSON output.
 - Runs without administrator privileges.
+
 ## Commands
 
 ```console
@@ -26,21 +24,63 @@ mcw watch
 mcw watch --notify
 mcw watch --interval 250
 mcw devices
+mcw explain 1234
+mcw explain 1234 --json
 mcw update
+```
 
-`status` exits with code `0` when no access is detected, `1` when access is active, and `2` on error.
+`status` exits with code `0` when no activity is detected, `1` when activity is reported, and `2` on error. `explain` returns `1` when the requested PID has no current observation.
+
+## Assessment model
+
+The three assessment dimensions are intentionally independent:
+
+| Field | Values | Meaning |
+|---|---|---|
+| `activity` | `active`, `ready` | `active` is reported by a live OS activity source; `ready` means a camera-capable pipeline is loaded but frame flow is unproven. |
+| `risk` | `normal`, `unexplained`, `suspicious`, `blocked` | Security interpretation of all collected evidence. `blocked` means Windows permission is denied; it does not claim that frames bypassed Windows. |
+| `confidence` | `high`, `medium`, `low` | Strength of the activity claim, not a probability or threat score. |
+
+Microphone attribution uses an active WASAPI capture session and has high confidence. An open Capability Access Manager interval provides medium-confidence camera activity. Loaded camera modules provide low-confidence readiness only.
+
+`mcw` deliberately has no `unauthorized` result: user-mode module inspection cannot prove that video frames were acquired despite a denied permission. It reports `blocked` and exposes the underlying evidence instead.
+
+## JSON contract
+
+Status JSON is an object with an explicit schema version:
+
+```json
+{
+  "schema_version": 1,
+  "accesses": []
+}
+```
+
+Watch events are newline-delimited JSON objects with `schema_version`, `action`, `observed_at`, and the flattened access assessment. Consumers must reject unsupported schema versions instead of guessing field semantics.
+
+## Detection limits
+
+- Loaded Media Foundation or DirectShow modules indicate capture capability, not current frame flow.
+- Capability Access Manager values can be historical, delayed, or unavailable.
+- Protected or higher-privilege processes can prevent path, command-line, module, or signature inspection.
+- A trusted Authenticode signature proves integrity and chain acceptance under the configured Windows policy; it does not prove benign behavior.
+- Signer identity may be unavailable for catalog-signed files even when WinVerifyTrust accepts the signature.
+- Application-name profiles add context only. They are not allowlists and do not establish trust by themselves.
+- `--notify` currently uses Windows PowerShell to call the WinRT toast API. Process-derived text is passed through environment variables rather than interpolated into PowerShell source.
+
+The output is suitable for diagnostics and monitoring. It is not a forensic proof that camera frames were captured.
 
 ## Install
 
 Download `miccamwatch-windows-x86_64.zip` from the [latest release](https://github.com/Roman-Cuisset/miccamwatch/releases/latest), extract `mcw.exe`, and place it in a directory listed in `PATH`.
 
-Upgrade later with one command:
+Upgrade later with:
 
 ```console
 mcw update
 ```
 
-The updater downloads the latest Windows release and verifies its SHA-256 checksum before replacing the running executable.
+The updater verifies the SHA-256 checksum published with the GitHub release. Because the archive and checksum share the same release channel, this protects integrity but is not an independent publisher signature.
 
 ## Build from source
 
@@ -52,23 +92,9 @@ cargo build --release
 
 The executable is created at `target/release/mcw.exe`.
 
-## Detection guarantees
-
-Microphone attribution uses the documented Windows audio-session API and is marked `confirmed`.
-
-Physical cameras are enumerated through Windows Media Foundation. Camera attribution combines Windows Capability Access Manager activity data with a forensic capture-pipeline scanner.
-
-Access is classified into four distinct operational states:
-
-| State | Confidence | Meaning |
-|---|---|---|
-| `ACTIVE` | `confirmed` / `inferred` | Camera access is verified by live system APIs or active Windows privacy tracking. |
-| `READY` | `forensic` | Camera capture pipeline is loaded, expected for the application type (video-call apps, browsers without dedicated capture processes). No frame flow is proven. |
-| `SUSPECT` | `forensic` | Camera capture pipeline is active without correlated Windows privacy activity and with anomalous signals (e.g. browser `VideoCaptureService` running without an active user session, unknown or unsigned binary, temporary directory, suspicious parent). |
-| `UNAUTHORIZED` | `forensic` | Camera capture pipeline is active while the Windows privacy permission is explicitly set to `Deny`. |
 ## Platform scope
 
-The first release targets Windows 10 and Windows 11. Linux, macOS, and Android are possible future targets after the event model and Windows backend are stable.
+Windows 10 and Windows 11 are supported. Linux and macOS would require separate evidence collectors while preserving the versioned assessment model.
 
 ## License
 
