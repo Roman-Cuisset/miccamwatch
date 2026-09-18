@@ -1,12 +1,20 @@
-use crate::model::{
-    Access, AccessEvent, Action, Activity, Confidence, Device, DiagnosticCheck, DiagnosticStatus,
-    Resource, Risk, SCHEMA_VERSION, Snapshot, StatusDocument,
+use crate::{
+    i18n::Language,
+    model::{
+        Access, AccessEvent, Action, Device, DiagnosticCheck, Risk, SCHEMA_VERSION, Snapshot,
+        StatusDocument,
+    },
 };
 use anyhow::Result;
 use chrono::Local;
 use colored::Colorize;
 
-pub fn print_status(snapshot: &Snapshot, json: bool, min_risk: Option<Risk>) -> Result<()> {
+pub fn print_status(
+    snapshot: &Snapshot,
+    json: bool,
+    min_risk: Option<Risk>,
+    lang: Language,
+) -> Result<()> {
     if json {
         println!(
             "{}",
@@ -26,12 +34,7 @@ pub fn print_status(snapshot: &Snapshot, json: bool, min_risk: Option<Risk>) -> 
         .filter(|a| should_display(a, min_risk))
         .collect();
     if visible.is_empty() {
-        println!(
-            "{}",
-            "✔ No microphone or camera activity detected."
-                .green()
-                .bold()
-        );
+        println!("{}", lang.no_activity().green().bold());
     }
     for collector in &snapshot.collectors {
         match collector.state {
@@ -55,12 +58,17 @@ pub fn print_status(snapshot: &Snapshot, json: bool, min_risk: Option<Risk>) -> 
         }
     }
     for access in &visible {
-        print_access(access, None);
+        print_access(access, None, lang);
     }
     Ok(())
 }
 
-pub fn print_event(event: &AccessEvent, json: bool, min_risk: Option<Risk>) -> Result<()> {
+pub fn print_event(
+    event: &AccessEvent,
+    json: bool,
+    min_risk: Option<Risk>,
+    lang: Language,
+) -> Result<()> {
     if json {
         println!("{}", serde_json::to_string(event)?);
         return Ok(());
@@ -71,20 +79,26 @@ pub fn print_event(event: &AccessEvent, json: bool, min_risk: Option<Risk>) -> R
 
     let time = event.observed_at.with_timezone(&Local).format("%H:%M:%S");
     print!("{}  ", time.to_string().dimmed());
-    print_access(&event.access, Some(event.action));
+    print_access(&event.access, Some(event.action), lang);
     Ok(())
 }
 
-pub fn print_devices(devices: &[Device], json: bool) -> Result<()> {
+pub fn print_devices(devices: &[Device], json: bool, lang: Language) -> Result<()> {
     if json {
         println!("{}", serde_json::to_string(devices)?);
     } else if devices.is_empty() {
-        println!("{}", "No microphone or camera device found.".yellow());
+        println!("{}", lang.no_devices_found().yellow());
     } else {
         for device in devices {
             let res = match device.resource {
-                Resource::Microphone => format!("{:<4}", "MIC").bold().magenta(),
-                Resource::Camera => format!("{:<4}", "CAM").bold().cyan(),
+                crate::model::Resource::Microphone => {
+                    format!("{:<4}", lang.resource(device.resource))
+                        .bold()
+                        .magenta()
+                }
+                crate::model::Resource::Camera => format!("{:<4}", lang.resource(device.resource))
+                    .bold()
+                    .cyan(),
             };
             println!(
                 "{}  {:<32}  {}",
@@ -97,16 +111,12 @@ pub fn print_devices(devices: &[Device], json: bool) -> Result<()> {
     Ok(())
 }
 
-pub fn print_doctor(checks: &[DiagnosticCheck], json: bool) -> Result<()> {
+pub fn print_doctor(checks: &[DiagnosticCheck], json: bool, lang: Language) -> Result<()> {
     if json {
         println!("{}", serde_json::to_string(checks)?);
     } else {
         for check in checks {
-            let badge = match check.status {
-                DiagnosticStatus::Ok => "[  OK]".bold().green(),
-                DiagnosticStatus::Warning => "[WARN]".bold().yellow(),
-                DiagnosticStatus::Error => "[ ERR]".bold().red(),
-            };
+            let badge = lang.doctor_status(check.status);
             println!("{}  {:<22}  {}", badge, check.name.bold(), check.detail);
         }
     }
@@ -117,40 +127,46 @@ fn should_display(access: &Access, min_risk: Option<Risk>) -> bool {
     min_risk.is_none_or(|min| access.risk >= min)
 }
 
-pub fn print_explanation(snapshot: &Snapshot, json: bool, min_risk: Option<Risk>) -> Result<()> {
-    print_status(snapshot, json, min_risk)
+pub fn print_explanation(
+    snapshot: &Snapshot,
+    json: bool,
+    min_risk: Option<Risk>,
+    lang: Language,
+) -> Result<()> {
+    print_status(snapshot, json, min_risk, lang)
 }
 
-fn print_access(access: &Access, action: Option<Action>) {
+fn print_access(access: &Access, action: Option<Action>, lang: Language) {
     let pid = access
         .pid
         .map(|pid| format!("PID {pid}"))
         .unwrap_or_else(|| "PID ?".to_owned());
-    let device = access.device.as_deref().unwrap_or("device unavailable");
+    let device = access
+        .device
+        .as_deref()
+        .unwrap_or_else(|| lang.device_unavailable());
 
     let resource_col = match access.resource {
-        Resource::Microphone => format!("{:<4}", "MIC").bold().magenta(),
-        Resource::Camera => format!("{:<4}", "CAM").bold().cyan(),
+        crate::model::Resource::Microphone => format!("{:<4}", lang.resource(access.resource))
+            .bold()
+            .magenta(),
+        crate::model::Resource::Camera => format!("{:<4}", lang.resource(access.resource))
+            .bold()
+            .cyan(),
     };
 
-    let state_str = match action {
-        Some(Action::Start) => "START",
-        Some(Action::Update) => "UPDATED",
-        Some(Action::Stop) => "STOPPED",
+    let state_str = lang.state_str(action, access.activity);
+    let state_col = match action {
+        Some(Action::Start) => format!("{:<9}", state_str).bold().green(),
+        Some(Action::Update) => format!("{:<9}", state_str).bold().cyan(),
+        Some(Action::Stop) => format!("{:<9}", state_str).dimmed(),
         None => match access.activity {
-            Activity::Active => "ACTIVE",
-            Activity::Ready => "READY",
+            crate::model::Activity::Active => format!("{:<9}", state_str).bold().green(),
+            crate::model::Activity::Ready => format!("{:<9}", state_str).bold().yellow(),
         },
     };
-    let state_col = match state_str {
-        "ACTIVE" | "START" => format!("{:<9}", state_str).bold().green(),
-        "READY" => format!("{:<9}", state_str).bold().yellow(),
-        "UPDATED" => format!("{:<9}", state_str).bold().cyan(),
-        "STOPPED" => format!("{:<9}", state_str).dimmed(),
-        _ => format!("{:<9}", state_str).normal(),
-    };
 
-    let risk_str = access.risk.to_string();
+    let risk_str = lang.risk_str(access.risk);
     let risk_col = match access.risk {
         Risk::Expected => format!("{:<12}", risk_str).bold().green(),
         Risk::Unexplained => format!("{:<12}", risk_str).bold().yellow(),
@@ -166,11 +182,7 @@ fn print_access(access: &Access, action: Option<Action>) {
         format!("{:<20}", device).dimmed()
     };
 
-    let conf_badge = match access.confidence {
-        Confidence::High => "[confidence: high]".green(),
-        Confidence::Medium => "[confidence: medium]".yellow(),
-        Confidence::Low => "[confidence: low]".dimmed(),
-    };
+    let conf_badge = lang.confidence_badge(access.confidence);
 
     println!(
         "{resource_col}  {state_col}  {risk_col}  {app_col}  {pid_col}  {device_col}  {conf_badge}"
@@ -179,14 +191,14 @@ fn print_access(access: &Access, action: Option<Action>) {
     if let (Some(parent_pid), Some(parent_name)) = (access.parent_pid, &access.parent_name) {
         println!(
             "     {} {} {}",
-            "parent:".dimmed(),
+            lang.parent_label().dimmed(),
             parent_name.bold(),
             format!("(PID {parent_pid})").dimmed()
         );
     }
     if let Some(process) = &access.process {
         if let Some(session_id) = process.session_id {
-            println!("     {} {session_id}", "session:".dimmed());
+            println!("     {} {session_id}", lang.session_label().dimmed());
         }
         if !process.ancestry.is_empty() {
             let chain = process
@@ -195,7 +207,7 @@ fn print_access(access: &Access, action: Option<Action>) {
                 .map(|ancestor| format!("{} ({})", ancestor.name.bold(), ancestor.pid))
                 .collect::<Vec<_>>()
                 .join(&" <- ".dimmed().to_string());
-            println!("     {} {chain}", "ancestry:".dimmed());
+            println!("     {} {chain}", lang.ancestry_label().dimmed());
         }
     }
 
@@ -204,19 +216,19 @@ fn print_access(access: &Access, action: Option<Action>) {
             let signer_display = sig
                 .signer
                 .as_deref()
-                .unwrap_or("trusted certificate; signer unavailable");
+                .unwrap_or_else(|| lang.signer_unavailable());
             println!(
                 "     {} {} {}",
-                "signer:".dimmed(),
+                lang.signer_label().dimmed(),
                 signer_display,
-                "[verified]".bold().green()
+                lang.verified_badge().bold().green()
             );
         } else if let Some(err) = &sig.error {
             println!(
                 "     {} {} {}",
-                "signature:".dimmed(),
+                lang.signature_label().dimmed(),
                 err.red(),
-                "[unverified]".bold().red()
+                lang.unverified_badge().bold().red()
             );
         }
     }
@@ -224,7 +236,7 @@ fn print_access(access: &Access, action: Option<Action>) {
     if !access.modules.is_empty() {
         println!(
             "     {} {}",
-            "modules:".dimmed(),
+            lang.modules_label().dimmed(),
             access.modules.join(", ").dimmed()
         );
     }
@@ -240,8 +252,8 @@ fn print_access(access: &Access, action: Option<Action>) {
         };
         println!(
             "     {} {kind_col} {} {} {} {}",
-            "evidence:".dimmed(),
-            "via".dimmed(),
+            lang.evidence_label().dimmed(),
+            lang.via_label().dimmed(),
             evidence.source.dimmed(),
             "—".dimmed(),
             evidence.detail
@@ -251,9 +263,7 @@ fn print_access(access: &Access, action: Option<Action>) {
     if access.risk >= Risk::Suspicious {
         println!(
             "     {}",
-            "⚠ recommended: inspect the process and executable before taking action."
-                .bold()
-                .truecolor(255, 140, 0)
+            lang.recommended_warning().bold().truecolor(255, 140, 0)
         );
     }
 }

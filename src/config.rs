@@ -27,6 +27,8 @@ pub struct Policy {
     #[serde(default)]
     pub trust_policy: TrustPolicy,
     #[serde(default)]
+    pub language: Option<String>,
+    #[serde(default)]
     pub applications: Vec<ApplicationRule>,
 }
 

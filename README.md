@@ -1,6 +1,6 @@
 # miccamwatch
 
-`mcw` is a lightweight Windows command-line monitor that attributes microphone and camera signals to local processes and explains the evidence behind each assessment. It supports policy-driven trust validation, JSONL logging, Windows Event Log integration, and desktop toast notifications.
+`mcw` is a lightweight Windows command-line monitor that attributes microphone and camera signals to local processes and explains the evidence behind each assessment. It supports high-contrast terminal colors, multilingual interfaces, policy-driven trust validation, JSONL logging, Windows Event Log integration, and desktop toast notifications.
 
 ## Current capabilities
 
@@ -18,6 +18,8 @@
 - Writes JSONL event logs to file (`--log`).
 - Optionally writes events to the Windows Application event log (`--eventlog`).
 - Sends Windows desktop toast notifications on access events (`--notify`).
+- High-contrast terminal color coding for instant status recognition (green, yellow, orange, red).
+- Multilingual user interface with automatic Windows system language detection and 7 supported languages: English (`en`), French (`fr`), German (`de`), Spanish (`es`), Japanese (`ja`), Simplified Chinese (`zh`), Russian (`ru`).
 - Runs without administrator privileges.
 
 ## Commands
@@ -28,10 +30,12 @@ mcw status --microphone
 mcw status --camera --json
 mcw status --risk suspicious
 mcw watch
+mcw status --lang fr
 mcw watch --notify
 mcw watch --interval 250
 mcw watch --log events.jsonl
 mcw watch --eventlog
+mcw watch --no-color
 mcw devices
 mcw explain 1234
 mcw explain 1234 --json
@@ -64,7 +68,7 @@ Status JSON is an object with an explicit schema version:
 ```json
 {
   "schema_version": 2,
-  "tool_version": "0.7.0",
+  "tool_version": "0.8.0",
   "collectors": [],
   "accesses": []
 }
@@ -101,9 +105,9 @@ The updater verifies the SHA-256 checksum published with the GitHub release. Bec
 Create a TOML policy file to control trust evaluation:
 
 ```toml
+language = "fr"             # en | fr | de | es | ja | zh | ru
 profile = "strict"          # conservative | balanced | strict
 trust_policy = "online"     # offline | online
-
 [[applications]]
 executable = "zoom.exe"
 publishers = ["Zoom Video Communications"]

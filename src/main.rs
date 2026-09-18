@@ -1,5 +1,6 @@
 mod cli;
 mod config;
+mod i18n;
 mod model;
 mod notify;
 mod output;
@@ -11,6 +12,7 @@ use anyhow::Result;
 use clap::Parser;
 use cli::{Cli, Command, ConfigCommand};
 use config::Policy;
+use i18n::Language;
 use platform::PlatformMonitor;
 use std::{process::ExitCode, time::Duration};
 
@@ -40,12 +42,16 @@ fn run() -> Result<u8> {
         let _ = colored::control::set_virtual_terminal(true);
     }
     let policy = Policy::load(cli.config.as_deref())?;
+    let lang = cli
+        .lang
+        .or_else(|| policy.language.as_deref().and_then(Language::from_code))
+        .unwrap_or_else(Language::detect);
     match cli.command {
         Command::Status(options) => {
             let monitor = PlatformMonitor::new(policy.clone())?;
             let snapshot = monitor.snapshot(&options.filter)?;
             let has_access = !snapshot.accesses.is_empty();
-            output::print_status(&snapshot, options.output.json, options.filter.risk)?;
+            output::print_status(&snapshot, options.output.json, options.filter.risk, lang)?;
             Ok(u8::from(has_access))
         }
         Command::Watch(options) => {
@@ -58,12 +64,13 @@ fn run() -> Result<u8> {
                 options.notify,
                 options.log.as_deref(),
                 options.eventlog,
+                lang,
             )?;
             Ok(0)
         }
         Command::Devices(options) => {
             let monitor = PlatformMonitor::new(policy.clone())?;
-            output::print_devices(&monitor.devices()?, options.json)?;
+            output::print_devices(&monitor.devices()?, options.json, lang)?;
             Ok(0)
         }
         Command::Explain(options) => {
@@ -73,7 +80,7 @@ fn run() -> Result<u8> {
                 .accesses
                 .retain(|access| access.pid == Some(options.pid));
             let missing = snapshot.accesses.is_empty();
-            output::print_explanation(&snapshot, options.output.json, None)?;
+            output::print_explanation(&snapshot, options.output.json, None, lang)?;
             Ok(u8::from(missing))
         }
         Command::Update => {
@@ -83,7 +90,7 @@ fn run() -> Result<u8> {
         Command::Doctor(options) => {
             let monitor = PlatformMonitor::new(policy)?;
             let checks = monitor.doctor();
-            output::print_doctor(&checks, options.json)?;
+            output::print_doctor(&checks, options.json, lang)?;
             Ok(0)
         }
         Command::Config {

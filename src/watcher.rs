@@ -1,5 +1,6 @@
 use crate::{
     cli::Filter,
+    i18n::Language,
     model::{Access, AccessEvent, Action, SCHEMA_VERSION, event_code},
     output,
     platform::PlatformMonitor,
@@ -33,7 +34,7 @@ use windows::{
     },
     core::PCWSTR,
 };
-
+#[allow(clippy::too_many_arguments)]
 pub fn watch(
     monitor: &PlatformMonitor,
     filter: &Filter,
@@ -42,6 +43,7 @@ pub fn watch(
     notify: bool,
     log_path: Option<&Path>,
     eventlog: bool,
+    lang: Language,
 ) -> Result<()> {
     let running = Arc::new(AtomicBool::new(true));
     let signal = Arc::clone(&running);
@@ -84,9 +86,9 @@ pub fn watch(
         };
         log_event(&event, &mut log_writer)?;
         write_eventlog(&event, &event_source);
-        output::print_event(&event, json, min_risk)?;
+        output::print_event(&event, json, min_risk, lang)?;
         if notify && notification_due(&mut last_notifications, &access.key) {
-            crate::notify::notify_access(access, Action::Start);
+            crate::notify::notify_access(access, Action::Start, lang);
         }
     }
 
@@ -109,9 +111,9 @@ pub fn watch(
                 };
                 log_event(&event, &mut log_writer)?;
                 write_eventlog(&event, &event_source);
-                output::print_event(&event, json, min_risk)?;
+                output::print_event(&event, json, min_risk, lang)?;
                 if notify && notification_due(&mut last_notifications, key) {
-                    crate::notify::notify_access(access, Action::Start);
+                    crate::notify::notify_access(access, Action::Start, lang);
                 }
             }
         }
@@ -131,9 +133,9 @@ pub fn watch(
                 };
                 log_event(&event, &mut log_writer)?;
                 write_eventlog(&event, &event_source);
-                output::print_event(&event, json, min_risk)?;
+                output::print_event(&event, json, min_risk, lang)?;
                 if notify && notification_due(&mut last_notifications, key) {
-                    crate::notify::notify_access(access, Action::Update);
+                    crate::notify::notify_access(access, Action::Update, lang);
                 }
             }
         }
@@ -149,9 +151,9 @@ pub fn watch(
                 };
                 log_event(&event, &mut log_writer)?;
                 write_eventlog(&event, &event_source);
-                output::print_event(&event, json, min_risk)?;
+                output::print_event(&event, json, min_risk, lang)?;
                 if notify && notification_due(&mut last_notifications, key) {
-                    crate::notify::notify_access(access, Action::Stop);
+                    crate::notify::notify_access(access, Action::Stop, lang);
                 }
             }
         }

@@ -1,3 +1,4 @@
+use crate::i18n::Language;
 use crate::model::Risk;
 use clap::{Args, Parser, Subcommand};
 use std::path::PathBuf;
@@ -12,6 +13,9 @@ pub struct Cli {
     /// Policy file in TOML format
     #[arg(long, global = true)]
     pub config: Option<PathBuf>,
+    /// User interface language (en, fr, de, es, ja, zh, ru)
+    #[arg(long, global = true, value_parser = parse_language)]
+    pub lang: Option<Language>,
     #[command(subcommand)]
     pub command: Command,
 }
@@ -121,4 +125,10 @@ fn parse_risk(s: &str) -> Result<Risk, String> {
             "unknown risk level '{s}'; expected one of: expected, unexplained, suspicious, blocked"
         )),
     }
+}
+
+fn parse_language(s: &str) -> Result<Language, String> {
+    Language::from_code(s).ok_or_else(|| {
+        format!("unknown language '{s}'; supported languages: en, fr, de, es, ja, zh, ru")
+    })
 }
