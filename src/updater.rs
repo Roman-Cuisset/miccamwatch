@@ -6,7 +6,7 @@ pub fn update() -> Result<()> {
         .repo_owner("Roman-Cuisset")
         .repo_name("miccamwatch")
         .bin_name("mcw")
-        .asset_identifier("windows-x86_64")
+        .asset_identifier("windows-x86_64.zip")
         .current_version(cargo_crate_version!())
         .checksum_from_asset("SHA256SUMS")
         .show_download_progress(true)

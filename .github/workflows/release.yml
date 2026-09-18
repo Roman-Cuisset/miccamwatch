@@ -35,7 +35,7 @@ jobs:
         with:
           path: .
           format: spdx-json
-          output-file: miccamwatch-windows-x86_64.spdx.json
+          output-file: miccamwatch-sbom.spdx.json
       - name: Attest release provenance
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
         with:
@@ -46,4 +46,4 @@ jobs:
           files: |
             miccamwatch-windows-x86_64.zip
             SHA256SUMS
-            miccamwatch-windows-x86_64.spdx.json
+            miccamwatch-sbom.spdx.json
