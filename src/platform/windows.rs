@@ -1,14 +1,17 @@
 use crate::{
     cli::Filter,
+    config::{Policy, Profile, TrustPolicy},
     model::{
-        Access, Activity, Confidence, Device, Evidence, EvidenceKind, Resource, Risk, SignatureInfo,
+        Access, Activity, CollectorHealth, CollectorState, Confidence, Device, DiagnosticCheck,
+        DiagnosticStatus, Evidence, EvidenceKind, ProcessAncestor, ProcessContext, Resource, Risk,
+        SignatureInfo, Snapshot,
     },
 };
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use std::{
     cell::RefCell, collections::HashMap, ffi::OsStr, fs, mem::size_of, path::Path, ptr, slice,
-    time::SystemTime,
+    sync::mpsc::Sender, time::SystemTime,
 };
 use windows::{
     Win32::{
@@ -16,8 +19,9 @@ use windows::{
         Foundation::{CloseHandle, FILETIME, HANDLE, HWND, NTSTATUS},
         Media::{
             Audio::{
-                AudioSessionStateActive, DEVICE_STATE_ACTIVE, IAudioSessionControl2,
-                IAudioSessionManager2, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator,
+                AudioSessionStateActive, DEVICE_STATE_ACTIVE, IAudioSessionControl,
+                IAudioSessionControl2, IAudioSessionManager2, IAudioSessionNotification,
+                IAudioSessionNotification_Impl, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator,
                 eCapture,
             },
             MediaFoundation::{
@@ -35,10 +39,14 @@ use windows::{
                 CERT_QUERY_OBJECT_FILE, CertFreeCertificateContext, CertGetNameStringW,
                 CryptQueryObject,
             },
+            GetSidSubAuthority, GetSidSubAuthorityCount, GetTokenInformation, LookupAccountSidW,
+            SID_NAME_USE, TOKEN_INFORMATION_CLASS, TOKEN_MANDATORY_LABEL, TOKEN_QUERY, TOKEN_USER,
+            TokenIntegrityLevel, TokenUser,
             WinTrust::{
                 WINTRUST_ACTION_GENERIC_VERIFY_V2, WINTRUST_DATA, WINTRUST_DATA_0,
                 WINTRUST_FILE_INFO, WTD_CACHE_ONLY_URL_RETRIEVAL, WTD_CHOICE_FILE, WTD_REVOKE_NONE,
-                WTD_SAFER_FLAG, WTD_STATEACTION_IGNORE, WTD_UI_NONE, WinVerifyTrust,
+                WTD_REVOKE_WHOLECHAIN, WTD_SAFER_FLAG, WTD_STATEACTION_IGNORE, WTD_UI_NONE,
+                WinVerifyTrust,
             },
         },
         System::{
@@ -51,8 +59,9 @@ use windows::{
                 PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPMODULE,
                 TH32CS_SNAPMODULE32, TH32CS_SNAPPROCESS,
             },
+            RemoteDesktop::ProcessIdToSessionId,
             Threading::{
-                GetProcessTimes, OpenProcess, PROCESS_NAME_WIN32,
+                GetProcessTimes, OpenProcess, OpenProcessToken, PROCESS_NAME_WIN32,
                 PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
             },
         },
@@ -60,7 +69,6 @@ use windows::{
     core::{Interface, PCWSTR, PWSTR},
 };
 use winreg::{RegKey, enums::HKEY_CURRENT_USER};
-
 const CONSENT_STORE: &str =
     r"Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore";
 const WINDOWS_TO_UNIX_EPOCH_100NS: i128 = 116_444_736_000_000_000;
@@ -121,12 +129,33 @@ windows::core::link!("ntdll.dll" "system" fn NtQueryInformationProcess(
 pub struct PlatformMonitor {
     enumerator: IMMDeviceEnumerator,
     signature_cache: RefCell<HashMap<String, CachedSignature>>,
+    policy: Policy,
     _media_foundation: MediaFoundationGuard,
     _com: ComGuard,
 }
 
+fn healthy(collector: &'static str) -> CollectorHealth {
+    CollectorHealth {
+        collector,
+        state: CollectorState::Healthy,
+        detail: None,
+    }
+}
+
+fn unhealthy(
+    collector: &'static str,
+    state: CollectorState,
+    error: &anyhow::Error,
+) -> CollectorHealth {
+    CollectorHealth {
+        collector,
+        state,
+        detail: Some(format!("{error:#}")),
+    }
+}
+
 impl PlatformMonitor {
-    pub fn new() -> Result<Self> {
+    pub fn new(policy: Policy) -> Result<Self> {
         let com = ComGuard::new()?;
         let media_foundation = MediaFoundationGuard::new()?;
         let enumerator = unsafe {
@@ -136,21 +165,104 @@ impl PlatformMonitor {
         Ok(Self {
             enumerator,
             signature_cache: RefCell::new(HashMap::new()),
+            policy,
             _media_foundation: media_foundation,
             _com: com,
         })
     }
 
-    pub fn snapshot(&self, filter: &Filter) -> Result<Vec<Access>> {
+    pub fn snapshot(&self, filter: &Filter) -> Result<Snapshot> {
         let mut accesses = Vec::new();
+        let mut collectors = Vec::new();
         if filter.includes_microphone() {
-            accesses.extend(self.microphone_accesses()?);
+            match self.microphone_accesses() {
+                Ok(found) => {
+                    accesses.extend(found);
+                    collectors.push(healthy("wasapi"));
+                }
+                Err(error) => {
+                    collectors.push(unhealthy("wasapi", CollectorState::Unavailable, &error))
+                }
+            }
         }
         if filter.includes_camera() {
-            accesses.extend(self.camera_accesses()?);
+            match self.camera_accesses() {
+                Ok(found) => {
+                    accesses.extend(found);
+                    collectors.push(healthy("privacy_store"));
+                    collectors.push(healthy("module_scanner"));
+                }
+                Err(error) => {
+                    collectors.push(unhealthy(
+                        "privacy_store",
+                        CollectorState::Unavailable,
+                        &error,
+                    ));
+                    collectors.push(unhealthy(
+                        "module_scanner",
+                        CollectorState::Unavailable,
+                        &error,
+                    ));
+                }
+            }
+        }
+        let incomplete_context = accesses
+            .iter()
+            .filter_map(|access| access.process.as_ref())
+            .any(|process| process.user.is_none() || process.integrity.is_none());
+        collectors.push(CollectorHealth {
+            collector: "process_context",
+            state: if incomplete_context {
+                CollectorState::Degraded
+            } else {
+                CollectorState::Healthy
+            },
+            detail: incomplete_context.then(|| {
+                "User or integrity information was inaccessible for at least one process."
+                    .to_owned()
+            }),
+        });
+        // Profile-based risk escalation
+        match self.policy.profile {
+            Profile::Strict => {
+                for access in &mut accesses {
+                    if access.risk == Risk::Unexplained {
+                        access.risk = Risk::Suspicious;
+                    }
+                }
+            }
+            Profile::Conservative => {}
+            Profile::Balanced => {}
         }
         accesses.sort_by(|left, right| left.key.cmp(&right.key));
-        Ok(accesses)
+        Ok(Snapshot {
+            collectors,
+            accesses,
+        })
+    }
+
+    pub fn register_audio_notifications(
+        &self,
+        sender: Sender<()>,
+    ) -> Result<AudioNotificationGuard> {
+        let collection = unsafe {
+            self.enumerator
+                .EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE)
+                .context("failed to enumerate microphone devices for notifications")?
+        };
+        let count = unsafe { collection.GetCount()? };
+        let mut registrations = Vec::with_capacity(count as usize);
+        for index in 0..count {
+            let device = unsafe { collection.Item(index)? };
+            let manager: IAudioSessionManager2 = unsafe { device.Activate(CLSCTX_ALL, None)? };
+            let callback: IAudioSessionNotification = AudioSessionNotifier {
+                sender: sender.clone(),
+            }
+            .into();
+            unsafe { manager.RegisterSessionNotification(&callback)? };
+            registrations.push((manager, callback));
+        }
+        Ok(AudioNotificationGuard { registrations })
     }
 
     pub fn devices(&self) -> Result<Vec<Device>> {
@@ -173,6 +285,112 @@ impl PlatformMonitor {
         }
         devices.extend(camera_devices()?);
         Ok(devices)
+    }
+
+    pub fn doctor(&self) -> Vec<DiagnosticCheck> {
+        let mut checks = Vec::new();
+
+        // Windows version
+        let version = RegKey::predef(winreg::enums::HKEY_LOCAL_MACHINE)
+            .open_subkey(r"SOFTWARE\Microsoft\Windows NT\CurrentVersion")
+            .and_then(|key| key.get_value::<String, _>("CurrentBuild"));
+        checks.push(match version {
+            Ok(build) => DiagnosticCheck {
+                name: "windows_version",
+                status: DiagnosticStatus::Ok,
+                detail: format!("Windows build {build}"),
+            },
+            Err(error) => DiagnosticCheck {
+                name: "windows_version",
+                status: DiagnosticStatus::Warning,
+                detail: format!("cannot read Windows version: {error}"),
+            },
+        });
+
+        // COM
+        checks.push(DiagnosticCheck {
+            name: "com_runtime",
+            status: DiagnosticStatus::Ok,
+            detail: "COM initialized successfully".into(),
+        });
+
+        // Media Foundation
+        checks.push(DiagnosticCheck {
+            name: "media_foundation",
+            status: DiagnosticStatus::Ok,
+            detail: "Media Foundation initialized successfully".into(),
+        });
+
+        // Audio capture devices
+        let mic_count = unsafe {
+            self.enumerator
+                .EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE)
+                .and_then(|collection| collection.GetCount())
+        };
+        checks.push(match mic_count {
+            Ok(count) => DiagnosticCheck {
+                name: "microphone_devices",
+                status: if count > 0 {
+                    DiagnosticStatus::Ok
+                } else {
+                    DiagnosticStatus::Warning
+                },
+                detail: format!("{count} capture device(s) detected"),
+            },
+            Err(error) => DiagnosticCheck {
+                name: "microphone_devices",
+                status: DiagnosticStatus::Error,
+                detail: format!("failed to enumerate: {error}"),
+            },
+        });
+
+        // Camera devices
+        match camera_devices() {
+            Ok(cams) => checks.push(DiagnosticCheck {
+                name: "camera_devices",
+                status: if cams.is_empty() {
+                    DiagnosticStatus::Warning
+                } else {
+                    DiagnosticStatus::Ok
+                },
+                detail: format!("{} camera device(s) detected", cams.len()),
+            }),
+            Err(error) => checks.push(DiagnosticCheck {
+                name: "camera_devices",
+                status: DiagnosticStatus::Error,
+                detail: format!("failed to enumerate: {error}"),
+            }),
+        }
+
+        // ConsentStore registry
+        let consent =
+            RegKey::predef(HKEY_CURRENT_USER).open_subkey(format!(r"{CONSENT_STORE}\webcam"));
+        checks.push(match consent {
+            Ok(_) => DiagnosticCheck {
+                name: "consent_store",
+                status: DiagnosticStatus::Ok,
+                detail: "Camera ConsentStore registry is accessible".into(),
+            },
+            Err(error) => DiagnosticCheck {
+                name: "consent_store",
+                status: DiagnosticStatus::Warning,
+                detail: format!("cannot open ConsentStore: {error}"),
+            },
+        });
+
+        // Policy
+        checks.push(DiagnosticCheck {
+            name: "policy",
+            status: DiagnosticStatus::Ok,
+            detail: format!(
+                "profile={:?}, trust={:?}, {} application rule(s)",
+                self.policy.profile,
+                self.policy.trust_policy,
+                self.policy.applications.len()
+            ),
+        });
+
+        checks
     }
 
     fn microphone_accesses(&self) -> Result<Vec<Access>> {
@@ -215,10 +433,9 @@ impl PlatformMonitor {
                     .map(str::to_owned)
                     .unwrap_or_else(|| format!("PID {pid}"));
 
-                let (parent_pid, parent_name) = match processes.parent(pid) {
-                    Some((ppid, pname)) => (Some(ppid), Some(pname)),
-                    None => (None, None),
-                };
+                let context = processes.context(pid);
+                let (parent_pid, parent_name) = immediate_parent(&context)
+                    .map_or((None, None), |(ppid, name)| (Some(ppid), Some(name)));
 
                 let signature = executable
                     .as_deref()
@@ -228,7 +445,7 @@ impl PlatformMonitor {
                     key,
                     resource: Resource::Microphone,
                     activity: Activity::Active,
-                    risk: Risk::Normal,
+                    risk: Risk::Expected,
                     confidence: Confidence::High,
                     application,
                     pid: Some(pid),
@@ -244,6 +461,7 @@ impl PlatformMonitor {
                         "WASAPI",
                         "An active capture audio session is attributed to this PID.",
                     )],
+                    process: Some(context),
                 });
             }
         }
@@ -261,7 +479,7 @@ impl PlatformMonitor {
         {
             return cached.info.clone();
         }
-        let info = verify_signature(path);
+        let info = verify_signature_with_policy(path, self.policy.trust_policy);
         self.signature_cache.borrow_mut().insert(
             key,
             CachedSignature {
@@ -273,7 +491,7 @@ impl PlatformMonitor {
     }
 
     fn camera_accesses(&self) -> Result<Vec<Access>> {
-        camera_accesses(|path| self.cached_signature(path))
+        camera_accesses(&self.policy, |path| self.cached_signature(path))
     }
 }
 
@@ -281,6 +499,33 @@ impl PlatformMonitor {
 struct CachedSignature {
     modified: Option<SystemTime>,
     info: SignatureInfo,
+}
+
+#[windows::core::implement(IAudioSessionNotification)]
+struct AudioSessionNotifier {
+    sender: Sender<()>,
+}
+
+impl IAudioSessionNotification_Impl for AudioSessionNotifier_Impl {
+    fn OnSessionCreated(
+        &self,
+        _new_session: windows::core::Ref<IAudioSessionControl>,
+    ) -> windows::core::Result<()> {
+        let _ = self.sender.send(());
+        Ok(())
+    }
+}
+
+pub struct AudioNotificationGuard {
+    registrations: Vec<(IAudioSessionManager2, IAudioSessionNotification)>,
+}
+
+impl Drop for AudioNotificationGuard {
+    fn drop(&mut self) {
+        for (manager, callback) in &self.registrations {
+            let _ = unsafe { manager.UnregisterSessionNotification(callback) };
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -381,7 +626,10 @@ struct CameraPermission {
     consent: Option<String>,
 }
 
-fn camera_accesses(mut signature_for: impl FnMut(&str) -> SignatureInfo) -> Result<Vec<Access>> {
+fn camera_accesses(
+    policy: &Policy,
+    mut signature_for: impl FnMut(&str) -> SignatureInfo,
+) -> Result<Vec<Access>> {
     let root = RegKey::predef(HKEY_CURRENT_USER);
     let Ok(webcam) = root.open_subkey(format!(r"{CONSENT_STORE}\webcam")) else {
         return Ok(Vec::new());
@@ -448,9 +696,11 @@ fn camera_accesses(mut signature_for: impl FnMut(&str) -> SignatureInfo) -> Resu
                 continue;
             }
             let command_line = process_command_line(pid);
-            let parent_info = processes.parent(pid);
+            let context = processes.context(pid);
+            let parent_info = immediate_parent(&context);
             let signature = signature_for(executable);
             let assessment = classify_forensic(
+                policy,
                 application,
                 executable,
                 permission,
@@ -459,10 +709,9 @@ fn camera_accesses(mut signature_for: impl FnMut(&str) -> SignatureInfo) -> Resu
                 &signature,
                 &modules,
             );
-            let (parent_pid, parent_name) = match parent_info {
-                Some((ppid, name)) => (Some(ppid), Some(name)),
-                None => (None, None),
-            };
+            let (parent_pid, parent_name) = parent_info
+                .clone()
+                .map_or((None, None), |(ppid, name)| (Some(ppid), Some(name)));
             accesses.push(Access {
                 key: format!("camera:forensic:{}", process_identity(pid)),
                 resource: Resource::Camera,
@@ -479,6 +728,7 @@ fn camera_accesses(mut signature_for: impl FnMut(&str) -> SignatureInfo) -> Resu
                 started_at: None,
                 modules,
                 evidence: assessment.evidence,
+                process: Some(context),
             });
         }
     }
@@ -511,17 +761,18 @@ fn registry_access(
         .map(Vec::as_slice)
         .unwrap_or_default();
     let pid = (matching_pids.len() == 1).then(|| matching_pids[0]);
-    let (parent_pid, parent_name) = match pid.and_then(|value| processes.parent(value)) {
-        Some((ppid, name)) => (Some(ppid), Some(name)),
-        None => (None, None),
-    };
+    let context = pid.map(|value| processes.context(value));
+    let (parent_pid, parent_name) = context
+        .as_ref()
+        .and_then(immediate_parent)
+        .map_or((None, None), |(ppid, name)| (Some(ppid), Some(name)));
     let signature = executable.as_deref().map(signature_for);
     let start = key.get_value::<u64, _>("LastUsedTimeStart").ok()?;
     Some(Access {
         key: format!("camera:{}", identity.to_ascii_lowercase()),
         resource: Resource::Camera,
         activity: Activity::Active,
-        risk: Risk::Normal,
+        risk: Risk::Expected,
         confidence: Confidence::Medium,
         application,
         pid,
@@ -537,6 +788,7 @@ fn registry_access(
             "CapabilityAccessManager",
             "Windows reports an open camera privacy activity interval.",
         )],
+        process: context,
     })
 }
 
@@ -550,7 +802,9 @@ struct Assessment {
     evidence: Vec<Evidence>,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn classify_forensic(
+    policy: &Policy,
     application: &str,
     executable: &str,
     permission: &CameraPermission,
@@ -652,7 +906,7 @@ fn classify_forensic(
             },
         ));
         if signature.verified && risk != Risk::Suspicious {
-            risk = Risk::Normal;
+            risk = Risk::Expected;
         }
     } else if executable.to_ascii_lowercase().contains(r"\temp\")
         || executable.to_ascii_lowercase().contains(r"\tmp\")
@@ -666,6 +920,53 @@ fn classify_forensic(
         ));
     }
 
+    // Policy publisher/path validation
+    if let Some(rule) = policy.application(application) {
+        let publisher_ok = rule.publishers.is_empty()
+            || signature
+                .signer
+                .as_ref()
+                .is_some_and(|s| rule.publishers.iter().any(|p| s.contains(p)));
+        let path_ok = rule.paths.is_empty()
+            || rule.paths.iter().any(|p| {
+                executable
+                    .to_ascii_lowercase()
+                    .contains(&p.to_ascii_lowercase())
+            });
+        if publisher_ok && path_ok {
+            if risk != Risk::Suspicious {
+                risk = Risk::Expected;
+            }
+            evidence.push(Evidence::new(
+                EvidenceKind::ApplicationProfile,
+                "policy",
+                "Application matches a configured policy rule.",
+            ));
+        } else {
+            risk = Risk::Suspicious;
+            if !publisher_ok {
+                evidence.push(Evidence::new(
+                    EvidenceKind::Signature,
+                    "policy",
+                    format!(
+                        "Publisher mismatch: expected one of {:?}, got {:?}.",
+                        rule.publishers, signature.signer
+                    ),
+                ));
+            }
+            if !path_ok {
+                evidence.push(Evidence::new(
+                    EvidenceKind::FileLocation,
+                    "policy",
+                    format!(
+                        "Path mismatch: expected one of {:?}, executable at {}.",
+                        rule.paths, executable
+                    ),
+                ));
+            }
+        }
+    }
+
     Assessment {
         risk,
         confidence: Confidence::Low,
@@ -677,23 +978,30 @@ fn classify_forensic(
 // Process inspection & Authenticode helpers
 // ---------------------------------------------------------------------------
 
-pub fn verify_signature(path: &str) -> SignatureInfo {
+fn verify_signature_with_policy(path: &str, trust_policy: TrustPolicy) -> SignatureInfo {
     let wide_path: Vec<u16> = path.encode_utf16().chain(Some(0)).collect();
     let mut file_info = WINTRUST_FILE_INFO {
         cbStruct: size_of::<WINTRUST_FILE_INFO>() as u32,
         pcwszFilePath: PCWSTR(wide_path.as_ptr()),
         ..Default::default()
     };
+    let (revocation_checks, prov_flags) = match trust_policy {
+        TrustPolicy::Offline => (
+            WTD_REVOKE_NONE,
+            WTD_SAFER_FLAG | WTD_CACHE_ONLY_URL_RETRIEVAL,
+        ),
+        TrustPolicy::Online => (WTD_REVOKE_WHOLECHAIN, WTD_SAFER_FLAG),
+    };
     let mut trust_data = WINTRUST_DATA {
         cbStruct: size_of::<WINTRUST_DATA>() as u32,
         dwUIChoice: WTD_UI_NONE,
-        fdwRevocationChecks: WTD_REVOKE_NONE,
+        fdwRevocationChecks: revocation_checks,
         dwUnionChoice: WTD_CHOICE_FILE,
         Anonymous: WINTRUST_DATA_0 {
             pFile: &mut file_info,
         },
         dwStateAction: WTD_STATEACTION_IGNORE,
-        dwProvFlags: WTD_SAFER_FLAG | WTD_CACHE_ONLY_URL_RETRIEVAL,
+        dwProvFlags: prov_flags,
         ..Default::default()
     };
 
@@ -947,6 +1255,7 @@ fn process_path(pid: u32) -> Option<String> {
 pub struct ProcessNode {
     pub parent_pid: u32,
     pub name: String,
+    pub created_at_filetime: Option<u64>,
 }
 
 pub struct ProcessTable {
@@ -972,9 +1281,8 @@ impl ProcessTable {
         if unsafe { Process32FirstW(snapshot, &mut entry) }.is_ok() {
             loop {
                 let name = wide_array_string(&entry.szExeFile);
-                let name_lower = name.to_ascii_lowercase();
                 by_name
-                    .entry(name_lower)
+                    .entry(name.to_ascii_lowercase())
                     .or_default()
                     .push(entry.th32ProcessID);
                 by_pid.insert(
@@ -982,6 +1290,7 @@ impl ProcessTable {
                     ProcessNode {
                         parent_pid: entry.th32ParentProcessID,
                         name,
+                        created_at_filetime: process_creation_time(entry.th32ProcessID),
                     },
                 );
                 if unsafe { Process32NextW(snapshot, &mut entry) }.is_err() {
@@ -993,17 +1302,158 @@ impl ProcessTable {
         Self { by_name, by_pid }
     }
 
-    pub fn parent(&self, pid: u32) -> Option<(u32, String)> {
-        let node = self.by_pid.get(&pid)?;
-        if node.parent_pid == 0 {
+    pub fn context(&self, pid: u32) -> ProcessContext {
+        let mut ancestry = Vec::new();
+        let mut current_pid = pid;
+        let mut child_created = self
+            .by_pid
+            .get(&pid)
+            .and_then(|node| node.created_at_filetime);
+        let mut visited = std::collections::HashSet::new();
+
+        for _ in 0..16 {
+            let Some(node) = self.by_pid.get(&current_pid) else {
+                break;
+            };
+            let parent_pid = node.parent_pid;
+            if parent_pid == 0 || !visited.insert(parent_pid) {
+                break;
+            }
+            let Some(parent) = self.by_pid.get(&parent_pid) else {
+                break;
+            };
+            if let (Some(parent_created), Some(child_created)) =
+                (parent.created_at_filetime, child_created)
+                && parent_created > child_created
+            {
+                break;
+            }
+            ancestry.push(ProcessAncestor {
+                pid: parent_pid,
+                name: parent.name.clone(),
+                created_at_filetime: parent.created_at_filetime,
+            });
+            current_pid = parent_pid;
+            child_created = parent.created_at_filetime;
+        }
+
+        let mut session_id = 0;
+        let session_id = unsafe { ProcessIdToSessionId(pid, &mut session_id) }
+            .ok()
+            .map(|_| session_id);
+        let (user, integrity) = process_security_context(pid);
+        ProcessContext {
+            instance_id: process_identity(pid),
+            ancestry,
+            user,
+            session_id,
+            integrity,
+        }
+    }
+}
+
+fn process_security_context(pid: u32) -> (Option<String>, Option<String>) {
+    let Ok(process) = (unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) })
+    else {
+        return (None, None);
+    };
+    let mut token = HANDLE::default();
+    if unsafe { OpenProcessToken(process, TOKEN_QUERY, &mut token) }.is_err() {
+        let _ = unsafe { CloseHandle(process) };
+        return (None, None);
+    }
+    let user = token_information(token, TokenUser).and_then(|buffer| {
+        let token_user = unsafe { &*(buffer.as_ptr().cast::<TOKEN_USER>()) };
+        let sid = token_user.User.Sid;
+        let mut name_len = 0;
+        let mut domain_len = 0;
+        let mut sid_type = SID_NAME_USE::default();
+        let _ = unsafe {
+            LookupAccountSidW(
+                PCWSTR::null(),
+                sid,
+                None,
+                &mut name_len,
+                None,
+                &mut domain_len,
+                &mut sid_type,
+            )
+        };
+        if name_len == 0 {
             return None;
         }
-        let parent_node = self.by_pid.get(&node.parent_pid);
-        let parent_name = parent_node
-            .map(|p| p.name.clone())
-            .unwrap_or_else(|| format!("PID {}", node.parent_pid));
-        Some((node.parent_pid, parent_name))
+        let mut name = vec![0u16; name_len as usize];
+        let mut domain = vec![0u16; domain_len as usize];
+        unsafe {
+            LookupAccountSidW(
+                PCWSTR::null(),
+                sid,
+                Some(PWSTR(name.as_mut_ptr())),
+                &mut name_len,
+                Some(PWSTR(domain.as_mut_ptr())),
+                &mut domain_len,
+                &mut sid_type,
+            )
+            .ok()?;
+        }
+        let name = String::from_utf16_lossy(&name[..name_len as usize]);
+        let domain = String::from_utf16_lossy(&domain[..domain_len as usize]);
+        Some(if domain.is_empty() {
+            name
+        } else {
+            format!("{domain}\\{name}")
+        })
+    });
+    let integrity = token_information(token, TokenIntegrityLevel).and_then(|buffer| {
+        let label = unsafe { &*(buffer.as_ptr().cast::<TOKEN_MANDATORY_LABEL>()) };
+        let count = unsafe { *GetSidSubAuthorityCount(label.Label.Sid) };
+        if count == 0 {
+            return None;
+        }
+        let rid = unsafe { *GetSidSubAuthority(label.Label.Sid, u32::from(count - 1)) };
+        Some(
+            match rid {
+                0x0000..=0x0fff => "untrusted",
+                0x1000..=0x1fff => "low",
+                0x2000..=0x2fff => "medium",
+                0x3000..=0x3fff => "high",
+                0x4000..=0x4fff => "system",
+                _ => "protected",
+            }
+            .to_owned(),
+        )
+    });
+    let _ = unsafe { CloseHandle(token) };
+    let _ = unsafe { CloseHandle(process) };
+    (user, integrity)
+}
+
+fn token_information(token: HANDLE, class: TOKEN_INFORMATION_CLASS) -> Option<Vec<usize>> {
+    let mut length = 0;
+    let _ = unsafe { GetTokenInformation(token, class, None, 0, &mut length) };
+    if length == 0 {
+        return None;
     }
+    let words = (length as usize).div_ceil(size_of::<usize>());
+    let mut buffer = vec![0usize; words];
+    unsafe {
+        GetTokenInformation(
+            token,
+            class,
+            Some(buffer.as_mut_ptr().cast()),
+            length,
+            &mut length,
+        )
+        .ok()?;
+    }
+    Some(buffer)
+}
+
+fn immediate_parent(context: &ProcessContext) -> Option<(u32, String)> {
+    context
+        .ancestry
+        .first()
+        .map(|parent| (parent.pid, parent.name.clone()))
 }
 
 #[cfg(test)]
@@ -1021,6 +1471,7 @@ mod tests {
     #[test]
     fn denied_permission_is_blocked_not_unauthorized() {
         let assessment = classify_forensic(
+            &Policy::default(),
             "camera.exe",
             r"C:\camera.exe",
             &CameraPermission {
@@ -1036,8 +1487,9 @@ mod tests {
     }
 
     #[test]
-    fn trusted_browser_pipeline_is_normal_but_low_confidence() {
+    fn trusted_browser_pipeline_is_expected_but_low_confidence() {
         let assessment = classify_forensic(
+            &Policy::default(),
             "msedge.exe",
             r"C:\Program Files\Microsoft\Edge\msedge.exe",
             &CameraPermission { consent: None },
@@ -1046,13 +1498,14 @@ mod tests {
             &signature(true),
             &["mfcaptureengine.dll".to_owned()],
         );
-        assert_eq!(assessment.risk, Risk::Normal);
+        assert_eq!(assessment.risk, Risk::Expected);
         assert_eq!(assessment.confidence, Confidence::Low);
     }
 
     #[test]
     fn unsigned_known_application_is_suspicious() {
         let assessment = classify_forensic(
+            &Policy::default(),
             "zoom.exe",
             r"C:\Apps\zoom.exe",
             &CameraPermission { consent: None },
@@ -1067,6 +1520,7 @@ mod tests {
     #[test]
     fn temporary_unknown_capture_binary_is_suspicious() {
         let assessment = classify_forensic(
+            &Policy::default(),
             "capture.exe",
             r"C:\Users\person\AppData\Local\Temp\capture.exe",
             &CameraPermission { consent: None },

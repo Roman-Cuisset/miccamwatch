@@ -1,33 +1,49 @@
-use crate::model::{Access, AccessEvent, Action, Device, Risk, SCHEMA_VERSION, StatusDocument};
+use crate::model::{
+    Access, AccessEvent, Action, Device, DiagnosticCheck, Risk, SCHEMA_VERSION, Snapshot,
+    StatusDocument,
+};
 use anyhow::Result;
 use chrono::Local;
 
-pub fn print_status(accesses: &[Access], json: bool) -> Result<()> {
+pub fn print_status(snapshot: &Snapshot, json: bool, min_risk: Option<Risk>) -> Result<()> {
     if json {
         println!(
             "{}",
             serde_json::to_string(&StatusDocument {
                 schema_version: SCHEMA_VERSION,
-                accesses,
+                tool_version: env!("CARGO_PKG_VERSION"),
+                collectors: &snapshot.collectors,
+                accesses: &snapshot.accesses,
             })?
         );
         return Ok(());
     }
 
-    if accesses.is_empty() {
+    let visible: Vec<_> = snapshot
+        .accesses
+        .iter()
+        .filter(|a| should_display(a, min_risk))
+        .collect();
+    if visible.is_empty() {
         println!("No microphone or camera activity detected.");
-        return Ok(());
     }
-
-    for access in accesses {
+    for collector in &snapshot.collectors {
+        if collector.state != crate::model::CollectorState::Healthy {
+            println!("collector {}: {:?}", collector.collector, collector.state);
+        }
+    }
+    for access in &visible {
         print_access(access, None);
     }
     Ok(())
 }
 
-pub fn print_event(event: &AccessEvent, json: bool) -> Result<()> {
+pub fn print_event(event: &AccessEvent, json: bool, min_risk: Option<Risk>) -> Result<()> {
     if json {
         println!("{}", serde_json::to_string(event)?);
+        return Ok(());
+    }
+    if !should_display(&event.access, min_risk) {
         return Ok(());
     }
 
@@ -50,8 +66,23 @@ pub fn print_devices(devices: &[Device], json: bool) -> Result<()> {
     Ok(())
 }
 
-pub fn print_explanation(accesses: &[Access], json: bool) -> Result<()> {
-    print_status(accesses, json)
+pub fn print_doctor(checks: &[DiagnosticCheck], json: bool) -> Result<()> {
+    if json {
+        println!("{}", serde_json::to_string(checks)?);
+    } else {
+        for check in checks {
+            println!("[{:>4}]  {}: {}", check.status, check.name, check.detail);
+        }
+    }
+    Ok(())
+}
+
+fn should_display(access: &Access, min_risk: Option<Risk>) -> bool {
+    min_risk.is_none_or(|min| access.risk >= min)
+}
+
+pub fn print_explanation(snapshot: &Snapshot, json: bool, min_risk: Option<Risk>) -> Result<()> {
+    print_status(snapshot, json, min_risk)
 }
 
 fn print_access(access: &Access, action: Option<Action>) {
@@ -73,6 +104,20 @@ fn print_access(access: &Access, action: Option<Action>) {
 
     if let (Some(parent_pid), Some(parent_name)) = (access.parent_pid, &access.parent_name) {
         println!("     parent: {parent_name} (PID {parent_pid})");
+    }
+    if let Some(process) = &access.process {
+        if let Some(session_id) = process.session_id {
+            println!("     session: {session_id}");
+        }
+        if !process.ancestry.is_empty() {
+            let chain = process
+                .ancestry
+                .iter()
+                .map(|ancestor| format!("{} ({})", ancestor.name, ancestor.pid))
+                .collect::<Vec<_>>()
+                .join(" <- ");
+            println!("     ancestry: {chain}");
+        }
     }
 
     if let Some(sig) = &access.signature {
