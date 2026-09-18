@@ -26,6 +26,19 @@ fn main() -> ExitCode {
 
 fn run() -> Result<u8> {
     let cli = Cli::parse();
+    let no_color = match &cli.command {
+        Command::Status(opts) => opts.output.no_color,
+        Command::Watch(opts) => opts.output.no_color,
+        Command::Devices(opts) => opts.no_color,
+        Command::Explain(opts) => opts.output.no_color,
+        Command::Doctor(opts) => opts.no_color,
+        _ => false,
+    };
+    if no_color {
+        colored::control::set_override(false);
+    } else {
+        let _ = colored::control::set_virtual_terminal(true);
+    }
     let policy = Policy::load(cli.config.as_deref())?;
     match cli.command {
         Command::Status(options) => {

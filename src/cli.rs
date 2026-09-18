@@ -106,6 +106,9 @@ pub struct OutputOptions {
     /// Emit newline-delimited JSON
     #[arg(long)]
     pub json: bool,
+    /// Disable colored terminal output
+    #[arg(long)]
+    pub no_color: bool,
 }
 
 fn parse_risk(s: &str) -> Result<Risk, String> {
