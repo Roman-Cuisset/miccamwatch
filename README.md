@@ -20,6 +20,12 @@
 - Sends Windows desktop toast notifications on access events (`--notify`).
 - High-contrast terminal color coding for instant status recognition (green, yellow, orange, red).
 - Multilingual user interface with automatic Windows system language detection and 7 supported languages: English (`en`), French (`fr`), German (`de`), Spanish (`es`), Japanese (`ja`), Simplified Chinese (`zh`), Russian (`ru`).
+- Emergency hardware microphone kill-switch (`mcw mute` / `mcw unmute` / `mcw mute --toggle`).
+- Interactive full-terminal live dashboard with keyboard shortcuts (`mcw top`).
+- Windows Notification Area system tray background mode with dynamic green/red status icon and right-click menu (`mcw tray`).
+- Active defensive process termination against unauthorized capture software (`--kill-unauthorized`, disabled by default).
+- Workstation lock detection (flags capture initiated while screen is locked via Winlogon desktop).
+- Discreet native audio chime upon capture initiation (`--sound`).
 - Runs without administrator privileges.
 
 ## Commands
@@ -36,6 +42,14 @@ mcw watch --interval 250
 mcw watch --log events.jsonl
 mcw watch --eventlog
 mcw watch --no-color
+mcw watch --sound
+mcw watch --kill-unauthorized
+mcw mute
+mcw mute --status
+mcw mute --toggle
+mcw unmute
+mcw top
+mcw tray
 mcw devices
 mcw explain 1234
 mcw explain 1234 --json
@@ -68,7 +82,7 @@ Status JSON is an object with an explicit schema version:
 ```json
 {
   "schema_version": 2,
-  "tool_version": "0.8.0",
+  "tool_version": "0.9.0",
   "collectors": [],
   "accesses": []
 }
@@ -108,6 +122,7 @@ Create a TOML policy file to control trust evaluation:
 language = "fr"             # en | fr | de | es | ja | zh | ru
 profile = "strict"          # conservative | balanced | strict
 trust_policy = "online"     # offline | online
+action = "alert"            # alert (default) | kill
 [[applications]]
 executable = "zoom.exe"
 publishers = ["Zoom Video Communications"]

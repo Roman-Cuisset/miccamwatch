@@ -19,6 +19,14 @@ pub enum TrustPolicy {
     Online,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum DefensiveAction {
+    #[default]
+    Alert,
+    Kill,
+}
+
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Policy {
@@ -28,6 +36,8 @@ pub struct Policy {
     pub trust_policy: TrustPolicy,
     #[serde(default)]
     pub language: Option<String>,
+    #[serde(default)]
+    pub action: DefensiveAction,
     #[serde(default)]
     pub applications: Vec<ApplicationRule>,
 }

@@ -5,12 +5,14 @@ mod model;
 mod notify;
 mod output;
 mod platform;
+mod tray;
+mod tui;
 mod updater;
 mod watcher;
-
 use anyhow::Result;
 use clap::Parser;
 use cli::{Cli, Command, ConfigCommand};
+use colored::Colorize;
 use config::Policy;
 use i18n::Language;
 use platform::PlatformMonitor;
@@ -56,6 +58,13 @@ fn run() -> Result<u8> {
         }
         Command::Watch(options) => {
             let monitor = PlatformMonitor::new(policy.clone())?;
+            let defensive_kill = if options.no_kill {
+                false
+            } else if options.kill_unauthorized {
+                true
+            } else {
+                policy.action == crate::config::DefensiveAction::Kill
+            };
             watcher::watch(
                 &monitor,
                 &options.filter,
@@ -65,6 +74,8 @@ fn run() -> Result<u8> {
                 options.log.as_deref(),
                 options.eventlog,
                 lang,
+                options.sound,
+                defensive_kill,
             )?;
             Ok(0)
         }
@@ -91,6 +102,46 @@ fn run() -> Result<u8> {
             let monitor = PlatformMonitor::new(policy)?;
             let checks = monitor.doctor();
             output::print_doctor(&checks, options.json, lang)?;
+            Ok(0)
+        }
+        Command::Mute(opts) => {
+            let monitor = PlatformMonitor::new(policy)?;
+            if opts.status {
+                let muted = monitor.get_microphone_mute()?;
+                if muted {
+                    println!("{}", "Microphone is MUTED.".red().bold());
+                } else {
+                    println!("{}", "Microphone is UNMUTED (active).".green().bold());
+                }
+                return Ok(if muted { 1 } else { 0 });
+            }
+            let new_state = if opts.toggle {
+                monitor.toggle_microphone_mute()?
+            } else {
+                monitor.set_microphone_mute(true)?;
+                true
+            };
+            if new_state {
+                println!("{}", "✔ Microphone MUTED.".red().bold());
+            } else {
+                println!("{}", "✔ Microphone UNMUTED.".green().bold());
+            }
+            Ok(0)
+        }
+        Command::Unmute => {
+            let monitor = PlatformMonitor::new(policy)?;
+            monitor.set_microphone_mute(false)?;
+            println!("{}", "✔ Microphone UNMUTED.".green().bold());
+            Ok(0)
+        }
+        Command::Top => {
+            let monitor = PlatformMonitor::new(policy)?;
+            tui::run_tui(monitor, lang)?;
+            Ok(0)
+        }
+        Command::Tray => {
+            let monitor = PlatformMonitor::new(policy)?;
+            tray::run_tray(monitor, lang)?;
             Ok(0)
         }
         Command::Config {

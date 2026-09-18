@@ -7,6 +7,7 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use chrono::Utc;
+use colored::Colorize;
 use std::{
     collections::HashMap,
     fs::OpenOptions,
@@ -44,6 +45,8 @@ pub fn watch(
     log_path: Option<&Path>,
     eventlog: bool,
     lang: Language,
+    sound: bool,
+    defensive_kill: bool,
 ) -> Result<()> {
     let running = Arc::new(AtomicBool::new(true));
     let signal = Arc::clone(&running);
@@ -76,7 +79,7 @@ pub fn watch(
     let mut previous = by_key(initial.accesses);
     let mut last_notifications: HashMap<String, Instant> = HashMap::new();
     for access in previous.values() {
-        let event = AccessEvent {
+        let mut event = AccessEvent {
             schema_version: SCHEMA_VERSION,
             event_code: event_code(Action::Start),
             tool_version: env!("CARGO_PKG_VERSION"),
@@ -84,6 +87,17 @@ pub fn watch(
             observed_at: Utc::now(),
             access: access.clone(),
         };
+        if crate::platform::is_session_locked() {
+            event.access.evidence.push(crate::model::Evidence::new(
+                crate::model::EvidenceKind::PrivacyActivity,
+                "session_lock",
+                "Capture detected while Windows session is locked!",
+            ));
+            if event.access.risk < crate::model::Risk::Suspicious {
+                event.access.risk = crate::model::Risk::Suspicious;
+            }
+        }
+        handle_defensive_actions(&event.access, defensive_kill, sound);
         log_event(&event, &mut log_writer)?;
         write_eventlog(&event, &event_source);
         output::print_event(&event, json, min_risk, lang)?;
@@ -101,7 +115,7 @@ pub fn watch(
 
         for (key, access) in &current {
             if !previous.contains_key(key) {
-                let event = AccessEvent {
+                let mut event = AccessEvent {
                     schema_version: SCHEMA_VERSION,
                     event_code: event_code(Action::Start),
                     tool_version: env!("CARGO_PKG_VERSION"),
@@ -109,6 +123,17 @@ pub fn watch(
                     observed_at: Utc::now(),
                     access: access.clone(),
                 };
+                if crate::platform::is_session_locked() {
+                    event.access.evidence.push(crate::model::Evidence::new(
+                        crate::model::EvidenceKind::PrivacyActivity,
+                        "session_lock",
+                        "Capture detected while Windows session is locked!",
+                    ));
+                    if event.access.risk < crate::model::Risk::Suspicious {
+                        event.access.risk = crate::model::Risk::Suspicious;
+                    }
+                }
+                handle_defensive_actions(&event.access, defensive_kill, sound);
                 log_event(&event, &mut log_writer)?;
                 write_eventlog(&event, &event_source);
                 output::print_event(&event, json, min_risk, lang)?;
@@ -164,6 +189,40 @@ pub fn watch(
         let _ = unsafe { DeregisterEventSource(handle) };
     }
     Ok(())
+}
+
+fn handle_defensive_actions(access: &Access, defensive_kill: bool, sound: bool) {
+    if sound {
+        crate::platform::play_chime();
+    }
+    if defensive_kill
+        && access.risk >= crate::model::Risk::Suspicious
+        && let Some(pid) = access.pid
+    {
+        match crate::platform::terminate_process_by_pid(pid) {
+            Ok(()) => {
+                eprintln!(
+                    "{}",
+                    format!(
+                        "  🛑 TERMINATED unauthorized process {} (PID {})",
+                        access.application, pid
+                    )
+                    .red()
+                    .bold()
+                );
+            }
+            Err(e) => {
+                eprintln!(
+                    "{}",
+                    format!(
+                        "  ⚠ Failed to terminate process {} (PID {}): {e}",
+                        access.application, pid
+                    )
+                    .yellow()
+                );
+            }
+        }
+    }
 }
 
 fn log_event(event: &AccessEvent, writer: &mut Option<BufWriter<std::fs::File>>) -> Result<()> {

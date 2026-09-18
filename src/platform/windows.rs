@@ -19,10 +19,10 @@ use windows::{
         Foundation::{CloseHandle, FILETIME, HANDLE, HWND, NTSTATUS},
         Media::{
             Audio::{
-                AudioSessionStateActive, DEVICE_STATE_ACTIVE, IAudioSessionControl,
-                IAudioSessionControl2, IAudioSessionManager2, IAudioSessionNotification,
-                IAudioSessionNotification_Impl, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator,
-                eCapture,
+                AudioSessionStateActive, DEVICE_STATE_ACTIVE, Endpoints::IAudioEndpointVolume,
+                IAudioSessionControl, IAudioSessionControl2, IAudioSessionManager2,
+                IAudioSessionNotification, IAudioSessionNotification_Impl, IMMDevice,
+                IMMDeviceEnumerator, MMDeviceEnumerator, eCapture,
             },
             MediaFoundation::{
                 IMFActivate, IMFAttributes, MF_DEVSOURCE_ATTRIBUTE_FRIENDLY_NAME,
@@ -54,17 +54,26 @@ use windows::{
                 CLSCTX_ALL, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoTaskMemFree,
                 CoUninitialize, STGM_READ, StructuredStorage::PropVariantToStringAlloc,
             },
-            Diagnostics::ToolHelp::{
-                CreateToolhelp32Snapshot, MODULEENTRY32W, Module32FirstW, Module32NextW,
-                PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPMODULE,
-                TH32CS_SNAPMODULE32, TH32CS_SNAPPROCESS,
+            Diagnostics::{
+                Debug::MessageBeep,
+                ToolHelp::{
+                    CreateToolhelp32Snapshot, MODULEENTRY32W, Module32FirstW, Module32NextW,
+                    PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPMODULE,
+                    TH32CS_SNAPMODULE32, TH32CS_SNAPPROCESS,
+                },
             },
             RemoteDesktop::ProcessIdToSessionId,
+            StationsAndDesktops::{
+                CloseDesktop, DESKTOP_CONTROL_FLAGS, DESKTOP_READOBJECTS,
+                GetUserObjectInformationW, OpenInputDesktop, UOI_NAME,
+            },
             Threading::{
                 GetProcessTimes, OpenProcess, OpenProcessToken, PROCESS_NAME_WIN32,
-                PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
+                PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE, QueryFullProcessImageNameW,
+                TerminateProcess,
             },
         },
+        UI::WindowsAndMessaging::MB_ICONASTERISK,
     },
     core::{Interface, PCWSTR, PWSTR},
 };
@@ -285,6 +294,51 @@ impl PlatformMonitor {
         }
         devices.extend(camera_devices()?);
         Ok(devices)
+    }
+
+    pub fn get_microphone_mute(&self) -> Result<bool> {
+        let collection = unsafe {
+            self.enumerator
+                .EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE)
+                .context("failed to enumerate microphone devices")?
+        };
+        let count = unsafe { collection.GetCount()? };
+        if count == 0 {
+            return Ok(false);
+        }
+        let mut any_unmuted = false;
+        for i in 0..count {
+            let device = unsafe { collection.Item(i)? };
+            let volume: IAudioEndpointVolume = unsafe { device.Activate(CLSCTX_ALL, None)? };
+            let muted = unsafe { volume.GetMute()? };
+            if !muted.as_bool() {
+                any_unmuted = true;
+                break;
+            }
+        }
+        Ok(!any_unmuted)
+    }
+
+    pub fn set_microphone_mute(&self, mute: bool) -> Result<()> {
+        let collection = unsafe {
+            self.enumerator
+                .EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE)
+                .context("failed to enumerate microphone devices")?
+        };
+        let count = unsafe { collection.GetCount()? };
+        for i in 0..count {
+            let device = unsafe { collection.Item(i)? };
+            let volume: IAudioEndpointVolume = unsafe { device.Activate(CLSCTX_ALL, None)? };
+            unsafe { volume.SetMute(mute, ptr::null())? };
+        }
+        Ok(())
+    }
+
+    pub fn toggle_microphone_mute(&self) -> Result<bool> {
+        let currently_muted = self.get_microphone_mute()?;
+        let new_state = !currently_muted;
+        self.set_microphone_mute(new_state)?;
+        Ok(new_state)
     }
 
     pub fn doctor(&self) -> Vec<DiagnosticCheck> {
@@ -1454,6 +1508,50 @@ fn immediate_parent(context: &ProcessContext) -> Option<(u32, String)> {
         .ancestry
         .first()
         .map(|parent| (parent.pid, parent.name.clone()))
+}
+
+pub fn terminate_process_by_pid(pid: u32) -> Result<()> {
+    unsafe {
+        let handle = OpenProcess(PROCESS_TERMINATE, false, pid)
+            .context("failed to open process for termination")?;
+        let result = TerminateProcess(handle, 1);
+        let _ = CloseHandle(handle);
+        result.context("failed to terminate process")?;
+    }
+    Ok(())
+}
+
+pub fn is_session_locked() -> bool {
+    let desk = unsafe { OpenInputDesktop(DESKTOP_CONTROL_FLAGS(0), false, DESKTOP_READOBJECTS) };
+    match desk {
+        Ok(desk) => {
+            let mut name = [0u16; 128];
+            let mut needed = 0;
+            let ok = unsafe {
+                GetUserObjectInformationW(
+                    HANDLE(desk.0),
+                    UOI_NAME,
+                    Some(name.as_mut_ptr() as _),
+                    (name.len() * 2) as u32,
+                    Some(&mut needed),
+                )
+            };
+            let _ = unsafe { CloseDesktop(desk) };
+            if ok.is_ok() && needed > 2 {
+                let s = String::from_utf16_lossy(&name[..needed as usize / 2 - 1]);
+                s.eq_ignore_ascii_case("Winlogon")
+            } else {
+                false
+            }
+        }
+        Err(_) => true,
+    }
+}
+
+pub fn play_chime() {
+    unsafe {
+        let _ = MessageBeep(MB_ICONASTERISK);
+    }
 }
 
 #[cfg(test)]

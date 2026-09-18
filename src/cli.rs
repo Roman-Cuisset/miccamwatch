@@ -34,6 +34,14 @@ pub enum Command {
     Update,
     /// Run self-diagnostics and report system compatibility
     Doctor(OutputOptions),
+    /// Mute or query microphone hardware capture level
+    Mute(MuteOptions),
+    /// Unmute all microphone capture devices
+    Unmute,
+    /// Launch the interactive full-terminal live dashboard
+    Top,
+    /// Run in background as a system tray icon in the Windows notification area
+    Tray,
     /// Validate policy configuration
     Config {
         #[command(subcommand)]
@@ -72,6 +80,15 @@ pub struct WatchOptions {
     /// Also write events to the Windows Application event log
     #[arg(long)]
     pub eventlog: bool,
+    /// Play a discreet chime when microphone or camera access starts
+    #[arg(long)]
+    pub sound: bool,
+    /// Automatically terminate suspicious unauthorized processes accessing camera or microphone (disabled by default)
+    #[arg(long, conflicts_with = "no_kill")]
+    pub kill_unauthorized: bool,
+    /// Disable automatic process termination, overriding policy configuration
+    #[arg(long, conflicts_with = "kill_unauthorized")]
+    pub no_kill: bool,
 }
 
 #[derive(Args, Debug)]
@@ -80,6 +97,16 @@ pub struct ExplainOptions {
     pub pid: u32,
     #[command(flatten)]
     pub output: OutputOptions,
+}
+
+#[derive(Args, Debug, Default)]
+pub struct MuteOptions {
+    /// Toggle mute state (mute if unmuted, unmute if muted)
+    #[arg(long, short = 't')]
+    pub toggle: bool,
+    /// Only check whether microphone is currently muted
+    #[arg(long, short = 's')]
+    pub status: bool,
 }
 
 #[derive(Args, Debug, Default)]
