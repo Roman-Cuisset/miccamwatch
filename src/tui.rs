@@ -1,7 +1,7 @@
 use crate::{
     cli::Filter,
     i18n::Language,
-    model::{Access, Activity, Device, Resource, Risk},
+    model::{Access, Activity, CollectorState, Device, MicrophoneMuteState, Resource, Risk},
     platform::PlatformMonitor,
 };
 use anyhow::{Context, Result};
@@ -24,20 +24,38 @@ use std::{
     time::{Duration, Instant},
 };
 
+struct TerminalSessionGuard;
+
+impl Drop for TerminalSessionGuard {
+    fn drop(&mut self) {
+        let _ = disable_raw_mode();
+        let _ = execute!(io::stdout(), LeaveAlternateScreen);
+    }
+}
+
+fn text(lang: Language, values: [&'static str; 7]) -> &'static str {
+    values[match lang {
+        Language::En => 0,
+        Language::Fr => 1,
+        Language::De => 2,
+        Language::Es => 3,
+        Language::Ja => 4,
+        Language::Zh => 5,
+        Language::Ru => 6,
+    }]
+}
+
 pub fn run_tui(monitor: PlatformMonitor, lang: Language) -> Result<()> {
     enable_raw_mode().context("failed to enable raw mode")?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen).context("failed to enter alternate screen")?;
+    let _session = TerminalSessionGuard;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend).context("failed to initialize ratatui terminal")?;
 
-    let res = tui_loop(&mut terminal, monitor, lang);
-
-    let _ = disable_raw_mode();
-    let _ = execute!(terminal.backend_mut(), LeaveAlternateScreen);
+    let result = tui_loop(&mut terminal, monitor, lang);
     let _ = terminal.show_cursor();
-
-    res
+    result
 }
 
 struct TuiState {
@@ -47,8 +65,10 @@ struct TuiState {
     table_state: TableState,
     events_log: Vec<(String, String, Color)>,
     status_msg: Option<(String, Instant, Color)>,
-    muted: bool,
+    mute_state: MicrophoneMuteState,
     devices: Vec<Device>,
+    health_error: Option<String>,
+    pending_kill: Option<(String, u32, Instant)>,
 }
 
 fn tui_loop(
@@ -57,7 +77,9 @@ fn tui_loop(
     lang: Language,
 ) -> Result<()> {
     let devices = monitor.devices().unwrap_or_default();
-    let muted = monitor.get_microphone_mute().unwrap_or(false);
+    let mute_state = monitor
+        .microphone_mute_state()
+        .unwrap_or(MicrophoneMuteState::Unavailable);
 
     let mut state = TuiState {
         monitor,
@@ -66,11 +88,16 @@ fn tui_loop(
         table_state: TableState::default(),
         events_log: Vec::new(),
         status_msg: None,
-        muted,
+        mute_state,
         devices,
+        health_error: None,
+        pending_kill: None,
     };
 
-    let filter = Filter::default();
+    let filter = Filter {
+        include_ready: true,
+        ..Filter::default()
+    };
     let mut last_poll = Instant::now() - Duration::from_secs(1);
     let mut current_accesses: Vec<Access> = Vec::new();
 
@@ -78,31 +105,52 @@ fn tui_loop(
         // Poll state every 250ms
         if last_poll.elapsed() >= Duration::from_millis(250) {
             last_poll = Instant::now();
-            if let Ok(snapshot) = state.monitor.snapshot(&filter) {
-                // Check new events
-                for access in &snapshot.accesses {
-                    if !current_accesses.iter().any(|a| a.key == access.key) {
-                        let time = Local::now().format("%H:%M:%S").to_string();
-                        let text = format!("START {} ({})", access.application, access.resource);
-                        state.events_log.push((time, text, Color::Green));
-                        if state.events_log.len() > 100 {
-                            state.events_log.remove(0);
+            match state.monitor.snapshot(&filter) {
+                Ok(snapshot) => {
+                    for access in &snapshot.accesses {
+                        if !current_accesses.iter().any(|a| a.key == access.key) {
+                            let time = Local::now().format("%H:%M:%S").to_string();
+                            let text =
+                                format!("START {} ({})", access.application, access.resource);
+                            state.events_log.push((time, text, Color::Green));
+                            if state.events_log.len() > 100 {
+                                state.events_log.remove(0);
+                            }
                         }
                     }
-                }
-                for prev in &current_accesses {
-                    if !snapshot.accesses.iter().any(|a| a.key == prev.key) {
-                        let time = Local::now().format("%H:%M:%S").to_string();
-                        let text = format!("STOP  {} ({})", prev.application, prev.resource);
-                        state.events_log.push((time, text, Color::DarkGray));
-                        if state.events_log.len() > 100 {
-                            state.events_log.remove(0);
+                    for previous in &current_accesses {
+                        if !snapshot.accesses.iter().any(|a| a.key == previous.key) {
+                            let time = Local::now().format("%H:%M:%S").to_string();
+                            let text =
+                                format!("STOP  {} ({})", previous.application, previous.resource);
+                            state.events_log.push((time, text, Color::DarkGray));
+                            if state.events_log.len() > 100 {
+                                state.events_log.remove(0);
+                            }
                         }
                     }
+                    state.health_error = snapshot
+                        .collectors
+                        .iter()
+                        .find(|collector| collector.state != CollectorState::Healthy)
+                        .map(|collector| {
+                            format!(
+                                "{}: {}",
+                                collector.collector,
+                                collector.detail.as_deref().unwrap_or("degraded")
+                            )
+                        });
+                    current_accesses = snapshot.accesses;
+                    state.selected_access = state
+                        .selected_access
+                        .min(current_accesses.len().saturating_sub(1));
                 }
-                current_accesses = snapshot.accesses;
+                Err(error) => state.health_error = Some(format!("collection failed: {error:#}")),
             }
-            state.muted = state.monitor.get_microphone_mute().unwrap_or(state.muted);
+            state.mute_state = state
+                .monitor
+                .microphone_mute_state()
+                .unwrap_or(MicrophoneMuteState::Unavailable);
         }
 
         // Draw UI
@@ -114,10 +162,21 @@ fn tui_loop(
             && key.kind == KeyEventKind::Press
         {
             match key.code {
+                KeyCode::Esc if state.pending_kill.take().is_some() => {
+                    state.status_msg = Some((
+                        "Termination cancelled".to_owned(),
+                        Instant::now(),
+                        Color::Yellow,
+                    ));
+                }
                 KeyCode::Char('q') | KeyCode::Esc => break,
-                KeyCode::Char('m') => {
-                    if let Ok(new_mute) = state.monitor.toggle_microphone_mute() {
-                        state.muted = new_mute;
+                KeyCode::Char('m') => match state.monitor.toggle_microphone_mute() {
+                    Ok(new_mute) => {
+                        state.mute_state = if new_mute {
+                            MicrophoneMuteState::Muted
+                        } else {
+                            MicrophoneMuteState::Unmuted
+                        };
                         let msg = if new_mute {
                             ("Microphone MUTED".to_owned(), Instant::now(), Color::Red)
                         } else {
@@ -129,13 +188,27 @@ fn tui_loop(
                         };
                         state.status_msg = Some(msg);
                     }
-                }
+                    Err(error) => {
+                        state.status_msg = Some((
+                            format!("Mute action failed: {error:#}"),
+                            Instant::now(),
+                            Color::Yellow,
+                        ));
+                    }
+                },
                 KeyCode::Char('k') => {
-                    if !current_accesses.is_empty()
-                        && state.selected_access < current_accesses.len()
+                    if let Some(target) = current_accesses.get(state.selected_access)
+                        && let Some(pid) = target.pid
                     {
-                        let target = &current_accesses[state.selected_access];
-                        if let Some(pid) = target.pid {
+                        let confirmed = state.pending_kill.as_ref().is_some_and(
+                            |(key, pending_pid, created)| {
+                                key == &target.key
+                                    && *pending_pid == pid
+                                    && created.elapsed() < Duration::from_secs(3)
+                            },
+                        );
+                        if confirmed {
+                            state.pending_kill = None;
                             match crate::platform::terminate_process_by_pid(pid) {
                                 Ok(()) => {
                                     state.status_msg = Some((
@@ -147,14 +220,24 @@ fn tui_loop(
                                         Color::Red,
                                     ));
                                 }
-                                Err(e) => {
+                                Err(error) => {
                                     state.status_msg = Some((
-                                        format!("Failed to kill PID {pid}: {e}"),
+                                        format!("Failed to terminate PID {pid}: {error:#}"),
                                         Instant::now(),
                                         Color::Yellow,
                                     ));
                                 }
                             }
+                        } else {
+                            state.pending_kill = Some((target.key.clone(), pid, Instant::now()));
+                            state.status_msg = Some((
+                                format!(
+                                    "Press [k] again within 3s to terminate {} (PID {})",
+                                    target.application, pid
+                                ),
+                                Instant::now(),
+                                Color::Yellow,
+                            ));
                         }
                     }
                 }
@@ -195,21 +278,31 @@ fn draw_ui(f: &mut Frame, state: &mut TuiState, accesses: &[Access]) {
 
     // 1. Header
     let time_str = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-    let mute_badge = if state.muted {
-        Span::styled(
+    let mute_badge = match state.mute_state {
+        MicrophoneMuteState::Muted => Span::styled(
             " [MIC MUTED] ",
             Style::default().bg(Color::Red).fg(Color::White).bold(),
-        )
-    } else {
-        Span::styled(
+        ),
+        MicrophoneMuteState::Unmuted => Span::styled(
             " [MIC ON] ",
             Style::default().bg(Color::Green).fg(Color::Black).bold(),
-        )
+        ),
+        MicrophoneMuteState::Mixed => Span::styled(
+            " [MIC MIXED] ",
+            Style::default().bg(Color::Yellow).fg(Color::Black).bold(),
+        ),
+        MicrophoneMuteState::Unavailable => Span::styled(
+            " [NO MIC] ",
+            Style::default().bg(Color::DarkGray).fg(Color::White).bold(),
+        ),
     };
 
     let title_line = Line::from(vec![
         Span::styled(" miccamwatch ", Style::default().fg(Color::Cyan).bold()),
-        Span::styled("v0.9.0 ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            format!("v{} ", env!("CARGO_PKG_VERSION")),
+            Style::default().fg(Color::DarkGray),
+        ),
         Span::raw("— "),
         Span::styled(time_str, Style::default().fg(Color::White)),
         Span::raw("   "),
@@ -244,12 +337,34 @@ fn draw_ui(f: &mut Frame, state: &mut TuiState, accesses: &[Access]) {
     }
     if dev_lines.is_empty() {
         dev_lines.push(Line::from(Span::styled(
-            "No capture devices found",
+            text(
+                state.lang,
+                [
+                    "No capture devices found",
+                    "Aucun périphérique de capture",
+                    "Keine Aufnahmegeräte gefunden",
+                    "No se encontraron dispositivos",
+                    "キャプチャデバイスなし",
+                    "未找到采集设备",
+                    "Устройства захвата не найдены",
+                ],
+            ),
             Style::default().fg(Color::DarkGray),
         )));
     }
     let dev_block = Block::default()
-        .title(" Devices ")
+        .title(text(
+            state.lang,
+            [
+                " Devices ",
+                " Périphériques ",
+                " Geräte ",
+                " Dispositivos ",
+                " デバイス ",
+                " 设备 ",
+                " Устройства ",
+            ],
+        ))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Blue));
     f.render_widget(Paragraph::new(dev_lines).block(dev_block), top_chunks[0]);
@@ -257,11 +372,15 @@ fn draw_ui(f: &mut Frame, state: &mut TuiState, accesses: &[Access]) {
     // Stats & Status Message
     let active_mics = accesses
         .iter()
-        .filter(|a| a.resource == Resource::Microphone)
+        .filter(|a| a.resource == Resource::Microphone && a.activity == Activity::Active)
         .count();
     let active_cams = accesses
         .iter()
-        .filter(|a| a.resource == Resource::Camera)
+        .filter(|a| a.resource == Resource::Camera && a.activity == Activity::Active)
+        .count();
+    let ready_cams = accesses
+        .iter()
+        .filter(|a| a.resource == Resource::Camera && a.activity == Activity::Ready)
         .count();
     let suspicious_count = accesses
         .iter()
@@ -294,6 +413,13 @@ fn draw_ui(f: &mut Frame, state: &mut TuiState, accesses: &[Access]) {
             ),
         ]),
         Line::from(vec![
+            Span::raw("Camera-ready pipelines: "),
+            Span::styled(
+                ready_cams.to_string(),
+                Style::default().fg(Color::Yellow).bold(),
+            ),
+        ]),
+        Line::from(vec![
             Span::raw("Risk alerts (Suspicious/Blocked): "),
             Span::styled(
                 suspicious_count.to_string(),
@@ -316,16 +442,44 @@ fn draw_ui(f: &mut Frame, state: &mut TuiState, accesses: &[Access]) {
             Span::styled(msg, Style::default().fg(*color).bold()),
         ]));
     }
+    if let Some(error) = &state.health_error {
+        stat_lines.push(Line::from(vec![
+            Span::styled("Telemetry: ", Style::default().bold()),
+            Span::styled(error, Style::default().fg(Color::Red).bold()),
+        ]));
+    }
 
     let stats_block = Block::default()
-        .title(" Summary ")
+        .title(text(
+            state.lang,
+            [
+                " Summary ",
+                " Résumé ",
+                " Übersicht ",
+                " Resumen ",
+                " 概要 ",
+                " 摘要 ",
+                " Сводка ",
+            ],
+        ))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Blue));
     f.render_widget(Paragraph::new(stat_lines).block(stats_block), top_chunks[1]);
 
     // 3. Active Accesses Table
     let table_block = Block::default()
-        .title(" Active Captures & Evidence ")
+        .title(text(
+            state.lang,
+            [
+                " Observed Access & Camera-Ready Pipelines ",
+                " Accès observés et pipelines caméra prêts ",
+                " Beobachtete Zugriffe und Kamerabereitschaft ",
+                " Accesos observados y cámaras preparadas ",
+                " 監視中のアクセスとカメラ準備状態 ",
+                " 已观察访问和摄像头就绪管线 ",
+                " Наблюдаемые доступы и готовность камеры ",
+            ],
+        ))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::White));
 
@@ -333,7 +487,18 @@ fn draw_ui(f: &mut Frame, state: &mut TuiState, accesses: &[Access]) {
         let empty_msg = Paragraph::new(Line::from(vec![
             Span::styled("✔ ", Style::default().fg(Color::Green).bold()),
             Span::styled(
-                "No active capture detected. Microphone and camera are currently idle.",
+                text(
+                    state.lang,
+                    [
+                        "No active capture detected. Microphone and camera are idle.",
+                        "Aucune capture active. Le microphone et la caméra sont inactifs.",
+                        "Keine aktive Aufnahme. Mikrofon und Kamera sind inaktiv.",
+                        "Sin captura activa. Micrófono y cámara inactivos.",
+                        "アクティブなキャプチャはありません。",
+                        "未检测到活动采集。",
+                        "Активный захват не обнаружен.",
+                    ],
+                ),
                 Style::default().fg(Color::Green),
             ),
         ]))
@@ -421,7 +586,18 @@ fn draw_ui(f: &mut Frame, state: &mut TuiState, accesses: &[Access]) {
 
     // 4. Event Stream Log
     let log_block = Block::default()
-        .title(" Event Stream ")
+        .title(text(
+            state.lang,
+            [
+                " Event Stream ",
+                " Flux d’événements ",
+                " Ereignisse ",
+                " Eventos ",
+                " イベント ",
+                " 事件流 ",
+                " События ",
+            ],
+        ))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::DarkGray));
     let log_lines: Vec<Line> = state
@@ -445,27 +621,82 @@ fn draw_ui(f: &mut Frame, state: &mut TuiState, accesses: &[Access]) {
             " [q] ",
             Style::default().bg(Color::DarkGray).fg(Color::White).bold(),
         ),
-        Span::raw("Quit  "),
+        Span::raw(text(
+            state.lang,
+            [
+                "Quit  ",
+                "Quitter  ",
+                "Beenden  ",
+                "Salir  ",
+                "終了  ",
+                "退出  ",
+                "Выход  ",
+            ],
+        )),
         Span::styled(
             " [m] ",
             Style::default().bg(Color::DarkGray).fg(Color::White).bold(),
         ),
-        Span::raw("Mute/Unmute Mic  "),
+        Span::raw(text(
+            state.lang,
+            [
+                "Mute/Unmute Mic  ",
+                "Couper/activer micro  ",
+                "Mikrofon umschalten  ",
+                "Silenciar/activar micro  ",
+                "マイク切替  ",
+                "麦克风静音切换  ",
+                "Микрофон вкл/выкл  ",
+            ],
+        )),
         Span::styled(
             " [k] ",
             Style::default().bg(Color::DarkGray).fg(Color::White).bold(),
         ),
-        Span::raw("Terminate Process  "),
+        Span::raw(text(
+            state.lang,
+            [
+                "Terminate Process  ",
+                "Terminer le processus  ",
+                "Prozess beenden  ",
+                "Terminar proceso  ",
+                "プロセス終了  ",
+                "终止进程  ",
+                "Завершить процесс  ",
+            ],
+        )),
         Span::styled(
             " [↑/↓] ",
             Style::default().bg(Color::DarkGray).fg(Color::White).bold(),
         ),
-        Span::raw("Select  "),
+        Span::raw(text(
+            state.lang,
+            [
+                "Select  ",
+                "Sélectionner  ",
+                "Auswählen  ",
+                "Seleccionar  ",
+                "選択  ",
+                "选择  ",
+                "Выбрать  ",
+            ],
+        )),
         Span::styled(
             " [r] ",
             Style::default().bg(Color::DarkGray).fg(Color::White).bold(),
         ),
-        Span::raw("Refresh"),
+        Span::raw(text(
+            state.lang,
+            [
+                "Refresh",
+                "Actualiser",
+                "Aktualisieren",
+                "Actualizar",
+                "更新",
+                "刷新",
+                "Обновить",
+            ],
+        )),
     ]);
     f.render_widget(Paragraph::new(footer_line), chunks[4]);
 }

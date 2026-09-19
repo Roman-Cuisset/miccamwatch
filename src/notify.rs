@@ -2,14 +2,25 @@ use crate::{
     i18n::Language,
     model::{Access, Action, Risk},
 };
+use winreg::{RegKey, enums::HKEY_CURRENT_USER};
+
 use windows::{
     Data::Xml::Dom::XmlDocument,
     UI::Notifications::{ToastNotification, ToastNotificationManager, ToastTemplateType},
     core::HSTRING,
 };
+const APP_ID: &str = "MicCamWatch.MicCamWatch";
+
+pub fn ensure_identity() -> anyhow::Result<()> {
+    let root = RegKey::predef(HKEY_CURRENT_USER);
+    let (key, _) = root.create_subkey(format!(r"Software\Classes\AppUserModelId\{APP_ID}"))?;
+    key.set_value("DisplayName", &"miccamwatch")?;
+    key.set_value("ShowInSettings", &1u32)?;
+    Ok(())
+}
 
 /// Sends a toast directly through WinRT. The watcher handles deduplication.
-pub fn notify_access(access: &Access, action: Action, lang: Language) {
+pub fn notify_access(access: &Access, action: Action, lang: Language) -> windows::core::Result<()> {
     let title = lang.toast_title(action, access.resource);
     let pid = access
         .pid
@@ -92,9 +103,11 @@ pub fn notify_access(access: &Access, action: Action, lang: Language) {
     }
     let detail = body.join(" | ");
 
-    std::thread::spawn(move || {
-        let _ = show_toast(&title, &detail);
-    });
+    show_toast(&title, &detail)
+}
+
+pub fn notify_message(title: &str, detail: &str) -> windows::core::Result<()> {
+    show_toast(title, detail)
 }
 
 fn show_toast(title: &str, detail: &str) -> windows::core::Result<()> {
@@ -106,10 +119,12 @@ fn show_toast(title: &str, detail: &str) -> windows::core::Result<()> {
     let detail_node = text.Item(1)?;
     detail_node.AppendChild(&xml.CreateTextNode(&HSTRING::from(detail))?)?;
     let toast = ToastNotification::CreateToastNotification(&xml)?;
-    // Reuse the registered Windows PowerShell AUMID only as the toast identity;
-    // no PowerShell process or script is started.
-    let notifier = ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(
-        r"{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe",
-    ))?;
+    ensure_identity().map_err(|error| {
+        windows::core::Error::new(
+            windows::core::HRESULT(0x80004005u32 as i32),
+            format!("failed to register notification identity: {error:#}"),
+        )
+    })?;
+    let notifier = ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(APP_ID))?;
     notifier.Show(&toast)
 }

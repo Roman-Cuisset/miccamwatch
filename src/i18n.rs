@@ -213,6 +213,52 @@ impl Language {
         }
     }
 
+    pub fn no_matching_activity(&self) -> &'static str {
+        match self {
+            Self::Fr => "Aucun accès ne correspond au filtre demandé.",
+            Self::De => "Kein Zugriff entspricht dem angeforderten Filter.",
+            Self::Es => "Ningún acceso coincide con el filtro solicitado.",
+            Self::Ja => "指定されたフィルターに一致するアクセスはありません。",
+            Self::Zh => "没有访问符合请求的筛选条件。",
+            Self::Ru => "Нет доступов, соответствующих заданному фильтру.",
+            Self::En => "No access matches the requested filter.",
+        }
+    }
+
+    pub fn microphone_status(&self, state: crate::model::MicrophoneMuteState) -> &'static str {
+        use crate::model::MicrophoneMuteState::{Mixed, Muted, Unavailable, Unmuted};
+        match (self, state) {
+            (Self::Fr, Unavailable) => "Aucun périphérique microphone actif.",
+            (Self::Fr, Muted) => "Le microphone est COUPÉ.",
+            (Self::Fr, Unmuted) => "Le microphone est ACTIVÉ.",
+            (Self::Fr, Mixed) => "Les microphones ont des états de sourdine MIXTES.",
+            (Self::De, Unavailable) => "Kein aktives Mikrofon gefunden.",
+            (Self::De, Muted) => "Das Mikrofon ist STUMMGESCHALTET.",
+            (Self::De, Unmuted) => "Das Mikrofon ist AKTIVIERT.",
+            (Self::De, Mixed) => "Die Mikrofone haben GEMISCHTE Stummschaltzustände.",
+            (Self::Es, Unavailable) => "No se encontró ningún micrófono activo.",
+            (Self::Es, Muted) => "El micrófono está SILENCIADO.",
+            (Self::Es, Unmuted) => "El micrófono está ACTIVADO.",
+            (Self::Es, Mixed) => "Los micrófonos tienen estados de silencio MIXTOS.",
+            (Self::Ja, Unavailable) => "有効なマイクデバイスがありません。",
+            (Self::Ja, Muted) => "マイクはミュートされています。",
+            (Self::Ja, Unmuted) => "マイクは有効です。",
+            (Self::Ja, Mixed) => "マイクのミュート状態が混在しています。",
+            (Self::Zh, Unavailable) => "未找到活动麦克风设备。",
+            (Self::Zh, Muted) => "麦克风已静音。",
+            (Self::Zh, Unmuted) => "麦克风已启用。",
+            (Self::Zh, Mixed) => "麦克风的静音状态不一致。",
+            (Self::Ru, Unavailable) => "Активные микрофоны не найдены.",
+            (Self::Ru, Muted) => "Микрофон ЗАГЛУШЕН.",
+            (Self::Ru, Unmuted) => "Микрофон ВКЛЮЧЕН.",
+            (Self::Ru, Mixed) => "Микрофоны имеют СМЕШАННЫЕ состояния.",
+            (Self::En, Unavailable) => "No active microphone capture device found.",
+            (Self::En, Muted) => "Microphone is MUTED.",
+            (Self::En, Unmuted) => "Microphone is UNMUTED.",
+            (Self::En, Mixed) => "Microphone devices have MIXED mute states.",
+        }
+    }
+
     pub fn device_unavailable(&self) -> &'static str {
         match self {
             Self::Fr => "périphérique non disponible",

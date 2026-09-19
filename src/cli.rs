@@ -120,6 +120,9 @@ pub struct Filter {
     /// Minimum risk level to display (expected, unexplained, suspicious, blocked)
     #[arg(long, value_parser = parse_risk)]
     pub risk: Option<Risk>,
+    /// Include low-confidence camera-ready pipelines without confirmed frame flow
+    #[arg(long)]
+    pub include_ready: bool,
 }
 
 impl Filter {

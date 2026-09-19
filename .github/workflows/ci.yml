@@ -18,4 +18,7 @@ jobs:
           components: rustfmt, clippy
       - run: cargo fmt --check
       - run: cargo clippy --all-targets --locked -- -D warnings
+      - run: cargo test --all-targets --locked
+      - name: Audit Rust dependencies
+        run: cargo install cargo-audit --locked && cargo audit
       - run: cargo build --release --locked

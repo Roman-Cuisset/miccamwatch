@@ -15,6 +15,7 @@ use cli::{Cli, Command, ConfigCommand};
 use colored::Colorize;
 use config::Policy;
 use i18n::Language;
+use model::MicrophoneMuteState;
 use platform::PlatformMonitor;
 use std::{process::ExitCode, time::Duration};
 
@@ -52,7 +53,10 @@ fn run() -> Result<u8> {
         Command::Status(options) => {
             let monitor = PlatformMonitor::new(policy.clone())?;
             let snapshot = monitor.snapshot(&options.filter)?;
-            let has_access = !snapshot.accesses.is_empty();
+            let has_access = snapshot
+                .accesses
+                .iter()
+                .any(|access| options.filter.risk.is_none_or(|risk| access.risk >= risk));
             output::print_status(&snapshot, options.output.json, options.filter.risk, lang)?;
             Ok(u8::from(has_access))
         }
@@ -107,13 +111,16 @@ fn run() -> Result<u8> {
         Command::Mute(opts) => {
             let monitor = PlatformMonitor::new(policy)?;
             if opts.status {
-                let muted = monitor.get_microphone_mute()?;
-                if muted {
-                    println!("{}", "Microphone is MUTED.".red().bold());
-                } else {
-                    println!("{}", "Microphone is UNMUTED (active).".green().bold());
+                let state = monitor.microphone_mute_state()?;
+                let message = lang.microphone_status(state);
+                match state {
+                    MicrophoneMuteState::Muted => println!("{}", message.red().bold()),
+                    MicrophoneMuteState::Unmuted => println!("{}", message.green().bold()),
+                    MicrophoneMuteState::Unavailable | MicrophoneMuteState::Mixed => {
+                        println!("{}", message.yellow().bold())
+                    }
                 }
-                return Ok(if muted { 1 } else { 0 });
+                return Ok(0);
             }
             let new_state = if opts.toggle {
                 monitor.toggle_microphone_mute()?

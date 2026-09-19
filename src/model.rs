@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use std::fmt;
 
-pub const SCHEMA_VERSION: u8 = 2;
+pub const SCHEMA_VERSION: u8 = 3;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -75,6 +75,30 @@ impl fmt::Display for Confidence {
             Self::Low => "low",
         })
     }
+}
+
+/// Policy decision used for enforcement. This is deliberately independent from
+/// the heuristic risk assessment.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EnforcementDecision {
+    /// An explicit policy rule matched.
+    Allow,
+    /// No explicit policy decision is available; report only.
+    #[default]
+    Alert,
+    /// An explicit policy rule was violated.
+    Deny,
+    /// Required identity evidence was unavailable.
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MicrophoneMuteState {
+    Unavailable,
+    Muted,
+    Unmuted,
+    Mixed,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -161,6 +185,7 @@ pub struct Access {
     pub activity: Activity,
     pub risk: Risk,
     pub confidence: Confidence,
+    pub enforcement: EnforcementDecision,
     pub application: String,
     pub pid: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -278,6 +303,7 @@ mod tests {
             pid: Some(1),
             parent_pid: None,
             parent_name: None,
+            enforcement: EnforcementDecision::Alert,
             executable: None,
             signature: None,
             device: None,
@@ -293,9 +319,10 @@ mod tests {
             accesses: &[access],
         })
         .unwrap();
-        assert_eq!(value["schema_version"], 2);
+        assert_eq!(value["schema_version"], 3);
         assert_eq!(value["accesses"][0]["activity"], "ready");
         assert_eq!(value["accesses"][0]["risk"], "unexplained");
+        assert_eq!(value["accesses"][0]["enforcement"], "alert");
         assert_eq!(value["accesses"][0]["confidence"], "low");
     }
 }

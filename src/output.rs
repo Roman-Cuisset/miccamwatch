@@ -15,6 +15,12 @@ pub fn print_status(
     min_risk: Option<Risk>,
     lang: Language,
 ) -> Result<()> {
+    let visible: Vec<_> = snapshot
+        .accesses
+        .iter()
+        .filter(|access| should_display(access, min_risk))
+        .cloned()
+        .collect();
     if json {
         println!(
             "{}",
@@ -22,19 +28,18 @@ pub fn print_status(
                 schema_version: SCHEMA_VERSION,
                 tool_version: env!("CARGO_PKG_VERSION"),
                 collectors: &snapshot.collectors,
-                accesses: &snapshot.accesses,
+                accesses: &visible,
             })?
         );
         return Ok(());
     }
 
-    let visible: Vec<_> = snapshot
-        .accesses
-        .iter()
-        .filter(|a| should_display(a, min_risk))
-        .collect();
     if visible.is_empty() {
-        println!("{}", lang.no_activity().green().bold());
+        if snapshot.accesses.is_empty() {
+            println!("{}", lang.no_activity().green().bold());
+        } else {
+            println!("{}", lang.no_matching_activity().yellow());
+        }
     }
     for collector in &snapshot.collectors {
         match collector.state {
@@ -69,11 +74,11 @@ pub fn print_event(
     min_risk: Option<Risk>,
     lang: Language,
 ) -> Result<()> {
-    if json {
-        println!("{}", serde_json::to_string(event)?);
+    if !should_display(&event.access, min_risk) {
         return Ok(());
     }
-    if !should_display(&event.access, min_risk) {
+    if json {
+        println!("{}", serde_json::to_string(event)?);
         return Ok(());
     }
 
@@ -265,5 +270,45 @@ fn print_access(access: &Access, action: Option<Action>, lang: Language) {
             "     {}",
             lang.recommended_warning().bold().truecolor(255, 140, 0)
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{Activity, Confidence, EnforcementDecision, Resource};
+
+    fn access(risk: Risk) -> Access {
+        Access {
+            key: "test".into(),
+            resource: Resource::Microphone,
+            activity: Activity::Active,
+            risk,
+            confidence: Confidence::High,
+            enforcement: EnforcementDecision::Alert,
+            application: "test.exe".into(),
+            pid: Some(42),
+            parent_pid: None,
+            parent_name: None,
+            executable: None,
+            signature: None,
+            device: None,
+            started_at: None,
+            modules: vec![],
+            evidence: vec![],
+            process: None,
+        }
+    }
+
+    #[test]
+    fn risk_filter_applies_identically_before_output_formatting() {
+        assert!(!should_display(
+            &access(Risk::Expected),
+            Some(Risk::Suspicious)
+        ));
+        assert!(should_display(
+            &access(Risk::Suspicious),
+            Some(Risk::Suspicious)
+        ));
     }
 }

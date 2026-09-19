@@ -1,6 +1,6 @@
 # miccamwatch
 
-`mcw` is a lightweight Windows command-line monitor that attributes microphone and camera signals to local processes and explains the evidence behind each assessment. It supports high-contrast terminal colors, multilingual interfaces, policy-driven trust validation, JSONL logging, Windows Event Log integration, and desktop toast notifications.
+`mcw` is a Windows beta monitoring tool that attributes microphone and camera signals to local processes and explains the evidence behind each assessment. It supports high-contrast terminal colors, multilingual core labels, policy-driven trust validation, JSONL logging, Windows Event Log integration, and desktop toast notifications. Detailed evidence remains in English for stable machine-readable diagnostics.
 
 ## Current capabilities
 
@@ -22,10 +22,10 @@
 - Multilingual user interface with automatic Windows system language detection and 7 supported languages: English (`en`), French (`fr`), German (`de`), Spanish (`es`), Japanese (`ja`), Simplified Chinese (`zh`), Russian (`ru`).
 - Emergency hardware microphone kill-switch (`mcw mute` / `mcw unmute` / `mcw mute --toggle`).
 - Interactive full-terminal live dashboard with keyboard shortcuts (`mcw top`).
-- Windows Notification Area system tray background mode with dynamic green/red status icon and right-click menu (`mcw tray`).
-- Active defensive process termination against unauthorized capture software (`--kill-unauthorized`, disabled by default).
-- Workstation lock detection (flags capture initiated while screen is locked via Winlogon desktop).
-- Discreet native audio chime upon capture initiation (`--sound`).
+- Windows Notification Area background mode with green (idle), yellow (camera-ready), red (confirmed active), and gray (collector error) states (`mcw tray`).
+- Opt-in termination of explicitly policy-denied active capture processes after two consecutive observations (`--kill-unauthorized`, disabled by default).
+- Three-state workstation lock detection; unknown lock state never triggers enforcement.
+- Discreet native audio chime upon confirmed capture initiation (`--sound`).
 - Runs without administrator privileges.
 
 ## Commands
@@ -35,6 +35,7 @@ mcw status
 mcw status --microphone
 mcw status --camera --json
 mcw status --risk suspicious
+mcw status --include-ready
 mcw watch
 mcw status --lang fr
 mcw watch --notify
@@ -59,7 +60,7 @@ mcw --config policy.toml status
 mcw --config policy.toml config validate
 mcw update
 
-`status` exits with code `0` when no activity is detected, `1` when activity is reported, and `2` on error. `explain` returns `1` when the requested PID has no current observation.
+`status` excludes low-confidence camera-ready pipelines unless `--include-ready` is supplied. It exits with code `0` when no access matching the filters is detected, `1` when a matching access is reported, and `2` on error. `explain` returns `1` when the requested PID has no current observation.
 
 ## Assessment model
 
@@ -73,7 +74,7 @@ The three assessment dimensions are intentionally independent:
 
 Microphone attribution uses an active WASAPI capture session and has high confidence. An open Capability Access Manager interval provides medium-confidence camera activity. Loaded camera modules provide low-confidence readiness only.
 
-`mcw` deliberately has no `unauthorized` result: user-mode module inspection cannot prove that video frames were acquired despite a denied permission. It reports `blocked` and exposes the underlying evidence instead.
+`mcw` deliberately has no heuristic `unauthorized` result. Enforcement is separate from risk: only an explicit publisher/path policy mismatch produces `enforcement = "deny"`. Automatic termination additionally requires confirmed `active` capture, a PID, two consecutive observations, and a non-protected process.
 
 ## JSON contract
 
@@ -81,14 +82,16 @@ Status JSON is an object with an explicit schema version:
 
 ```json
 {
-  "schema_version": 2,
-  "tool_version": "0.9.0",
+  "schema_version": 3,
+  "tool_version": "0.10.0",
   "collectors": [],
   "accesses": []
 }
 ```
 
 Watch events are newline-delimited JSON objects with `schema_version`, `action`, `observed_at`, and the flattened access assessment. Consumers must reject unsupported schema versions instead of guessing field semantics.
+
+Every access also includes `enforcement`: `allow`, `alert`, `deny`, or `unknown`. Risk is explanatory; enforcement is policy-driven.
 
 ## Detection limits
 
@@ -97,8 +100,8 @@ Watch events are newline-delimited JSON objects with `schema_version`, `action`,
 - Protected or higher-privilege processes can prevent path, command-line, module, or signature inspection.
 - A trusted Authenticode signature proves integrity and chain acceptance under the configured Windows policy; it does not prove benign behavior.
 - Signer identity may be unavailable for catalog-signed files even when WinVerifyTrust accepts the signature.
-- Application-name profiles add context only. They are not allowlists and do not establish trust by themselves.
-- `--notify` uses the WinRT toast API via XML DOM. Process-derived text is sanitized through XML escaping before insertion.
+- Application-name profiles add context only. They are not allowlists and cannot trigger automatic termination.
+- Toast notifications register the per-user `MicCamWatch.MicCamWatch` application identity. Notification errors are reported instead of silently ignored.
 
 The output is suitable for diagnostics and monitoring. It is not a forensic proof that camera frames were captured.
 
@@ -129,9 +132,9 @@ publishers = ["Zoom Video Communications"]
 paths = ["C:\\Program Files\\Zoom"]
 ```
 
-- **strict**: escalates `unexplained` accesses to `suspicious`.
+- **strict**: escalates heuristic `unexplained` assessments to `suspicious`; it does not authorize termination.
 - **online**: performs live certificate revocation checking (CRL/OCSP) instead of cache-only.
-- **applications**: per-executable publisher and path validation rules. Mismatches are flagged as `suspicious` with detailed evidence.
+- **applications**: explicit per-executable publisher and path rules. A fully observed mismatch produces `enforcement = "deny"`; missing identity evidence produces `unknown`, never termination.
 
 Validate a policy file:
 
@@ -152,6 +155,8 @@ The executable is created at `target/release/mcw.exe`.
 ## Platform scope
 
 Windows 10 and Windows 11 are supported. Linux and macOS would require separate evidence collectors while preserving the versioned assessment model.
+
+Linux and macOS collectors are planned after the Windows 1.x architecture is stable. Android requires a separate application and permission model rather than a direct port of the desktop collector.
 
 ## License
 

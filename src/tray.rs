@@ -1,6 +1,11 @@
-use crate::{cli::Filter, i18n::Language, model::Resource, platform::PlatformMonitor};
+use crate::{
+    cli::Filter,
+    i18n::Language,
+    model::{Activity, CollectorState, MicrophoneMuteState, Resource},
+    platform::PlatformMonitor,
+};
 use anyhow::{Context, Result};
-use std::{ffi::OsStr, os::windows::ffi::OsStrExt, ptr};
+use std::{ffi::OsStr, os::windows::ffi::OsStrExt};
 use windows::{
     Win32::{
         Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, WPARAM},
@@ -14,13 +19,14 @@ use windows::{
                 Shell_NotifyIconW,
             },
             WindowsAndMessaging::{
-                AppendMenuW, CreateIconIndirect, CreatePopupMenu, CreateWindowExW, DefWindowProcW,
-                DestroyIcon, DestroyMenu, DestroyWindow, DispatchMessageW, GetCursorPos,
-                GetMessageW, HICON, ICONINFO, KillTimer, MF_DISABLED, MF_GRAYED, MF_SEPARATOR,
-                MF_STRING, MSG, PostQuitMessage, RegisterClassW, SetForegroundWindow, SetTimer,
-                TPM_BOTTOMALIGN, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage,
-                WINDOW_EX_STYLE, WM_APP, WM_COMMAND, WM_DESTROY, WM_LBUTTONDBLCLK, WM_RBUTTONUP,
-                WM_TIMER, WNDCLASSW, WS_OVERLAPPED,
+                AppendMenuW, CREATESTRUCTW, CreateIconIndirect, CreatePopupMenu, CreateWindowExW,
+                DefWindowProcW, DestroyIcon, DestroyMenu, DestroyWindow, DispatchMessageW,
+                GWLP_USERDATA, GetCursorPos, GetMessageW, GetWindowLongPtrW, HICON, ICONINFO,
+                KillTimer, MF_DISABLED, MF_GRAYED, MF_SEPARATOR, MF_STRING, MSG, PostQuitMessage,
+                RegisterClassW, SetForegroundWindow, SetTimer, SetWindowLongPtrW, TPM_BOTTOMALIGN,
+                TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, WINDOW_EX_STYLE, WM_APP,
+                WM_COMMAND, WM_DESTROY, WM_LBUTTONDBLCLK, WM_NCCREATE, WM_RBUTTONUP, WM_TIMER,
+                WNDCLASSW, WS_OVERLAPPED,
             },
         },
     },
@@ -29,61 +35,69 @@ use windows::{
 
 const WM_TRAY_CALLBACK: u32 = WM_APP + 1;
 const TIMER_POLL_ID: usize = 1;
-
 const CMD_TOGGLE_MUTE: usize = 101;
-const CMD_STATUS_TOAST: usize = 102;
 const CMD_EXIT: usize = 103;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TrayVisual {
+    Idle,
+    Ready,
+    Active,
+    Error,
+}
 
 struct TrayAppState {
     monitor: PlatformMonitor,
     lang: Language,
-    active: bool,
+    visual: TrayVisual,
     summary: String,
-    muted: bool,
+    mute_state: MicrophoneMuteState,
     green_icon: HICON,
+    yellow_icon: HICON,
     red_icon: HICON,
+    gray_icon: HICON,
 }
 
-static mut TRAY_STATE: Option<TrayAppState> = None;
+impl Drop for TrayAppState {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = DestroyIcon(self.green_icon);
+            let _ = DestroyIcon(self.yellow_icon);
+            let _ = DestroyIcon(self.red_icon);
+            let _ = DestroyIcon(self.gray_icon);
+        }
+    }
+}
 
 pub fn run_tray(monitor: PlatformMonitor, lang: Language) -> Result<()> {
-    let green_icon = create_circle_icon(34, 197, 94).context("failed to create green tray icon")?;
-    let red_icon = create_circle_icon(239, 68, 68).context("failed to create red tray icon")?;
-    let muted = monitor.get_microphone_mute().unwrap_or(false);
-
-    let initial_state = TrayAppState {
+    let state = Box::new(TrayAppState {
+        mute_state: monitor
+            .microphone_mute_state()
+            .unwrap_or(MicrophoneMuteState::Unavailable),
         monitor,
         lang,
-        active: false,
-        summary: "miccamwatch: Idle".to_owned(),
-        muted,
-        green_icon,
-        red_icon,
-    };
-    unsafe {
-        TRAY_STATE = Some(initial_state);
-    }
+        visual: TrayVisual::Idle,
+        summary: idle_text(lang).to_owned(),
+        green_icon: create_circle_icon(34, 197, 94)?,
+        yellow_icon: create_circle_icon(245, 158, 11)?,
+        red_icon: create_circle_icon(239, 68, 68)?,
+        gray_icon: create_circle_icon(107, 114, 128)?,
+    });
+    let state_ptr = Box::into_raw(state);
 
-    let class_name: Vec<u16> = OsStr::new("MicCamWatchTrayClass")
-        .encode_wide()
-        .chain(Some(0))
-        .collect();
-
+    let class_name = format_wide("MicCamWatchTrayClass");
     let wc = WNDCLASSW {
         lpfnWndProc: Some(tray_wnd_proc),
         lpszClassName: PCWSTR(class_name.as_ptr()),
         ..Default::default()
     };
-    unsafe {
-        let _ = RegisterClassW(&wc);
+    if unsafe { RegisterClassW(&wc) } == 0 {
+        unsafe { drop(Box::from_raw(state_ptr)) };
+        anyhow::bail!("failed to register tray window class");
     }
 
-    let window_title: Vec<u16> = OsStr::new("MicCamWatchTray")
-        .encode_wide()
-        .chain(Some(0))
-        .collect();
-
-    let hwnd = unsafe {
+    let window_title = format_wide("MicCamWatchTray");
+    let hwnd = match unsafe {
         CreateWindowExW(
             WINDOW_EX_STYLE(0),
             PCWSTR(class_name.as_ptr()),
@@ -96,279 +110,251 @@ pub fn run_tray(monitor: PlatformMonitor, lang: Language) -> Result<()> {
             None,
             None,
             None,
-            None,
+            Some(state_ptr.cast()),
         )
-    }
-    .context("failed to create tray message window")?;
-
-    let mut nid = NOTIFYICONDATAW {
-        cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
-        hWnd: hwnd,
-        uID: 1,
-        uFlags: NIF_ICON | NIF_MESSAGE | NIF_TIP,
-        uCallbackMessage: WM_TRAY_CALLBACK,
-        hIcon: green_icon,
-        ..Default::default()
+    } {
+        Ok(hwnd) => hwnd,
+        Err(error) => {
+            unsafe { drop(Box::from_raw(state_ptr)) };
+            return Err(error).context("failed to create tray message window");
+        }
     };
-    set_tooltip(&mut nid, "miccamwatch: Idle");
 
-    let ok = unsafe { Shell_NotifyIconW(NIM_ADD, &nid) };
-    if !ok.as_bool() {
+    let state = unsafe { &*state_ptr };
+    let nid = notify_icon_data(hwnd, state.green_icon, &state.summary);
+    if !unsafe { Shell_NotifyIconW(NIM_ADD, &nid) }.as_bool() {
+        unsafe {
+            let _ = DestroyWindow(hwnd);
+            drop(Box::from_raw(state_ptr));
+        }
         anyhow::bail!("failed to register system tray icon");
     }
-
-    // Timer every 500ms on the main GUI thread - no cross-thread COM issues!
-    unsafe {
-        SetTimer(Some(hwnd), TIMER_POLL_ID, 500, None);
+    let timer = unsafe { SetTimer(Some(hwnd), TIMER_POLL_ID, 500, None) };
+    if timer == 0 {
+        unsafe {
+            let _ = Shell_NotifyIconW(NIM_DELETE, &nid);
+            let _ = DestroyWindow(hwnd);
+            drop(Box::from_raw(state_ptr));
+        }
+        anyhow::bail!("failed to start tray polling timer");
     }
 
     println!("miccamwatch tray running. Right-click the icon near the clock to control.");
-
-    // Message loop
-    let mut msg = MSG::default();
-    unsafe {
-        while GetMessageW(&mut msg, None, 0, 0).as_bool() {
-            let _ = TranslateMessage(&msg);
-            DispatchMessageW(&msg);
+    let mut message = MSG::default();
+    let loop_result = loop {
+        let result = unsafe { GetMessageW(&mut message, None, 0, 0) };
+        if result.0 == -1 {
+            break Err(anyhow::anyhow!("Windows tray message loop failed"));
         }
-    }
+        if result.0 == 0 {
+            break Ok(());
+        }
+        unsafe {
+            let _ = TranslateMessage(&message);
+            DispatchMessageW(&message);
+        }
+    };
 
     unsafe {
         let _ = KillTimer(Some(hwnd), TIMER_POLL_ID);
         let _ = Shell_NotifyIconW(NIM_DELETE, &nid);
-        let _ = DestroyIcon(green_icon);
-        let _ = DestroyIcon(red_icon);
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+        drop(Box::from_raw(state_ptr));
     }
-    Ok(())
+    loop_result
 }
 
-fn set_tooltip(nid: &mut NOTIFYICONDATAW, text: &str) {
-    let wide: Vec<u16> = OsStr::new(text).encode_wide().collect();
-    let max = nid.szTip.len().saturating_sub(1);
-    let len = wide.len().min(max);
-    nid.szTip[..len].copy_from_slice(&wide[..len]);
-    nid.szTip[len] = 0;
+fn state(hwnd: HWND) -> Option<&'static mut TrayAppState> {
+    let pointer = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *mut TrayAppState;
+    unsafe { pointer.as_mut() }
 }
 
 unsafe extern "system" fn tray_wnd_proc(
     hwnd: HWND,
-    msg: u32,
+    message: u32,
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    match msg {
+    if message == WM_NCCREATE {
+        let create = unsafe { &*(lparam.0 as *const CREATESTRUCTW) };
+        unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, create.lpCreateParams as isize) };
+        return LRESULT(1);
+    }
+    match message {
         WM_TIMER => {
-            unsafe {
-                if let Some(state) = &mut *ptr::addr_of_mut!(TRAY_STATE) {
-                    let filter = Filter::default();
-                    if let Ok(snapshot) = state.monitor.snapshot(&filter) {
-                        let is_active = !snapshot.accesses.is_empty();
-                        let summary = if is_active {
-                            let apps: Vec<String> = snapshot
-                                .accesses
-                                .iter()
-                                .map(|a| {
-                                    let res = match a.resource {
-                                        Resource::Microphone => "Mic",
-                                        Resource::Camera => "Cam",
-                                    };
-                                    format!("{}: {}", a.application, res)
-                                })
-                                .collect();
-                            format!("miccamwatch: {}", apps.join(", "))
-                        } else {
-                            match state.lang {
-                                Language::Fr => "miccamwatch : Aucun accès actif".to_owned(),
-                                Language::De => "miccamwatch: Keine aktiven Zugriffe".to_owned(),
-                                Language::Es => "miccamwatch: Sin accesos activos".to_owned(),
-                                Language::Ja => "miccamwatch: アクティブなアクセスなし".to_owned(),
-                                Language::Zh => "miccamwatch: 无活动访问".to_owned(),
-                                Language::Ru => "miccamwatch: Нет активных доступов".to_owned(),
-                                Language::En => "miccamwatch: Idle".to_owned(),
-                            }
-                        };
-                        let muted = state.monitor.get_microphone_mute().unwrap_or(false);
-
-                        let changed = state.active != is_active
-                            || state.summary != summary
-                            || state.muted != muted;
-                        state.active = is_active;
-                        state.summary = summary;
-                        state.muted = muted;
-
-                        if changed {
-                            let mut nid = NOTIFYICONDATAW {
-                                cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
-                                hWnd: hwnd,
-                                uID: 1,
-                                uFlags: NIF_ICON | NIF_TIP,
-                                hIcon: if state.active {
-                                    state.red_icon
-                                } else {
-                                    state.green_icon
-                                },
-                                ..Default::default()
-                            };
-                            set_tooltip(&mut nid, &state.summary);
-                            let _ = Shell_NotifyIconW(NIM_MODIFY, &nid);
-                        }
-                    }
-                }
+            if let Some(state) = state(hwnd) {
+                refresh_state(hwnd, state);
             }
             LRESULT(0)
         }
         WM_TRAY_CALLBACK => {
-            let event = lparam.0 as u32;
-            match event {
-                WM_RBUTTONUP => {
-                    show_context_menu(hwnd);
-                }
-                WM_LBUTTONDBLCLK => {
-                    show_status_toast();
-                }
+            match lparam.0 as u32 {
+                WM_RBUTTONUP => show_context_menu(hwnd),
+                WM_LBUTTONDBLCLK => show_status_toast(hwnd),
                 _ => {}
             }
             LRESULT(0)
         }
         WM_COMMAND => {
-            let id = wparam.0 & 0xffff;
-            match id {
-                CMD_TOGGLE_MUTE => unsafe {
-                    if let Some(state) = &mut *ptr::addr_of_mut!(TRAY_STATE)
-                        && let Ok(new_mute) = state.monitor.toggle_microphone_mute()
-                    {
-                        state.muted = new_mute;
-                        let title = "miccamwatch";
-                        let msg = if new_mute {
-                            "Microphone MUTED"
-                        } else {
-                            "Microphone UNMUTED"
-                        };
-                        crate::notify::notify_access(
-                            &crate::model::Access {
-                                key: "mute:toggle".into(),
-                                resource: Resource::Microphone,
-                                activity: crate::model::Activity::Active,
-                                risk: crate::model::Risk::Expected,
-                                confidence: crate::model::Confidence::High,
-                                application: "System".into(),
-                                pid: None,
-                                parent_pid: None,
-                                parent_name: None,
-                                executable: None,
-                                signature: None,
-                                device: None,
-                                started_at: None,
-                                modules: vec![],
-                                evidence: vec![],
-                                process: None,
-                            },
-                            crate::model::Action::Update,
-                            Language::En,
-                        );
-                        println!("{title}: {msg}");
-                    }
-                },
-                CMD_STATUS_TOAST => {
-                    show_status_toast();
-                }
+            match wparam.0 & 0xffff {
+                CMD_TOGGLE_MUTE => toggle_mute(hwnd),
                 CMD_EXIT => unsafe {
                     let _ = DestroyWindow(hwnd);
-                    PostQuitMessage(0);
                 },
                 _ => {}
             }
             LRESULT(0)
         }
         WM_DESTROY => {
-            unsafe {
-                PostQuitMessage(0);
-            }
+            unsafe { PostQuitMessage(0) };
             LRESULT(0)
         }
-        _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
+        _ => unsafe { DefWindowProcW(hwnd, message, wparam, lparam) },
+    }
+}
+
+fn refresh_state(hwnd: HWND, state: &mut TrayAppState) {
+    let filter = Filter {
+        include_ready: true,
+        ..Filter::default()
+    };
+    let (visual, summary) = match state.monitor.snapshot(&filter) {
+        Ok(snapshot) => {
+            let unhealthy = snapshot
+                .collectors
+                .iter()
+                .any(|collector| collector.state != CollectorState::Healthy);
+            let active = snapshot
+                .accesses
+                .iter()
+                .filter(|access| access.activity == Activity::Active)
+                .collect::<Vec<_>>();
+            let ready = snapshot
+                .accesses
+                .iter()
+                .filter(|access| access.activity == Activity::Ready)
+                .collect::<Vec<_>>();
+            if unhealthy {
+                (
+                    TrayVisual::Error,
+                    "miccamwatch: telemetry degraded".to_owned(),
+                )
+            } else if !active.is_empty() {
+                (TrayVisual::Active, summarize(&active))
+            } else if !ready.is_empty() {
+                (
+                    TrayVisual::Ready,
+                    format!(
+                        "miccamwatch: camera-ready pipeline: {}",
+                        ready[0].application
+                    ),
+                )
+            } else {
+                (TrayVisual::Idle, idle_text(state.lang).to_owned())
+            }
+        }
+        Err(error) => (
+            TrayVisual::Error,
+            format!("miccamwatch: telemetry error: {error}"),
+        ),
+    };
+    let mute_state = state
+        .monitor
+        .microphone_mute_state()
+        .unwrap_or(MicrophoneMuteState::Unavailable);
+    if visual == state.visual && summary == state.summary && mute_state == state.mute_state {
+        return;
+    }
+    state.visual = visual;
+    state.summary = summary;
+    state.mute_state = mute_state;
+    let icon = match visual {
+        TrayVisual::Idle => state.green_icon,
+        TrayVisual::Ready => state.yellow_icon,
+        TrayVisual::Active => state.red_icon,
+        TrayVisual::Error => state.gray_icon,
+    };
+    let nid = notify_icon_data(hwnd, icon, &state.summary);
+    if !unsafe { Shell_NotifyIconW(NIM_MODIFY, &nid) }.as_bool() {
+        state.visual = TrayVisual::Error;
+        state.summary = "miccamwatch: failed to update tray icon".to_owned();
+    }
+}
+
+fn summarize(accesses: &[&crate::model::Access]) -> String {
+    let items = accesses
+        .iter()
+        .map(|access| {
+            let resource = match access.resource {
+                Resource::Microphone => "Mic",
+                Resource::Camera => "Cam",
+            };
+            format!("{}: {resource}", access.application)
+        })
+        .collect::<Vec<_>>();
+    format!("miccamwatch: {}", items.join(", "))
+}
+
+fn toggle_mute(hwnd: HWND) {
+    let Some(state) = state(hwnd) else { return };
+    match state.monitor.toggle_microphone_mute() {
+        Ok(muted) => {
+            state.mute_state = if muted {
+                MicrophoneMuteState::Muted
+            } else {
+                MicrophoneMuteState::Unmuted
+            };
+            let message = if muted {
+                "Microphone muted"
+            } else {
+                "Microphone unmuted"
+            };
+            if let Err(error) = crate::notify::notify_message("miccamwatch", message) {
+                eprintln!("notification failed: {error}");
+            }
+        }
+        Err(error) => {
+            state.summary = format!("miccamwatch: mute failed: {error}");
+            state.visual = TrayVisual::Error;
+        }
     }
 }
 
 fn show_context_menu(hwnd: HWND) {
-    let (lang, summary, muted) = unsafe {
-        if let Some(state) = &*ptr::addr_of!(TRAY_STATE) {
-            (state.lang, state.summary.clone(), state.muted)
-        } else {
-            return;
-        }
-    };
-
+    let Some(state) = state(hwnd) else { return };
     unsafe {
-        let menu = match CreatePopupMenu() {
-            Ok(m) => m,
-            Err(_) => return,
+        let Ok(menu) = CreatePopupMenu() else { return };
+        append_disabled(menu, &format!("miccamwatch v{}", env!("CARGO_PKG_VERSION")));
+        append_disabled(menu, &state.summary);
+        let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
+        let mute_text = match state.mute_state {
+            MicrophoneMuteState::Muted => "Unmute microphone",
+            MicrophoneMuteState::Unmuted | MicrophoneMuteState::Mixed => "Mute microphone",
+            MicrophoneMuteState::Unavailable => "Microphone unavailable",
         };
-
-        let title_str = format_wide("miccamwatch v0.9.0");
-        let _ = AppendMenuW(
-            menu,
-            MF_STRING | MF_DISABLED | MF_GRAYED,
-            0,
-            PCWSTR(title_str.as_ptr()),
-        );
-
-        let summary_str = format_wide(&summary);
-        let _ = AppendMenuW(
-            menu,
-            MF_STRING | MF_DISABLED | MF_GRAYED,
-            0,
-            PCWSTR(summary_str.as_ptr()),
-        );
-
-        let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR(ptr::null()));
-
-        let mute_text = if muted {
-            match lang {
-                Language::Fr => "Activer le micro (Unmute)",
-                Language::De => "Mikrofon einschalten (Unmute)",
-                Language::Es => "Activar micrófono (Unmute)",
-                Language::Ja => "マイクのミュート解除 (Unmute)",
-                Language::Zh => "取消静音麦克风 (Unmute)",
-                Language::Ru => "Включить микрофон (Unmute)",
-                Language::En => "Unmute microphone",
-            }
+        let mute_wide = format_wide(mute_text);
+        let mute_flags = if state.mute_state == MicrophoneMuteState::Unavailable {
+            MF_STRING | MF_DISABLED | MF_GRAYED
         } else {
-            match lang {
-                Language::Fr => "Couper le micro (Mute)",
-                Language::De => "Mikrofon stummschalten (Mute)",
-                Language::Es => "Silenciar micrófono (Mute)",
-                Language::Ja => "マイクをミュート (Mute)",
-                Language::Zh => "静音麦克风 (Mute)",
-                Language::Ru => "Заглушить микрофон (Mute)",
-                Language::En => "Mute microphone",
-            }
+            MF_STRING
         };
-        let mute_str = format_wide(mute_text);
-        let _ = AppendMenuW(menu, MF_STRING, CMD_TOGGLE_MUTE, PCWSTR(mute_str.as_ptr()));
-
-        let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR(ptr::null()));
-
-        let exit_text = match lang {
-            Language::Fr => "Quitter",
-            Language::De => "Beenden",
-            Language::Es => "Salir",
-            Language::Ja => "終了",
-            Language::Zh => "退出",
-            Language::Ru => "Выход",
-            Language::En => "Exit",
-        };
-        let exit_str = format_wide(exit_text);
-        let _ = AppendMenuW(menu, MF_STRING, CMD_EXIT, PCWSTR(exit_str.as_ptr()));
-
-        let mut pt = POINT::default();
-        let _ = GetCursorPos(&mut pt);
+        let _ = AppendMenuW(
+            menu,
+            mute_flags,
+            CMD_TOGGLE_MUTE,
+            PCWSTR(mute_wide.as_ptr()),
+        );
+        let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
+        let exit = format_wide("Exit");
+        let _ = AppendMenuW(menu, MF_STRING, CMD_EXIT, PCWSTR(exit.as_ptr()));
+        let mut point = POINT::default();
+        let _ = GetCursorPos(&mut point);
         let _ = SetForegroundWindow(hwnd);
         let _ = TrackPopupMenu(
             menu,
             TPM_RIGHTBUTTON | TPM_BOTTOMALIGN,
-            pt.x,
-            pt.y,
+            point.x,
+            point.y,
             None,
             hwnd,
             None,
@@ -377,77 +363,88 @@ fn show_context_menu(hwnd: HWND) {
     }
 }
 
-fn show_status_toast() {
-    let (summary, lang) = unsafe {
-        if let Some(state) = &*ptr::addr_of!(TRAY_STATE) {
-            (state.summary.clone(), state.lang)
-        } else {
-            return;
-        }
+fn append_disabled(menu: windows::Win32::UI::WindowsAndMessaging::HMENU, text: &str) {
+    let wide = format_wide(text);
+    let _ = unsafe {
+        AppendMenuW(
+            menu,
+            MF_STRING | MF_DISABLED | MF_GRAYED,
+            0,
+            PCWSTR(wide.as_ptr()),
+        )
     };
-
-    let access = crate::model::Access {
-        key: "tray:status".into(),
-        resource: Resource::Camera,
-        activity: crate::model::Activity::Active,
-        risk: crate::model::Risk::Expected,
-        confidence: crate::model::Confidence::High,
-        application: summary,
-        pid: None,
-        parent_pid: None,
-        parent_name: None,
-        executable: None,
-        signature: None,
-        device: None,
-        started_at: None,
-        modules: vec![],
-        evidence: vec![],
-        process: None,
-    };
-    crate::notify::notify_access(&access, crate::model::Action::Update, lang);
 }
 
-fn format_wide(s: &str) -> Vec<u16> {
-    OsStr::new(s).encode_wide().chain(Some(0)).collect()
+fn show_status_toast(hwnd: HWND) {
+    let Some(state) = state(hwnd) else { return };
+    if let Err(error) = crate::notify::notify_message("miccamwatch", &state.summary) {
+        eprintln!("notification failed: {error}");
+    }
 }
 
-fn create_circle_icon(r: u8, g: u8, b: u8) -> Result<HICON> {
+fn idle_text(lang: Language) -> &'static str {
+    match lang {
+        Language::Fr => "miccamwatch : aucun accès actif",
+        Language::De => "miccamwatch: keine aktiven Zugriffe",
+        Language::Es => "miccamwatch: sin accesos activos",
+        Language::Ja => "miccamwatch: アクティブなアクセスなし",
+        Language::Zh => "miccamwatch: 无活动访问",
+        Language::Ru => "miccamwatch: нет активных доступов",
+        Language::En => "miccamwatch: idle",
+    }
+}
+
+fn notify_icon_data(hwnd: HWND, icon: HICON, tooltip: &str) -> NOTIFYICONDATAW {
+    let mut data = NOTIFYICONDATAW {
+        cbSize: size_of::<NOTIFYICONDATAW>() as u32,
+        hWnd: hwnd,
+        uID: 1,
+        uFlags: NIF_ICON | NIF_MESSAGE | NIF_TIP,
+        uCallbackMessage: WM_TRAY_CALLBACK,
+        hIcon: icon,
+        ..Default::default()
+    };
+    let wide: Vec<u16> = OsStr::new(tooltip).encode_wide().collect();
+    let length = wide.len().min(data.szTip.len().saturating_sub(1));
+    data.szTip[..length].copy_from_slice(&wide[..length]);
+    data.szTip[length] = 0;
+    data
+}
+
+fn format_wide(value: &str) -> Vec<u16> {
+    OsStr::new(value).encode_wide().chain(Some(0)).collect()
+}
+
+fn create_circle_icon(red: u8, green: u8, blue: u8) -> Result<HICON> {
     unsafe {
         let dc = CreateCompatibleDC(None);
         if dc.is_invalid() {
             anyhow::bail!("failed to create compatible DC for tray icon");
         }
-
-        let hbm_color = CreateCompatibleBitmap(dc, 16, 16);
-        let mask_bits = [0xffu8; 32];
-        let hbm_mask = CreateBitmap(16, 16, 1, 1, Some(mask_bits.as_ptr() as _));
-
-        let old_bmp = SelectObject(dc, hbm_color.into());
-
-        let bg_brush = CreateSolidBrush(COLORREF(0));
-        let brush = CreateSolidBrush(COLORREF(r as u32 | ((g as u32) << 8) | ((b as u32) << 16)));
-
+        let color_bitmap = CreateCompatibleBitmap(dc, 16, 16);
+        let mask_bits = [0u8; 32];
+        let mask_bitmap = CreateBitmap(16, 16, 1, 1, Some(mask_bits.as_ptr().cast()));
+        let old_bitmap = SelectObject(dc, color_bitmap.into());
+        let brush = CreateSolidBrush(COLORREF(
+            red as u32 | ((green as u32) << 8) | ((blue as u32) << 16),
+        ));
         let old_brush = SelectObject(dc, brush.into());
         let _ = Ellipse(dc, 1, 1, 15, 15);
-
         let _ = SelectObject(dc, old_brush);
-        let _ = SelectObject(dc, old_bmp);
+        let _ = SelectObject(dc, old_bitmap);
         let _ = DeleteObject(brush.into());
-        let _ = DeleteObject(bg_brush.into());
         let _ = DeleteDC(dc);
-
         let info = ICONINFO {
             fIcon: true.into(),
-            xHotspot: 0,
-            yHotspot: 0,
-            hbmMask: hbm_mask,
-            hbmColor: hbm_color,
+            hbmMask: mask_bitmap,
+            hbmColor: color_bitmap,
+            ..Default::default()
         };
-
         let icon = CreateIconIndirect(&info);
-        let _ = DeleteObject(hbm_color.into());
-        let _ = DeleteObject(hbm_mask.into());
-
-        icon.context("failed to create icon from indirect descriptor")
+        let _ = DeleteObject(color_bitmap.into());
+        let _ = DeleteObject(mask_bitmap.into());
+        icon.context("failed to create tray icon")
     }
 }
+
+use std::mem::size_of;

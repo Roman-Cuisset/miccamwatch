@@ -3,8 +3,8 @@ use crate::{
     config::{Policy, Profile, TrustPolicy},
     model::{
         Access, Activity, CollectorHealth, CollectorState, Confidence, Device, DiagnosticCheck,
-        DiagnosticStatus, Evidence, EvidenceKind, ProcessAncestor, ProcessContext, Resource, Risk,
-        SignatureInfo, Snapshot,
+        DiagnosticStatus, EnforcementDecision, Evidence, EvidenceKind, MicrophoneMuteState,
+        ProcessAncestor, ProcessContext, Resource, Risk, SignatureInfo, Snapshot,
     },
 };
 use anyhow::{Context, Result};
@@ -215,6 +215,9 @@ impl PlatformMonitor {
                 }
             }
         }
+        if !filter.include_ready {
+            accesses.retain(|access| access.activity == Activity::Active);
+        }
         let incomplete_context = accesses
             .iter()
             .filter_map(|access| access.process.as_ref())
@@ -296,49 +299,71 @@ impl PlatformMonitor {
         Ok(devices)
     }
 
-    pub fn get_microphone_mute(&self) -> Result<bool> {
-        let collection = unsafe {
-            self.enumerator
-                .EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE)
-                .context("failed to enumerate microphone devices")?
-        };
-        let count = unsafe { collection.GetCount()? };
-        if count == 0 {
-            return Ok(false);
+    pub fn microphone_mute_state(&self) -> Result<MicrophoneMuteState> {
+        let endpoints = self.microphone_volumes()?;
+        if endpoints.is_empty() {
+            return Ok(MicrophoneMuteState::Unavailable);
         }
-        let mut any_unmuted = false;
-        for i in 0..count {
-            let device = unsafe { collection.Item(i)? };
-            let volume: IAudioEndpointVolume = unsafe { device.Activate(CLSCTX_ALL, None)? };
-            let muted = unsafe { volume.GetMute()? };
-            if !muted.as_bool() {
-                any_unmuted = true;
-                break;
-            }
-        }
-        Ok(!any_unmuted)
+        let muted = endpoints
+            .iter()
+            .map(|volume| unsafe { volume.GetMute().map(|value| value.as_bool()) })
+            .collect::<windows::core::Result<Vec<_>>>()?;
+        Ok(if muted.iter().all(|value| *value) {
+            MicrophoneMuteState::Muted
+        } else if muted.iter().all(|value| !*value) {
+            MicrophoneMuteState::Unmuted
+        } else {
+            MicrophoneMuteState::Mixed
+        })
     }
 
-    pub fn set_microphone_mute(&self, mute: bool) -> Result<()> {
+    fn microphone_volumes(&self) -> Result<Vec<IAudioEndpointVolume>> {
         let collection = unsafe {
             self.enumerator
                 .EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE)
                 .context("failed to enumerate microphone devices")?
         };
         let count = unsafe { collection.GetCount()? };
-        for i in 0..count {
-            let device = unsafe { collection.Item(i)? };
-            let volume: IAudioEndpointVolume = unsafe { device.Activate(CLSCTX_ALL, None)? };
-            unsafe { volume.SetMute(mute, ptr::null())? };
+        let mut volumes = Vec::with_capacity(count as usize);
+        for index in 0..count {
+            let device = unsafe { collection.Item(index)? };
+            volumes.push(unsafe { device.Activate(CLSCTX_ALL, None)? });
         }
-        Ok(())
+        Ok(volumes)
+    }
+
+    pub fn set_microphone_mute(&self, mute: bool) -> Result<usize> {
+        let endpoints = self.microphone_volumes()?;
+        if endpoints.is_empty() {
+            anyhow::bail!("no active microphone capture device was found");
+        }
+        let original = endpoints
+            .iter()
+            .map(|volume| unsafe { volume.GetMute().map(|value| value.as_bool()) })
+            .collect::<windows::core::Result<Vec<_>>>()?;
+        for (index, volume) in endpoints.iter().enumerate() {
+            if let Err(error) = unsafe { volume.SetMute(mute, ptr::null()) } {
+                for (changed, was_muted) in endpoints[..index].iter().zip(&original[..index]) {
+                    let _ = unsafe { changed.SetMute(*was_muted, ptr::null()) };
+                }
+                return Err(error).context(
+                    "failed to change microphone mute state; prior devices were restored",
+                );
+            }
+        }
+        Ok(endpoints.len())
     }
 
     pub fn toggle_microphone_mute(&self) -> Result<bool> {
-        let currently_muted = self.get_microphone_mute()?;
-        let new_state = !currently_muted;
-        self.set_microphone_mute(new_state)?;
-        Ok(new_state)
+        let mute = match self.microphone_mute_state()? {
+            MicrophoneMuteState::Unavailable => {
+                anyhow::bail!("no active microphone capture device was found")
+            }
+            MicrophoneMuteState::Muted => false,
+            MicrophoneMuteState::Unmuted | MicrophoneMuteState::Mixed => true,
+        };
+        self.set_microphone_mute(mute)?;
+        Ok(mute)
     }
 
     pub fn doctor(&self) -> Vec<DiagnosticCheck> {
@@ -494,13 +519,26 @@ impl PlatformMonitor {
                 let signature = executable
                     .as_deref()
                     .map(|path| self.cached_signature(path));
+                let mut evidence = vec![Evidence::new(
+                    EvidenceKind::LiveApi,
+                    "WASAPI",
+                    "An active capture audio session is attributed to this PID.",
+                )];
+                let (risk, enforcement) = assess_policy(
+                    &self.policy,
+                    &application,
+                    executable.as_deref(),
+                    signature.as_ref(),
+                    &mut evidence,
+                );
                 let key = format!("microphone:{id}:{}", process_identity(pid));
                 accesses.entry(key.clone()).or_insert(Access {
                     key,
                     resource: Resource::Microphone,
                     activity: Activity::Active,
-                    risk: Risk::Expected,
+                    risk,
                     confidence: Confidence::High,
+                    enforcement,
                     application,
                     pid: Some(pid),
                     parent_pid,
@@ -510,11 +548,7 @@ impl PlatformMonitor {
                     device: Some(name.clone()),
                     started_at: None,
                     modules: Vec::new(),
-                    evidence: vec![Evidence::new(
-                        EvidenceKind::LiveApi,
-                        "WASAPI",
-                        "An active capture audio session is attributed to this PID.",
-                    )],
+                    evidence,
                     process: Some(context),
                 });
             }
@@ -716,6 +750,7 @@ fn camera_accesses(
                         true,
                         &processes,
                         &mut signature_for,
+                        policy,
                     )
                 {
                     accesses.push(access);
@@ -729,8 +764,14 @@ fn camera_accesses(
                 (key_name.clone(), CameraPermission { consent }),
             );
             if is_privacy_active(&sub_key)
-                && let Some(access) =
-                    registry_access(&sub_key, &key_name, false, &processes, &mut signature_for)
+                && let Some(access) = registry_access(
+                    &sub_key,
+                    &key_name,
+                    false,
+                    &processes,
+                    &mut signature_for,
+                    policy,
+                )
             {
                 accesses.push(access);
             }
@@ -772,6 +813,7 @@ fn camera_accesses(
                 activity: Activity::Ready,
                 risk: assessment.risk,
                 confidence: assessment.confidence,
+                enforcement: assessment.enforcement,
                 application: application.clone(),
                 pid: Some(pid),
                 parent_pid,
@@ -801,6 +843,7 @@ fn registry_access(
     non_packaged: bool,
     processes: &ProcessTable,
     signature_for: &mut impl FnMut(&str) -> SignatureInfo,
+    policy: &Policy,
 ) -> Option<Access> {
     let executable = non_packaged.then(|| identity.replace('#', r"\"));
     let application = executable
@@ -821,13 +864,26 @@ fn registry_access(
         .and_then(immediate_parent)
         .map_or((None, None), |(ppid, name)| (Some(ppid), Some(name)));
     let signature = executable.as_deref().map(signature_for);
+    let mut evidence = vec![Evidence::new(
+        EvidenceKind::PrivacyActivity,
+        "CapabilityAccessManager",
+        "Windows reports an open camera privacy activity interval.",
+    )];
+    let (risk, enforcement) = assess_policy(
+        policy,
+        &application,
+        executable.as_deref(),
+        signature.as_ref(),
+        &mut evidence,
+    );
     let start = key.get_value::<u64, _>("LastUsedTimeStart").ok()?;
     Some(Access {
         key: format!("camera:{}", identity.to_ascii_lowercase()),
         resource: Resource::Camera,
         activity: Activity::Active,
-        risk: Risk::Expected,
+        risk,
         confidence: Confidence::Medium,
+        enforcement,
         application,
         pid,
         parent_pid,
@@ -837,11 +893,7 @@ fn registry_access(
         device: None,
         started_at: filetime_to_utc(start),
         modules: Vec::new(),
-        evidence: vec![Evidence::new(
-            EvidenceKind::PrivacyActivity,
-            "CapabilityAccessManager",
-            "Windows reports an open camera privacy activity interval.",
-        )],
+        evidence,
         process: context,
     })
 }
@@ -850,10 +902,77 @@ fn registry_access(
 // Forensic classification with Authenticode and Parent analysis
 // ---------------------------------------------------------------------------
 
+fn assess_policy(
+    policy: &Policy,
+    application: &str,
+    executable: Option<&str>,
+    signature: Option<&SignatureInfo>,
+    evidence: &mut Vec<Evidence>,
+) -> (Risk, EnforcementDecision) {
+    let Some(rule) = policy.application(application) else {
+        return (Risk::Expected, EnforcementDecision::Alert);
+    };
+    let publisher = signature.and_then(|value| value.signer.as_deref());
+    let publisher_ok = rule.publishers.is_empty()
+        || publisher.is_some_and(|signer| {
+            rule.publishers
+                .iter()
+                .any(|expected| signer.contains(expected))
+        });
+    let path_ok = rule.paths.is_empty()
+        || executable.is_some_and(|path| {
+            let path = path.to_ascii_lowercase();
+            rule.paths
+                .iter()
+                .any(|expected| path.starts_with(&expected.to_ascii_lowercase()))
+        });
+    let evidence_complete = (rule.publishers.is_empty() || publisher.is_some())
+        && (rule.paths.is_empty() || executable.is_some());
+
+    if !evidence_complete {
+        evidence.push(Evidence::new(
+            EvidenceKind::ApplicationProfile,
+            "policy",
+            "Policy rule matched the executable name, but required identity evidence is unavailable.",
+        ));
+        return (Risk::Unexplained, EnforcementDecision::Unknown);
+    }
+    if publisher_ok && path_ok {
+        evidence.push(Evidence::new(
+            EvidenceKind::ApplicationProfile,
+            "policy",
+            "Application matches its configured policy rule.",
+        ));
+        return (Risk::Expected, EnforcementDecision::Allow);
+    }
+    if !publisher_ok {
+        evidence.push(Evidence::new(
+            EvidenceKind::Signature,
+            "policy",
+            format!(
+                "Publisher mismatch: expected one of {:?}, got {:?}.",
+                rule.publishers, publisher
+            ),
+        ));
+    }
+    if !path_ok {
+        evidence.push(Evidence::new(
+            EvidenceKind::FileLocation,
+            "policy",
+            format!(
+                "Path mismatch: expected a prefix in {:?}, executable at {:?}.",
+                rule.paths, executable
+            ),
+        ));
+    }
+    (Risk::Suspicious, EnforcementDecision::Deny)
+}
+
 struct Assessment {
     risk: Risk,
     confidence: Confidence,
     evidence: Vec<Evidence>,
+    enforcement: EnforcementDecision,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -891,6 +1010,7 @@ fn classify_forensic(
                 risk: Risk::Blocked,
                 confidence: Confidence::Low,
                 evidence,
+                enforcement: EnforcementDecision::Alert,
             };
         }
     }
@@ -974,57 +1094,25 @@ fn classify_forensic(
         ));
     }
 
-    // Policy publisher/path validation
-    if let Some(rule) = policy.application(application) {
-        let publisher_ok = rule.publishers.is_empty()
-            || signature
-                .signer
-                .as_ref()
-                .is_some_and(|s| rule.publishers.iter().any(|p| s.contains(p)));
-        let path_ok = rule.paths.is_empty()
-            || rule.paths.iter().any(|p| {
-                executable
-                    .to_ascii_lowercase()
-                    .contains(&p.to_ascii_lowercase())
-            });
-        if publisher_ok && path_ok {
-            if risk != Risk::Suspicious {
-                risk = Risk::Expected;
-            }
-            evidence.push(Evidence::new(
-                EvidenceKind::ApplicationProfile,
-                "policy",
-                "Application matches a configured policy rule.",
-            ));
-        } else {
-            risk = Risk::Suspicious;
-            if !publisher_ok {
-                evidence.push(Evidence::new(
-                    EvidenceKind::Signature,
-                    "policy",
-                    format!(
-                        "Publisher mismatch: expected one of {:?}, got {:?}.",
-                        rule.publishers, signature.signer
-                    ),
-                ));
-            }
-            if !path_ok {
-                evidence.push(Evidence::new(
-                    EvidenceKind::FileLocation,
-                    "policy",
-                    format!(
-                        "Path mismatch: expected one of {:?}, executable at {}.",
-                        rule.paths, executable
-                    ),
-                ));
-            }
-        }
+    let (policy_risk, enforcement) = assess_policy(
+        policy,
+        application,
+        Some(executable),
+        Some(signature),
+        &mut evidence,
+    );
+    match enforcement {
+        EnforcementDecision::Allow if risk != Risk::Suspicious => risk = Risk::Expected,
+        EnforcementDecision::Deny => risk = Risk::Suspicious,
+        EnforcementDecision::Unknown if risk == Risk::Expected => risk = policy_risk,
+        EnforcementDecision::Allow | EnforcementDecision::Alert | EnforcementDecision::Unknown => {}
     }
 
     Assessment {
         risk,
         confidence: Confidence::Low,
         evidence,
+        enforcement,
     }
 }
 
@@ -1511,6 +1599,9 @@ fn immediate_parent(context: &ProcessContext) -> Option<(u32, String)> {
 }
 
 pub fn terminate_process_by_pid(pid: u32) -> Result<()> {
+    if pid <= 4 || pid == std::process::id() {
+        anyhow::bail!("refusing to terminate a protected process identifier");
+    }
     unsafe {
         let handle = OpenProcess(PROCESS_TERMINATE, false, pid)
             .context("failed to open process for termination")?;
@@ -1521,30 +1612,39 @@ pub fn terminate_process_by_pid(pid: u32) -> Result<()> {
     Ok(())
 }
 
-pub fn is_session_locked() -> bool {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SessionLockState {
+    Locked,
+    Unlocked,
+    Unknown,
+}
+
+pub fn session_lock_state() -> SessionLockState {
     let desk = unsafe { OpenInputDesktop(DESKTOP_CONTROL_FLAGS(0), false, DESKTOP_READOBJECTS) };
-    match desk {
-        Ok(desk) => {
-            let mut name = [0u16; 128];
-            let mut needed = 0;
-            let ok = unsafe {
-                GetUserObjectInformationW(
-                    HANDLE(desk.0),
-                    UOI_NAME,
-                    Some(name.as_mut_ptr() as _),
-                    (name.len() * 2) as u32,
-                    Some(&mut needed),
-                )
-            };
-            let _ = unsafe { CloseDesktop(desk) };
-            if ok.is_ok() && needed > 2 {
-                let s = String::from_utf16_lossy(&name[..needed as usize / 2 - 1]);
-                s.eq_ignore_ascii_case("Winlogon")
-            } else {
-                false
-            }
-        }
-        Err(_) => true,
+    let Ok(desk) = desk else {
+        return SessionLockState::Unknown;
+    };
+    let mut name = [0u16; 128];
+    let mut needed = 0;
+    let result = unsafe {
+        GetUserObjectInformationW(
+            HANDLE(desk.0),
+            UOI_NAME,
+            Some(name.as_mut_ptr().cast()),
+            (name.len() * size_of::<u16>()) as u32,
+            Some(&mut needed),
+        )
+    };
+    let _ = unsafe { CloseDesktop(desk) };
+    if result.is_err() || needed < 2 || needed as usize > name.len() * size_of::<u16>() {
+        return SessionLockState::Unknown;
+    }
+    let length = needed as usize / size_of::<u16>();
+    let desktop = String::from_utf16_lossy(&name[..length.saturating_sub(1)]);
+    if desktop.eq_ignore_ascii_case("Winlogon") {
+        SessionLockState::Locked
+    } else {
+        SessionLockState::Unlocked
     }
 }
 
@@ -1557,6 +1657,7 @@ pub fn play_chime() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::ApplicationRule;
 
     fn signature(verified: bool) -> SignatureInfo {
         SignatureInfo {
@@ -1582,6 +1683,7 @@ mod tests {
         );
         assert_eq!(assessment.risk, Risk::Blocked);
         assert_eq!(assessment.confidence, Confidence::Low);
+        assert_eq!(assessment.enforcement, EnforcementDecision::Alert);
     }
 
     #[test]
@@ -1628,5 +1730,47 @@ mod tests {
             &["kswdmcap.ax".to_owned()],
         );
         assert_eq!(assessment.risk, Risk::Suspicious);
+    }
+
+    fn explicit_policy() -> Policy {
+        Policy {
+            applications: vec![ApplicationRule {
+                executable: "capture.exe".to_owned(),
+                publishers: vec!["Expected Publisher".to_owned()],
+                paths: vec![r"C:\Program Files\Capture".to_owned()],
+            }],
+            ..Policy::default()
+        }
+    }
+
+    #[test]
+    fn explicit_policy_match_allows_and_mismatch_denies() {
+        let policy = explicit_policy();
+        let mut evidence = Vec::new();
+        let matched = assess_policy(
+            &policy,
+            "capture.exe",
+            Some(r"C:\Program Files\Capture\capture.exe"),
+            Some(&signature(true)),
+            &mut evidence,
+        );
+        assert_eq!(matched, (Risk::Expected, EnforcementDecision::Allow));
+
+        let mut evidence = Vec::new();
+        let denied = assess_policy(
+            &policy,
+            "capture.exe",
+            Some(r"C:\Users\person\capture.exe"),
+            Some(&signature(true)),
+            &mut evidence,
+        );
+        assert_eq!(denied, (Risk::Suspicious, EnforcementDecision::Deny));
+    }
+
+    #[test]
+    fn missing_policy_identity_is_unknown_not_denied() {
+        let mut evidence = Vec::new();
+        let result = assess_policy(&explicit_policy(), "capture.exe", None, None, &mut evidence);
+        assert_eq!(result, (Risk::Unexplained, EnforcementDecision::Unknown));
     }
 }

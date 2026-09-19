@@ -1,15 +1,18 @@
 use crate::{
     cli::Filter,
     i18n::Language,
-    model::{Access, AccessEvent, Action, SCHEMA_VERSION, event_code},
+    model::{
+        Access, AccessEvent, Action, Activity, EnforcementDecision, Evidence, EvidenceKind,
+        SCHEMA_VERSION, event_code,
+    },
     output,
-    platform::PlatformMonitor,
+    platform::{PlatformMonitor, SessionLockState},
 };
 use anyhow::{Context, Result};
 use chrono::Utc;
 use colored::Colorize;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs::OpenOptions,
     io::{BufWriter, Write},
     path::Path,
@@ -35,6 +38,7 @@ use windows::{
     },
     core::PCWSTR,
 };
+
 #[allow(clippy::too_many_arguments)]
 pub fn watch(
     monitor: &PlatformMonitor,
@@ -75,154 +79,236 @@ pub fn watch(
     } else {
         None
     };
-    let initial = monitor.snapshot(filter)?;
-    let mut previous = by_key(initial.accesses);
-    let mut last_notifications: HashMap<String, Instant> = HashMap::new();
+
+    let mut previous = snapshot_by_key(monitor, filter)?;
+    let mut last_notifications = HashMap::new();
+    let mut denial_observations = HashMap::new();
+    let mut terminated = HashSet::new();
+
     for access in previous.values() {
-        let mut event = AccessEvent {
-            schema_version: SCHEMA_VERSION,
-            event_code: event_code(Action::Start),
-            tool_version: env!("CARGO_PKG_VERSION"),
-            action: Action::Start,
-            observed_at: Utc::now(),
-            access: access.clone(),
-        };
-        if crate::platform::is_session_locked() {
-            event.access.evidence.push(crate::model::Evidence::new(
-                crate::model::EvidenceKind::PrivacyActivity,
-                "session_lock",
-                "Capture detected while Windows session is locked!",
-            ));
-            if event.access.risk < crate::model::Risk::Suspicious {
-                event.access.risk = crate::model::Risk::Suspicious;
-            }
-        }
-        handle_defensive_actions(&event.access, defensive_kill, sound);
-        log_event(&event, &mut log_writer)?;
-        write_eventlog(&event, &event_source);
-        output::print_event(&event, json, min_risk, lang)?;
-        if notify && notification_due(&mut last_notifications, &access.key) {
-            crate::notify::notify_access(access, Action::Start, lang);
-        }
+        emit_event(
+            access,
+            Action::Start,
+            json,
+            min_risk,
+            lang,
+            notify,
+            sound,
+            &mut last_notifications,
+            &mut log_writer,
+            &event_source,
+        )?;
     }
+    update_enforcement_candidates(
+        previous.values(),
+        defensive_kill,
+        &mut denial_observations,
+        &mut terminated,
+    );
 
     while running.load(Ordering::SeqCst) {
         match wake_receiver.recv_timeout(interval) {
             Ok(()) | Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
-        let current = by_key(monitor.snapshot(filter)?.accesses);
+        let current = snapshot_by_key(monitor, filter)?;
 
         for (key, access) in &current {
             if !previous.contains_key(key) {
-                let mut event = AccessEvent {
-                    schema_version: SCHEMA_VERSION,
-                    event_code: event_code(Action::Start),
-                    tool_version: env!("CARGO_PKG_VERSION"),
-                    action: Action::Start,
-                    observed_at: Utc::now(),
-                    access: access.clone(),
-                };
-                if crate::platform::is_session_locked() {
-                    event.access.evidence.push(crate::model::Evidence::new(
-                        crate::model::EvidenceKind::PrivacyActivity,
-                        "session_lock",
-                        "Capture detected while Windows session is locked!",
-                    ));
-                    if event.access.risk < crate::model::Risk::Suspicious {
-                        event.access.risk = crate::model::Risk::Suspicious;
-                    }
-                }
-                handle_defensive_actions(&event.access, defensive_kill, sound);
-                log_event(&event, &mut log_writer)?;
-                write_eventlog(&event, &event_source);
-                output::print_event(&event, json, min_risk, lang)?;
-                if notify && notification_due(&mut last_notifications, key) {
-                    crate::notify::notify_access(access, Action::Start, lang);
-                }
+                emit_event(
+                    access,
+                    Action::Start,
+                    json,
+                    min_risk,
+                    lang,
+                    notify,
+                    sound,
+                    &mut last_notifications,
+                    &mut log_writer,
+                    &event_source,
+                )?;
             }
         }
         for (key, access) in &current {
             if let Some(old) = previous.get(key)
-                && (old.activity != access.activity
-                    || old.risk != access.risk
-                    || old.confidence != access.confidence)
+                && access_changed(old, access)
             {
-                let event = AccessEvent {
-                    schema_version: SCHEMA_VERSION,
-                    event_code: event_code(Action::Update),
-                    tool_version: env!("CARGO_PKG_VERSION"),
-                    action: Action::Update,
-                    observed_at: Utc::now(),
-                    access: access.clone(),
-                };
-                log_event(&event, &mut log_writer)?;
-                write_eventlog(&event, &event_source);
-                output::print_event(&event, json, min_risk, lang)?;
-                if notify && notification_due(&mut last_notifications, key) {
-                    crate::notify::notify_access(access, Action::Update, lang);
-                }
+                emit_event(
+                    access,
+                    Action::Update,
+                    json,
+                    min_risk,
+                    lang,
+                    notify,
+                    false,
+                    &mut last_notifications,
+                    &mut log_writer,
+                    &event_source,
+                )?;
             }
         }
         for (key, access) in &previous {
             if !current.contains_key(key) {
-                let event = AccessEvent {
-                    schema_version: SCHEMA_VERSION,
-                    event_code: event_code(Action::Stop),
-                    tool_version: env!("CARGO_PKG_VERSION"),
-                    action: Action::Stop,
-                    observed_at: Utc::now(),
-                    access: access.clone(),
-                };
-                log_event(&event, &mut log_writer)?;
-                write_eventlog(&event, &event_source);
-                output::print_event(&event, json, min_risk, lang)?;
-                if notify && notification_due(&mut last_notifications, key) {
-                    crate::notify::notify_access(access, Action::Stop, lang);
-                }
+                emit_event(
+                    access,
+                    Action::Stop,
+                    json,
+                    min_risk,
+                    lang,
+                    notify,
+                    false,
+                    &mut last_notifications,
+                    &mut log_writer,
+                    &event_source,
+                )?;
             }
         }
 
+        update_enforcement_candidates(
+            current.values(),
+            defensive_kill,
+            &mut denial_observations,
+            &mut terminated,
+        );
+        denial_observations.retain(|key, _| current.contains_key(key));
+        terminated.retain(|key| current.contains_key(key));
         previous = current;
     }
+
     if let Some(handle) = event_source {
         let _ = unsafe { DeregisterEventSource(handle) };
     }
     Ok(())
 }
 
-fn handle_defensive_actions(access: &Access, defensive_kill: bool, sound: bool) {
-    if sound {
+fn snapshot_by_key(monitor: &PlatformMonitor, filter: &Filter) -> Result<HashMap<String, Access>> {
+    let mut accesses = monitor.snapshot(filter)?.accesses;
+    if crate::platform::session_lock_state() == SessionLockState::Locked {
+        for access in &mut accesses {
+            if access.activity == Activity::Active {
+                access.evidence.push(Evidence::new(
+                    EvidenceKind::PrivacyActivity,
+                    "session_lock",
+                    "Capture was observed while the Windows session was locked.",
+                ));
+                if access.risk < crate::model::Risk::Suspicious {
+                    access.risk = crate::model::Risk::Suspicious;
+                }
+            }
+        }
+    }
+    Ok(by_key(accesses))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_event(
+    access: &Access,
+    action: Action,
+    json: bool,
+    min_risk: Option<crate::model::Risk>,
+    lang: Language,
+    notify: bool,
+    sound: bool,
+    last_notifications: &mut HashMap<String, Instant>,
+    log_writer: &mut Option<BufWriter<std::fs::File>>,
+    event_source: &Option<HANDLE>,
+) -> Result<()> {
+    let event = AccessEvent {
+        schema_version: SCHEMA_VERSION,
+        event_code: event_code(action),
+        tool_version: env!("CARGO_PKG_VERSION"),
+        action,
+        observed_at: Utc::now(),
+        access: access.clone(),
+    };
+    if sound && matches!(action, Action::Start) && access.activity == Activity::Active {
         crate::platform::play_chime();
     }
-    if defensive_kill
-        && access.risk >= crate::model::Risk::Suspicious
-        && let Some(pid) = access.pid
+    log_event(&event, log_writer)?;
+    write_eventlog(&event, event_source);
+    output::print_event(&event, json, min_risk, lang)?;
+    if notify
+        && notification_due(last_notifications, &access.key)
+        && let Err(error) = crate::notify::notify_access(access, action, lang)
     {
+        eprintln!("notification failed: {error:#}");
+    }
+    Ok(())
+}
+
+fn access_changed(old: &Access, current: &Access) -> bool {
+    old.activity != current.activity
+        || old.risk != current.risk
+        || old.confidence != current.confidence
+        || old.enforcement != current.enforcement
+        || old.evidence != current.evidence
+}
+
+fn update_enforcement_candidates<'a>(
+    accesses: impl Iterator<Item = &'a Access>,
+    enabled: bool,
+    observations: &mut HashMap<String, u8>,
+    terminated: &mut HashSet<String>,
+) {
+    if !enabled {
+        observations.clear();
+        return;
+    }
+    for access in accesses {
+        if access.activity != Activity::Active
+            || access.enforcement != EnforcementDecision::Deny
+            || access.risk == crate::model::Risk::Blocked
+            || protected_application(&access.application)
+        {
+            observations.remove(&access.key);
+            continue;
+        }
+        let count = observations.entry(access.key.clone()).or_default();
+        *count = count.saturating_add(1);
+        if *count < 2 || terminated.contains(&access.key) {
+            continue;
+        }
+        let Some(pid) = access.pid else { continue };
         match crate::platform::terminate_process_by_pid(pid) {
             Ok(()) => {
+                terminated.insert(access.key.clone());
                 eprintln!(
                     "{}",
                     format!(
-                        "  🛑 TERMINATED unauthorized process {} (PID {})",
+                        "  TERMINATED policy-denied process {} (PID {}) after two observations",
                         access.application, pid
                     )
                     .red()
                     .bold()
                 );
             }
-            Err(e) => {
-                eprintln!(
-                    "{}",
-                    format!(
-                        "  ⚠ Failed to terminate process {} (PID {}): {e}",
-                        access.application, pid
-                    )
-                    .yellow()
-                );
-            }
+            Err(error) => eprintln!(
+                "{}",
+                format!(
+                    "  Failed to terminate policy-denied process {} (PID {}): {error}",
+                    access.application, pid
+                )
+                .yellow()
+            ),
         }
     }
+}
+
+fn protected_application(application: &str) -> bool {
+    matches!(
+        application.to_ascii_lowercase().as_str(),
+        "system"
+            | "registry"
+            | "smss.exe"
+            | "csrss.exe"
+            | "wininit.exe"
+            | "services.exe"
+            | "lsass.exe"
+            | "winlogon.exe"
+            | "dwm.exe"
+            | "explorer.exe"
+            | "mcw.exe"
+    )
 }
 
 fn log_event(event: &AccessEvent, writer: &mut Option<BufWriter<std::fs::File>>) -> Result<()> {
@@ -242,7 +328,7 @@ fn write_eventlog(event: &AccessEvent, handle: &Option<HANDLE>) {
         event.access.resource,
         event.access.application,
         event.access.risk,
-        event.access.pid.map_or("?".into(), |p| p.to_string()),
+        event.access.pid.map_or("?".into(), |pid| pid.to_string()),
     );
     let wide: Vec<u16> = msg.encode_utf16().chain(Some(0)).collect();
     let strings = [PCWSTR(wide.as_ptr())];
@@ -309,4 +395,64 @@ fn by_key(accesses: Vec<Access>) -> HashMap<String, Access> {
         .into_iter()
         .map(|access| (access.key.clone(), access))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{Confidence, Resource, Risk};
+
+    fn access(activity: Activity, decision: EnforcementDecision) -> Access {
+        Access {
+            key: "camera:test:1".into(),
+            resource: Resource::Camera,
+            activity,
+            risk: Risk::Suspicious,
+            confidence: Confidence::High,
+            enforcement: decision,
+            application: "test.exe".into(),
+            pid: Some(999_999),
+            parent_pid: None,
+            parent_name: None,
+            executable: Some(r"C:\test.exe".into()),
+            signature: None,
+            device: None,
+            started_at: None,
+            modules: vec![],
+            evidence: vec![],
+            process: None,
+        }
+    }
+
+    #[test]
+    fn enforcement_requires_active_explicit_denial_and_two_observations() {
+        let ready = access(Activity::Ready, EnforcementDecision::Deny);
+        let alert = access(Activity::Active, EnforcementDecision::Alert);
+        let denied = access(Activity::Active, EnforcementDecision::Deny);
+        let mut observations = HashMap::new();
+        let mut terminated = HashSet::new();
+
+        update_enforcement_candidates(
+            [&ready, &alert].into_iter(),
+            true,
+            &mut observations,
+            &mut terminated,
+        );
+        assert!(observations.is_empty());
+
+        update_enforcement_candidates(
+            [&denied].into_iter(),
+            true,
+            &mut observations,
+            &mut terminated,
+        );
+        assert_eq!(observations[&denied.key], 1);
+    }
+
+    #[test]
+    fn critical_process_names_are_protected() {
+        assert!(protected_application("LSASS.EXE"));
+        assert!(protected_application("mcw.exe"));
+        assert!(!protected_application("browser.exe"));
+    }
 }
