@@ -22,3 +22,18 @@ jobs:
       - name: Audit Rust dependencies
         run: cargo install cargo-audit --locked && cargo audit
       - run: cargo build --release --locked
+      - name: Build and smoke-test per-user MSI
+        shell: pwsh
+        run: |
+          dotnet tool restore
+          $version = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages[0].version
+          dotnet wix build installer/miccamwatch.wxs -d Version=$version -d Executable=target/release/mcw.exe -o target/miccamwatch-windows-x86_64.msi
+          $msi = (Resolve-Path target/miccamwatch-windows-x86_64.msi).Path
+          $install = Start-Process msiexec.exe -ArgumentList @('/i', $msi, '/qn', '/norestart') -Wait -PassThru
+          if ($install.ExitCode -ne 0) { throw "MSI install failed with code $($install.ExitCode)" }
+          $installed = Join-Path $env:LOCALAPPDATA 'Programs\MicCamWatch\mcw.exe'
+          if (-not (Test-Path $installed)) { throw "Installed executable is missing" }
+          $reported = & $installed --version
+          if ($reported -ne "mcw $version") { throw "Installed version mismatch: $reported" }
+          $uninstall = Start-Process msiexec.exe -ArgumentList @('/x', $msi, '/qn', '/norestart') -Wait -PassThru
+          if ($uninstall.ExitCode -ne 0) { throw "MSI uninstall failed with code $($uninstall.ExitCode)" }

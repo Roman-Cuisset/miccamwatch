@@ -457,6 +457,62 @@ impl PlatformMonitor {
             },
         });
 
+        let executable = std::env::current_exe();
+        checks.push(match executable {
+            Ok(path) => {
+                let installed = std::env::var_os("LOCALAPPDATA")
+                    .map(std::path::PathBuf::from)
+                    .map(|root| path.starts_with(root.join("Programs").join("MicCamWatch")))
+                    .unwrap_or(false);
+                DiagnosticCheck {
+                    name: "installation",
+                    status: if installed {
+                        DiagnosticStatus::Ok
+                    } else {
+                        DiagnosticStatus::Warning
+                    },
+                    detail: if installed {
+                        format!("installed executable: {}", path.display())
+                    } else {
+                        format!("portable executable: {}", path.display())
+                    },
+                }
+            }
+            Err(error) => DiagnosticCheck {
+                name: "installation",
+                status: DiagnosticStatus::Warning,
+                detail: format!("cannot locate executable: {error}"),
+            },
+        });
+
+        checks.push(match crate::autostart::state() {
+            Ok(state) => DiagnosticCheck {
+                name: "autostart",
+                status: DiagnosticStatus::Ok,
+                detail: format!("{state:?}").to_ascii_lowercase(),
+            },
+            Err(error) => DiagnosticCheck {
+                name: "autostart",
+                status: DiagnosticStatus::Warning,
+                detail: format!("cannot inspect autostart: {error:#}"),
+            },
+        });
+
+        let notification_identity = RegKey::predef(HKEY_CURRENT_USER)
+            .open_subkey(r"Software\Classes\AppUserModelId\MicCamWatch.MicCamWatch");
+        checks.push(match notification_identity {
+            Ok(_) => DiagnosticCheck {
+                name: "notification_identity",
+                status: DiagnosticStatus::Ok,
+                detail: "MicCamWatch.MicCamWatch is registered".into(),
+            },
+            Err(error) => DiagnosticCheck {
+                name: "notification_identity",
+                status: DiagnosticStatus::Warning,
+                detail: format!("notification identity is not registered: {error}"),
+            },
+        });
+
         // Policy
         checks.push(DiagnosticCheck {
             name: "policy",

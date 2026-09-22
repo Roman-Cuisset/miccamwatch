@@ -13,6 +13,9 @@ jobs:
   windows:
     runs-on: windows-latest
     environment: release
+    env:
+      WINDOWS_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
+      WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
@@ -24,12 +27,35 @@ jobs:
             throw "Tag $env:GITHUB_REF_NAME does not match Cargo version $version"
           }
       - run: cargo build --release --locked
-      - name: Package executable and checksum
+      - name: Restore pinned installer toolchain
+        run: dotnet tool restore
+      - name: Sign executable when release certificate is configured
+        if: ${{ env.WINDOWS_CERTIFICATE_BASE64 != '' }}
+        shell: pwsh
+        run: |
+          [IO.File]::WriteAllBytes("certificate.pfx", [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE_BASE64))
+          signtool sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /f certificate.pfx /p $env:WINDOWS_CERTIFICATE_PASSWORD target/release/mcw.exe
+          Remove-Item certificate.pfx
+      - name: Build per-user MSI
+        shell: pwsh
+        run: |
+          $version = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages[0].version
+          dotnet wix build installer/miccamwatch.wxs -d Version=$version -d Executable=target/release/mcw.exe -o miccamwatch-windows-x86_64.msi
+      - name: Sign MSI when release certificate is configured
+        if: ${{ env.WINDOWS_CERTIFICATE_BASE64 != '' }}
+        shell: pwsh
+        run: |
+          [IO.File]::WriteAllBytes("certificate.pfx", [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE_BASE64))
+          signtool sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /f certificate.pfx /p $env:WINDOWS_CERTIFICATE_PASSWORD miccamwatch-windows-x86_64.msi
+          Remove-Item certificate.pfx
+      - name: Package executable and checksums
         shell: pwsh
         run: |
           Compress-Archive -Path target/release/mcw.exe -DestinationPath miccamwatch-windows-x86_64.zip
-          $hash = (Get-FileHash miccamwatch-windows-x86_64.zip -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$hash *miccamwatch-windows-x86_64.zip" | Out-File -Encoding ascii -NoNewline SHA256SUMS
+          @("miccamwatch-windows-x86_64.zip", "miccamwatch-windows-x86_64.msi") | ForEach-Object {
+            $hash = (Get-FileHash $_ -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash *$_"
+          } | Out-File -Encoding ascii SHA256SUMS
       - name: Generate SPDX SBOM
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
         with:
@@ -39,11 +65,14 @@ jobs:
       - name: Attest release provenance
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
         with:
-          subject-path: miccamwatch-windows-x86_64.zip
+          subject-path: |
+            miccamwatch-windows-x86_64.zip
+            miccamwatch-windows-x86_64.msi
       - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           generate_release_notes: true
           files: |
             miccamwatch-windows-x86_64.zip
+            miccamwatch-windows-x86_64.msi
             SHA256SUMS
             miccamwatch-sbom.spdx.json

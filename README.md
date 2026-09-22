@@ -104,7 +104,7 @@ Status JSON is an object with an explicit schema version:
 ```json
 {
   "schema_version": 3,
-  "tool_version": "0.11.0",
+  "tool_version": "0.12.0",
   "collectors": [],
   "accesses": []
 }
@@ -128,7 +128,7 @@ The output is suitable for diagnostics and monitoring. It is not a forensic proo
 
 ## Install
 
-Download `miccamwatch-windows-x86_64.zip` from the [latest release](https://github.com/Roman-Cuisset/miccamwatch/releases/latest), extract `mcw.exe`, and place it in a directory listed in `PATH`.
+Download `miccamwatch-windows-x86_64.msi` from the [latest release](https://github.com/Roman-Cuisset/miccamwatch/releases/latest) for a per-user installation with `mcw` on `PATH` and a Start Menu entry. The portable `miccamwatch-windows-x86_64.zip` remains available.
 
 Upgrade later with:
 
@@ -136,7 +136,7 @@ Upgrade later with:
 mcw update
 ```
 
-The updater verifies the SHA-256 checksum published with the GitHub release. Because the archive and checksum share the same release channel, this protects integrity but is not an independent publisher signature.
+The updater verifies the SHA-256 checksum published with the GitHub release. Because the archive and checksum share the same release channel, this protects integrity but is not an independent publisher signature. Production signing is conditional on a configured release certificate; see [Authenticode release signing](docs/SIGNING.md).
 
 ## Policy configuration
 
