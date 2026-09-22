@@ -5,13 +5,13 @@ use crate::{
     platform::PlatformMonitor,
 };
 use anyhow::{Context, Result};
-use std::{ffi::OsStr, os::windows::ffi::OsStrExt};
+use std::{ffi::OsStr, mem::size_of, os::windows::ffi::OsStrExt};
 use windows::{
     Win32::{
-        Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, WPARAM},
+        Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM},
         Graphics::Gdi::{
-            CreateBitmap, CreateCompatibleBitmap, CreateCompatibleDC, CreateSolidBrush, DeleteDC,
-            DeleteObject, Ellipse, SelectObject,
+            BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CreateBitmap, CreateDIBSection, DIB_RGB_COLORS,
+            DeleteObject,
         },
         UI::{
             Shell::{
@@ -41,6 +41,14 @@ const CMD_EXIT: usize = 103;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TrayVisual {
     Idle,
+    Ready,
+    Active,
+    Error,
+}
+
+#[derive(Clone, Copy)]
+enum IconGlyph {
+    Check,
     Ready,
     Active,
     Error,
@@ -78,10 +86,10 @@ pub fn run_tray(monitor: PlatformMonitor, lang: Language) -> Result<()> {
         lang,
         visual: TrayVisual::Idle,
         summary: idle_text(lang).to_owned(),
-        green_icon: create_circle_icon(34, 197, 94)?,
-        yellow_icon: create_circle_icon(245, 158, 11)?,
-        red_icon: create_circle_icon(239, 68, 68)?,
-        gray_icon: create_circle_icon(107, 114, 128)?,
+        green_icon: create_status_icon((34, 197, 94), IconGlyph::Check)?,
+        yellow_icon: create_status_icon((245, 158, 11), IconGlyph::Ready)?,
+        red_icon: create_status_icon((239, 68, 68), IconGlyph::Active)?,
+        gray_icon: create_status_icon((107, 114, 128), IconGlyph::Error)?,
     });
     let state_ptr = Box::into_raw(state);
 
@@ -415,36 +423,112 @@ fn format_wide(value: &str) -> Vec<u16> {
     OsStr::new(value).encode_wide().chain(Some(0)).collect()
 }
 
-fn create_circle_icon(red: u8, green: u8, blue: u8) -> Result<HICON> {
-    unsafe {
-        let dc = CreateCompatibleDC(None);
-        if dc.is_invalid() {
-            anyhow::bail!("failed to create compatible DC for tray icon");
-        }
-        let color_bitmap = CreateCompatibleBitmap(dc, 16, 16);
-        let mask_bits = [0u8; 32];
-        let mask_bitmap = CreateBitmap(16, 16, 1, 1, Some(mask_bits.as_ptr().cast()));
-        let old_bitmap = SelectObject(dc, color_bitmap.into());
-        let brush = CreateSolidBrush(COLORREF(
-            red as u32 | ((green as u32) << 8) | ((blue as u32) << 16),
-        ));
-        let old_brush = SelectObject(dc, brush.into());
-        let _ = Ellipse(dc, 1, 1, 15, 15);
-        let _ = SelectObject(dc, old_brush);
-        let _ = SelectObject(dc, old_bitmap);
-        let _ = DeleteObject(brush.into());
-        let _ = DeleteDC(dc);
-        let info = ICONINFO {
-            fIcon: true.into(),
-            hbmMask: mask_bitmap,
-            hbmColor: color_bitmap,
+fn create_status_icon(color: (u8, u8, u8), glyph: IconGlyph) -> Result<HICON> {
+    const SIZE: i32 = 32;
+    let info = BITMAPINFO {
+        bmiHeader: BITMAPINFOHEADER {
+            biSize: size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: SIZE,
+            biHeight: -SIZE,
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: BI_RGB.0,
             ..Default::default()
-        };
-        let icon = CreateIconIndirect(&info);
-        let _ = DeleteObject(color_bitmap.into());
-        let _ = DeleteObject(mask_bitmap.into());
-        icon.context("failed to create tray icon")
+        },
+        ..Default::default()
+    };
+    let mut bits = std::ptr::null_mut();
+    let color_bitmap =
+        unsafe { CreateDIBSection(None, &info, DIB_RGB_COLORS, &mut bits, None, 0)? };
+    if bits.is_null() {
+        let _ = unsafe { DeleteObject(color_bitmap.into()) };
+        anyhow::bail!("Windows returned no pixel buffer for tray icon");
+    }
+    let rendered = render_icon_pixels(color, glyph);
+    let pixels =
+        unsafe { std::slice::from_raw_parts_mut(bits.cast::<u32>(), (SIZE * SIZE) as usize) };
+    pixels.copy_from_slice(&rendered);
+    let mask = [0u8; 128];
+    let mask_bitmap = unsafe { CreateBitmap(SIZE, SIZE, 1, 1, Some(mask.as_ptr().cast())) };
+    let icon_info = ICONINFO {
+        fIcon: true.into(),
+        hbmMask: mask_bitmap,
+        hbmColor: color_bitmap,
+        ..Default::default()
+    };
+    let icon = unsafe { CreateIconIndirect(&icon_info) };
+    let _ = unsafe { DeleteObject(color_bitmap.into()) };
+    let _ = unsafe { DeleteObject(mask_bitmap.into()) };
+    icon.context("failed to create alpha tray icon")
+}
+
+fn render_icon_pixels(color: (u8, u8, u8), glyph: IconGlyph) -> Vec<u32> {
+    const SIZE: i32 = 32;
+    let mut pixels = vec![0; (SIZE * SIZE) as usize];
+    for y in 0..SIZE {
+        for x in 0..SIZE {
+            let dx = x as f32 - 15.5;
+            let dy = y as f32 - 15.5;
+            let distance = (dx * dx + dy * dy).sqrt();
+            let alpha = ((15.0 - distance).clamp(0.0, 1.0) * 255.0) as u32;
+            if alpha == 0 {
+                continue;
+            }
+            let white = glyph_pixel(glyph, x, y);
+            let (red, green, blue) = if white { (255, 255, 255) } else { color };
+            pixels[(y * SIZE + x) as usize] = (alpha << 24)
+                | ((red as u32 * alpha / 255) << 16)
+                | ((green as u32 * alpha / 255) << 8)
+                | (blue as u32 * alpha / 255);
+        }
+    }
+    pixels
+}
+
+fn glyph_pixel(glyph: IconGlyph, x: i32, y: i32) -> bool {
+    match glyph {
+        IconGlyph::Check => {
+            line_distance(x, y, 8, 16, 13, 21) <= 1.7 || line_distance(x, y, 13, 21, 24, 10) <= 1.7
+        }
+        IconGlyph::Ready => {
+            (9..=22).contains(&y) && ((10..=12).contains(&x) || (19..=21).contains(&x))
+        }
+        IconGlyph::Active => {
+            ((13..=18).contains(&x) && (7..=19).contains(&y))
+                || ((13..=18).contains(&x) && (23..=27).contains(&y))
+        }
+        IconGlyph::Error => {
+            line_distance(x, y, 9, 9, 22, 22) <= 1.8 || line_distance(x, y, 22, 9, 9, 22) <= 1.8
+        }
     }
 }
 
-use std::mem::size_of;
+fn line_distance(x: i32, y: i32, x1: i32, y1: i32, x2: i32, y2: i32) -> f32 {
+    let (px, py) = (x as f32, y as f32);
+    let (ax, ay) = (x1 as f32, y1 as f32);
+    let (bx, by) = (x2 as f32, y2 as f32);
+    let (vx, vy) = (bx - ax, by - ay);
+    let length_squared = vx * vx + vy * vy;
+    let t = (((px - ax) * vx + (py - ay) * vy) / length_squared).clamp(0.0, 1.0);
+    ((px - (ax + t * vx)).powi(2) + (py - (ay + t * vy)).powi(2)).sqrt()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tray_icons_have_alpha_color_and_distinct_glyphs() {
+        let idle = render_icon_pixels((34, 197, 94), IconGlyph::Check);
+        let ready = render_icon_pixels((245, 158, 11), IconGlyph::Ready);
+        let active = render_icon_pixels((239, 68, 68), IconGlyph::Active);
+        let error = render_icon_pixels((107, 114, 128), IconGlyph::Error);
+
+        assert_eq!(idle.len(), 32 * 32);
+        assert_eq!(idle[0] >> 24, 0);
+        assert_eq!(idle[16 * 32 + 16] >> 24, 255);
+        assert_ne!(idle, ready);
+        assert_ne!(ready, active);
+        assert_ne!(active, error);
+    }
+}
