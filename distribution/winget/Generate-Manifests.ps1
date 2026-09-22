@@ -10,6 +10,7 @@ $output = Join-Path $PSScriptRoot "manifests/r/RomanCuisset/MicCamWatch/$Version
 New-Item -ItemType Directory -Force -Path $output | Out-Null
 
 @"
+# yaml-language-server: `$schema=https://aka.ms/winget-manifest.version.1.9.0.schema.json
 PackageIdentifier: $identifier
 PackageVersion: $Version
 DefaultLocale: en-US
@@ -18,6 +19,7 @@ ManifestVersion: 1.9.0
 "@ | Set-Content -Encoding utf8 (Join-Path $output "$identifier.yaml")
 
 @"
+# yaml-language-server: `$schema=https://aka.ms/winget-manifest.installer.1.9.0.schema.json
 PackageIdentifier: $identifier
 PackageVersion: $Version
 InstallerLocale: en-US
@@ -39,6 +41,7 @@ ManifestVersion: 1.9.0
 "@ | Set-Content -Encoding utf8 (Join-Path $output "$identifier.installer.yaml")
 
 @"
+# yaml-language-server: `$schema=https://aka.ms/winget-manifest.defaultLocale.1.9.0.schema.json
 PackageIdentifier: $identifier
 PackageVersion: $Version
 PackageLocale: en-US
