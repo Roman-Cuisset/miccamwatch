@@ -1,22 +1,30 @@
+mod autostart;
 mod cli;
 mod config;
+mod history;
 mod i18n;
 mod model;
 mod notify;
 mod output;
 mod platform;
+mod privacy;
+mod settings;
 mod tray;
 mod tui;
 mod updater;
 mod watcher;
 use anyhow::Result;
 use clap::Parser;
-use cli::{Cli, Command, ConfigCommand};
+use cli::{
+    AutostartCommand, CameraCommand, Cli, Command, ConfigCommand, HistoryCommand,
+    LockPolicyCommand, NotificationCommand, ProfileArg, TrayCommand,
+};
 use colored::Colorize;
-use config::Policy;
+use config::{Policy, Profile};
 use i18n::Language;
 use model::MicrophoneMuteState;
 use platform::PlatformMonitor;
+use settings::{PrivacyProfile, Settings};
 use std::{process::ExitCode, time::Duration};
 
 fn main() -> ExitCode {
@@ -44,7 +52,20 @@ fn run() -> Result<u8> {
     } else {
         let _ = colored::control::set_virtual_terminal(true);
     }
-    let policy = Policy::load(cli.config.as_deref())?;
+    let mut settings = Settings::load()?;
+    let default_policy = settings::default_policy_path()?;
+    let policy_path = cli
+        .config
+        .as_deref()
+        .or_else(|| default_policy.exists().then_some(default_policy.as_path()));
+    let mut policy = Policy::load(policy_path)?;
+    if cli.config.is_none() && !default_policy.exists() {
+        policy.profile = match settings.profile {
+            PrivacyProfile::Private => Profile::Strict,
+            PrivacyProfile::Development => Profile::Conservative,
+            PrivacyProfile::Meeting | PrivacyProfile::Balanced => Profile::Balanced,
+        };
+    }
     let lang = cli
         .lang
         .or_else(|| policy.language.as_deref().and_then(Language::from_code))
@@ -74,12 +95,15 @@ fn run() -> Result<u8> {
                 &options.filter,
                 options.output.json,
                 Duration::from_millis(options.interval),
-                options.notify,
+                options.notify
+                    && settings.notifications_enabled
+                    && !settings.notifications_paused(),
                 options.log.as_deref(),
                 options.eventlog,
                 lang,
-                options.sound,
+                options.sound || settings.sound_enabled,
                 defensive_kill,
+                settings.history_enabled,
             )?;
             Ok(0)
         }
@@ -146,18 +170,145 @@ fn run() -> Result<u8> {
             tui::run_tui(monitor, lang)?;
             Ok(0)
         }
-        Command::Tray => {
-            let monitor = PlatformMonitor::new(policy)?;
-            tray::run_tray(monitor, lang)?;
+        Command::Tray { command } => match command.unwrap_or(TrayCommand::Run) {
+            TrayCommand::Run => {
+                let monitor = PlatformMonitor::new(policy)?;
+                tray::run_tray(monitor, lang, settings)?;
+                Ok(0)
+            }
+            TrayCommand::Stop => {
+                let stopped = tray::stop_running()?;
+                println!(
+                    "{}",
+                    if stopped {
+                        "Tray stopped."
+                    } else {
+                        "Tray is not running."
+                    }
+                );
+                Ok(u8::from(!stopped))
+            }
+            TrayCommand::Status => {
+                let running = tray::is_running();
+                println!("{}", if running { "running" } else { "stopped" });
+                Ok(u8::from(!running))
+            }
+        },
+        Command::Camera { command } => {
+            let state = match command {
+                CameraCommand::Status => privacy::camera_state()?,
+                CameraCommand::Allow => {
+                    privacy::set_camera_state(privacy::CameraPrivacyState::Allowed)?;
+                    privacy::CameraPrivacyState::Allowed
+                }
+                CameraCommand::Block => {
+                    privacy::set_camera_state(privacy::CameraPrivacyState::Blocked)?;
+                    privacy::CameraPrivacyState::Blocked
+                }
+                CameraCommand::Toggle => privacy::toggle_camera()?,
+            };
+            println!("{}", state.as_str());
             Ok(0)
         }
-        Command::Config {
-            command: ConfigCommand::Validate,
-        } => {
-            if cli.config.is_none() {
-                anyhow::bail!("--config <PATH> is required for config validate");
+        Command::Autostart { command } => {
+            let status_query = matches!(&command, AutostartCommand::Status);
+            match command {
+                AutostartCommand::Status => {}
+                AutostartCommand::Enable => autostart::enable()?,
+                AutostartCommand::Disable => autostart::disable()?,
             }
-            println!("Policy configuration is valid.");
+            let state = autostart::state()?;
+            println!("{}", format!("{state:?}").to_ascii_lowercase());
+            Ok(u8::from(
+                status_query && state == autostart::AutostartState::Disabled,
+            ))
+        }
+        Command::Profile { profile } => {
+            if let Some(profile) = profile {
+                settings.profile = match profile {
+                    ProfileArg::Private => PrivacyProfile::Private,
+                    ProfileArg::Meeting => PrivacyProfile::Meeting,
+                    ProfileArg::Development => PrivacyProfile::Development,
+                    ProfileArg::Balanced => PrivacyProfile::Balanced,
+                };
+                settings.save()?;
+            }
+            println!("{}", format!("{:?}", settings.profile).to_ascii_lowercase());
+            Ok(0)
+        }
+        Command::Notifications { command } => {
+            match command {
+                NotificationCommand::Status => {}
+                NotificationCommand::Pause { minutes } => {
+                    let minutes = i64::try_from(minutes)?;
+                    settings.pause_notifications_until =
+                        Some(chrono::Utc::now() + chrono::Duration::minutes(minutes));
+                    settings.save()?;
+                }
+                NotificationCommand::Resume => {
+                    settings.pause_notifications_until = None;
+                    settings.save()?;
+                }
+            }
+            println!(
+                "{}",
+                if settings.notifications_paused() {
+                    "paused"
+                } else {
+                    "enabled"
+                }
+            );
+            Ok(0)
+        }
+        Command::LockPolicy { command } => {
+            match command {
+                LockPolicyCommand::Status => {}
+                LockPolicyCommand::Enable { microphone, camera } => {
+                    let both = !microphone && !camera;
+                    settings.mute_on_lock = microphone || both;
+                    settings.block_camera_on_lock = camera || both;
+                    settings.restore_on_unlock = true;
+                    settings.save()?;
+                }
+                LockPolicyCommand::Disable => {
+                    settings.mute_on_lock = false;
+                    settings.block_camera_on_lock = false;
+                    settings.save()?;
+                }
+            }
+            println!(
+                "microphone={} camera={} restore={}",
+                settings.mute_on_lock, settings.block_camera_on_lock, settings.restore_on_unlock
+            );
+            Ok(0)
+        }
+
+        Command::History { command } => {
+            match command {
+                HistoryCommand::Path => println!("{}", history::path()?.display()),
+                HistoryCommand::Clear => {
+                    history::clear()?;
+                    println!("History cleared.");
+                }
+            }
+            Ok(0)
+        }
+        Command::Config { command } => {
+            match command {
+                ConfigCommand::Validate => {
+                    if cli.config.is_none() && !default_policy.exists() {
+                        anyhow::bail!(
+                            "no policy found; pass --config <PATH> or create {}",
+                            default_policy.display()
+                        );
+                    }
+                    println!("Policy configuration is valid.");
+                }
+                ConfigCommand::Path => println!("{}", default_policy.display()),
+                ConfigCommand::SettingsPath => {
+                    println!("{}", settings::settings_path()?.display())
+                }
+            }
             Ok(0)
         }
     }

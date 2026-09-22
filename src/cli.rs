@@ -1,6 +1,6 @@
 use crate::i18n::Language;
 use crate::model::Risk;
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 #[derive(Debug, Parser)]
@@ -40,8 +40,41 @@ pub enum Command {
     Unmute,
     /// Launch the interactive full-terminal live dashboard
     Top,
-    /// Run in background as a system tray icon in the Windows notification area
-    Tray,
+    /// Control the background notification-area service
+    Tray {
+        #[command(subcommand)]
+        command: Option<TrayCommand>,
+    },
+    /// Control the current user's Windows camera privacy switch
+    Camera {
+        #[command(subcommand)]
+        command: CameraCommand,
+    },
+    /// Manage the per-user scheduled autostart task
+    Autostart {
+        #[command(subcommand)]
+        command: AutostartCommand,
+    },
+    /// Select a privacy profile
+    Profile {
+        #[arg(value_enum)]
+        profile: Option<ProfileArg>,
+    },
+    /// Pause, resume, or inspect desktop notifications
+    Notifications {
+        #[command(subcommand)]
+        command: NotificationCommand,
+    },
+    /// Configure privacy actions while the Windows session is locked
+    LockPolicy {
+        #[command(subcommand)]
+        command: LockPolicyCommand,
+    },
+    /// Inspect or clear the rotating local activity history
+    History {
+        #[command(subcommand)]
+        command: HistoryCommand,
+    },
     /// Validate policy configuration
     Config {
         #[command(subcommand)]
@@ -50,9 +83,75 @@ pub enum Command {
 }
 
 #[derive(Debug, Subcommand)]
+pub enum TrayCommand {
+    /// Run the notification-area service in this process
+    Run,
+    /// Stop the running notification-area service
+    Stop,
+    /// Report whether the notification-area service is running
+    Status,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum CameraCommand {
+    Status,
+    Allow,
+    Block,
+    Toggle,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum AutostartCommand {
+    Status,
+    Enable,
+    Disable,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum ProfileArg {
+    Private,
+    Meeting,
+    Development,
+    Balanced,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum NotificationCommand {
+    Status,
+    /// Pause notifications for a bounded number of minutes
+    Pause {
+        #[arg(value_parser = clap::value_parser!(u64).range(1..=10080))]
+        minutes: u64,
+    },
+    Resume,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum LockPolicyCommand {
+    Status,
+    Enable {
+        #[arg(long)]
+        microphone: bool,
+        #[arg(long)]
+        camera: bool,
+    },
+    Disable,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum HistoryCommand {
+    Path,
+    Clear,
+}
+
+#[derive(Debug, Subcommand)]
 pub enum ConfigCommand {
     /// Parse and validate the selected policy file
     Validate,
+    /// Print the default user policy path
+    Path,
+    /// Print the persistent application settings path
+    SettingsPath,
 }
 #[derive(Args, Debug)]
 pub struct Options {

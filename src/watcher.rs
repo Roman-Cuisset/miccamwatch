@@ -51,6 +51,7 @@ pub fn watch(
     lang: Language,
     sound: bool,
     defensive_kill: bool,
+    history_enabled: bool,
 ) -> Result<()> {
     let running = Arc::new(AtomicBool::new(true));
     let signal = Arc::clone(&running);
@@ -97,6 +98,7 @@ pub fn watch(
             &mut last_notifications,
             &mut log_writer,
             &event_source,
+            history_enabled,
         )?;
     }
     update_enforcement_candidates(
@@ -126,6 +128,7 @@ pub fn watch(
                     &mut last_notifications,
                     &mut log_writer,
                     &event_source,
+                    history_enabled,
                 )?;
             }
         }
@@ -144,6 +147,7 @@ pub fn watch(
                     &mut last_notifications,
                     &mut log_writer,
                     &event_source,
+                    history_enabled,
                 )?;
             }
         }
@@ -160,6 +164,7 @@ pub fn watch(
                     &mut last_notifications,
                     &mut log_writer,
                     &event_source,
+                    history_enabled,
                 )?;
             }
         }
@@ -212,6 +217,7 @@ fn emit_event(
     last_notifications: &mut HashMap<String, Instant>,
     log_writer: &mut Option<BufWriter<std::fs::File>>,
     event_source: &Option<HANDLE>,
+    history_enabled: bool,
 ) -> Result<()> {
     let event = AccessEvent {
         schema_version: SCHEMA_VERSION,
@@ -221,6 +227,9 @@ fn emit_event(
         observed_at: Utc::now(),
         access: access.clone(),
     };
+    if history_enabled {
+        crate::history::append(&event)?;
+    }
     if sound && matches!(action, Action::Start) && access.activity == Activity::Active {
         crate::platform::play_chime();
     }

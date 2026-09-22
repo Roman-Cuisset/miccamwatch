@@ -23,6 +23,9 @@
 - Emergency hardware microphone kill-switch (`mcw mute` / `mcw unmute` / `mcw mute --toggle`).
 - Interactive full-terminal live dashboard with keyboard shortcuts (`mcw top`).
 - Windows Notification Area background mode with green (idle), yellow (camera-ready), red (confirmed active), and gray (collector error) states (`mcw tray`).
+- Privacy Control Center commands for camera allow/block, scheduled autostart with a per-user fallback, notification pause, lock policies, profiles, and tray lifecycle control.
+- Persistent settings in `%APPDATA%\MicCamWatch\settings.toml` and rotating JSONL activity history in `%LOCALAPPDATA%\MicCamWatch`.
+- Single-instance tray service with local Windows message IPC (`mcw tray status` / `mcw tray stop`).
 - Opt-in termination of explicitly policy-denied active capture processes after two consecutive observations (`--kill-unauthorized`, disabled by default).
 - Three-state workstation lock detection; unknown lock state never triggers enforcement.
 - Discreet native audio chime upon confirmed capture initiation (`--sound`).
@@ -51,6 +54,24 @@ mcw mute --toggle
 mcw unmute
 mcw top
 mcw tray
+mcw tray status
+mcw tray stop
+mcw camera status
+mcw camera block
+mcw camera allow
+mcw camera toggle
+mcw autostart enable
+mcw autostart status
+mcw autostart disable
+mcw notifications pause 60
+mcw notifications resume
+mcw profile private
+mcw lock-policy enable --microphone --camera
+mcw lock-policy disable
+mcw history path
+mcw history clear
+mcw config path
+mcw config settings-path
 mcw devices
 mcw explain 1234
 mcw explain 1234 --json
@@ -83,7 +104,7 @@ Status JSON is an object with an explicit schema version:
 ```json
 {
   "schema_version": 3,
-  "tool_version": "0.10.1",
+  "tool_version": "0.11.0",
   "collectors": [],
   "accesses": []
 }
@@ -141,6 +162,16 @@ Validate a policy file:
 ```console
 mcw --config policy.toml config validate
 ```
+
+## Privacy Control Center
+
+`mcw tray` keeps the monitor in the Windows notification area. Its menu controls microphone mute, camera privacy, one-hour notification pause, the active profile, and autostart. The tray runs as a single per-user instance; the CLI can inspect or stop it.
+
+Autostart first uses a limited per-user Task Scheduler task. On systems that deny task creation, it uses the current user's `Run` registry key instead, without requesting elevation. `mcw autostart disable` removes both mechanisms.
+
+Lock policies are opt-in. On transition to a locked session, the tray can mute microphones and block camera access. On unlock, it restores only the states it changed. Unknown lock state never applies or restores controls.
+
+The default policy path is `%APPDATA%\MicCamWatch\policy.toml`. It is loaded automatically when present; `--config` overrides it. Application settings and rotating history paths are available through `mcw config settings-path` and `mcw history path`.
 
 ## Build from source
 

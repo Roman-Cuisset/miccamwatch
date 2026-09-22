@@ -1,18 +1,27 @@
 use crate::{
     cli::Filter,
     i18n::Language,
-    model::{Activity, CollectorState, MicrophoneMuteState, Resource},
-    platform::PlatformMonitor,
+    model::{
+        Access, AccessEvent, Action, Activity, CollectorState, MicrophoneMuteState, Resource,
+        SCHEMA_VERSION, event_code,
+    },
+    platform::{PlatformMonitor, SessionLockState},
+    privacy::CameraPrivacyState,
+    settings::{PrivacyProfile, Settings},
 };
 use anyhow::{Context, Result};
-use std::{ffi::OsStr, mem::size_of, os::windows::ffi::OsStrExt};
+use std::{collections::HashMap, ffi::OsStr, mem::size_of, os::windows::ffi::OsStrExt};
 use windows::{
     Win32::{
-        Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM},
+        Foundation::{
+            CloseHandle, ERROR_ALREADY_EXISTS, GetLastError, HANDLE, HWND, LPARAM, LRESULT, POINT,
+            WPARAM,
+        },
         Graphics::Gdi::{
             BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CreateBitmap, CreateDIBSection, DIB_RGB_COLORS,
             DeleteObject,
         },
+        System::Threading::CreateMutexW,
         UI::{
             Shell::{
                 NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW,
@@ -21,12 +30,12 @@ use windows::{
             WindowsAndMessaging::{
                 AppendMenuW, CREATESTRUCTW, CreateIconIndirect, CreatePopupMenu, CreateWindowExW,
                 DefWindowProcW, DestroyIcon, DestroyMenu, DestroyWindow, DispatchMessageW,
-                GWLP_USERDATA, GetCursorPos, GetMessageW, GetWindowLongPtrW, HICON, ICONINFO,
-                KillTimer, MF_DISABLED, MF_GRAYED, MF_SEPARATOR, MF_STRING, MSG, PostQuitMessage,
-                RegisterClassW, SetForegroundWindow, SetTimer, SetWindowLongPtrW, TPM_BOTTOMALIGN,
-                TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, WINDOW_EX_STYLE, WM_APP,
-                WM_COMMAND, WM_DESTROY, WM_LBUTTONDBLCLK, WM_NCCREATE, WM_RBUTTONUP, WM_TIMER,
-                WNDCLASSW, WS_OVERLAPPED,
+                FindWindowW, GWLP_USERDATA, GetCursorPos, GetMessageW, GetWindowLongPtrW, HICON,
+                ICONINFO, KillTimer, MF_DISABLED, MF_GRAYED, MF_SEPARATOR, MF_STRING, MSG,
+                PostMessageW, PostQuitMessage, RegisterClassW, SetForegroundWindow, SetTimer,
+                SetWindowLongPtrW, TPM_BOTTOMALIGN, TPM_RIGHTBUTTON, TrackPopupMenu,
+                TranslateMessage, WINDOW_EX_STYLE, WM_APP, WM_CLOSE, WM_COMMAND, WM_DESTROY,
+                WM_LBUTTONDBLCLK, WM_NCCREATE, WM_RBUTTONUP, WM_TIMER, WNDCLASSW, WS_OVERLAPPED,
             },
         },
     },
@@ -36,7 +45,11 @@ use windows::{
 const WM_TRAY_CALLBACK: u32 = WM_APP + 1;
 const TIMER_POLL_ID: usize = 1;
 const CMD_TOGGLE_MUTE: usize = 101;
+const CMD_TOGGLE_CAMERA: usize = 102;
 const CMD_EXIT: usize = 103;
+const CMD_TOGGLE_NOTIFICATIONS: usize = 104;
+const CMD_TOGGLE_AUTOSTART: usize = 105;
+const CMD_CYCLE_PROFILE: usize = 106;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TrayVisual {
@@ -54,12 +67,29 @@ enum IconGlyph {
     Error,
 }
 
+struct MutexGuard(HANDLE);
+
+impl Drop for MutexGuard {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = CloseHandle(self.0);
+        }
+    }
+}
+
 struct TrayAppState {
     monitor: PlatformMonitor,
     lang: Language,
     visual: TrayVisual,
     summary: String,
     mute_state: MicrophoneMuteState,
+    camera_state: CameraPrivacyState,
+    autostart_state: crate::autostart::AutostartState,
+    settings: Settings,
+    lock_state: SessionLockState,
+    restore_mute: Option<bool>,
+    restore_camera: Option<CameraPrivacyState>,
+    previous_accesses: HashMap<String, Access>,
     green_icon: HICON,
     yellow_icon: HICON,
     red_icon: HICON,
@@ -77,15 +107,29 @@ impl Drop for TrayAppState {
     }
 }
 
-pub fn run_tray(monitor: PlatformMonitor, lang: Language) -> Result<()> {
+pub fn run_tray(monitor: PlatformMonitor, lang: Language, settings: Settings) -> Result<()> {
+    let mutex_name = format_wide("Local\\MicCamWatch.Tray");
+    let _mutex = MutexGuard(unsafe { CreateMutexW(None, true, PCWSTR(mutex_name.as_ptr()))? });
+    if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
+        anyhow::bail!("MicCamWatch tray is already running");
+    }
+
     let state = Box::new(TrayAppState {
         mute_state: monitor
             .microphone_mute_state()
             .unwrap_or(MicrophoneMuteState::Unavailable),
+        camera_state: crate::privacy::camera_state().unwrap_or(CameraPrivacyState::SystemManaged),
+        autostart_state: crate::autostart::state()
+            .unwrap_or(crate::autostart::AutostartState::Disabled),
         monitor,
         lang,
         visual: TrayVisual::Idle,
         summary: idle_text(lang).to_owned(),
+        settings,
+        lock_state: crate::platform::session_lock_state(),
+        restore_mute: None,
+        restore_camera: None,
+        previous_accesses: HashMap::new(),
         green_icon: create_status_icon((34, 197, 94), IconGlyph::Check)?,
         yellow_icon: create_status_icon((245, 158, 11), IconGlyph::Ready)?,
         red_icon: create_status_icon((239, 68, 68), IconGlyph::Active)?,
@@ -172,6 +216,20 @@ pub fn run_tray(monitor: PlatformMonitor, lang: Language) -> Result<()> {
     loop_result
 }
 
+pub fn is_running() -> bool {
+    let class_name = format_wide("MicCamWatchTrayClass");
+    unsafe { FindWindowW(PCWSTR(class_name.as_ptr()), PCWSTR::null()) }.is_ok()
+}
+
+pub fn stop_running() -> Result<bool> {
+    let class_name = format_wide("MicCamWatchTrayClass");
+    let Ok(hwnd) = (unsafe { FindWindowW(PCWSTR(class_name.as_ptr()), PCWSTR::null()) }) else {
+        return Ok(false);
+    };
+    unsafe { PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0))? };
+    Ok(true)
+}
+
 fn state(hwnd: HWND) -> Option<&'static mut TrayAppState> {
     let pointer = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *mut TrayAppState;
     unsafe { pointer.as_mut() }
@@ -206,6 +264,10 @@ unsafe extern "system" fn tray_wnd_proc(
         WM_COMMAND => {
             match wparam.0 & 0xffff {
                 CMD_TOGGLE_MUTE => toggle_mute(hwnd),
+                CMD_TOGGLE_CAMERA => toggle_camera(hwnd),
+                CMD_TOGGLE_NOTIFICATIONS => toggle_notifications(hwnd),
+                CMD_TOGGLE_AUTOSTART => toggle_autostart(hwnd),
+                CMD_CYCLE_PROFILE => cycle_profile(hwnd),
                 CMD_EXIT => unsafe {
                     let _ = DestroyWindow(hwnd);
                 },
@@ -221,13 +283,46 @@ unsafe extern "system" fn tray_wnd_proc(
     }
 }
 
+fn apply_lock_policy(state: &mut TrayAppState) {
+    let current = crate::platform::session_lock_state();
+    if current == state.lock_state {
+        return;
+    }
+    if current == SessionLockState::Locked {
+        if state.settings.mute_on_lock {
+            let was_muted = state.mute_state == MicrophoneMuteState::Muted;
+            if state.monitor.set_microphone_mute(true).is_ok() {
+                state.restore_mute = Some(was_muted);
+            }
+        }
+        if state.settings.block_camera_on_lock {
+            let previous = crate::privacy::camera_state().ok();
+            if crate::privacy::set_camera_state(CameraPrivacyState::Blocked).is_ok() {
+                state.restore_camera = previous;
+            }
+        }
+    } else if current == SessionLockState::Unlocked && state.settings.restore_on_unlock {
+        if let Some(was_muted) = state.restore_mute.take() {
+            let _ = state.monitor.set_microphone_mute(was_muted);
+        }
+        if let Some(previous) = state.restore_camera.take()
+            && previous != CameraPrivacyState::SystemManaged
+        {
+            let _ = crate::privacy::set_camera_state(previous);
+        }
+    }
+    state.lock_state = current;
+}
+
 fn refresh_state(hwnd: HWND, state: &mut TrayAppState) {
+    apply_lock_policy(state);
     let filter = Filter {
         include_ready: true,
         ..Filter::default()
     };
     let (visual, summary) = match state.monitor.snapshot(&filter) {
         Ok(snapshot) => {
+            record_history_changes(state, &snapshot.accesses);
             let unhealthy = snapshot
                 .collectors
                 .iter()
@@ -270,12 +365,18 @@ fn refresh_state(hwnd: HWND, state: &mut TrayAppState) {
         .monitor
         .microphone_mute_state()
         .unwrap_or(MicrophoneMuteState::Unavailable);
-    if visual == state.visual && summary == state.summary && mute_state == state.mute_state {
+    let camera_state = crate::privacy::camera_state().unwrap_or(CameraPrivacyState::SystemManaged);
+    if visual == state.visual
+        && summary == state.summary
+        && mute_state == state.mute_state
+        && camera_state == state.camera_state
+    {
         return;
     }
     state.visual = visual;
     state.summary = summary;
     state.mute_state = mute_state;
+    state.camera_state = camera_state;
     let icon = match visual {
         TrayVisual::Idle => state.green_icon,
         TrayVisual::Ready => state.yellow_icon,
@@ -286,6 +387,41 @@ fn refresh_state(hwnd: HWND, state: &mut TrayAppState) {
     if !unsafe { Shell_NotifyIconW(NIM_MODIFY, &nid) }.as_bool() {
         state.visual = TrayVisual::Error;
         state.summary = "miccamwatch: failed to update tray icon".to_owned();
+    }
+}
+
+fn record_history_changes(state: &mut TrayAppState, accesses: &[Access]) {
+    if !state.settings.history_enabled {
+        return;
+    }
+    let current = accesses
+        .iter()
+        .map(|access| (access.key.clone(), access.clone()))
+        .collect::<HashMap<_, _>>();
+    for (key, access) in &current {
+        if !state.previous_accesses.contains_key(key) {
+            append_history_event(access, Action::Start);
+        }
+    }
+    for (key, access) in &state.previous_accesses {
+        if !current.contains_key(key) {
+            append_history_event(access, Action::Stop);
+        }
+    }
+    state.previous_accesses = current;
+}
+
+fn append_history_event(access: &Access, action: Action) {
+    let event = AccessEvent {
+        schema_version: SCHEMA_VERSION,
+        event_code: event_code(action),
+        tool_version: env!("CARGO_PKG_VERSION"),
+        action,
+        observed_at: chrono::Utc::now(),
+        access: access.clone(),
+    };
+    if let Err(error) = crate::history::append(&event) {
+        eprintln!("history append failed: {error}");
     }
 }
 
@@ -328,6 +464,52 @@ fn toggle_mute(hwnd: HWND) {
     }
 }
 
+fn toggle_camera(hwnd: HWND) {
+    let Some(state) = state(hwnd) else { return };
+    match crate::privacy::toggle_camera() {
+        Ok(camera_state) => state.camera_state = camera_state,
+        Err(error) => state.summary = format!("miccamwatch: camera privacy failed: {error}"),
+    }
+}
+
+fn toggle_notifications(hwnd: HWND) {
+    let Some(state) = state(hwnd) else { return };
+    state.settings.pause_notifications_until = if state.settings.notifications_paused() {
+        None
+    } else {
+        Some(chrono::Utc::now() + chrono::Duration::hours(1))
+    };
+    if let Err(error) = state.settings.save() {
+        state.summary = format!("miccamwatch: settings save failed: {error}");
+    }
+}
+
+fn toggle_autostart(hwnd: HWND) {
+    let Some(state) = state(hwnd) else { return };
+    let result = match state.autostart_state {
+        crate::autostart::AutostartState::Enabled => crate::autostart::disable(),
+        crate::autostart::AutostartState::Disabled => crate::autostart::enable(),
+    };
+    if let Err(error) = result {
+        state.summary = format!("miccamwatch: autostart failed: {error}");
+    }
+    state.autostart_state =
+        crate::autostart::state().unwrap_or(crate::autostart::AutostartState::Disabled);
+}
+
+fn cycle_profile(hwnd: HWND) {
+    let Some(state) = state(hwnd) else { return };
+    state.settings.profile = match state.settings.profile {
+        PrivacyProfile::Balanced => PrivacyProfile::Private,
+        PrivacyProfile::Private => PrivacyProfile::Meeting,
+        PrivacyProfile::Meeting => PrivacyProfile::Development,
+        PrivacyProfile::Development => PrivacyProfile::Balanced,
+    };
+    if let Err(error) = state.settings.save() {
+        state.summary = format!("miccamwatch: settings save failed: {error}");
+    }
+}
+
 fn show_context_menu(hwnd: HWND) {
     let Some(state) = state(hwnd) else { return };
     unsafe {
@@ -351,6 +533,40 @@ fn show_context_menu(hwnd: HWND) {
             mute_flags,
             CMD_TOGGLE_MUTE,
             PCWSTR(mute_wide.as_ptr()),
+        );
+        let camera_text = format_wide(match state.camera_state {
+            CameraPrivacyState::Allowed => "Block camera",
+            CameraPrivacyState::Blocked => "Allow camera",
+            CameraPrivacyState::SystemManaged => "Allow camera (system managed)",
+        });
+        let _ = AppendMenuW(
+            menu,
+            MF_STRING,
+            CMD_TOGGLE_CAMERA,
+            PCWSTR(camera_text.as_ptr()),
+        );
+        let notifications = format_wide(if state.settings.notifications_paused() {
+            "Resume notifications"
+        } else {
+            "Pause notifications for 1 hour"
+        });
+        let _ = AppendMenuW(
+            menu,
+            MF_STRING,
+            CMD_TOGGLE_NOTIFICATIONS,
+            PCWSTR(notifications.as_ptr()),
+        );
+        let profile = format_wide(&format!("Profile: {:?} (change)", state.settings.profile));
+        let _ = AppendMenuW(menu, MF_STRING, CMD_CYCLE_PROFILE, PCWSTR(profile.as_ptr()));
+        let autostart = format_wide(match state.autostart_state {
+            crate::autostart::AutostartState::Enabled => "Disable autostart",
+            crate::autostart::AutostartState::Disabled => "Enable autostart",
+        });
+        let _ = AppendMenuW(
+            menu,
+            MF_STRING,
+            CMD_TOGGLE_AUTOSTART,
+            PCWSTR(autostart.as_ptr()),
         );
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
         let exit = format_wide("Exit");
