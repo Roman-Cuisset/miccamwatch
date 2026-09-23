@@ -80,6 +80,7 @@ mcw doctor --json
 mcw --config policy.toml status
 mcw --config policy.toml config validate
 mcw update
+```
 
 `status` excludes low-confidence camera-ready pipelines unless `--include-ready` is supplied. It exits with code `0` when no access matching the filters is detected, `1` when a matching access is reported, and `2` on error. `explain` returns `1` when the requested PID has no current observation.
 
