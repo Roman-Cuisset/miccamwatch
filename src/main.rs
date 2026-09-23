@@ -1,30 +1,26 @@
-mod autostart;
-mod cli;
-mod config;
-mod history;
-mod i18n;
-mod model;
-mod notify;
-mod output;
-mod platform;
-mod privacy;
-mod settings;
-mod tray;
-mod tui;
-mod updater;
-mod watcher;
 use anyhow::Result;
 use clap::Parser;
-use cli::{
-    AutostartCommand, CameraCommand, Cli, Command, ConfigCommand, HistoryCommand,
-    LockPolicyCommand, NotificationCommand, ProfileArg, TrayCommand,
-};
 use colored::Colorize;
-use config::{Policy, Profile};
-use i18n::Language;
-use model::MicrophoneMuteState;
-use platform::PlatformMonitor;
-use settings::{PrivacyProfile, Settings};
+use miccamwatch::{
+    autostart,
+    collector::CaptureScope,
+    config::{DefensiveAction, Policy, Profile},
+    frontends::{
+        cli::{
+            AutostartCommand, CameraCommand, Cli, Command, ConfigCommand, HistoryCommand,
+            LockPolicyCommand, NotificationCommand, ProfileArg, TrayCommand,
+        },
+        tray, tui,
+    },
+    history,
+    i18n::Language,
+    model::MicrophoneMuteState,
+    output,
+    platform::PlatformMonitor,
+    privacy, settings,
+    settings::{PrivacyProfile, Settings},
+    updater, watcher,
+};
 use std::{process::ExitCode, time::Duration};
 
 fn main() -> ExitCode {
@@ -73,7 +69,7 @@ fn run() -> Result<u8> {
     match cli.command {
         Command::Status(options) => {
             let monitor = PlatformMonitor::new(policy.clone())?;
-            let snapshot = monitor.snapshot(&options.filter)?;
+            let snapshot = monitor.snapshot((&options.filter).into())?;
             let has_access = snapshot
                 .accesses
                 .iter()
@@ -88,7 +84,7 @@ fn run() -> Result<u8> {
             } else if options.kill_unauthorized {
                 true
             } else {
-                policy.action == crate::config::DefensiveAction::Kill
+                policy.action == DefensiveAction::Kill
             };
             watcher::watch(
                 &monitor,
@@ -114,7 +110,7 @@ fn run() -> Result<u8> {
         }
         Command::Explain(options) => {
             let monitor = PlatformMonitor::new(policy.clone())?;
-            let mut snapshot = monitor.snapshot(&Default::default())?;
+            let mut snapshot = monitor.snapshot(CaptureScope::default())?;
             snapshot
                 .accesses
                 .retain(|access| access.pid == Some(options.pid));

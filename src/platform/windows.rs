@@ -1,5 +1,5 @@
 use crate::{
-    cli::Filter,
+    collector::{CaptureCollector, CaptureScope},
     config::{Policy, Profile, TrustPolicy},
     model::{
         Access, Activity, CollectorHealth, CollectorState, Confidence, Device, DiagnosticCheck,
@@ -180,10 +180,10 @@ impl PlatformMonitor {
         })
     }
 
-    pub fn snapshot(&self, filter: &Filter) -> Result<Snapshot> {
+    pub fn snapshot(&self, scope: CaptureScope) -> Result<Snapshot> {
         let mut accesses = Vec::new();
         let mut collectors = Vec::new();
-        if filter.includes_microphone() {
+        if scope.microphone {
             match self.microphone_accesses() {
                 Ok(found) => {
                     accesses.extend(found);
@@ -194,7 +194,7 @@ impl PlatformMonitor {
                 }
             }
         }
-        if filter.includes_camera() {
+        if scope.camera {
             match self.camera_accesses() {
                 Ok(found) => {
                     accesses.extend(found);
@@ -215,7 +215,7 @@ impl PlatformMonitor {
                 }
             }
         }
-        if !filter.include_ready {
+        if !scope.include_ready {
             accesses.retain(|access| access.activity == Activity::Active);
         }
         let incomplete_context = accesses
@@ -636,6 +636,20 @@ impl PlatformMonitor {
 
     fn camera_accesses(&self) -> Result<Vec<Access>> {
         camera_accesses(&self.policy, |path| self.cached_signature(path))
+    }
+}
+
+impl CaptureCollector for PlatformMonitor {
+    fn snapshot(&self, scope: CaptureScope) -> Result<Snapshot> {
+        PlatformMonitor::snapshot(self, scope)
+    }
+
+    fn devices(&self) -> Result<Vec<Device>> {
+        PlatformMonitor::devices(self)
+    }
+
+    fn diagnostics(&self) -> Vec<DiagnosticCheck> {
+        self.doctor()
     }
 }
 

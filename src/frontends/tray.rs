@@ -1,5 +1,5 @@
 use crate::{
-    cli::Filter,
+    frontends::cli::Filter,
     i18n::Language,
     model::{
         Access, AccessEvent, Action, Activity, CollectorState, MicrophoneMuteState, Resource,
@@ -320,7 +320,7 @@ fn refresh_state(hwnd: HWND, state: &mut TrayAppState) {
         include_ready: true,
         ..Filter::default()
     };
-    let (visual, summary) = match state.monitor.snapshot(&filter) {
+    let (visual, summary) = match state.monitor.snapshot((&filter).into()) {
         Ok(snapshot) => {
             record_history_changes(state, &snapshot.accesses);
             let unhealthy = snapshot

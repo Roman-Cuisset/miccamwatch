@@ -233,6 +233,15 @@ impl Filter {
         self.camera || !self.microphone
     }
 }
+impl From<&Filter> for crate::collector::CaptureScope {
+    fn from(filter: &Filter) -> Self {
+        Self {
+            microphone: filter.includes_microphone(),
+            camera: filter.includes_camera(),
+            include_ready: filter.include_ready,
+        }
+    }
+}
 
 #[derive(Args, Debug, Default)]
 pub struct OutputOptions {

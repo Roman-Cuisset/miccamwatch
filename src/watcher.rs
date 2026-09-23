@@ -1,5 +1,5 @@
 use crate::{
-    cli::Filter,
+    frontends::cli::Filter,
     i18n::Language,
     model::{
         Access, AccessEvent, Action, Activity, EnforcementDecision, Evidence, EvidenceKind,
@@ -187,7 +187,7 @@ pub fn watch(
 }
 
 fn snapshot_by_key(monitor: &PlatformMonitor, filter: &Filter) -> Result<HashMap<String, Access>> {
-    let mut accesses = monitor.snapshot(filter)?.accesses;
+    let mut accesses = monitor.snapshot(filter.into())?.accesses;
     if crate::platform::session_lock_state() == SessionLockState::Locked {
         for access in &mut accesses {
             if access.activity == Activity::Active {

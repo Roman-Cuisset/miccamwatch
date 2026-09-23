@@ -104,7 +104,7 @@ Status JSON is an object with an explicit schema version:
 ```json
 {
   "schema_version": 3,
-  "tool_version": "0.12.0",
+  "tool_version": "0.13.0",
   "collectors": [],
   "accesses": []
 }
@@ -185,9 +185,9 @@ The executable is created at `target/release/mcw.exe`.
 
 ## Platform scope
 
-Windows 10 and Windows 11 are supported. Linux and macOS would require separate evidence collectors while preserving the versioned assessment model.
+Windows 10 and Windows 11 are supported. The reusable library, collector interface, and separate CLI/TUI/tray frontends establish the boundary for additional backends; see [Architecture](docs/ARCHITECTURE.md).
 
-Linux and macOS collectors are planned after the Windows 1.x architecture is stable. Android requires a separate application and permission model rather than a direct port of the desktop collector.
+Linux requires PipeWire/V4L2 collectors, macOS requires CoreAudio/AVFoundation/TCC collectors, and Android requires a separate application and permission architecture. These are explicit contracts and roadmap targets, not currently implemented support.
 
 ## License
 

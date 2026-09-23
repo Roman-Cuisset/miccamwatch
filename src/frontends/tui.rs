@@ -1,5 +1,5 @@
 use crate::{
-    cli::Filter,
+    frontends::cli::Filter,
     i18n::Language,
     model::{Access, Activity, CollectorState, Device, MicrophoneMuteState, Resource, Risk},
     platform::PlatformMonitor,
@@ -105,7 +105,7 @@ fn tui_loop(
         // Poll state every 250ms
         if last_poll.elapsed() >= Duration::from_millis(250) {
             last_poll = Instant::now();
-            match state.monitor.snapshot(&filter) {
+            match state.monitor.snapshot((&filter).into()) {
                 Ok(snapshot) => {
                     for access in &snapshot.accesses {
                         if !current_accesses.iter().any(|a| a.key == access.key) {
