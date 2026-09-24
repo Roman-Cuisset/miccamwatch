@@ -31,11 +31,12 @@ use windows::{
                 AppendMenuW, CREATESTRUCTW, CreateIconIndirect, CreatePopupMenu, CreateWindowExW,
                 DefWindowProcW, DestroyIcon, DestroyMenu, DestroyWindow, DispatchMessageW,
                 FindWindowW, GWLP_USERDATA, GetCursorPos, GetMessageW, GetWindowLongPtrW, HICON,
-                ICONINFO, KillTimer, MF_DISABLED, MF_GRAYED, MF_SEPARATOR, MF_STRING, MSG,
-                PostMessageW, PostQuitMessage, RegisterClassW, SetForegroundWindow, SetTimer,
-                SetWindowLongPtrW, TPM_BOTTOMALIGN, TPM_RIGHTBUTTON, TrackPopupMenu,
-                TranslateMessage, WINDOW_EX_STYLE, WM_APP, WM_CLOSE, WM_COMMAND, WM_DESTROY,
-                WM_LBUTTONDBLCLK, WM_NCCREATE, WM_RBUTTONUP, WM_TIMER, WNDCLASSW, WS_OVERLAPPED,
+                ICONINFO, KillTimer, MB_ICONERROR, MB_OK, MF_DISABLED, MF_GRAYED, MF_SEPARATOR,
+                MF_STRING, MSG, MessageBoxW, PostMessageW, PostQuitMessage, RegisterClassW,
+                SetForegroundWindow, SetTimer, SetWindowLongPtrW, TPM_BOTTOMALIGN, TPM_RIGHTBUTTON,
+                TrackPopupMenu, TranslateMessage, WINDOW_EX_STYLE, WM_APP, WM_CLOSE, WM_COMMAND,
+                WM_DESTROY, WM_LBUTTONDBLCLK, WM_NCCREATE, WM_RBUTTONUP, WM_TIMER, WNDCLASSW,
+                WS_OVERLAPPED,
             },
         },
     },
@@ -467,8 +468,36 @@ fn toggle_mute(hwnd: HWND) {
 fn toggle_camera(hwnd: HWND) {
     let Some(state) = state(hwnd) else { return };
     match crate::privacy::toggle_camera() {
-        Ok(camera_state) => state.camera_state = camera_state,
-        Err(error) => state.summary = format!("miccamwatch: camera privacy failed: {error}"),
+        Ok(camera_state) => {
+            state.camera_state = camera_state;
+            let message = match camera_state {
+                CameraPrivacyState::Allowed => {
+                    "Connected cameras are allowed. Reconnect and allow again to restore any disconnected cameras."
+                }
+                CameraPrivacyState::Blocked => "Connected cameras are blocked.",
+                CameraPrivacyState::SystemManaged => {
+                    "Camera state is partial; reconnect missing devices before restoring them."
+                }
+            };
+            let _ = crate::notify::notify_message("MicCamWatch camera", message);
+        }
+        Err(error) => {
+            let message = format!("Camera control failed: {error:#}");
+            state.summary = format!("miccamwatch: {message}");
+            state.visual = TrayVisual::Error;
+            if crate::notify::notify_message("MicCamWatch camera", &message).is_err() {
+                let title = format_wide("MicCamWatch camera");
+                let detail = format_wide(&message);
+                unsafe {
+                    let _ = MessageBoxW(
+                        Some(hwnd),
+                        PCWSTR(detail.as_ptr()),
+                        PCWSTR(title.as_ptr()),
+                        MB_OK | MB_ICONERROR,
+                    );
+                }
+            }
+        }
     }
 }
 

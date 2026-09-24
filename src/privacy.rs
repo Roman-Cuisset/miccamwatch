@@ -84,17 +84,35 @@ pub fn camera_state() -> Result<CameraPrivacyState> {
 }
 
 fn classify_devices(blocked: &[String], current: &[CameraDevice]) -> CameraPrivacyState {
-    if current.iter().any(|device| device.status == "OK")
-        || blocked.iter().any(|id| {
-            !current
-                .iter()
-                .any(|device| device.instance_id.eq_ignore_ascii_case(id))
-        })
-    {
-        CameraPrivacyState::SystemManaged
-    } else {
+    let blocked_present = blocked.iter().any(|id| {
+        current
+            .iter()
+            .any(|device| device.instance_id.eq_ignore_ascii_case(id) && device.status != "OK")
+    });
+    let allowed_present = current.iter().any(|device| device.status == "OK");
+    if allowed_present && !blocked_present {
+        CameraPrivacyState::Allowed
+    } else if !allowed_present && blocked_present {
         CameraPrivacyState::Blocked
+    } else {
+        CameraPrivacyState::SystemManaged
     }
+}
+
+fn restoration_plan(blocked: &[String], current: &[CameraDevice]) -> (Vec<String>, Vec<String>) {
+    let mut pending = Vec::new();
+    let mut to_restore = Vec::new();
+    for id in blocked {
+        match current
+            .iter()
+            .find(|device| device.instance_id.eq_ignore_ascii_case(id))
+        {
+            Some(device) if device.status == "OK" => {}
+            Some(_) => to_restore.push(id.clone()),
+            None => pending.push(id.clone()),
+        }
+    }
+    (to_restore, pending)
 }
 
 fn pnputil_elevated(action: &str, instance_ids: &[String]) -> Result<()> {
@@ -135,59 +153,59 @@ fn pnputil_elevated(action: &str, instance_ids: &[String]) -> Result<()> {
 pub fn set_camera_state(state: CameraPrivacyState) -> Result<()> {
     match state {
         CameraPrivacyState::Blocked => {
-            if blocked_devices()?.is_some() {
-                if camera_state()? == CameraPrivacyState::Blocked {
-                    return Ok(());
-                }
-                bail!("camera block is incomplete; run 'mcw camera allow' before retrying");
-            }
+            let mut blocked = blocked_devices()?.unwrap_or_default();
             let enabled = devices()?
                 .into_iter()
                 .filter(|device| device.status == "OK")
                 .map(|device| device.instance_id)
                 .collect::<Vec<_>>();
             if enabled.is_empty() {
+                if !blocked.is_empty() && camera_state()? == CameraPrivacyState::Blocked {
+                    return Ok(());
+                }
                 bail!("no enabled physical camera devices were found");
+            }
+            for id in &enabled {
+                if !blocked.iter().any(|saved| saved.eq_ignore_ascii_case(id)) {
+                    blocked.push(id.clone());
+                }
             }
             let path = blocked_devices_path()?;
             fs::create_dir_all(path.parent().context("camera block path has no parent")?)?;
-            fs::write(&path, serde_json::to_vec(&enabled)?).with_context(|| {
+            fs::write(&path, serde_json::to_vec(&blocked)?).with_context(|| {
                 format!("failed to save camera device state at {}", path.display())
             })?;
             pnputil_elevated("disable", &enabled)?;
-            if camera_state()? != CameraPrivacyState::Blocked {
-                bail!("Windows did not disable every camera device");
+            if devices()?.iter().any(|device| device.status == "OK") {
+                bail!("Windows did not disable every connected camera device");
             }
         }
         CameraPrivacyState::Allowed => {
             if let Some(blocked) = blocked_devices()? {
                 let current = devices()?;
-                let to_restore = blocked
-                    .iter()
-                    .filter_map(|id| {
-                        let device = current
-                            .iter()
-                            .find(|device| device.instance_id.eq_ignore_ascii_case(id));
-                        match device {
-                            Some(device) if device.status == "OK" => None,
-                            Some(_) => Some(Ok(id.clone())),
-                            None => Some(Err(anyhow::anyhow!(
-                                "camera {id} is disconnected; reconnect it before restoring"
-                            ))),
-                        }
-                    })
-                    .collect::<Result<Vec<_>>>()?;
+                let (to_restore, pending) = restoration_plan(&blocked, &current);
+                if pending.len() == blocked.len() {
+                    if current.iter().any(|device| device.status == "OK") {
+                        return Ok(());
+                    }
+                    bail!("all blocked cameras are disconnected; reconnect a camera to restore it");
+                }
                 pnputil_elevated("enable", &to_restore)?;
                 let current = devices()?;
                 if blocked.iter().any(|id| {
-                    !current.iter().any(|device| {
-                        device.instance_id.eq_ignore_ascii_case(id) && device.status == "OK"
+                    current.iter().any(|device| {
+                        device.instance_id.eq_ignore_ascii_case(id) && device.status != "OK"
                     })
                 }) {
-                    bail!("Windows did not restore every camera device");
+                    bail!("Windows did not restore every connected camera device");
                 }
-                fs::remove_file(blocked_devices_path()?)
-                    .context("failed to clear camera block record")?;
+                let path = blocked_devices_path()?;
+                if pending.is_empty() {
+                    fs::remove_file(&path).context("failed to clear camera block record")?;
+                } else {
+                    fs::write(&path, serde_json::to_vec(&pending)?)
+                        .context("failed to save disconnected cameras for later restoration")?;
+                }
             }
         }
         CameraPrivacyState::SystemManaged => {
@@ -205,7 +223,7 @@ pub fn toggle_camera() -> Result<CameraPrivacyState> {
         }
     };
     set_camera_state(next)?;
-    Ok(next)
+    camera_state()
 }
 
 #[cfg(test)]
@@ -220,7 +238,7 @@ mod tests {
             status: "Error".to_owned(),
         };
         assert_eq!(
-            classify_devices(&blocked, &[disabled]),
+            classify_devices(&blocked, std::slice::from_ref(&disabled)),
             CameraPrivacyState::Blocked
         );
         assert_eq!(
@@ -233,7 +251,48 @@ mod tests {
         };
         assert_eq!(
             classify_devices(&blocked, &[enabled]),
+            CameraPrivacyState::Allowed
+        );
+        assert_eq!(
+            classify_devices(
+                &blocked,
+                &[
+                    disabled,
+                    CameraDevice {
+                        instance_id: "USB\\CAMERA_B".to_owned(),
+                        status: "OK".to_owned(),
+                    }
+                ]
+            ),
             CameraPrivacyState::SystemManaged
+        );
+    }
+
+    #[test]
+    fn disconnected_camera_does_not_prevent_restoring_connected_camera() {
+        let blocked = vec!["USB\\CAMERA_A".to_owned(), "USB\\CAMERA_B".to_owned()];
+        let present = CameraDevice {
+            instance_id: blocked[0].clone(),
+            status: "Error".to_owned(),
+        };
+        let (restore, pending) = restoration_plan(&blocked, &[present]);
+        assert_eq!(restore, vec!["USB\\CAMERA_A"]);
+        assert_eq!(pending, vec!["USB\\CAMERA_B"]);
+
+        let reconnected = CameraDevice {
+            instance_id: pending[0].clone(),
+            status: "Error".to_owned(),
+        };
+        let (restore_again, still_pending) = restoration_plan(&pending, &[reconnected]);
+        assert_eq!(restore_again, pending);
+        assert!(still_pending.is_empty());
+        let restored = CameraDevice {
+            instance_id: blocked[0].clone(),
+            status: "OK".to_owned(),
+        };
+        assert_eq!(
+            classify_devices(&pending, &[restored]),
+            CameraPrivacyState::Allowed
         );
     }
 }

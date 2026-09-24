@@ -1,6 +1,6 @@
 [package]
 name = "miccamwatch"
-version = "0.13.1"
+version = "0.13.2"
 edition = "2024"
 description = "Monitor Windows microphone and camera access from the command line"
 license = "MIT"

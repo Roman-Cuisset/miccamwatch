@@ -105,7 +105,7 @@ Status JSON is an object with an explicit schema version:
 ```json
 {
   "schema_version": 3,
-  "tool_version": "0.13.1",
+  "tool_version": "0.13.2",
   "collectors": [],
   "accesses": []
 }
@@ -170,7 +170,7 @@ mcw --config policy.toml config validate
 
 Installed and release packages include `mcw-tray.exe`, a windowless tray host used by autostart and the Start Menu shortcut. It prevents a terminal window from remaining open at login. `mcw.exe tray` remains available for interactive diagnostics.
 
-`mcw camera block` disables the currently enabled, connected devices in the Windows Camera device class through PnP. Windows requests one administrator approval per block or allow command, even with several webcams. This affects every application; a blocked physical webcam disappears from capture-device enumeration. `mcw camera allow` restores only the devices saved by the block operation. The device list is stored in `%LOCALAPPDATA%\MicCamWatch\blocked-camera-devices.json` so it survives restarts; do not delete this file until devices have been restored. If an approval is declined or a device cannot change state, the command reports failure and retains the record so `mcw camera allow` can recover. Devices connected after blocking are not automatically disabled.
+`mcw camera block` disables the currently enabled, connected devices in the Windows Camera device class through PnP. Windows requests one administrator approval per block or allow command, even with several webcams. This affects every application; a blocked physical webcam disappears from capture-device enumeration. `mcw camera allow` restores only the devices saved by the block operation. If a previously blocked webcam has been unplugged, the CLI and tray restore the connected webcams immediately and keep the unplugged one in `%LOCALAPPDATA%\MicCamWatch\blocked-camera-devices.json`. On reconnection, select **Allow camera** again to restore it; a detached webcam is never reported as physically re-enabled. When all connected webcams are restored, `mcw camera status` reports `allowed`, even if a detached device is pending. The tray reports the result or error through a notification. Do not delete the state file while devices remain disabled. If administrator approval is declined or Windows cannot change a connected device, the command reports failure and retains the record. Cameras connected after blocking are not automatically disabled.
 
 For the Windows Camera app, a sustained capture-process workload is treated as active even when Windows stops updating the registry activity interval. Idle browser capture modules remain `ready`; their brief wakeups during Windows Camera capture do not override that app's active attribution. Process CPU is a heuristic, not direct frame telemetry, so simultaneous browser capture while Windows Camera is active cannot be attributed independently.
 
