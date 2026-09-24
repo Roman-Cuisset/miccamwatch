@@ -31,8 +31,15 @@ pub fn state() -> Result<AutostartState> {
 }
 
 pub fn enable() -> Result<()> {
-    let executable = std::env::current_exe().context("failed to locate mcw executable")?;
-    let command = format!("\"{}\" tray run", executable.display());
+    let executable = tray_executable()?;
+    let command = if executable
+        .file_name()
+        .is_some_and(|name| name.eq_ignore_ascii_case("mcw-tray.exe"))
+    {
+        format!("\"{}\"", executable.display())
+    } else {
+        format!("\"{}\" tray run", executable.display())
+    };
     let output = schtasks(&[
         "/Create", "/TN", TASK_NAME, "/TR", &command, "/SC", "ONLOGON", "/RL", "LIMITED", "/F",
     ])?;
@@ -59,6 +66,12 @@ pub fn disable() -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn tray_executable() -> Result<std::path::PathBuf> {
+    let current = std::env::current_exe().context("failed to locate mcw executable")?;
+    let tray = current.with_file_name("mcw-tray.exe");
+    Ok(if tray.exists() { tray } else { current })
 }
 
 fn schtasks(arguments: &[&str]) -> Result<std::process::Output> {

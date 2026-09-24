@@ -23,13 +23,13 @@
 - Emergency hardware microphone kill-switch (`mcw mute` / `mcw unmute` / `mcw mute --toggle`).
 - Interactive full-terminal live dashboard with keyboard shortcuts (`mcw top`).
 - Windows Notification Area background mode with green (idle), yellow (camera-ready), red (confirmed active), and gray (collector error) states (`mcw tray`).
-- Privacy Control Center commands for camera allow/block, scheduled autostart with a per-user fallback, notification pause, lock policies, profiles, and tray lifecycle control.
+- Privacy Control Center commands for hardware camera allow/block (administrator approval required), scheduled autostart with a per-user fallback, notification pause, lock policies, profiles, and tray lifecycle control.
 - Persistent settings in `%APPDATA%\MicCamWatch\settings.toml` and rotating JSONL activity history in `%LOCALAPPDATA%\MicCamWatch`.
 - Single-instance tray service with local Windows message IPC (`mcw tray status` / `mcw tray stop`).
 - Opt-in termination of explicitly policy-denied active capture processes after two consecutive observations (`--kill-unauthorized`, disabled by default).
 - Three-state workstation lock detection; unknown lock state never triggers enforcement.
 - Discreet native audio chime upon confirmed capture initiation (`--sound`).
-- Runs without administrator privileges.
+- Monitoring runs without administrator privileges; disabling or re-enabling camera devices prompts for administrator approval.
 
 ## Commands
 
@@ -105,7 +105,7 @@ Status JSON is an object with an explicit schema version:
 ```json
 {
   "schema_version": 3,
-  "tool_version": "0.13.0",
+  "tool_version": "0.13.1",
   "collectors": [],
   "accesses": []
 }
@@ -168,9 +168,15 @@ mcw --config policy.toml config validate
 
 `mcw tray` keeps the monitor in the Windows notification area. Its menu controls microphone mute, camera privacy, one-hour notification pause, the active profile, and autostart. The tray runs as a single per-user instance; the CLI can inspect or stop it.
 
+Installed and release packages include `mcw-tray.exe`, a windowless tray host used by autostart and the Start Menu shortcut. It prevents a terminal window from remaining open at login. `mcw.exe tray` remains available for interactive diagnostics.
+
+`mcw camera block` disables the currently enabled, connected devices in the Windows Camera device class through PnP. Windows requests one administrator approval per block or allow command, even with several webcams. This affects every application; a blocked physical webcam disappears from capture-device enumeration. `mcw camera allow` restores only the devices saved by the block operation. The device list is stored in `%LOCALAPPDATA%\MicCamWatch\blocked-camera-devices.json` so it survives restarts; do not delete this file until devices have been restored. If an approval is declined or a device cannot change state, the command reports failure and retains the record so `mcw camera allow` can recover. Devices connected after blocking are not automatically disabled.
+
+For the Windows Camera app, a sustained capture-process workload is treated as active even when Windows stops updating the registry activity interval. Idle browser capture modules remain `ready`; their brief wakeups during Windows Camera capture do not override that app's active attribution. Process CPU is a heuristic, not direct frame telemetry, so simultaneous browser capture while Windows Camera is active cannot be attributed independently.
+
 Autostart first uses a limited per-user Task Scheduler task. On systems that deny task creation, it uses the current user's `Run` registry key instead, without requesting elevation. `mcw autostart disable` removes both mechanisms.
 
-Lock policies are opt-in. On transition to a locked session, the tray can mute microphones and block camera access. On unlock, it restores only the states it changed. Unknown lock state never applies or restores controls.
+Lock policies are opt-in. On transition to a locked session, the tray can mute microphones. Camera device control requires an administrator prompt; Windows cannot approve that prompt while the session is locked, so `block-camera-on-lock` is not a reliable automatic safeguard. Manually block the cameras before locking when hardware isolation is required. Unknown lock state never triggers enforcement.
 
 The default policy path is `%APPDATA%\MicCamWatch\policy.toml`. It is loaded automatically when present; `--config` overrides it. Application settings and rotating history paths are available through `mcw config settings-path` and `mcw history path`.
 

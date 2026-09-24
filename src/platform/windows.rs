@@ -10,8 +10,15 @@ use crate::{
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use std::{
-    cell::RefCell, collections::HashMap, ffi::OsStr, fs, mem::size_of, path::Path, ptr, slice,
-    sync::mpsc::Sender, time::SystemTime,
+    cell::RefCell,
+    collections::{HashMap, HashSet},
+    ffi::OsStr,
+    fs,
+    mem::size_of,
+    path::Path,
+    ptr, slice,
+    sync::mpsc::Sender,
+    time::SystemTime,
 };
 use windows::{
     Win32::{
@@ -795,14 +802,22 @@ fn camera_accesses(
     let processes = ProcessTable::load();
     let mut accesses = Vec::new();
     let mut known_apps: HashMap<String, (String, CameraPermission)> = HashMap::new();
+    let global_consent = webcam.get_value::<String, _>("Value").ok();
 
     for key_name in webcam.enum_keys().filter_map(|item| item.ok()) {
         if key_name.eq_ignore_ascii_case("NonPackaged") {
             let non_packaged = webcam.open_subkey(&key_name)?;
+            let desktop_consent = non_packaged
+                .get_value::<String, _>("Value")
+                .ok()
+                .or_else(|| global_consent.clone());
             for encoded_path in non_packaged.enum_keys().filter_map(|item| item.ok()) {
                 let executable = encoded_path.replace('#', r"\");
                 let sub_key = non_packaged.open_subkey(&encoded_path)?;
-                let consent = sub_key.get_value::<String, _>("Value").ok();
+                let consent = sub_key
+                    .get_value::<String, _>("Value")
+                    .ok()
+                    .or_else(|| desktop_consent.clone());
                 if let Some(application) = Path::new(&executable)
                     .file_name()
                     .and_then(OsStr::to_str)
@@ -828,7 +843,10 @@ fn camera_accesses(
             }
         } else {
             let sub_key = webcam.open_subkey(&key_name)?;
-            let consent = sub_key.get_value::<String, _>("Value").ok();
+            let consent = sub_key
+                .get_value::<String, _>("Value")
+                .ok()
+                .or_else(|| global_consent.clone());
             known_apps.insert(
                 key_name.to_ascii_lowercase(),
                 (key_name.clone(), CameraPermission { consent }),
@@ -848,7 +866,30 @@ fn camera_accesses(
         }
     }
 
-    for (application, (executable, permission)) in &known_apps {
+    // Packaged camera applications run under their executable name, not their
+    // package-family consent key. The registry interval can remain stale while
+    // a packaged application continues capturing frames.
+    let camera_package = "microsoft.windowscamera_";
+    let packaged_camera = webcam
+        .enum_keys()
+        .filter_map(Result::ok)
+        .find(|key| key.to_ascii_lowercase().starts_with(camera_package));
+    let packaged_camera_pids = packaged_camera
+        .as_ref()
+        .and_then(|_| processes.by_name.get("windowscamera.exe"))
+        .into_iter()
+        .flatten()
+        .filter_map(|&pid| {
+            let executable = process_path(pid)?;
+            executable
+                .to_ascii_lowercase()
+                .contains(camera_package)
+                .then_some((pid, executable))
+        })
+        .collect::<Vec<_>>();
+
+    let mut candidate_runtime = HashMap::new();
+    for application in known_apps.keys() {
         let Some(pids) = processes.by_name.get(application.as_str()) else {
             continue;
         };
@@ -860,11 +901,49 @@ fn camera_accesses(
             if modules.is_empty() {
                 continue;
             }
-            let command_line = process_command_line(pid);
+            candidate_runtime.insert(pid, (modules, process_command_line(pid)));
+        }
+    }
+    let mut packaged_modules = packaged_camera_pids
+        .iter()
+        .filter_map(|(pid, _)| {
+            let modules = capture_modules_loaded(*pid);
+            (!modules.is_empty()).then_some((*pid, modules))
+        })
+        .collect::<HashMap<_, _>>();
+    let busy_capture_services = busy_capture_services(
+        candidate_runtime
+            .iter()
+            .filter_map(|(&pid, (_, command))| {
+                command
+                    .as_deref()
+                    .is_some_and(is_video_capture_service)
+                    .then_some(pid)
+            })
+            .chain(packaged_modules.keys().copied()),
+    );
+    // Opening Windows Camera wakes idle browser capture services too. CPU time
+    // cannot attribute those wakeups to the browser while Camera is capturing.
+    let packaged_camera_active = packaged_modules
+        .keys()
+        .any(|pid| busy_capture_services.contains(pid));
+
+    for (application, (executable, permission)) in &known_apps {
+        let Some(pids) = processes.by_name.get(application.as_str()) else {
+            continue;
+        };
+        for &pid in pids {
+            if accesses.iter().any(|access| access.pid == Some(pid)) {
+                continue;
+            }
+            let Some((modules, command_line)) = candidate_runtime.get(&pid) else {
+                continue;
+            };
+            let live_capture = !packaged_camera_active && busy_capture_services.contains(&pid);
             let context = processes.context(pid);
             let parent_info = immediate_parent(&context);
             let signature = signature_for(executable);
-            let assessment = classify_forensic(
+            let mut assessment = classify_forensic(
                 policy,
                 application,
                 executable,
@@ -872,17 +951,32 @@ fn camera_accesses(
                 command_line.as_deref(),
                 parent_info.as_ref(),
                 &signature,
-                &modules,
+                modules,
             );
+            if live_capture {
+                assessment.evidence.push(Evidence::new(
+                    EvidenceKind::ApplicationProfile,
+                    "ProcessTimes",
+                    "Sustained CPU activity in the browser video-capture service; frame flow is inferred, not directly observed.",
+                ));
+            }
             let (parent_pid, parent_name) = parent_info
                 .clone()
                 .map_or((None, None), |(ppid, name)| (Some(ppid), Some(name)));
             accesses.push(Access {
                 key: format!("camera:forensic:{}", process_identity(pid)),
                 resource: Resource::Camera,
-                activity: Activity::Ready,
+                activity: if live_capture {
+                    Activity::Active
+                } else {
+                    Activity::Ready
+                },
                 risk: assessment.risk,
-                confidence: assessment.confidence,
+                confidence: if live_capture {
+                    Confidence::Medium
+                } else {
+                    assessment.confidence
+                },
                 enforcement: assessment.enforcement,
                 application: application.clone(),
                 pid: Some(pid),
@@ -892,11 +986,52 @@ fn camera_accesses(
                 signature: Some(signature),
                 device: None,
                 started_at: None,
-                modules,
+                modules: modules.clone(),
                 evidence: assessment.evidence,
                 process: Some(context),
             });
         }
+    }
+    for (pid, executable) in packaged_camera_pids {
+        if !busy_capture_services.contains(&pid) {
+            continue;
+        }
+        let context = processes.context(pid);
+        let signature = signature_for(&executable);
+        let mut evidence = vec![Evidence::new(
+            EvidenceKind::ApplicationProfile,
+            "ProcessTimes",
+            "Sustained CPU activity in the Windows Camera capture process; frame flow is inferred, not directly observed.",
+        )];
+        let application = "WindowsCamera.exe";
+        let (risk, enforcement) = assess_policy(
+            policy,
+            application,
+            Some(&executable),
+            Some(&signature),
+            &mut evidence,
+        );
+        let (parent_pid, parent_name) =
+            immediate_parent(&context).map_or((None, None), |(pid, name)| (Some(pid), Some(name)));
+        accesses.push(Access {
+            key: format!("camera:forensic:{}", process_identity(pid)),
+            resource: Resource::Camera,
+            activity: Activity::Active,
+            risk,
+            confidence: Confidence::Medium,
+            enforcement,
+            application: application.to_owned(),
+            pid: Some(pid),
+            parent_pid,
+            parent_name,
+            executable: Some(executable),
+            signature: Some(signature),
+            device: None,
+            started_at: None,
+            modules: packaged_modules.remove(&pid).unwrap_or_default(),
+            evidence,
+            process: Some(context),
+        });
     }
     Ok(accesses)
 }
@@ -904,7 +1039,11 @@ fn camera_accesses(
 fn is_privacy_active(key: &RegKey) -> bool {
     let start = key.get_value::<u64, _>("LastUsedTimeStart").unwrap_or(0);
     let stop = key.get_value::<u64, _>("LastUsedTimeStop").unwrap_or(0);
-    start > 0 && stop == 0
+    privacy_interval_active(start, stop)
+}
+
+fn privacy_interval_active(start: u64, stop: u64) -> bool {
+    start > 0 && start > stop
 }
 
 fn registry_access(
@@ -1432,6 +1571,56 @@ fn process_identity(pid: u32) -> String {
     format!("{pid}:{created}")
 }
 
+fn busy_capture_services(pids: impl Iterator<Item = u32>) -> HashSet<u32> {
+    let before = pids
+        .filter_map(|pid| process_cpu_time(pid).map(|time| (pid, time)))
+        .collect::<HashMap<_, _>>();
+    if before.is_empty() {
+        return HashSet::new();
+    }
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    let midpoint = before
+        .into_iter()
+        .filter_map(|(pid, prior)| {
+            let current = process_cpu_time(pid)?;
+            (current.saturating_sub(prior) >= 150_000).then_some((pid, current))
+        })
+        .collect::<HashMap<_, _>>();
+    if midpoint.is_empty() {
+        return HashSet::new();
+    }
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    midpoint
+        .into_iter()
+        .filter_map(|(pid, prior)| {
+            process_cpu_time(pid)
+                .is_some_and(|current| current.saturating_sub(prior) >= 150_000)
+                .then_some(pid)
+        })
+        .collect()
+}
+fn is_video_capture_service(command_line: &str) -> bool {
+    let command = command_line.to_ascii_lowercase();
+    command.contains("video_capture") || command.contains("videocaptureservice")
+}
+
+fn process_cpu_time(pid: u32) -> Option<u64> {
+    let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()? };
+    let mut created = FILETIME::default();
+    let mut exited = FILETIME::default();
+    let mut kernel = FILETIME::default();
+    let mut user = FILETIME::default();
+    let result =
+        unsafe { GetProcessTimes(process, &mut created, &mut exited, &mut kernel, &mut user) };
+    let _ = unsafe { CloseHandle(process) };
+    result.ok()?;
+    Some(filetime_value(kernel) + filetime_value(user))
+}
+
+fn filetime_value(value: FILETIME) -> u64 {
+    (u64::from(value.dwHighDateTime) << 32) | u64::from(value.dwLowDateTime)
+}
+
 fn process_creation_time(pid: u32) -> Option<u64> {
     let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()? };
     let mut created = FILETIME::default();
@@ -1705,6 +1894,7 @@ pub fn session_lock_state() -> SessionLockState {
             Some(&mut needed),
         )
     };
+
     let _ = unsafe { CloseDesktop(desk) };
     if result.is_err() || needed < 2 || needed as usize > name.len() * size_of::<u16>() {
         return SessionLockState::Unknown;
@@ -1735,6 +1925,22 @@ mod tests {
             signer: verified.then(|| "Expected Publisher".to_owned()),
             error: (!verified).then(|| "unsigned".to_owned()),
         }
+    }
+
+    #[test]
+    fn camera_interval_is_active_when_new_start_supersedes_old_stop() {
+        assert!(!privacy_interval_active(0, 0));
+        assert!(privacy_interval_active(200, 0));
+        assert!(privacy_interval_active(300, 200));
+        assert!(!privacy_interval_active(200, 300));
+        assert!(!privacy_interval_active(300, 300));
+    }
+    #[test]
+    fn recognizes_browser_video_capture_service_commands() {
+        assert!(is_video_capture_service(
+            "--utility-sub-type=video_capture.mojom.VideoCaptureService"
+        ));
+        assert!(!is_video_capture_service("--type=renderer"));
     }
 
     #[test]

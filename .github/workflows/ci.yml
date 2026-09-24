@@ -27,12 +27,14 @@ jobs:
         run: |
           dotnet tool restore
           $version = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages[0].version
-          dotnet wix build installer/miccamwatch.wxs -d Version=$version -d Executable=target/release/mcw.exe -o target/miccamwatch-windows-x86_64.msi
+          dotnet wix build installer/miccamwatch.wxs -d Version=$version -d Executable=target/release/mcw.exe -d TrayExecutable=target/release/mcw-tray.exe -o target/miccamwatch-windows-x86_64.msi
           $msi = (Resolve-Path target/miccamwatch-windows-x86_64.msi).Path
           $install = Start-Process msiexec.exe -ArgumentList @('/i', $msi, '/qn', '/norestart') -Wait -PassThru
           if ($install.ExitCode -ne 0) { throw "MSI install failed with code $($install.ExitCode)" }
           $installed = Join-Path $env:LOCALAPPDATA 'Programs\MicCamWatch\mcw.exe'
-          if (-not (Test-Path $installed)) { throw "Installed executable is missing" }
+          $installedTray = Join-Path $env:LOCALAPPDATA 'Programs\MicCamWatch\mcw-tray.exe'
+          if (-not (Test-Path $installed)) { throw "Installed CLI executable is missing" }
+          if (-not (Test-Path $installedTray)) { throw "Installed tray executable is missing" }
           $reported = & $installed --version
           if ($reported -ne "mcw $version") { throw "Installed version mismatch: $reported" }
           $uninstall = Start-Process msiexec.exe -ArgumentList @('/x', $msi, '/qn', '/norestart') -Wait -PassThru

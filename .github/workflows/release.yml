@@ -34,13 +34,13 @@ jobs:
         shell: pwsh
         run: |
           [IO.File]::WriteAllBytes("certificate.pfx", [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE_BASE64))
-          signtool sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /f certificate.pfx /p $env:WINDOWS_CERTIFICATE_PASSWORD target/release/mcw.exe
+          signtool sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /f certificate.pfx /p $env:WINDOWS_CERTIFICATE_PASSWORD target/release/mcw.exe target/release/mcw-tray.exe
           Remove-Item certificate.pfx
       - name: Build per-user MSI
         shell: pwsh
         run: |
           $version = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages[0].version
-          dotnet wix build installer/miccamwatch.wxs -d Version=$version -d Executable=target/release/mcw.exe -o miccamwatch-windows-x86_64.msi
+          dotnet wix build installer/miccamwatch.wxs -d Version=$version -d Executable=target/release/mcw.exe -d TrayExecutable=target/release/mcw-tray.exe -o miccamwatch-windows-x86_64.msi
       - name: Sign MSI when release certificate is configured
         if: ${{ env.WINDOWS_CERTIFICATE_BASE64 != '' }}
         shell: pwsh
@@ -51,7 +51,7 @@ jobs:
       - name: Package executable and checksums
         shell: pwsh
         run: |
-          Compress-Archive -Path target/release/mcw.exe -DestinationPath miccamwatch-windows-x86_64.zip
+          Compress-Archive -Path target/release/mcw.exe,target/release/mcw-tray.exe -DestinationPath miccamwatch-windows-x86_64.zip
           @("miccamwatch-windows-x86_64.zip", "miccamwatch-windows-x86_64.msi") | ForEach-Object {
             $hash = (Get-FileHash $_ -Algorithm SHA256).Hash.ToLowerInvariant()
             "$hash *$_"

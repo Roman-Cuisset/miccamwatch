@@ -13,18 +13,7 @@
       <Directory Id="ProgramsFolder" Name="Programs">
         <Directory Id="INSTALLFOLDER" Name="MicCamWatch">
           <Component Id="MainExecutable" Guid="*">
-            <File Id="MicCamWatchExecutable" Source="$(Executable)" Name="mcw.exe" KeyPath="yes">
-              <Shortcut
-                Id="StartMenuShortcut"
-                Directory="ProgramMenuFolder"
-                Name="MicCamWatch"
-                Description="MicCamWatch Privacy Control Center"
-                Arguments="tray"
-                WorkingDirectory="INSTALLFOLDER"
-                Advertise="no">
-                <ShortcutProperty Key="System.AppUserModel.ID" Value="MicCamWatch.MicCamWatch" />
-              </Shortcut>
-            </File>
+            <File Id="MicCamWatchExecutable" Source="$(Executable)" Name="mcw.exe" KeyPath="yes" />
             <RegistryKey Root="HKCU" Key="Software\Classes\AppUserModelId\MicCamWatch.MicCamWatch">
               <RegistryValue Name="DisplayName" Type="string" Value="MicCamWatch" />
               <RegistryValue Name="ShowInSettings" Type="integer" Value="1" />
@@ -38,12 +27,26 @@
               System="no"
               Permanent="no" />
           </Component>
+          <Component Id="TrayExecutable" Guid="*">
+            <File Id="MicCamWatchTrayExecutable" Source="$(TrayExecutable)" Name="mcw-tray.exe" KeyPath="yes">
+              <Shortcut
+                Id="StartMenuShortcut"
+                Directory="ProgramMenuFolder"
+                Name="MicCamWatch"
+                Description="MicCamWatch Privacy Control Center"
+                WorkingDirectory="INSTALLFOLDER"
+                Advertise="no">
+                <ShortcutProperty Key="System.AppUserModel.ID" Value="MicCamWatch.MicCamWatch" />
+              </Shortcut>
+            </File>
+          </Component>
         </Directory>
       </Directory>
     </StandardDirectory>
 
     <Feature Id="ProductFeature" Title="MicCamWatch" Level="1">
       <ComponentRef Id="MainExecutable" />
+      <ComponentRef Id="TrayExecutable" />
     </Feature>
   </Package>
 </Wix>

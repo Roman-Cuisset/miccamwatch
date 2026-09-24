@@ -1,9 +1,9 @@
-use anyhow::{Context, Result};
-use serde::Serialize;
-use winreg::{RegKey, enums::HKEY_CURRENT_USER};
+use anyhow::{Context, Result, bail};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
+use serde::{Deserialize, Serialize};
+use std::{fs, os::windows::process::CommandExt, process::Command};
 
-const WEBCAM_KEY: &str =
-    r"Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\webcam";
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -23,40 +23,177 @@ impl CameraPrivacyState {
     }
 }
 
-pub fn camera_state() -> Result<CameraPrivacyState> {
-    let root = RegKey::predef(HKEY_CURRENT_USER);
-    let key = match root.open_subkey(WEBCAM_KEY) {
-        Ok(key) => key,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(CameraPrivacyState::SystemManaged);
-        }
-        Err(error) => return Err(error).context("failed to open Windows camera privacy settings"),
-    };
-    match key.get_value::<String, _>("Value") {
-        Ok(value) if value.eq_ignore_ascii_case("Allow") => Ok(CameraPrivacyState::Allowed),
-        Ok(value) if value.eq_ignore_ascii_case("Deny") => Ok(CameraPrivacyState::Blocked),
-        Ok(value) => anyhow::bail!("unsupported Windows camera privacy value '{value}'"),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            Ok(CameraPrivacyState::SystemManaged)
-        }
-        Err(error) => Err(error).context("failed to read Windows camera privacy state"),
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct CameraDevice {
+    instance_id: String,
+    status: String,
+}
+
+fn devices() -> Result<Vec<CameraDevice>> {
+    let output = Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-Command",
+            "Get-PnpDevice -Class Camera -PresentOnly | Select-Object InstanceId,Status | ConvertTo-Json -Compress",
+        ])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .context("failed to query Windows camera devices")?;
+    if !output.status.success() {
+        bail!(
+            "failed to query Windows camera devices: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let text =
+        String::from_utf8(output.stdout).context("invalid camera device inventory encoding")?;
+    let text = text.trim_start_matches('\u{feff}').trim();
+    if text.is_empty() {
+        return Ok(Vec::new());
+    }
+    if text.starts_with('[') {
+        serde_json::from_str(text).context("invalid Windows camera device inventory")
+    } else {
+        Ok(vec![
+            serde_json::from_str(text).context("invalid Windows camera device inventory")?,
+        ])
     }
 }
 
-pub fn set_camera_state(state: CameraPrivacyState) -> Result<()> {
-    let value = match state {
-        CameraPrivacyState::Allowed => "Allow",
-        CameraPrivacyState::Blocked => "Deny",
-        CameraPrivacyState::SystemManaged => {
-            anyhow::bail!("system-managed camera privacy cannot be written directly")
-        }
+fn blocked_devices_path() -> Result<std::path::PathBuf> {
+    Ok(crate::settings::data_dir()?.join("blocked-camera-devices.json"))
+}
+
+fn blocked_devices() -> Result<Option<Vec<String>>> {
+    let path = blocked_devices_path()?;
+    match fs::read(&path) {
+        Ok(bytes) => Ok(Some(serde_json::from_slice(&bytes).with_context(|| {
+            format!("invalid camera block record {}", path.display())
+        })?)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error).with_context(|| format!("failed to read {}", path.display())),
+    }
+}
+
+pub fn camera_state() -> Result<CameraPrivacyState> {
+    let Some(blocked) = blocked_devices()? else {
+        return Ok(CameraPrivacyState::Allowed);
     };
-    let root = RegKey::predef(HKEY_CURRENT_USER);
-    let (key, _) = root
-        .create_subkey(WEBCAM_KEY)
-        .context("failed to open writable Windows camera privacy settings")?;
-    key.set_value("Value", &value)
-        .context("failed to update Windows camera privacy state")?;
+    Ok(classify_devices(&blocked, &devices()?))
+}
+
+fn classify_devices(blocked: &[String], current: &[CameraDevice]) -> CameraPrivacyState {
+    if current.iter().any(|device| device.status == "OK")
+        || blocked.iter().any(|id| {
+            !current
+                .iter()
+                .any(|device| device.instance_id.eq_ignore_ascii_case(id))
+        })
+    {
+        CameraPrivacyState::SystemManaged
+    } else {
+        CameraPrivacyState::Blocked
+    }
+}
+
+fn pnputil_elevated(action: &str, instance_ids: &[String]) -> Result<()> {
+    if instance_ids.is_empty() {
+        return Ok(());
+    }
+    let ids = instance_ids
+        .iter()
+        .map(|id| format!("'{}'", id.replace('\'', "''")))
+        .collect::<Vec<_>>()
+        .join(",");
+    let elevated = format!(
+        "$ErrorActionPreference = 'Stop'; foreach ($id in @({ids})) {{ & \"$env:WINDIR\\System32\\pnputil.exe\" /{action}-device $id | Out-Null; if ($LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }} }}"
+    );
+    let encoded = STANDARD.encode(
+        elevated
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect::<Vec<_>>(),
+    );
+    let script = format!(
+        "$ErrorActionPreference = 'Stop'; $p = Start-Process -FilePath \"$env:WINDIR\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\" -Verb RunAs -WindowStyle Hidden -ArgumentList @('-NoProfile', '-EncodedCommand', '{encoded}') -Wait -PassThru; if ($null -eq $p) {{ exit 1 }}; exit $p.ExitCode"
+    );
+    let output = Command::new("powershell.exe")
+        .args(["-NoProfile", "-Command", &script])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .context("failed to request administrator approval for camera control")?;
+    if !output.status.success() {
+        bail!(
+            "camera {action} failed or administrator approval was declined: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    Ok(())
+}
+
+pub fn set_camera_state(state: CameraPrivacyState) -> Result<()> {
+    match state {
+        CameraPrivacyState::Blocked => {
+            if blocked_devices()?.is_some() {
+                if camera_state()? == CameraPrivacyState::Blocked {
+                    return Ok(());
+                }
+                bail!("camera block is incomplete; run 'mcw camera allow' before retrying");
+            }
+            let enabled = devices()?
+                .into_iter()
+                .filter(|device| device.status == "OK")
+                .map(|device| device.instance_id)
+                .collect::<Vec<_>>();
+            if enabled.is_empty() {
+                bail!("no enabled physical camera devices were found");
+            }
+            let path = blocked_devices_path()?;
+            fs::create_dir_all(path.parent().context("camera block path has no parent")?)?;
+            fs::write(&path, serde_json::to_vec(&enabled)?).with_context(|| {
+                format!("failed to save camera device state at {}", path.display())
+            })?;
+            pnputil_elevated("disable", &enabled)?;
+            if camera_state()? != CameraPrivacyState::Blocked {
+                bail!("Windows did not disable every camera device");
+            }
+        }
+        CameraPrivacyState::Allowed => {
+            if let Some(blocked) = blocked_devices()? {
+                let current = devices()?;
+                let to_restore = blocked
+                    .iter()
+                    .filter_map(|id| {
+                        let device = current
+                            .iter()
+                            .find(|device| device.instance_id.eq_ignore_ascii_case(id));
+                        match device {
+                            Some(device) if device.status == "OK" => None,
+                            Some(_) => Some(Ok(id.clone())),
+                            None => Some(Err(anyhow::anyhow!(
+                                "camera {id} is disconnected; reconnect it before restoring"
+                            ))),
+                        }
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                pnputil_elevated("enable", &to_restore)?;
+                let current = devices()?;
+                if blocked.iter().any(|id| {
+                    !current.iter().any(|device| {
+                        device.instance_id.eq_ignore_ascii_case(id) && device.status == "OK"
+                    })
+                }) {
+                    bail!("Windows did not restore every camera device");
+                }
+                fs::remove_file(blocked_devices_path()?)
+                    .context("failed to clear camera block record")?;
+            }
+        }
+        CameraPrivacyState::SystemManaged => {
+            bail!("system-managed camera state cannot be selected")
+        }
+    }
     Ok(())
 }
 
@@ -69,4 +206,34 @@ pub fn toggle_camera() -> Result<CameraPrivacyState> {
     };
     set_camera_state(next)?;
     Ok(next)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn camera_block_reports_partial_and_new_devices() {
+        let blocked = vec!["USB\\CAMERA_A".to_owned()];
+        let disabled = CameraDevice {
+            instance_id: blocked[0].clone(),
+            status: "Error".to_owned(),
+        };
+        assert_eq!(
+            classify_devices(&blocked, &[disabled]),
+            CameraPrivacyState::Blocked
+        );
+        assert_eq!(
+            classify_devices(&blocked, &[]),
+            CameraPrivacyState::SystemManaged
+        );
+        let enabled = CameraDevice {
+            instance_id: "USB\\CAMERA_B".to_owned(),
+            status: "OK".to_owned(),
+        };
+        assert_eq!(
+            classify_devices(&blocked, &[enabled]),
+            CameraPrivacyState::SystemManaged
+        );
+    }
 }

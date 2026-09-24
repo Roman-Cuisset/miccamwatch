@@ -1,6 +1,6 @@
 [package]
 name = "miccamwatch"
-version = "0.13.0"
+version = "0.13.1"
 edition = "2024"
 description = "Monitor Windows microphone and camera access from the command line"
 license = "MIT"
@@ -11,7 +11,12 @@ repository = "https://github.com/Roman-Cuisset/miccamwatch"
 name = "mcw"
 path = "src/main.rs"
 
+[[bin]]
+name = "mcw-tray"
+path = "src/bin/mcw-tray.rs"
+
 [dependencies]
+base64 = "0.22"
 anyhow = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4.5", features = ["derive"] }
