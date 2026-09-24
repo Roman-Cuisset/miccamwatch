@@ -1,0 +1,19 @@
+﻿# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.9.0.schema.json
+PackageIdentifier: RomanCuisset.MicCamWatch
+PackageVersion: 0.13.2
+InstallerLocale: en-US
+InstallerType: wix
+Scope: user
+InstallModes:
+  - interactive
+  - silent
+  - silentWithProgress
+UpgradeBehavior: install
+Commands:
+  - mcw
+Installers:
+  - Architecture: x64
+    InstallerUrl: https://github.com/Roman-Cuisset/miccamwatch/releases/download/v0.13.2/miccamwatch-windows-x86_64.msi
+    InstallerSha256: 8BD39FAF1683E45D318EE1F6CC6DC4B20F0C81D522C3EA4FCF97F164AFFC4CBA
+ManifestType: installer
+ManifestVersion: 1.9.0
