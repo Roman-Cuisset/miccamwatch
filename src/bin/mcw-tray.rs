@@ -28,8 +28,8 @@ fn run() -> Result<()> {
         .as_deref()
         .and_then(Language::from_code)
         .unwrap_or_else(Language::detect);
-    let monitor = PlatformMonitor::new(policy)?;
-    tray::run_tray(monitor, lang, settings)
+    let monitor = PlatformMonitor::new(policy.clone())?;
+    tray::run_tray(monitor, policy, lang, settings)
 }
 
 fn show_error(message: &str) {

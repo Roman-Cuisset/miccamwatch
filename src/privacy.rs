@@ -1,9 +1,48 @@
 use anyhow::{Context, Result, bail};
-use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
-use std::{fs, os::windows::process::CommandExt, process::Command};
-
+use std::{
+    collections::HashSet, fs, mem::size_of, os::windows::process::CommandExt, process::Command,
+};
+use windows::{
+    Win32::{
+        Foundation::{CloseHandle, ERROR_CANCELLED},
+        System::Threading::{GetExitCodeProcess, INFINITE, WaitForSingleObject},
+        UI::Shell::{SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW, ShellExecuteExW},
+    },
+    core::PCWSTR,
+};
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+#[link(name = "cfgmgr32")]
+unsafe extern "system" {
+    fn CM_Locate_DevNodeW(pdndevinst: *mut u32, pdeviceid: *const u16, ulflags: u32) -> u32;
+    fn CM_Get_DevNode_Status(
+        pulstatus: *mut u32,
+        pulproblemnumber: *mut u32,
+        dndevinst: u32,
+        ulflags: u32,
+    ) -> u32;
+}
+
+fn device_status(instance_id: &str) -> Option<String> {
+    let wide: Vec<u16> = instance_id.encode_utf16().chain(Some(0)).collect();
+    let mut devinst = 0u32;
+    let res = unsafe { CM_Locate_DevNodeW(&mut devinst, wide.as_ptr(), 0) };
+    if res != 0 {
+        return None;
+    }
+    let mut status = 0u32;
+    let mut problem = 0u32;
+    let res = unsafe { CM_Get_DevNode_Status(&mut status, &mut problem, devinst, 0) };
+    if res != 0 {
+        return Some("Error".to_owned());
+    }
+    if problem == 0 {
+        Some("OK".to_owned())
+    } else {
+        Some("Error".to_owned())
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -31,6 +70,45 @@ struct CameraDevice {
 }
 
 fn devices() -> Result<Vec<CameraDevice>> {
+    let mut found = Vec::new();
+    let mut seen = HashSet::new();
+
+    for class in &["Camera", "Image"] {
+        if let Ok(output) = Command::new("pnputil.exe")
+            .args(["/enum-devices", "/class", class])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            && output.status.success()
+        {
+            let text = String::from_utf8_lossy(&output.stdout);
+            for line in text.lines() {
+                let lower = line.to_ascii_lowercase();
+                if (lower.contains("instance") || lower.contains("d'instance"))
+                    && let Some((_, val)) = line.split_once(':')
+                {
+                    let id = val.trim();
+                    if !id.is_empty()
+                        && seen.insert(id.to_ascii_lowercase())
+                        && let Some(status) = device_status(id)
+                    {
+                        found.push(CameraDevice {
+                            instance_id: id.to_owned(),
+                            status,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    if !found.is_empty() {
+        return Ok(found);
+    }
+
+    devices_powershell()
+}
+
+fn devices_powershell() -> Result<Vec<CameraDevice>> {
     let output = Command::new("powershell.exe")
         .args([
             "-NoProfile",
@@ -80,7 +158,26 @@ pub fn camera_state() -> Result<CameraPrivacyState> {
     let Some(blocked) = blocked_devices()? else {
         return Ok(CameraPrivacyState::Allowed);
     };
-    Ok(classify_devices(&blocked, &devices()?))
+    let mut current = Vec::new();
+    for id in &blocked {
+        if let Some(status) = device_status(id) {
+            current.push(CameraDevice {
+                instance_id: id.clone(),
+                status,
+            });
+        }
+    }
+    if let Ok(all_devices) = devices() {
+        for dev in all_devices {
+            if !current
+                .iter()
+                .any(|c| c.instance_id.eq_ignore_ascii_case(&dev.instance_id))
+            {
+                current.push(dev);
+            }
+        }
+    }
+    Ok(classify_devices(&blocked, &current))
 }
 
 fn classify_devices(blocked: &[String], current: &[CameraDevice]) -> CameraPrivacyState {
@@ -119,33 +216,54 @@ fn pnputil_elevated(action: &str, instance_ids: &[String]) -> Result<()> {
     if instance_ids.is_empty() {
         return Ok(());
     }
-    let ids = instance_ids
-        .iter()
-        .map(|id| format!("'{}'", id.replace('\'', "''")))
-        .collect::<Vec<_>>()
-        .join(",");
-    let elevated = format!(
-        "$ErrorActionPreference = 'Stop'; foreach ($id in @({ids})) {{ & \"$env:WINDIR\\System32\\pnputil.exe\" /{action}-device $id | Out-Null; if ($LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }} }}"
-    );
-    let encoded = STANDARD.encode(
-        elevated
-            .encode_utf16()
-            .flat_map(u16::to_le_bytes)
-            .collect::<Vec<_>>(),
-    );
-    let script = format!(
-        "$ErrorActionPreference = 'Stop'; $p = Start-Process -FilePath \"$env:WINDIR\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\" -Verb RunAs -WindowStyle Hidden -ArgumentList @('-NoProfile', '-EncodedCommand', '{encoded}') -Wait -PassThru; if ($null -eq $p) {{ exit 1 }}; exit $p.ExitCode"
-    );
-    let output = Command::new("powershell.exe")
-        .args(["-NoProfile", "-Command", &script])
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
-        .context("failed to request administrator approval for camera control")?;
-    if !output.status.success() {
-        bail!(
-            "camera {action} failed or administrator approval was declined: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
+    let (file, parameters) = if instance_ids.len() == 1 {
+        (
+            "pnputil.exe".to_owned(),
+            format!("/{action}-device \"{}\"", instance_ids[0]),
+        )
+    } else {
+        let commands = instance_ids
+            .iter()
+            .map(|id| format!("pnputil.exe /{action}-device \"{id}\""))
+            .collect::<Vec<_>>()
+            .join(" & ");
+        ("cmd.exe".to_owned(), format!("/d /c {commands}"))
+    };
+
+    let wide_verb: Vec<u16> = "runas\0".encode_utf16().collect();
+    let wide_file: Vec<u16> = file.encode_utf16().chain(Some(0)).collect();
+    let wide_params: Vec<u16> = parameters.encode_utf16().chain(Some(0)).collect();
+
+    let mut info = SHELLEXECUTEINFOW {
+        cbSize: size_of::<SHELLEXECUTEINFOW>() as u32,
+        fMask: SEE_MASK_NOCLOSEPROCESS,
+        lpVerb: PCWSTR(wide_verb.as_ptr()),
+        lpFile: PCWSTR(wide_file.as_ptr()),
+        lpParameters: PCWSTR(wide_params.as_ptr()),
+        nShow: 0,
+        ..Default::default()
+    };
+
+    let result = unsafe { ShellExecuteExW(&mut info) };
+    if let Err(error) = result {
+        if error.code().0 == 0x8007_04C7_u32 as i32
+            || unsafe { windows::Win32::Foundation::GetLastError() } == ERROR_CANCELLED
+        {
+            bail!("camera {action} administrator approval was declined");
+        }
+        bail!("failed to request administrator approval for camera control: {error}");
+    }
+
+    if !info.hProcess.is_invalid() {
+        unsafe {
+            WaitForSingleObject(info.hProcess, INFINITE);
+            let mut exit_code = 0u32;
+            let _ = GetExitCodeProcess(info.hProcess, &mut exit_code);
+            let _ = CloseHandle(info.hProcess);
+            if exit_code != 0 {
+                bail!("camera {action} failed with exit code {exit_code}");
+            }
+        }
     }
     Ok(())
 }

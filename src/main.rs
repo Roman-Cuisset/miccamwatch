@@ -168,8 +168,8 @@ fn run() -> Result<u8> {
         }
         Command::Tray { command } => match command.unwrap_or(TrayCommand::Run) {
             TrayCommand::Run => {
-                let monitor = PlatformMonitor::new(policy)?;
-                tray::run_tray(monitor, lang, settings)?;
+                let monitor = PlatformMonitor::new(policy.clone())?;
+                tray::run_tray(monitor, policy, lang, settings)?;
                 Ok(0)
             }
             TrayCommand::Stop => {

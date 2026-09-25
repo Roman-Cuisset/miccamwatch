@@ -105,7 +105,7 @@ Status JSON is an object with an explicit schema version:
 ```json
 {
   "schema_version": 3,
-  "tool_version": "0.13.2",
+  "tool_version": "0.13.3",
   "collectors": [],
   "accesses": []
 }

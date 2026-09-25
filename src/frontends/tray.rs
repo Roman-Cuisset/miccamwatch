@@ -3,14 +3,26 @@ use crate::{
     i18n::Language,
     model::{
         Access, AccessEvent, Action, Activity, CollectorState, MicrophoneMuteState, Resource,
-        SCHEMA_VERSION, event_code,
+        SCHEMA_VERSION, Snapshot, event_code,
     },
     platform::{PlatformMonitor, SessionLockState},
     privacy::CameraPrivacyState,
     settings::{PrivacyProfile, Settings},
 };
 use anyhow::{Context, Result};
-use std::{collections::HashMap, ffi::OsStr, mem::size_of, os::windows::ffi::OsStrExt};
+use std::{
+    collections::HashMap,
+    ffi::OsStr,
+    mem::size_of,
+    os::windows::ffi::OsStrExt,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicIsize, Ordering},
+        mpsc::{self, Receiver},
+    },
+    thread,
+    time::{Duration, Instant},
+};
 use windows::{
     Win32::{
         Foundation::{
@@ -30,12 +42,13 @@ use windows::{
             WindowsAndMessaging::{
                 AppendMenuW, CREATESTRUCTW, CreateIconIndirect, CreatePopupMenu, CreateWindowExW,
                 DefWindowProcW, DestroyIcon, DestroyMenu, DestroyWindow, DispatchMessageW,
-                FindWindowW, GWLP_USERDATA, GetCursorPos, GetMessageW, GetWindowLongPtrW, HICON,
-                ICONINFO, KillTimer, MB_ICONERROR, MB_OK, MF_DISABLED, MF_GRAYED, MF_SEPARATOR,
-                MF_STRING, MSG, MessageBoxW, PostMessageW, PostQuitMessage, RegisterClassW,
-                SetForegroundWindow, SetTimer, SetWindowLongPtrW, TPM_BOTTOMALIGN, TPM_RIGHTBUTTON,
-                TrackPopupMenu, TranslateMessage, WINDOW_EX_STYLE, WM_APP, WM_CLOSE, WM_COMMAND,
-                WM_DESTROY, WM_LBUTTONDBLCLK, WM_NCCREATE, WM_RBUTTONUP, WM_TIMER, WNDCLASSW,
+                FindWindowW, GWLP_USERDATA, GetCursorPos, GetMessageW, GetSystemMetrics,
+                GetWindowLongPtrW, HICON, ICONINFO, KillTimer, MF_DISABLED, MF_GRAYED,
+                MF_SEPARATOR, MF_STRING, MSG, PostMessageW, PostQuitMessage, RegisterClassW,
+                SM_CXSMICON, SetForegroundWindow, SetTimer, SetWindowLongPtrW, TPM_BOTTOMALIGN,
+                TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage,
+                WINDOW_EX_STYLE, WM_APP, WM_CLOSE, WM_COMMAND, WM_DESTROY, WM_LBUTTONDBLCLK,
+                WM_LBUTTONUP, WM_NCCREATE, WM_NULL, WM_RBUTTONUP, WM_TIMER, WNDCLASSW,
                 WS_OVERLAPPED,
             },
         },
@@ -43,8 +56,28 @@ use windows::{
     core::PCWSTR,
 };
 
+#[link(name = "user32")]
+unsafe extern "system" {
+    fn SetProcessDpiAwarenessContext(context: isize) -> i32;
+}
+
+/// `DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2`.
+const PER_MONITOR_AWARE_V2: isize = -4;
+
+/// Without this the shell renders the popup menu at 96 DPI and bitmap-stretches it,
+/// which is what makes the tray text look pixelated on a scaled display.
+fn enable_dpi_awareness() {
+    unsafe {
+        // Fails harmlessly when the embedded manifest already set the context.
+        let _ = SetProcessDpiAwarenessContext(PER_MONITOR_AWARE_V2);
+    }
+}
+
 const WM_TRAY_CALLBACK: u32 = WM_APP + 1;
+const WM_CAMERA_RESULT: u32 = WM_APP + 2;
+const WM_TRAY_REFRESH: u32 = WM_APP + 3;
 const TIMER_POLL_ID: usize = 1;
+const CAMERA_POLL_INTERVAL: Duration = Duration::from_secs(5);
 const CMD_TOGGLE_MUTE: usize = 101;
 const CMD_TOGGLE_CAMERA: usize = 102;
 const CMD_EXIT: usize = 103;
@@ -78,6 +111,13 @@ impl Drop for MutexGuard {
     }
 }
 
+struct TrayRefresh {
+    snapshot: Result<Snapshot, String>,
+    mute_state: MicrophoneMuteState,
+    camera_state: CameraPrivacyState,
+    lock_state: SessionLockState,
+}
+
 struct TrayAppState {
     monitor: PlatformMonitor,
     lang: Language,
@@ -95,6 +135,8 @@ struct TrayAppState {
     yellow_icon: HICON,
     red_icon: HICON,
     gray_icon: HICON,
+    refreshes: Receiver<TrayRefresh>,
+    camera_dirty: Arc<AtomicBool>,
 }
 
 impl Drop for TrayAppState {
@@ -108,12 +150,110 @@ impl Drop for TrayAppState {
     }
 }
 
-pub fn run_tray(monitor: PlatformMonitor, lang: Language, settings: Settings) -> Result<()> {
+fn start_refresh_worker(
+    hwnd_cell: Arc<AtomicIsize>,
+    camera_dirty: Arc<AtomicBool>,
+    policy: crate::config::Policy,
+) -> Receiver<TrayRefresh> {
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let monitor = match PlatformMonitor::new(policy) {
+            Ok(monitor) => monitor,
+            Err(error) => {
+                let _ = sender.send(TrayRefresh {
+                    snapshot: Err(format!("{error:#}")),
+                    mute_state: MicrophoneMuteState::Unavailable,
+                    camera_state: CameraPrivacyState::SystemManaged,
+                    lock_state: SessionLockState::Unknown,
+                });
+                let h = hwnd_cell.load(Ordering::Relaxed);
+                if h != 0 {
+                    unsafe {
+                        let _ = PostMessageW(
+                            Some(HWND(h as *mut _)),
+                            WM_TRAY_REFRESH,
+                            WPARAM(0),
+                            LPARAM(0),
+                        );
+                    }
+                }
+                return;
+            }
+        };
+        let filter = Filter {
+            include_ready: true,
+            ..Filter::default()
+        };
+        let mut camera_state =
+            crate::privacy::camera_state().unwrap_or(CameraPrivacyState::SystemManaged);
+        let mut last_camera_poll = Some(Instant::now());
+        loop {
+            let snapshot = monitor
+                .snapshot((&filter).into())
+                .map_err(|error| format!("{error:#}"));
+            let mute_state = monitor
+                .microphone_mute_state()
+                .unwrap_or(MicrophoneMuteState::Unavailable);
+            // Session probes cross into the input desktop, so they stay off the window
+            // thread or the popup menu paints late.
+            let lock_state = crate::platform::session_lock_state();
+            // `camera_state` shells out to pnputil; running it every cycle would spawn a
+            // process twice a second forever. The tray updates it directly after a toggle,
+            // so a slow poll is only there to notice out-of-band changes.
+            let now = Instant::now();
+            let camera_stale = last_camera_poll
+                .is_none_or(|last| now.duration_since(last) >= CAMERA_POLL_INTERVAL);
+            if camera_stale || camera_dirty.swap(false, Ordering::Relaxed) {
+                camera_state =
+                    crate::privacy::camera_state().unwrap_or(CameraPrivacyState::SystemManaged);
+                last_camera_poll = Some(now);
+            }
+            if sender
+                .send(TrayRefresh {
+                    snapshot,
+                    mute_state,
+                    camera_state,
+                    lock_state,
+                })
+                .is_err()
+            {
+                break;
+            }
+            let h = hwnd_cell.load(Ordering::Relaxed);
+            if h != 0 {
+                unsafe {
+                    let _ = PostMessageW(
+                        Some(HWND(h as *mut _)),
+                        WM_TRAY_REFRESH,
+                        WPARAM(0),
+                        LPARAM(0),
+                    );
+                }
+            }
+            thread::sleep(Duration::from_millis(500));
+        }
+    });
+    receiver
+}
+
+pub fn run_tray(
+    monitor: PlatformMonitor,
+    policy: crate::config::Policy,
+    lang: Language,
+    settings: Settings,
+) -> Result<()> {
+    enable_dpi_awareness();
     let mutex_name = format_wide("Local\\MicCamWatch.Tray");
     let _mutex = MutexGuard(unsafe { CreateMutexW(None, true, PCWSTR(mutex_name.as_ptr()))? });
     if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
         anyhow::bail!("MicCamWatch tray is already running");
     }
+    let hwnd_cell = Arc::new(AtomicIsize::new(0));
+    let camera_dirty = Arc::new(AtomicBool::new(false));
+    let refreshes = start_refresh_worker(Arc::clone(&hwnd_cell), Arc::clone(&camera_dirty), policy);
+    // The shell downsamples anything larger than the small-icon metric, which is what
+    // made the icons look muddy. Render at the size the notification area will use.
+    let icon_size = unsafe { GetSystemMetrics(SM_CXSMICON) }.max(16);
 
     let state = Box::new(TrayAppState {
         mute_state: monitor
@@ -129,12 +269,14 @@ pub fn run_tray(monitor: PlatformMonitor, lang: Language, settings: Settings) ->
         settings,
         lock_state: crate::platform::session_lock_state(),
         restore_mute: None,
+        refreshes,
+        camera_dirty,
         restore_camera: None,
         previous_accesses: HashMap::new(),
-        green_icon: create_status_icon((34, 197, 94), IconGlyph::Check)?,
-        yellow_icon: create_status_icon((245, 158, 11), IconGlyph::Ready)?,
-        red_icon: create_status_icon((239, 68, 68), IconGlyph::Active)?,
-        gray_icon: create_status_icon((107, 114, 128), IconGlyph::Error)?,
+        green_icon: create_status_icon((34, 197, 94), IconGlyph::Check, icon_size)?,
+        yellow_icon: create_status_icon((245, 158, 11), IconGlyph::Ready, icon_size)?,
+        red_icon: create_status_icon((239, 68, 68), IconGlyph::Active, icon_size)?,
+        gray_icon: create_status_icon((107, 114, 128), IconGlyph::Error, icon_size)?,
     });
     let state_ptr = Box::into_raw(state);
 
@@ -166,7 +308,10 @@ pub fn run_tray(monitor: PlatformMonitor, lang: Language, settings: Settings) ->
             Some(state_ptr.cast()),
         )
     } {
-        Ok(hwnd) => hwnd,
+        Ok(hwnd) => {
+            hwnd_cell.store(hwnd.0 as isize, Ordering::Relaxed);
+            hwnd
+        }
         Err(error) => {
             unsafe { drop(Box::from_raw(state_ptr)) };
             return Err(error).context("failed to create tray message window");
@@ -192,7 +337,7 @@ pub fn run_tray(monitor: PlatformMonitor, lang: Language, settings: Settings) ->
         anyhow::bail!("failed to start tray polling timer");
     }
 
-    println!("miccamwatch tray running. Right-click the icon near the clock to control.");
+    println!("miccamwatch tray running. Click the icon near the clock to open the menu.");
     let mut message = MSG::default();
     let loop_result = loop {
         let result = unsafe { GetMessageW(&mut message, None, 0, 0) };
@@ -248,7 +393,7 @@ unsafe extern "system" fn tray_wnd_proc(
         return LRESULT(1);
     }
     match message {
-        WM_TIMER => {
+        WM_TRAY_REFRESH | WM_TIMER => {
             if let Some(state) = state(hwnd) {
                 refresh_state(hwnd, state);
             }
@@ -256,9 +401,19 @@ unsafe extern "system" fn tray_wnd_proc(
         }
         WM_TRAY_CALLBACK => {
             match lparam.0 as u32 {
-                WM_RBUTTONUP => show_context_menu(hwnd),
+                // A plain left click opens the menu, matching what users expect from
+                // other tray applications. Double clicks keep the status toast.
+                WM_LBUTTONUP | WM_RBUTTONUP => show_context_menu(hwnd),
                 WM_LBUTTONDBLCLK => show_status_toast(hwnd),
                 _ => {}
+            }
+            LRESULT(0)
+        }
+        WM_CAMERA_RESULT => {
+            let result =
+                unsafe { Box::from_raw(lparam.0 as *mut Result<CameraPrivacyState, String>) };
+            if let Some(state) = state(hwnd) {
+                handle_camera_result(state, *result);
             }
             LRESULT(0)
         }
@@ -284,8 +439,11 @@ unsafe extern "system" fn tray_wnd_proc(
     }
 }
 
-fn apply_lock_policy(state: &mut TrayAppState) {
-    let current = crate::platform::session_lock_state();
+fn apply_lock_policy(
+    state: &mut TrayAppState,
+    current: SessionLockState,
+    camera_state: CameraPrivacyState,
+) {
     if current == state.lock_state {
         return;
     }
@@ -296,11 +454,11 @@ fn apply_lock_policy(state: &mut TrayAppState) {
                 state.restore_mute = Some(was_muted);
             }
         }
-        if state.settings.block_camera_on_lock {
-            let previous = crate::privacy::camera_state().ok();
-            if crate::privacy::set_camera_state(CameraPrivacyState::Blocked).is_ok() {
-                state.restore_camera = previous;
-            }
+        if state.settings.block_camera_on_lock
+            && crate::privacy::set_camera_state(CameraPrivacyState::Blocked).is_ok()
+        {
+            state.restore_camera = Some(camera_state);
+            state.camera_dirty.store(true, Ordering::Relaxed);
         }
     } else if current == SessionLockState::Unlocked && state.settings.restore_on_unlock {
         if let Some(was_muted) = state.restore_mute.take() {
@@ -308,20 +466,34 @@ fn apply_lock_policy(state: &mut TrayAppState) {
         }
         if let Some(previous) = state.restore_camera.take()
             && previous != CameraPrivacyState::SystemManaged
+            && crate::privacy::set_camera_state(previous).is_ok()
         {
-            let _ = crate::privacy::set_camera_state(previous);
+            state.camera_dirty.store(true, Ordering::Relaxed);
         }
     }
     state.lock_state = current;
 }
 
+/// WinRT toast delivery round-trips through the shell and can take hundreds of
+/// milliseconds; running it inline would stall the window thread mid-menu.
+fn notify_async(title: &str, message: &str) {
+    let title = title.to_owned();
+    let message = message.to_owned();
+    thread::spawn(move || {
+        if let Err(error) = crate::notify::notify_message(&title, &message) {
+            eprintln!("notification failed: {error}");
+        }
+    });
+}
+
 fn refresh_state(hwnd: HWND, state: &mut TrayAppState) {
-    apply_lock_policy(state);
-    let filter = Filter {
-        include_ready: true,
-        ..Filter::default()
-    };
-    let (visual, summary) = match state.monitor.snapshot((&filter).into()) {
+    let mut latest = None;
+    while let Ok(refresh) = state.refreshes.try_recv() {
+        latest = Some(refresh);
+    }
+    let Some(refresh) = latest else { return };
+    apply_lock_policy(state, refresh.lock_state, refresh.camera_state);
+    let (visual, summary) = match refresh.snapshot {
         Ok(snapshot) => {
             record_history_changes(state, &snapshot.accesses);
             let unhealthy = snapshot
@@ -362,11 +534,8 @@ fn refresh_state(hwnd: HWND, state: &mut TrayAppState) {
             format!("miccamwatch: telemetry error: {error}"),
         ),
     };
-    let mute_state = state
-        .monitor
-        .microphone_mute_state()
-        .unwrap_or(MicrophoneMuteState::Unavailable);
-    let camera_state = crate::privacy::camera_state().unwrap_or(CameraPrivacyState::SystemManaged);
+    let mute_state = refresh.mute_state;
+    let camera_state = refresh.camera_state;
     if visual == state.visual
         && summary == state.summary
         && mute_state == state.mute_state
@@ -454,9 +623,7 @@ fn toggle_mute(hwnd: HWND) {
             } else {
                 "Microphone unmuted"
             };
-            if let Err(error) = crate::notify::notify_message("miccamwatch", message) {
-                eprintln!("notification failed: {error}");
-            }
+            notify_async("miccamwatch", message);
         }
         Err(error) => {
             state.summary = format!("miccamwatch: mute failed: {error}");
@@ -466,10 +633,31 @@ fn toggle_mute(hwnd: HWND) {
 }
 
 fn toggle_camera(hwnd: HWND) {
-    let Some(state) = state(hwnd) else { return };
-    match crate::privacy::toggle_camera() {
+    // Run the elevated pnputil call on a background thread so the UI stays responsive
+    // during the UAC prompt. The result is posted back via WM_CAMERA_RESULT.
+    let hwnd_raw = hwnd.0 as usize;
+    thread::spawn(move || {
+        let result = crate::privacy::toggle_camera().map_err(|error| format!("{error:#}"));
+        let boxed = Box::into_raw(Box::new(result));
+        let hwnd = HWND(hwnd_raw as *mut _);
+        unsafe {
+            let _ = PostMessageW(
+                Some(hwnd),
+                WM_CAMERA_RESULT,
+                WPARAM(0),
+                LPARAM(boxed as isize),
+            );
+        }
+    });
+}
+
+fn handle_camera_result(state: &mut TrayAppState, result: Result<CameraPrivacyState, String>) {
+    match result {
         Ok(camera_state) => {
             state.camera_state = camera_state;
+            // Force the poller to re-read privacy state instead of overwriting this
+            // with a value captured before the toggle.
+            state.camera_dirty.store(true, Ordering::Relaxed);
             let message = match camera_state {
                 CameraPrivacyState::Allowed => {
                     "Connected cameras are allowed. Reconnect and allow again to restore any disconnected cameras."
@@ -479,24 +667,13 @@ fn toggle_camera(hwnd: HWND) {
                     "Camera state is partial; reconnect missing devices before restoring them."
                 }
             };
-            let _ = crate::notify::notify_message("MicCamWatch camera", message);
+            notify_async("MicCamWatch camera", message);
         }
         Err(error) => {
-            let message = format!("Camera control failed: {error:#}");
+            let message = format!("Camera control failed: {error}");
             state.summary = format!("miccamwatch: {message}");
             state.visual = TrayVisual::Error;
-            if crate::notify::notify_message("MicCamWatch camera", &message).is_err() {
-                let title = format_wide("MicCamWatch camera");
-                let detail = format_wide(&message);
-                unsafe {
-                    let _ = MessageBoxW(
-                        Some(hwnd),
-                        PCWSTR(detail.as_ptr()),
-                        PCWSTR(title.as_ptr()),
-                        MB_OK | MB_ICONERROR,
-                    );
-                }
-            }
+            notify_async("MicCamWatch camera", &message);
         }
     }
 }
@@ -603,15 +780,20 @@ fn show_context_menu(hwnd: HWND) {
         let mut point = POINT::default();
         let _ = GetCursorPos(&mut point);
         let _ = SetForegroundWindow(hwnd);
-        let _ = TrackPopupMenu(
+        let command = TrackPopupMenu(
             menu,
-            TPM_RIGHTBUTTON | TPM_BOTTOMALIGN,
+            TPM_RIGHTBUTTON | TPM_BOTTOMALIGN | TPM_RETURNCMD | TPM_NONOTIFY,
             point.x,
             point.y,
             None,
             hwnd,
             None,
-        );
+        )
+        .0;
+        let _ = PostMessageW(Some(hwnd), WM_NULL, WPARAM(0), LPARAM(0));
+        if command != 0 {
+            let _ = PostMessageW(Some(hwnd), WM_COMMAND, WPARAM(command as usize), LPARAM(0));
+        }
         let _ = DestroyMenu(menu);
     }
 }
@@ -630,9 +812,7 @@ fn append_disabled(menu: windows::Win32::UI::WindowsAndMessaging::HMENU, text: &
 
 fn show_status_toast(hwnd: HWND) {
     let Some(state) = state(hwnd) else { return };
-    if let Err(error) = crate::notify::notify_message("miccamwatch", &state.summary) {
-        eprintln!("notification failed: {error}");
-    }
+    notify_async("miccamwatch", &state.summary);
 }
 
 fn idle_text(lang: Language) -> &'static str {
@@ -668,13 +848,12 @@ fn format_wide(value: &str) -> Vec<u16> {
     OsStr::new(value).encode_wide().chain(Some(0)).collect()
 }
 
-fn create_status_icon(color: (u8, u8, u8), glyph: IconGlyph) -> Result<HICON> {
-    const SIZE: i32 = 32;
+fn create_status_icon(color: (u8, u8, u8), glyph: IconGlyph, size: i32) -> Result<HICON> {
     let info = BITMAPINFO {
         bmiHeader: BITMAPINFOHEADER {
             biSize: size_of::<BITMAPINFOHEADER>() as u32,
-            biWidth: SIZE,
-            biHeight: -SIZE,
+            biWidth: size,
+            biHeight: -size,
             biPlanes: 1,
             biBitCount: 32,
             biCompression: BI_RGB.0,
@@ -689,12 +868,12 @@ fn create_status_icon(color: (u8, u8, u8), glyph: IconGlyph) -> Result<HICON> {
         let _ = unsafe { DeleteObject(color_bitmap.into()) };
         anyhow::bail!("Windows returned no pixel buffer for tray icon");
     }
-    let rendered = render_icon_pixels(color, glyph);
+    let rendered = render_icon_pixels(color, glyph, size);
     let pixels =
-        unsafe { std::slice::from_raw_parts_mut(bits.cast::<u32>(), (SIZE * SIZE) as usize) };
+        unsafe { std::slice::from_raw_parts_mut(bits.cast::<u32>(), (size * size) as usize) };
     pixels.copy_from_slice(&rendered);
-    let mask = [0u8; 128];
-    let mask_bitmap = unsafe { CreateBitmap(SIZE, SIZE, 1, 1, Some(mask.as_ptr().cast())) };
+    let mask = vec![0u8; ((size * size) / 8) as usize];
+    let mask_bitmap = unsafe { CreateBitmap(size, size, 1, 1, Some(mask.as_ptr().cast())) };
     let icon_info = ICONINFO {
         fIcon: true.into(),
         hbmMask: mask_bitmap,
@@ -707,21 +886,25 @@ fn create_status_icon(color: (u8, u8, u8), glyph: IconGlyph) -> Result<HICON> {
     icon.context("failed to create alpha tray icon")
 }
 
-fn render_icon_pixels(color: (u8, u8, u8), glyph: IconGlyph) -> Vec<u32> {
-    const SIZE: i32 = 32;
-    let mut pixels = vec![0; (SIZE * SIZE) as usize];
-    for y in 0..SIZE {
-        for x in 0..SIZE {
-            let dx = x as f32 - 15.5;
-            let dy = y as f32 - 15.5;
+fn render_icon_pixels(color: (u8, u8, u8), glyph: IconGlyph, size: i32) -> Vec<u32> {
+    let mut pixels = vec![0; (size * size) as usize];
+    let scale = size as f32 / 32.0;
+    for y in 0..size {
+        for x in 0..size {
+            // Sample the 32px glyph geometry in destination space so every icon size
+            // keeps the same proportions instead of being stretched by the shell.
+            let sx = (x as f32 + 0.5) / scale - 0.5;
+            let sy = (y as f32 + 0.5) / scale - 0.5;
+            let dx = sx - 15.5;
+            let dy = sy - 15.5;
             let distance = (dx * dx + dy * dy).sqrt();
             let alpha = ((15.0 - distance).clamp(0.0, 1.0) * 255.0) as u32;
             if alpha == 0 {
                 continue;
             }
-            let white = glyph_pixel(glyph, x, y);
+            let white = glyph_pixel(glyph, sx, sy);
             let (red, green, blue) = if white { (255, 255, 255) } else { color };
-            pixels[(y * SIZE + x) as usize] = (alpha << 24)
+            pixels[(y * size + x) as usize] = (alpha << 24)
                 | ((red as u32 * alpha / 255) << 16)
                 | ((green as u32 * alpha / 255) << 8)
                 | (blue as u32 * alpha / 255);
@@ -730,32 +913,31 @@ fn render_icon_pixels(color: (u8, u8, u8), glyph: IconGlyph) -> Vec<u32> {
     pixels
 }
 
-fn glyph_pixel(glyph: IconGlyph, x: i32, y: i32) -> bool {
+fn glyph_pixel(glyph: IconGlyph, x: f32, y: f32) -> bool {
     match glyph {
         IconGlyph::Check => {
-            line_distance(x, y, 8, 16, 13, 21) <= 1.7 || line_distance(x, y, 13, 21, 24, 10) <= 1.7
+            line_distance(x, y, 8.0, 16.0, 13.0, 21.0) <= 1.7
+                || line_distance(x, y, 13.0, 21.0, 24.0, 10.0) <= 1.7
         }
         IconGlyph::Ready => {
-            (9..=22).contains(&y) && ((10..=12).contains(&x) || (19..=21).contains(&x))
+            (9.0..=22.0).contains(&y) && ((10.0..=12.0).contains(&x) || (19.0..=21.0).contains(&x))
         }
         IconGlyph::Active => {
-            ((13..=18).contains(&x) && (7..=19).contains(&y))
-                || ((13..=18).contains(&x) && (23..=27).contains(&y))
+            ((13.0..=18.0).contains(&x) && (7.0..=19.0).contains(&y))
+                || ((13.0..=18.0).contains(&x) && (23.0..=27.0).contains(&y))
         }
         IconGlyph::Error => {
-            line_distance(x, y, 9, 9, 22, 22) <= 1.8 || line_distance(x, y, 22, 9, 9, 22) <= 1.8
+            line_distance(x, y, 9.0, 9.0, 22.0, 22.0) <= 1.8
+                || line_distance(x, y, 22.0, 9.0, 9.0, 22.0) <= 1.8
         }
     }
 }
 
-fn line_distance(x: i32, y: i32, x1: i32, y1: i32, x2: i32, y2: i32) -> f32 {
-    let (px, py) = (x as f32, y as f32);
-    let (ax, ay) = (x1 as f32, y1 as f32);
-    let (bx, by) = (x2 as f32, y2 as f32);
-    let (vx, vy) = (bx - ax, by - ay);
+fn line_distance(x: f32, y: f32, x1: f32, y1: f32, x2: f32, y2: f32) -> f32 {
+    let (vx, vy) = (x2 - x1, y2 - y1);
     let length_squared = vx * vx + vy * vy;
-    let t = (((px - ax) * vx + (py - ay) * vy) / length_squared).clamp(0.0, 1.0);
-    ((px - (ax + t * vx)).powi(2) + (py - (ay + t * vy)).powi(2)).sqrt()
+    let t = (((x - x1) * vx + (y - y1) * vy) / length_squared).clamp(0.0, 1.0);
+    ((x - (x1 + t * vx)).powi(2) + (y - (y1 + t * vy)).powi(2)).sqrt()
 }
 
 #[cfg(test)]
@@ -764,10 +946,10 @@ mod tests {
 
     #[test]
     fn tray_icons_have_alpha_color_and_distinct_glyphs() {
-        let idle = render_icon_pixels((34, 197, 94), IconGlyph::Check);
-        let ready = render_icon_pixels((245, 158, 11), IconGlyph::Ready);
-        let active = render_icon_pixels((239, 68, 68), IconGlyph::Active);
-        let error = render_icon_pixels((107, 114, 128), IconGlyph::Error);
+        let idle = render_icon_pixels((34, 197, 94), IconGlyph::Check, 32);
+        let ready = render_icon_pixels((245, 158, 11), IconGlyph::Ready, 32);
+        let active = render_icon_pixels((239, 68, 68), IconGlyph::Active, 32);
+        let error = render_icon_pixels((107, 114, 128), IconGlyph::Error, 32);
 
         assert_eq!(idle.len(), 32 * 32);
         assert_eq!(idle[0] >> 24, 0);
@@ -775,5 +957,20 @@ mod tests {
         assert_ne!(idle, ready);
         assert_ne!(ready, active);
         assert_ne!(active, error);
+    }
+
+    #[test]
+    fn every_supported_icon_size_renders_an_opaque_centre() {
+        for size in [16, 20, 24, 32, 40] {
+            let pixels = render_icon_pixels((34, 197, 94), IconGlyph::Check, size);
+            assert_eq!(pixels.len(), (size * size) as usize);
+            assert_eq!(
+                pixels[0] >> 24,
+                0,
+                "corner must stay transparent at {size}px"
+            );
+            let centre = pixels[((size / 2) * size + size / 2) as usize];
+            assert_eq!(centre >> 24, 255, "centre must be opaque at {size}px");
+        }
     }
 }
