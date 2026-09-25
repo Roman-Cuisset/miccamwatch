@@ -196,6 +196,15 @@ Windows 10 and Windows 11 are supported. The reusable library, collector interfa
 
 Linux requires PipeWire/V4L2 collectors, macOS requires CoreAudio/AVFoundation/TCC collectors, and Android requires a separate application and permission architecture. These are explicit contracts and roadmap targets, not currently implemented support.
 
+## Privacy
+
+MicCamWatch is designed from the ground up as an offline-first privacy tool:
+- **Zero network communication**: `mcw` contains no telemetry, no analytics, and makes no remote network requests.
+- **No media capture**: `mcw` inspects capture session metadata, loaded modules, and registry activity timestamps. It never records audio samples or captures video frames.
+- **Local storage**: Settings and history logs remain strictly on your local machine under your Windows user profile (`%APPDATA%\MicCamWatch` and `%LOCALAPPDATA%\MicCamWatch`).
+
+See the full [Privacy Policy](PRIVACY.md).
+
 ## License
 
 MIT
