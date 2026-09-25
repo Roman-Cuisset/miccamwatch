@@ -76,6 +76,8 @@ fn enable_dpi_awareness() {
 const WM_TRAY_CALLBACK: u32 = WM_APP + 1;
 const WM_CAMERA_RESULT: u32 = WM_APP + 2;
 const WM_TRAY_REFRESH: u32 = WM_APP + 3;
+const WM_RESTORE_ARRIVED: u32 = WM_APP + 4;
+const WM_RESTORE_RESULT: u32 = WM_APP + 5;
 const TIMER_POLL_ID: usize = 1;
 const CAMERA_POLL_INTERVAL: Duration = Duration::from_secs(5);
 const CMD_TOGGLE_MUTE: usize = 101;
@@ -187,6 +189,10 @@ fn start_refresh_worker(
         let mut camera_state =
             crate::privacy::camera_state().unwrap_or(CameraPrivacyState::SystemManaged);
         let mut last_camera_poll = Some(Instant::now());
+        // Camera instance IDs already offered for restoration. Dropping an entry when
+        // the device disappears is what re-arms the prompt after a replug, and it keeps
+        // a declined UAC prompt from being raised again for the same arrival.
+        let mut restore_offered: Vec<String> = Vec::new();
         loop {
             let snapshot = monitor
                 .snapshot((&filter).into())
@@ -220,11 +226,28 @@ fn start_refresh_worker(
                 break;
             }
             let h = hwnd_cell.load(Ordering::Relaxed);
-            if h != 0 {
+            if h == 0 {
+                thread::sleep(Duration::from_millis(500));
+                continue;
+            }
+            unsafe {
+                let _ = PostMessageW(
+                    Some(HWND(h as *mut _)),
+                    WM_TRAY_REFRESH,
+                    WPARAM(0),
+                    LPARAM(0),
+                );
+            }
+            // A camera the user already asked to restore is plugged back in, so finish
+            // that request instead of waiting for another `mcw camera allow`. These
+            // probes only touch cfgmgr32 and the record file, never the device tree.
+            let arrived = crate::privacy::arrived_restore_targets().unwrap_or_default();
+            let fresh = take_fresh_arrivals(&arrived, &mut restore_offered);
+            if !fresh.is_empty() {
                 unsafe {
                     let _ = PostMessageW(
                         Some(HWND(h as *mut _)),
-                        WM_TRAY_REFRESH,
+                        WM_RESTORE_ARRIVED,
                         WPARAM(0),
                         LPARAM(0),
                     );
@@ -414,6 +437,17 @@ unsafe extern "system" fn tray_wnd_proc(
                 unsafe { Box::from_raw(lparam.0 as *mut Result<CameraPrivacyState, String>) };
             if let Some(state) = state(hwnd) {
                 handle_camera_result(state, *result);
+            }
+            LRESULT(0)
+        }
+        WM_RESTORE_ARRIVED => {
+            restore_arrived_cameras(hwnd);
+            LRESULT(0)
+        }
+        WM_RESTORE_RESULT => {
+            let result = unsafe { Box::from_raw(lparam.0 as *mut Result<usize, String>) };
+            if let Some(state) = state(hwnd) {
+                handle_restore_result(state, *result);
             }
             LRESULT(0)
         }
@@ -651,6 +685,67 @@ fn toggle_camera(hwnd: HWND) {
     });
 }
 
+/// Narrows reconnected cameras down to the ones not yet offered for restoration,
+/// and remembers them.
+///
+/// Keeping the bookkeeping here means a declined administrator prompt is not
+/// raised again for the same arrival. An entry that leaves `arrived` is forgotten,
+/// which is what re-arms the prompt once the camera is unplugged and connected
+/// again.
+fn take_fresh_arrivals(arrived: &[String], offered: &mut Vec<String>) -> Vec<String> {
+    offered.retain(|id| {
+        arrived
+            .iter()
+            .any(|arrival| arrival.eq_ignore_ascii_case(id))
+    });
+    let fresh = arrived
+        .iter()
+        .filter(|id| !offered.iter().any(|seen| seen.eq_ignore_ascii_case(id)))
+        .cloned()
+        .collect::<Vec<_>>();
+    offered.extend(fresh.iter().cloned());
+    fresh
+}
+
+fn restore_arrived_cameras(hwnd: HWND) {
+    // The enable needs administrator approval, so it runs off the window thread and
+    // reports back through WM_RESTORE_RESULT. The worker only raises this once per
+    // arrival, so a declined prompt is not repeated.
+    let hwnd_raw = hwnd.0 as usize;
+    thread::spawn(move || {
+        let result = crate::privacy::restore_arrived().map_err(|error| format!("{error:#}"));
+        let boxed = Box::into_raw(Box::new(result));
+        unsafe {
+            let _ = PostMessageW(
+                Some(HWND(hwnd_raw as *mut _)),
+                WM_RESTORE_RESULT,
+                WPARAM(0),
+                LPARAM(boxed as isize),
+            );
+        }
+    });
+}
+
+fn handle_restore_result(state: &mut TrayAppState, result: Result<usize, String>) {
+    // Let the poller re-read privacy state rather than guessing it here.
+    state.camera_dirty.store(true, Ordering::Relaxed);
+    match result {
+        Ok(restored) => {
+            let message = format!(
+                "Reconnected camera restored ({restored} device{}).",
+                if restored == 1 { "" } else { "s" }
+            );
+            notify_async("MicCamWatch camera", &message);
+        }
+        Err(error) => {
+            // Staying silent after a declined prompt matters more than reporting it,
+            // so the failure only surfaces in the tray summary and tooltip.
+            state.summary = format!("miccamwatch: camera restore failed: {error}");
+            state.visual = TrayVisual::Error;
+        }
+    }
+}
+
 fn handle_camera_result(state: &mut TrayAppState, result: Result<CameraPrivacyState, String>) {
     match result {
         Ok(camera_state) => {
@@ -660,11 +755,11 @@ fn handle_camera_result(state: &mut TrayAppState, result: Result<CameraPrivacySt
             state.camera_dirty.store(true, Ordering::Relaxed);
             let message = match camera_state {
                 CameraPrivacyState::Allowed => {
-                    "Connected cameras are allowed. Reconnect and allow again to restore any disconnected cameras."
+                    "Connected cameras are allowed. Plugged-in cameras that are still blocked will be restored automatically."
                 }
                 CameraPrivacyState::Blocked => "Connected cameras are blocked.",
                 CameraPrivacyState::SystemManaged => {
-                    "Camera state is partial; reconnect missing devices before restoring them."
+                    "A blocked camera is still unplugged; it will be restored automatically when reconnected."
                 }
             };
             notify_async("MicCamWatch camera", message);
@@ -743,7 +838,7 @@ fn show_context_menu(hwnd: HWND) {
         let camera_text = format_wide(match state.camera_state {
             CameraPrivacyState::Allowed => "Block camera",
             CameraPrivacyState::Blocked => "Allow camera",
-            CameraPrivacyState::SystemManaged => "Allow camera (system managed)",
+            CameraPrivacyState::SystemManaged => "Allow camera (blocked camera unplugged)",
         });
         let _ = AppendMenuW(
             menu,
@@ -943,6 +1038,49 @@ fn line_distance(x: f32, y: f32, x1: f32, y1: f32, x2: f32, y2: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_declined_restore_prompt_is_not_raised_again() {
+        let logi = "USB\\CAMERA_LOGI".to_owned();
+        let mut offered = Vec::new();
+
+        // First sighting reports the camera and arms the bookkeeping.
+        assert_eq!(
+            take_fresh_arrivals(std::slice::from_ref(&logi), &mut offered),
+            vec![logi.clone()]
+        );
+        // Still connected on the next poll: the prompt must not reappear.
+        assert!(take_fresh_arrivals(std::slice::from_ref(&logi), &mut offered).is_empty());
+        assert_eq!(offered, vec![logi.clone()]);
+    }
+
+    #[test]
+    fn unplugging_re_arms_the_restore_prompt() {
+        let logi = "USB\\CAMERA_LOGI".to_owned();
+        let mut offered = vec![logi.clone()];
+
+        // The camera is gone, so the entry is forgotten.
+        assert!(take_fresh_arrivals(&[], &mut offered).is_empty());
+        assert!(offered.is_empty());
+
+        // Plugged back in, it is offered again.
+        assert_eq!(
+            take_fresh_arrivals(std::slice::from_ref(&logi), &mut offered),
+            vec![logi]
+        );
+    }
+
+    #[test]
+    fn only_newly_arrived_cameras_are_reported() {
+        let builtin = "USB\\CAMERA_BUILTIN".to_owned();
+        let logi = "USB\\CAMERA_LOGI".to_owned();
+        let mut offered = vec![builtin.clone()];
+
+        let fresh = take_fresh_arrivals(&[builtin.clone(), logi.clone()], &mut offered);
+        assert_eq!(fresh, vec![logi]);
+        // Case differences in PnP instance IDs must not defeat the bookkeeping.
+        assert!(take_fresh_arrivals(&[builtin.to_uppercase()], &mut offered).is_empty());
+    }
 
     #[test]
     fn tray_icons_have_alpha_color_and_distinct_glyphs() {

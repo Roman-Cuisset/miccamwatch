@@ -195,11 +195,13 @@ fn run() -> Result<u8> {
                 CameraCommand::Status => privacy::camera_state()?,
                 CameraCommand::Allow => {
                     privacy::set_camera_state(privacy::CameraPrivacyState::Allowed)?;
-                    privacy::CameraPrivacyState::Allowed
+                    // A camera that is unplugged right now leaves the switch partially
+                    // engaged, so report what Windows actually ends up in.
+                    privacy::camera_state()?
                 }
                 CameraCommand::Block => {
                     privacy::set_camera_state(privacy::CameraPrivacyState::Blocked)?;
-                    privacy::CameraPrivacyState::Blocked
+                    privacy::camera_state()?
                 }
                 CameraCommand::Toggle => privacy::toggle_camera()?,
             };
