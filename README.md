@@ -11,7 +11,7 @@
 - Monitors ConsentStore registry changes via native notifications for near-instant camera event detection.
 - Separates observable activity from security risk and confidence.
 - Supports configurable TOML policy files with trust profiles (conservative, balanced, strict), publisher/path validation, and online/offline revocation checking.
-- Caches Authenticode verification by executable path and modification time.
+- Re-verifies Authenticode for each observed capture; executable path and modification time alone cannot safely cache signer identity after a file replacement.
 - Emits deduplicated start, update, and stop events with stable event codes.
 - Supports human-readable and versioned JSON output.
 - Filters output by minimum risk level (`--risk`).
@@ -123,6 +123,7 @@ Every access also includes `enforcement`: `allow`, `alert`, `deny`, or `unknown`
 - A trusted Authenticode signature proves integrity and chain acceptance under the configured Windows policy; it does not prove benign behavior.
 - Signer identity may be unavailable for catalog-signed files even when WinVerifyTrust accepts the signature.
 - Application-name profiles add context only. They are not allowlists and cannot trigger automatic termination.
+- NonPackaged camera records are matched to running processes by full executable path; inaccessible paths, short-name aliases, junctions and other path representations may remain unattributed rather than borrowing another process's signature.
 - Toast notifications register the per-user `MicCamWatch.MicCamWatch` application identity. Notification errors are reported instead of silently ignored.
 
 The output is suitable for diagnostics and monitoring. It is not a forensic proof that camera frames were captured.
@@ -131,13 +132,9 @@ The output is suitable for diagnostics and monitoring. It is not a forensic proo
 
 Download `miccamwatch-windows-x86_64.msi` from the [latest release](https://github.com/Roman-Cuisset/miccamwatch/releases/latest) for a per-user installation with `mcw` on `PATH` and a Start Menu entry. The portable `miccamwatch-windows-x86_64.zip` remains available.
 
-Upgrade later with:
+For MSI installations, upgrade by running the latest MSI from [GitHub Releases](https://github.com/Roman-Cuisset/miccamwatch/releases/latest). For the portable ZIP, stop the tray and replace both `mcw.exe` and `mcw-tray.exe` together. `mcw update` currently replaces only `mcw.exe`: it does not update the companion tray or MSI registration, so do not use it for those two-binary installations.
 
-```console
-mcw update
-```
-
-The updater verifies the SHA-256 checksum published with the GitHub release. Because the archive and checksum share the same release channel, this protects integrity but is not an independent publisher signature. Production signing is conditional on a configured release certificate; see [Authenticode release signing](docs/SIGNING.md).
+The CLI updater verifies the SHA-256 checksum published with the GitHub release. Because the archive and checksum share the same release channel, this protects integrity but is not an independent publisher signature. Production signing is conditional on a configured release certificate; see [Authenticode release signing](docs/SIGNING.md).
 
 ## Policy configuration
 
@@ -156,7 +153,7 @@ paths = ["C:\\Program Files\\Zoom"]
 
 - **strict**: escalates heuristic `unexplained` assessments to `suspicious`; it does not authorize termination.
 - **online**: performs live certificate revocation checking (CRL/OCSP) instead of cache-only.
-- **applications**: explicit per-executable publisher and path rules. A fully observed mismatch produces `enforcement = "deny"`; missing identity evidence produces `unknown`, never termination.
+- **applications**: explicit per-executable publisher and path rules. Publisher names must match the verified Authenticode signer exactly (case-insensitive); path prefixes end at a Windows directory boundary. These are lexical checks, not a defense against reparse-point redirects. A fully observed mismatch produces `enforcement = "deny"`; missing identity evidence produces `unknown`, never termination.
 
 Validate a policy file:
 
@@ -170,13 +167,15 @@ mcw --config policy.toml config validate
 
 Installed and release packages include `mcw-tray.exe`, a windowless tray host used by autostart and the Start Menu shortcut. It prevents a terminal window from remaining open at login. `mcw.exe tray` remains available for interactive diagnostics.
 
-`mcw camera block` disables the currently enabled, connected devices in the Windows Camera device class through PnP. Windows requests one administrator approval per block or allow command, even with several webcams. This affects every application; a blocked physical webcam disappears from capture-device enumeration. `mcw camera allow` restores only the devices saved by the block operation. If a previously blocked webcam has been unplugged, the command restores the connected webcams immediately and records the unplugged one in `%LOCALAPPDATA%\MicCamWatch\blocked-camera-devices.json`. The record distinguishes a device that must stay blocked from one whose restoration is still owed, so plugging the webcam back in completes the earlier `allow` on its own: the running tray notices the arrival and prompts once for administrator approval. Without the tray running, run `mcw camera allow` again after reconnecting it. A detached webcam is never reported as physically re-enabled, and `mcw camera status` reports `system_managed` rather than `allowed` while a restoration is still owed. The tray reports the result or error through a notification. Do not delete the state file while devices remain disabled. If administrator approval is declined or Windows cannot change a connected device, the command reports failure and retains the record; a declined prompt is not repeated until the camera is unplugged and connected again. Cameras connected after blocking are not automatically disabled.
+`mcw camera block` disables currently enabled, connected devices in the Windows Camera setup class and legacy Image-class devices that expose a video-camera interface or both video and capture interfaces. Image also contains scanners; an Image device without positive video-capture membership is not disabled. Inventory uses native Windows Configuration Manager APIs rather than localized command output; inventory failures stop the operation. Windows requests one administrator approval per block or allow command, even with several webcams. This affects every application; a blocked physical webcam disappears from capture-device enumeration. `mcw camera allow` restores only devices saved by a block operation. If a previously blocked webcam is unplugged, the command restores connected webcams immediately and records the unplugged one in `%LOCALAPPDATA%\MicCamWatch\blocked-camera-devices.json`. The record distinguishes devices that must stay blocked from those still owed restoration; when the webcam reconnects, the running tray prompts for administrator approval to restore it.
+
+If the tray is not running when a webcam reconnects, run `mcw camera allow` after reconnecting to complete a pending restoration. While an unplugged webcam is waiting to be restored, `mcw camera status` reports `system_managed`, not fully allowed. If Windows fails to change a device or administrator approval is declined, its saved state is retained so the action can be retried; do not delete `blocked-camera-devices.json` to recover. `mcw camera block` affects only webcams connected and enabled at the time of the command; newly connected webcams are not automatically blocked.
 
 For the Windows Camera app, a sustained capture-process workload is treated as active even when Windows stops updating the registry activity interval. Idle browser capture modules remain `ready`; their brief wakeups during Windows Camera capture do not override that app's active attribution. Process CPU is a heuristic, not direct frame telemetry, so simultaneous browser capture while Windows Camera is active cannot be attributed independently.
 
 Autostart first uses a limited per-user Task Scheduler task. On systems that deny task creation, it uses the current user's `Run` registry key instead, without requesting elevation. `mcw autostart disable` removes both mechanisms.
 
-Lock policies are opt-in. On transition to a locked session, the tray can mute microphones. Camera device control requires an administrator prompt; Windows cannot approve that prompt while the session is locked, so `block-camera-on-lock` is not a reliable automatic safeguard. Manually block the cameras before locking when hardware isolation is required. Unknown lock state never triggers enforcement.
+Lock policies are opt-in. On transition to a locked session, the tray can mute microphones. Camera device control runs on a worker so the tray remains responsive while approval is pending; it restores a previously allowed camera on unlock only after blocking succeeded. Windows cannot approve the administrator prompt while the session is locked, so `block-camera-on-lock` is not a reliable automatic safeguard. Manually block the cameras before locking when hardware isolation is required. Unknown lock state never triggers enforcement.
 
 The default policy path is `%APPDATA%\MicCamWatch\policy.toml`. It is loaded automatically when present; `--config` overrides it. Application settings and rotating history paths are available through `mcw config settings-path` and `mcw history path`.
 
@@ -199,7 +198,7 @@ Linux requires PipeWire/V4L2 collectors, macOS requires CoreAudio/AVFoundation/T
 ## Privacy
 
 MicCamWatch is designed from the ground up as an offline-first privacy tool:
-- **Zero network communication**: `mcw` contains no telemetry, no analytics, and makes no remote network requests.
+- **Offline by default**: monitoring has no telemetry or analytics. Explicit `mcw update` contacts GitHub; a policy with `trust_policy = "online"` can contact certificate-revocation services through Windows.
 - **No media capture**: `mcw` inspects capture session metadata, loaded modules, and registry activity timestamps. It never records audio samples or captures video frames.
 - **Local storage**: Settings and history logs remain strictly on your local machine under your Windows user profile (`%APPDATA%\MicCamWatch` and `%LOCALAPPDATA%\MicCamWatch`).
 

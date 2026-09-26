@@ -17,8 +17,8 @@ use std::{
     os::windows::ffi::OsStrExt,
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicIsize, Ordering},
-        mpsc::{self, Receiver},
+        atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering},
+        mpsc::{self, Receiver, Sender, SyncSender},
     },
     thread,
     time::{Duration, Instant},
@@ -76,8 +76,7 @@ fn enable_dpi_awareness() {
 const WM_TRAY_CALLBACK: u32 = WM_APP + 1;
 const WM_CAMERA_RESULT: u32 = WM_APP + 2;
 const WM_TRAY_REFRESH: u32 = WM_APP + 3;
-const WM_RESTORE_ARRIVED: u32 = WM_APP + 4;
-const WM_RESTORE_RESULT: u32 = WM_APP + 5;
+const WM_RESTORE_RESULT: u32 = WM_APP + 4;
 const TIMER_POLL_ID: usize = 1;
 const CAMERA_POLL_INTERVAL: Duration = Duration::from_secs(5);
 const CMD_TOGGLE_MUTE: usize = 101;
@@ -117,8 +116,26 @@ struct TrayRefresh {
     snapshot: Result<Snapshot, String>,
     mute_state: MicrophoneMuteState,
     camera_state: CameraPrivacyState,
+    camera_generation: u64,
     lock_state: SessionLockState,
 }
+
+#[derive(Clone, Copy, Debug)]
+enum CameraRequest {
+    Manual,
+    Block {
+        id: u64,
+        previous: CameraPrivacyState,
+        manual_generation: u64,
+    },
+    Restore {
+        id: u64,
+        previous: CameraPrivacyState,
+    },
+}
+
+type CameraResult = (CameraRequest, Result<CameraPrivacyState, String>);
+type CameraWorker = (Sender<CameraRequest>, Receiver<CameraResult>);
 
 struct TrayAppState {
     monitor: PlatformMonitor,
@@ -139,6 +156,18 @@ struct TrayAppState {
     gray_icon: HICON,
     refreshes: Receiver<TrayRefresh>,
     camera_dirty: Arc<AtomicBool>,
+    camera_sequence: Arc<AtomicU64>,
+    camera_generation: u64,
+    hwnd_cell: Arc<AtomicIsize>,
+    restore_results: Receiver<Result<usize, String>>,
+    camera_requests: Sender<CameraRequest>,
+    camera_results: Receiver<CameraResult>,
+    camera_next_id: u64,
+    manual_generation: u64,
+    pending_manual: usize,
+    deferred_lock_block: bool,
+    pending_lock_block: Option<u64>,
+    pending_lock_restore: Option<u64>,
 }
 
 impl Drop for TrayAppState {
@@ -155,6 +184,8 @@ impl Drop for TrayAppState {
 fn start_refresh_worker(
     hwnd_cell: Arc<AtomicIsize>,
     camera_dirty: Arc<AtomicBool>,
+    camera_sequence: Arc<AtomicU64>,
+    restore_requests: SyncSender<()>,
     policy: crate::config::Policy,
 ) -> Receiver<TrayRefresh> {
     let (sender, receiver) = mpsc::channel();
@@ -166,6 +197,7 @@ fn start_refresh_worker(
                     snapshot: Err(format!("{error:#}")),
                     mute_state: MicrophoneMuteState::Unavailable,
                     camera_state: CameraPrivacyState::SystemManaged,
+                    camera_generation: 0,
                     lock_state: SessionLockState::Unknown,
                 });
                 let h = hwnd_cell.load(Ordering::Relaxed);
@@ -186,6 +218,7 @@ fn start_refresh_worker(
             include_ready: true,
             ..Filter::default()
         };
+        let mut camera_generation = camera_sequence.load(Ordering::Acquire);
         let mut camera_state =
             crate::privacy::camera_state().unwrap_or(CameraPrivacyState::SystemManaged);
         let mut last_camera_poll = Some(Instant::now());
@@ -203,15 +236,17 @@ fn start_refresh_worker(
             // Session probes cross into the input desktop, so they stay off the window
             // thread or the popup menu paints late.
             let lock_state = crate::platform::session_lock_state();
-            // `camera_state` shells out to pnputil; running it every cycle would spawn a
-            // process twice a second forever. The tray updates it directly after a toggle,
-            // so a slow poll is only there to notice out-of-band changes.
+            // Native device inventory is kept off the window thread. The
+            // generation tags a poll so older queued frames cannot replace
+            // a more recent camera operation result.
             let now = Instant::now();
             let camera_stale = last_camera_poll
                 .is_none_or(|last| now.duration_since(last) >= CAMERA_POLL_INTERVAL);
-            if camera_stale || camera_dirty.swap(false, Ordering::Relaxed) {
+            if camera_stale || camera_dirty.swap(false, Ordering::AcqRel) {
+                let generation = camera_sequence.load(Ordering::Acquire);
                 camera_state =
                     crate::privacy::camera_state().unwrap_or(CameraPrivacyState::SystemManaged);
+                camera_generation = generation;
                 last_camera_poll = Some(now);
             }
             if sender
@@ -219,6 +254,7 @@ fn start_refresh_worker(
                     snapshot,
                     mute_state,
                     camera_state,
+                    camera_generation,
                     lock_state,
                 })
                 .is_err()
@@ -241,17 +277,13 @@ fn start_refresh_worker(
             // A camera the user already asked to restore is plugged back in, so finish
             // that request instead of waiting for another `mcw camera allow`. These
             // probes only touch cfgmgr32 and the record file, never the device tree.
-            let arrived = crate::privacy::arrived_restore_targets().unwrap_or_default();
-            let fresh = take_fresh_arrivals(&arrived, &mut restore_offered);
-            if !fresh.is_empty() {
-                unsafe {
-                    let _ = PostMessageW(
-                        Some(HWND(h as *mut _)),
-                        WM_RESTORE_ARRIVED,
-                        WPARAM(0),
-                        LPARAM(0),
-                    );
-                }
+            if !take_fresh_arrivals(
+                crate::privacy::arrived_restore_targets().as_deref(),
+                &mut restore_offered,
+            )
+            .is_empty()
+            {
+                let _ = restore_requests.try_send(());
             }
             thread::sleep(Duration::from_millis(500));
         }
@@ -273,7 +305,16 @@ pub fn run_tray(
     }
     let hwnd_cell = Arc::new(AtomicIsize::new(0));
     let camera_dirty = Arc::new(AtomicBool::new(false));
-    let refreshes = start_refresh_worker(Arc::clone(&hwnd_cell), Arc::clone(&camera_dirty), policy);
+    let camera_sequence = Arc::new(AtomicU64::new(0));
+    let (restore_requests, restore_results) = start_restore_worker(Arc::clone(&hwnd_cell));
+    let (camera_requests, camera_results) = start_camera_worker(Arc::clone(&hwnd_cell));
+    let refreshes = start_refresh_worker(
+        Arc::clone(&hwnd_cell),
+        Arc::clone(&camera_dirty),
+        Arc::clone(&camera_sequence),
+        restore_requests,
+        policy,
+    );
     // The shell downsamples anything larger than the small-icon metric, which is what
     // made the icons look muddy. Render at the size the notification area will use.
     let icon_size = unsafe { GetSystemMetrics(SM_CXSMICON) }.max(16);
@@ -294,7 +335,19 @@ pub fn run_tray(
         restore_mute: None,
         refreshes,
         camera_dirty,
+        camera_sequence,
+        camera_generation: 0,
+        hwnd_cell: Arc::clone(&hwnd_cell),
+        restore_results,
         restore_camera: None,
+        camera_requests,
+        camera_results,
+        camera_next_id: 0,
+        manual_generation: 0,
+        pending_manual: 0,
+        deferred_lock_block: false,
+        pending_lock_block: None,
+        pending_lock_restore: None,
         previous_accesses: HashMap::new(),
         green_icon: create_status_icon((34, 197, 94), IconGlyph::Check, icon_size)?,
         yellow_icon: create_status_icon((245, 158, 11), IconGlyph::Ready, icon_size)?,
@@ -376,6 +429,7 @@ pub fn run_tray(
         }
     };
 
+    hwnd_cell.store(0, Ordering::Relaxed);
     unsafe {
         let _ = KillTimer(Some(hwnd), TIMER_POLL_ID);
         let _ = Shell_NotifyIconW(NIM_DELETE, &nid);
@@ -418,6 +472,8 @@ unsafe extern "system" fn tray_wnd_proc(
     match message {
         WM_TRAY_REFRESH | WM_TIMER => {
             if let Some(state) = state(hwnd) {
+                // Timer fallback also consumes results if a worker's PostMessage failed.
+                handle_worker_results(state);
                 refresh_state(hwnd, state);
             }
             LRESULT(0)
@@ -432,22 +488,9 @@ unsafe extern "system" fn tray_wnd_proc(
             }
             LRESULT(0)
         }
-        WM_CAMERA_RESULT => {
-            let result =
-                unsafe { Box::from_raw(lparam.0 as *mut Result<CameraPrivacyState, String>) };
+        WM_CAMERA_RESULT | WM_RESTORE_RESULT => {
             if let Some(state) = state(hwnd) {
-                handle_camera_result(state, *result);
-            }
-            LRESULT(0)
-        }
-        WM_RESTORE_ARRIVED => {
-            restore_arrived_cameras(hwnd);
-            LRESULT(0)
-        }
-        WM_RESTORE_RESULT => {
-            let result = unsafe { Box::from_raw(lparam.0 as *mut Result<usize, String>) };
-            if let Some(state) = state(hwnd) {
-                handle_restore_result(state, *result);
+                handle_worker_results(state);
             }
             LRESULT(0)
         }
@@ -466,6 +509,9 @@ unsafe extern "system" fn tray_wnd_proc(
             LRESULT(0)
         }
         WM_DESTROY => {
+            if let Some(state) = state(hwnd) {
+                state.hwnd_cell.store(0, Ordering::Relaxed);
+            }
             unsafe { PostQuitMessage(0) };
             LRESULT(0)
         }
@@ -473,11 +519,100 @@ unsafe extern "system" fn tray_wnd_proc(
     }
 }
 
-fn apply_lock_policy(
-    state: &mut TrayAppState,
-    current: SessionLockState,
-    camera_state: CameraPrivacyState,
+fn start_camera_worker(hwnd_cell: Arc<AtomicIsize>) -> CameraWorker {
+    let (requests, pending) = mpsc::channel();
+    let (results, delivered) = mpsc::channel();
+    thread::spawn(move || {
+        camera_worker(
+            pending,
+            results,
+            |request| {
+                match request {
+                    CameraRequest::Manual => crate::privacy::toggle_camera(),
+                    CameraRequest::Block { .. } => {
+                        crate::privacy::set_camera_state(CameraPrivacyState::Blocked)
+                            .and_then(|()| crate::privacy::camera_state())
+                    }
+                    CameraRequest::Restore { previous, .. } => {
+                        crate::privacy::set_camera_state(previous)
+                            .and_then(|()| crate::privacy::camera_state())
+                    }
+                }
+                .map_err(|error| format!("{error:#}"))
+            },
+            || {
+                let h = hwnd_cell.load(Ordering::Relaxed);
+                if h != 0 {
+                    unsafe {
+                        let _ = PostMessageW(
+                            Some(HWND(h as *mut _)),
+                            WM_CAMERA_RESULT,
+                            WPARAM(0),
+                            LPARAM(0),
+                        );
+                    }
+                }
+            },
+            || hwnd_cell.load(Ordering::Relaxed) != 0,
+        );
+    });
+    (requests, delivered)
+}
+
+fn camera_worker(
+    requests: Receiver<CameraRequest>,
+    results: Sender<CameraResult>,
+    mut execute: impl FnMut(CameraRequest) -> Result<CameraPrivacyState, String>,
+    mut notify: impl FnMut(),
+    mut alive: impl FnMut() -> bool,
 ) {
+    while let Ok(request) = requests.recv() {
+        if !alive() {
+            break;
+        }
+        if results.send((request, execute(request))).is_err() {
+            break;
+        }
+        notify();
+    }
+}
+
+fn queue_lock_camera_restore(state: &mut TrayAppState, previous: CameraPrivacyState) {
+    if state.pending_lock_restore.is_some() {
+        return;
+    }
+    state.camera_next_id = state.camera_next_id.wrapping_add(1);
+    let id = state.camera_next_id;
+    if state
+        .camera_requests
+        .send(CameraRequest::Restore { id, previous })
+        .is_ok()
+    {
+        state.pending_lock_restore = Some(id);
+    }
+}
+
+fn queue_lock_camera_block(state: &mut TrayAppState, camera_state: CameraPrivacyState) {
+    if state.pending_lock_block.is_some() {
+        return;
+    }
+    state.camera_next_id = state.camera_next_id.wrapping_add(1);
+    let id = state.camera_next_id;
+    let previous = state.restore_camera.unwrap_or(camera_state);
+    if state
+        .camera_requests
+        .send(CameraRequest::Block {
+            id,
+            previous,
+            manual_generation: state.manual_generation,
+        })
+        .is_ok()
+    {
+        state.pending_lock_block = Some(id);
+    }
+}
+
+fn apply_lock_policy(state: &mut TrayAppState, current: SessionLockState) {
     if current == state.lock_state {
         return;
     }
@@ -488,21 +623,25 @@ fn apply_lock_policy(
                 state.restore_mute = Some(was_muted);
             }
         }
-        if state.settings.block_camera_on_lock
-            && crate::privacy::set_camera_state(CameraPrivacyState::Blocked).is_ok()
-        {
-            state.restore_camera = Some(camera_state);
-            state.camera_dirty.store(true, Ordering::Relaxed);
+        if state.settings.block_camera_on_lock {
+            if state.pending_manual == 0 {
+                queue_lock_camera_block(state, state.camera_state);
+            } else {
+                state.deferred_lock_block = true;
+            }
         }
-    } else if current == SessionLockState::Unlocked && state.settings.restore_on_unlock {
-        if let Some(was_muted) = state.restore_mute.take() {
-            let _ = state.monitor.set_microphone_mute(was_muted);
-        }
-        if let Some(previous) = state.restore_camera.take()
-            && previous != CameraPrivacyState::SystemManaged
-            && crate::privacy::set_camera_state(previous).is_ok()
-        {
-            state.camera_dirty.store(true, Ordering::Relaxed);
+    } else {
+        state.deferred_lock_block = false;
+        if current == SessionLockState::Unlocked && state.settings.restore_on_unlock {
+            if let Some(was_muted) = state.restore_mute.take() {
+                let _ = state.monitor.set_microphone_mute(was_muted);
+            }
+            if state.pending_lock_block.is_none()
+                && let Some(previous) = state.restore_camera
+                && previous == CameraPrivacyState::Allowed
+            {
+                queue_lock_camera_restore(state, previous);
+            }
         }
     }
     state.lock_state = current;
@@ -520,20 +659,41 @@ fn notify_async(title: &str, message: &str) {
     });
 }
 
+fn current_camera_from_refresh(
+    refresh_generation: u64,
+    completed_generation: u64,
+    refresh_state: CameraPrivacyState,
+    completed_state: CameraPrivacyState,
+) -> CameraPrivacyState {
+    if refresh_generation == completed_generation {
+        refresh_state
+    } else {
+        completed_state
+    }
+}
+
 fn refresh_state(hwnd: HWND, state: &mut TrayAppState) {
     let mut latest = None;
     while let Ok(refresh) = state.refreshes.try_recv() {
         latest = Some(refresh);
     }
     let Some(refresh) = latest else { return };
-    apply_lock_policy(state, refresh.lock_state, refresh.camera_state);
+    let camera_state = current_camera_from_refresh(
+        refresh.camera_generation,
+        state.camera_generation,
+        refresh.camera_state,
+        state.camera_state,
+    );
+    let old_camera_state = state.camera_state;
+    state.camera_state = camera_state;
+    apply_lock_policy(state, refresh.lock_state);
     let (visual, summary) = match refresh.snapshot {
         Ok(snapshot) => {
-            record_history_changes(state, &snapshot.accesses);
             let unhealthy = snapshot
                 .collectors
                 .iter()
                 .any(|collector| collector.state != CollectorState::Healthy);
+            record_history_changes(state, &snapshot);
             let active = snapshot
                 .accesses
                 .iter()
@@ -569,11 +729,10 @@ fn refresh_state(hwnd: HWND, state: &mut TrayAppState) {
         ),
     };
     let mute_state = refresh.mute_state;
-    let camera_state = refresh.camera_state;
     if visual == state.visual
         && summary == state.summary
         && mute_state == state.mute_state
-        && camera_state == state.camera_state
+        && camera_state == old_camera_state
     {
         return;
     }
@@ -594,14 +753,11 @@ fn refresh_state(hwnd: HWND, state: &mut TrayAppState) {
     }
 }
 
-fn record_history_changes(state: &mut TrayAppState, accesses: &[Access]) {
+fn record_history_changes(state: &mut TrayAppState, snapshot: &Snapshot) {
     if !state.settings.history_enabled {
         return;
     }
-    let current = accesses
-        .iter()
-        .map(|access| (access.key.clone(), access.clone()))
-        .collect::<HashMap<_, _>>();
+    let current = history_current(&state.previous_accesses, snapshot);
     for (key, access) in &current {
         if !state.previous_accesses.contains_key(key) {
             append_history_event(access, Action::Start);
@@ -613,6 +769,41 @@ fn record_history_changes(state: &mut TrayAppState, accesses: &[Access]) {
         }
     }
     state.previous_accesses = current;
+}
+
+fn history_current(
+    previous: &HashMap<String, Access>,
+    snapshot: &Snapshot,
+) -> HashMap<String, Access> {
+    let mut unavailable_mic = false;
+    let mut unavailable_camera = false;
+    for collector in snapshot
+        .collectors
+        .iter()
+        .filter(|collector| collector.state == CollectorState::Unavailable)
+    {
+        match collector.collector {
+            "wasapi" => unavailable_mic = true,
+            "privacy_store" | "module_scanner" => unavailable_camera = true,
+            _ => {
+                unavailable_mic = true;
+                unavailable_camera = true;
+            }
+        }
+    }
+    let mut current = snapshot
+        .accesses
+        .iter()
+        .map(|access| (access.key.clone(), access.clone()))
+        .collect::<HashMap<_, _>>();
+    for (key, access) in previous {
+        if (access.resource == Resource::Microphone && unavailable_mic)
+            || (access.resource == Resource::Camera && unavailable_camera)
+        {
+            current.entry(key.clone()).or_insert_with(|| access.clone());
+        }
+    }
+    current
 }
 
 fn append_history_event(access: &Access, action: Action) {
@@ -667,32 +858,20 @@ fn toggle_mute(hwnd: HWND) {
 }
 
 fn toggle_camera(hwnd: HWND) {
-    // Run the elevated pnputil call on a background thread so the UI stays responsive
-    // during the UAC prompt. The result is posted back via WM_CAMERA_RESULT.
-    let hwnd_raw = hwnd.0 as usize;
-    thread::spawn(move || {
-        let result = crate::privacy::toggle_camera().map_err(|error| format!("{error:#}"));
-        let boxed = Box::into_raw(Box::new(result));
-        let hwnd = HWND(hwnd_raw as *mut _);
-        unsafe {
-            let _ = PostMessageW(
-                Some(hwnd),
-                WM_CAMERA_RESULT,
-                WPARAM(0),
-                LPARAM(boxed as isize),
-            );
-        }
-    });
+    let Some(state) = state(hwnd) else { return };
+    if state.camera_requests.send(CameraRequest::Manual).is_ok() {
+        state.manual_generation = state.manual_generation.wrapping_add(1);
+        state.pending_manual += 1;
+    }
 }
 
 /// Narrows reconnected cameras down to the ones not yet offered for restoration,
-/// and remembers them.
-///
-/// Keeping the bookkeeping here means a declined administrator prompt is not
-/// raised again for the same arrival. An entry that leaves `arrived` is forgotten,
-/// which is what re-arms the prompt once the camera is unplugged and connected
-/// again.
-fn take_fresh_arrivals(arrived: &[String], offered: &mut Vec<String>) -> Vec<String> {
+/// and remembers them. A failed probe is not evidence that any camera was
+/// unplugged: retain all offers until a successful probe observes their absence.
+fn take_fresh_arrivals<E>(arrived: Result<&[String], E>, offered: &mut Vec<String>) -> Vec<String> {
+    let Ok(arrived) = arrived else {
+        return Vec::new();
+    };
     offered.retain(|id| {
         arrived
             .iter()
@@ -707,23 +886,190 @@ fn take_fresh_arrivals(arrived: &[String], offered: &mut Vec<String>) -> Vec<Str
     fresh
 }
 
-fn restore_arrived_cameras(hwnd: HWND) {
-    // The enable needs administrator approval, so it runs off the window thread and
-    // reports back through WM_RESTORE_RESULT. The worker only raises this once per
-    // arrival, so a declined prompt is not repeated.
-    let hwnd_raw = hwnd.0 as usize;
+// Only one automatic restore worker may enter the elevated privacy operation.
+// A one-slot queue coalesces multiple arrivals while a UAC prompt is in flight.
+fn start_restore_worker(
+    hwnd_cell: Arc<AtomicIsize>,
+) -> (SyncSender<()>, Receiver<Result<usize, String>>) {
+    let (requests, pending) = mpsc::sync_channel(1);
+    let (results, delivered) = mpsc::channel();
     thread::spawn(move || {
-        let result = crate::privacy::restore_arrived().map_err(|error| format!("{error:#}"));
-        let boxed = Box::into_raw(Box::new(result));
-        unsafe {
-            let _ = PostMessageW(
-                Some(HWND(hwnd_raw as *mut _)),
-                WM_RESTORE_RESULT,
-                WPARAM(0),
-                LPARAM(boxed as isize),
-            );
-        }
+        restore_worker(
+            pending,
+            results,
+            || hwnd_cell.load(Ordering::Relaxed) != 0,
+            || crate::privacy::restore_arrived().map_err(|error| format!("{error:#}")),
+            || {
+                let h = hwnd_cell.load(Ordering::Relaxed);
+                h != 0
+                    && unsafe {
+                        PostMessageW(
+                            Some(HWND(h as *mut _)),
+                            WM_RESTORE_RESULT,
+                            WPARAM(0),
+                            LPARAM(0),
+                        )
+                        .is_ok()
+                    }
+            },
+        );
     });
+    (requests, delivered)
+}
+
+fn restore_worker(
+    requests: Receiver<()>,
+    results: mpsc::Sender<Result<usize, String>>,
+    alive: impl Fn() -> bool,
+    mut restore: impl FnMut() -> Result<usize, String>,
+    mut notify: impl FnMut() -> bool,
+) {
+    while requests.recv().is_ok() {
+        if !alive() {
+            break;
+        }
+        let result = restore();
+        if result.is_err() {
+            // A declined UAC prompt must not be raised again just because a
+            // different camera arrived during that prompt.
+            while requests.try_recv().is_ok() {}
+        }
+        if results.send(result).is_err() {
+            break;
+        }
+        // A failed post leaves the owned result in the tray's channel; its
+        // timer consumes it while the window is alive. A closed window ends work.
+        if !notify() && !alive() {
+            break;
+        }
+    }
+}
+
+fn handle_worker_results(state: &mut TrayAppState) {
+    while let Ok((request, result)) = state.camera_results.try_recv() {
+        handle_camera_operation_result(state, request, result);
+    }
+    while let Ok(result) = state.restore_results.try_recv() {
+        handle_restore_result(state, result);
+    }
+}
+
+fn restore_due_after_lock_result(
+    pending: Option<u64>,
+    id: u64,
+    succeeded: bool,
+    previous: CameraPrivacyState,
+    lock_state: SessionLockState,
+    restore_on_unlock: bool,
+    same_manual_generation: bool,
+) -> bool {
+    pending == Some(id)
+        && succeeded
+        && previous == CameraPrivacyState::Allowed
+        && lock_state == SessionLockState::Unlocked
+        && restore_on_unlock
+        && same_manual_generation
+}
+
+fn should_queue_deferred_block(
+    pending_manual: usize,
+    deferred_lock_block: bool,
+    lock_state: SessionLockState,
+    block_camera_on_lock: bool,
+) -> bool {
+    pending_manual == 0
+        && deferred_lock_block
+        && lock_state == SessionLockState::Locked
+        && block_camera_on_lock
+}
+
+fn handle_camera_operation_result(
+    state: &mut TrayAppState,
+    request: CameraRequest,
+    result: Result<CameraPrivacyState, String>,
+) {
+    state.camera_generation = state.camera_generation.wrapping_add(1);
+    state
+        .camera_sequence
+        .store(state.camera_generation, Ordering::Release);
+    state.camera_dirty.store(true, Ordering::Release);
+    match request {
+        CameraRequest::Manual => {
+            state.pending_manual -= 1;
+            handle_camera_result(state, result);
+            let block_after_manual = should_queue_deferred_block(
+                state.pending_manual,
+                state.deferred_lock_block,
+                state.lock_state,
+                state.settings.block_camera_on_lock,
+            );
+            if state.pending_manual == 0 {
+                state.deferred_lock_block = false;
+            }
+            if block_after_manual {
+                queue_lock_camera_block(state, state.camera_state);
+            }
+        }
+        CameraRequest::Block {
+            id,
+            previous,
+            manual_generation,
+        } => {
+            let same_manual_generation = state.manual_generation == manual_generation;
+            let restore_now = restore_due_after_lock_result(
+                state.pending_lock_block,
+                id,
+                result.is_ok(),
+                previous,
+                state.lock_state,
+                state.settings.restore_on_unlock,
+                same_manual_generation,
+            );
+            if state.pending_lock_block != Some(id) {
+                return;
+            }
+            state.pending_lock_block = None;
+            match result {
+                Ok(camera_state) => {
+                    state.camera_state = camera_state;
+                    if previous == CameraPrivacyState::Allowed {
+                        state.restore_camera = Some(previous);
+                        if restore_now {
+                            queue_lock_camera_restore(state, previous);
+                        }
+                    }
+                }
+                Err(error) => {
+                    let message = format!("Camera lock policy failed: {error}");
+                    state.summary = format!("miccamwatch: {message}");
+                    state.visual = TrayVisual::Error;
+                    notify_async("MicCamWatch camera", &message);
+                }
+            }
+        }
+        CameraRequest::Restore { id, .. } => {
+            if state.pending_lock_restore != Some(id) {
+                return;
+            }
+            state.pending_lock_restore = None;
+            match result {
+                Ok(camera_state) => {
+                    state.camera_state = camera_state;
+                    if state.lock_state == SessionLockState::Unlocked
+                        && state.pending_lock_block.is_none()
+                    {
+                        state.restore_camera = None;
+                    }
+                }
+                Err(error) => {
+                    let message = format!("Camera unlock policy failed: {error}");
+                    state.summary = format!("miccamwatch: {message}");
+                    state.visual = TrayVisual::Error;
+                    notify_async("MicCamWatch camera", &message);
+                }
+            }
+        }
+    }
 }
 
 fn handle_restore_result(state: &mut TrayAppState, result: Result<usize, String>) {
@@ -746,10 +1092,23 @@ fn handle_restore_result(state: &mut TrayAppState, result: Result<usize, String>
     }
 }
 
+fn commit_manual_camera_state(
+    camera_state: &mut CameraPrivacyState,
+    restore_camera: &mut Option<CameraPrivacyState>,
+    completed: CameraPrivacyState,
+) {
+    *camera_state = completed;
+    *restore_camera = None;
+}
+
 fn handle_camera_result(state: &mut TrayAppState, result: Result<CameraPrivacyState, String>) {
     match result {
         Ok(camera_state) => {
-            state.camera_state = camera_state;
+            commit_manual_camera_state(
+                &mut state.camera_state,
+                &mut state.restore_camera,
+                camera_state,
+            );
             // Force the poller to re-read privacy state instead of overwriting this
             // with a value captured before the toggle.
             state.camera_dirty.store(true, Ordering::Relaxed);
@@ -1038,6 +1397,213 @@ fn line_distance(x: f32, y: f32, x1: f32, y1: f32, x2: f32, y2: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn observed(resource: Resource, key: &str) -> Access {
+        Access {
+            key: key.to_owned(),
+            resource,
+            activity: Activity::Active,
+            risk: crate::model::Risk::Expected,
+            confidence: crate::model::Confidence::High,
+            enforcement: crate::model::EnforcementDecision::Alert,
+            application: "capture.exe".into(),
+            pid: Some(123),
+            parent_pid: None,
+            parent_name: None,
+            executable: None,
+            signature: None,
+            device: None,
+            started_at: None,
+            modules: vec![],
+            evidence: vec![],
+            process: None,
+        }
+    }
+
+    #[test]
+    fn stale_camera_refresh_cannot_revert_manual_completion() {
+        assert_eq!(
+            current_camera_from_refresh(
+                4,
+                5,
+                CameraPrivacyState::Allowed,
+                CameraPrivacyState::Blocked,
+            ),
+            CameraPrivacyState::Blocked
+        );
+        assert_eq!(
+            current_camera_from_refresh(
+                5,
+                5,
+                CameraPrivacyState::Allowed,
+                CameraPrivacyState::Blocked,
+            ),
+            CameraPrivacyState::Allowed
+        );
+    }
+
+    #[test]
+    fn declined_manual_toggle_does_not_reprompt_pending_unlock_restore() {
+        // The block finished after unlock; its original restore obligation is
+        // retained, but a declined manual UAC must not issue another request.
+        let mut restore_camera = Some(CameraPrivacyState::Allowed);
+        let mut camera_state = CameraPrivacyState::Blocked;
+        let declined: Result<CameraPrivacyState, String> = Err("approval declined".into());
+        if let Ok(completed) = declined {
+            commit_manual_camera_state(&mut camera_state, &mut restore_camera, completed);
+        }
+        assert_eq!(restore_camera, Some(CameraPrivacyState::Allowed));
+        assert_eq!(camera_state, CameraPrivacyState::Blocked);
+        assert!(!should_queue_deferred_block(
+            0,
+            false,
+            SessionLockState::Unlocked,
+            true,
+        ));
+    }
+
+    #[test]
+    fn lock_block_result_restores_only_successful_matching_unlocked_transition() {
+        let restores = |pending, id, succeeded, previous, lock_state| {
+            restore_due_after_lock_result(pending, id, succeeded, previous, lock_state, true, true)
+        };
+        assert!(!restores(
+            Some(3),
+            3,
+            false,
+            CameraPrivacyState::Allowed,
+            SessionLockState::Unlocked
+        ));
+        assert!(!restores(
+            Some(4),
+            3,
+            true,
+            CameraPrivacyState::Allowed,
+            SessionLockState::Unlocked
+        ));
+        assert!(!restores(
+            Some(3),
+            3,
+            true,
+            CameraPrivacyState::Allowed,
+            SessionLockState::Locked
+        ));
+        assert!(!restores(
+            Some(3),
+            3,
+            true,
+            CameraPrivacyState::Blocked,
+            SessionLockState::Unlocked
+        ));
+        assert!(restores(
+            Some(3),
+            3,
+            true,
+            CameraPrivacyState::Allowed,
+            SessionLockState::Unlocked
+        ));
+        assert!(!restore_due_after_lock_result(
+            Some(3),
+            3,
+            true,
+            CameraPrivacyState::Allowed,
+            SessionLockState::Unlocked,
+            true,
+            false,
+        ));
+    }
+
+    #[test]
+    fn manual_block_supersedes_failed_restore_on_next_lock() {
+        let mut state = CameraPrivacyState::Allowed;
+        let mut restore_camera = Some(CameraPrivacyState::Allowed);
+        // A declined automatic restore leaves its intent outstanding.
+        commit_manual_camera_state(&mut state, &mut restore_camera, CameraPrivacyState::Blocked);
+        assert_eq!(state, CameraPrivacyState::Blocked);
+        assert_eq!(restore_camera, None);
+        let previous = restore_camera.unwrap_or(state);
+        assert!(!restore_due_after_lock_result(
+            Some(5),
+            5,
+            true,
+            previous,
+            SessionLockState::Unlocked,
+            true,
+            true,
+        ));
+    }
+
+    #[test]
+    fn serialized_camera_worker_applies_manual_block_after_unlock_restore() {
+        let (requests, pending) = mpsc::channel();
+        let (results, delivered) = mpsc::channel();
+        requests
+            .send(CameraRequest::Restore {
+                id: 1,
+                previous: CameraPrivacyState::Allowed,
+            })
+            .unwrap();
+        requests.send(CameraRequest::Manual).unwrap();
+        drop(requests);
+        camera_worker(
+            pending,
+            results,
+            |request| match request {
+                CameraRequest::Restore { .. } => Ok(CameraPrivacyState::Allowed),
+                CameraRequest::Manual => Ok(CameraPrivacyState::Blocked),
+                CameraRequest::Block { .. } => unreachable!(),
+            },
+            || {},
+            || true,
+        );
+        let mut actual = CameraPrivacyState::Blocked;
+        let mut restore_camera = Some(CameraPrivacyState::Allowed);
+        for (request, completed) in delivered {
+            let completed = completed.unwrap();
+            match request {
+                CameraRequest::Restore { .. } => {
+                    actual = completed;
+                    restore_camera = None;
+                }
+                CameraRequest::Manual => {
+                    commit_manual_camera_state(&mut actual, &mut restore_camera, completed);
+                }
+                CameraRequest::Block { .. } => unreachable!(),
+            }
+        }
+        assert_eq!(actual, CameraPrivacyState::Blocked);
+        assert_eq!(restore_camera, None);
+    }
+
+    #[test]
+    fn partial_outage_preserves_mic_without_losing_new_camera_history() {
+        let mic = observed(Resource::Microphone, "microphone:old");
+        let camera = observed(Resource::Camera, "camera:new");
+        let old = HashMap::from([(mic.key.clone(), mic)]);
+        let snapshot = Snapshot {
+            collectors: vec![
+                crate::model::CollectorHealth {
+                    collector: "wasapi",
+                    state: CollectorState::Unavailable,
+                    detail: None,
+                },
+                crate::model::CollectorHealth {
+                    collector: "privacy_store",
+                    state: CollectorState::Healthy,
+                    detail: None,
+                },
+            ],
+            accesses: vec![camera],
+        };
+        let current = history_current(&old, &snapshot);
+        assert!(
+            current.contains_key("microphone:old"),
+            "outage is not a stop"
+        );
+        assert!(
+            current.contains_key("camera:new"),
+            "healthy camera start is kept"
+        );
+    }
 
     #[test]
     fn a_declined_restore_prompt_is_not_raised_again() {
@@ -1046,11 +1612,13 @@ mod tests {
 
         // First sighting reports the camera and arms the bookkeeping.
         assert_eq!(
-            take_fresh_arrivals(std::slice::from_ref(&logi), &mut offered),
+            take_fresh_arrivals(Ok::<_, ()>(std::slice::from_ref(&logi)), &mut offered),
             vec![logi.clone()]
         );
         // Still connected on the next poll: the prompt must not reappear.
-        assert!(take_fresh_arrivals(std::slice::from_ref(&logi), &mut offered).is_empty());
+        assert!(
+            take_fresh_arrivals(Ok::<_, ()>(std::slice::from_ref(&logi)), &mut offered).is_empty()
+        );
         assert_eq!(offered, vec![logi.clone()]);
     }
 
@@ -1060,12 +1628,12 @@ mod tests {
         let mut offered = vec![logi.clone()];
 
         // The camera is gone, so the entry is forgotten.
-        assert!(take_fresh_arrivals(&[], &mut offered).is_empty());
+        assert!(take_fresh_arrivals(Ok::<_, ()>(&[]), &mut offered).is_empty());
         assert!(offered.is_empty());
 
         // Plugged back in, it is offered again.
         assert_eq!(
-            take_fresh_arrivals(std::slice::from_ref(&logi), &mut offered),
+            take_fresh_arrivals(Ok::<_, ()>(std::slice::from_ref(&logi)), &mut offered),
             vec![logi]
         );
     }
@@ -1076,10 +1644,217 @@ mod tests {
         let logi = "USB\\CAMERA_LOGI".to_owned();
         let mut offered = vec![builtin.clone()];
 
-        let fresh = take_fresh_arrivals(&[builtin.clone(), logi.clone()], &mut offered);
+        let fresh =
+            take_fresh_arrivals(Ok::<_, ()>(&[builtin.clone(), logi.clone()]), &mut offered);
         assert_eq!(fresh, vec![logi]);
         // Case differences in PnP instance IDs must not defeat the bookkeeping.
-        assert!(take_fresh_arrivals(&[builtin.to_uppercase()], &mut offered).is_empty());
+        assert!(
+            take_fresh_arrivals(Ok::<_, ()>(&[builtin.to_uppercase()]), &mut offered).is_empty()
+        );
+    }
+
+    #[test]
+    fn failed_arrival_probe_keeps_offered_ids_until_observed_absent() {
+        let id = "USB\\CAMERA_LOGI".to_owned();
+        let mut offered = Vec::new();
+        assert_eq!(
+            take_fresh_arrivals(Ok::<_, ()>(std::slice::from_ref(&id)), &mut offered),
+            vec![id.clone()]
+        );
+        assert!(take_fresh_arrivals(Err::<&[String], _>(()), &mut offered).is_empty());
+        assert_eq!(offered, vec![id.clone()]);
+        assert!(
+            take_fresh_arrivals(Ok::<_, ()>(std::slice::from_ref(&id)), &mut offered).is_empty()
+        );
+        assert!(take_fresh_arrivals(Ok::<_, ()>(&[]), &mut offered).is_empty());
+        assert_eq!(
+            take_fresh_arrivals(Ok::<_, ()>(std::slice::from_ref(&id)), &mut offered),
+            vec![id]
+        );
+    }
+
+    #[test]
+    fn arrival_during_restore_waits_for_first_result_then_runs_once() {
+        let (requests, pending) = mpsc::sync_channel(1);
+        let (results, delivered) = mpsc::channel();
+        let (started, entered) = mpsc::channel();
+        let (release, resume) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            let mut calls = 0;
+            restore_worker(
+                pending,
+                results,
+                || true,
+                || {
+                    calls += 1;
+                    if calls == 1 {
+                        started.send(()).unwrap();
+                        resume.recv().unwrap();
+                    }
+                    Ok(calls)
+                },
+                || true,
+            );
+            calls
+        });
+
+        requests.try_send(()).unwrap();
+        entered.recv_timeout(Duration::from_secs(2)).unwrap();
+        requests.try_send(()).unwrap();
+        assert!(matches!(
+            delivered.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        release.send(()).unwrap();
+        assert_eq!(
+            delivered.recv_timeout(Duration::from_secs(2)).unwrap(),
+            Ok(1)
+        );
+        assert_eq!(
+            delivered.recv_timeout(Duration::from_secs(2)).unwrap(),
+            Ok(2)
+        );
+        drop(requests);
+        assert_eq!(worker.join().unwrap(), 2);
+    }
+
+    #[test]
+    fn declined_prompt_discards_arrivals_queued_during_the_prompt() {
+        let (requests, pending) = mpsc::sync_channel(1);
+        let (results, delivered) = mpsc::channel();
+        let (started, entered) = mpsc::channel();
+        let (release, resume) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            let mut calls = 0;
+            restore_worker(
+                pending,
+                results,
+                || true,
+                || {
+                    calls += 1;
+                    if calls == 1 {
+                        started.send(()).unwrap();
+                        resume.recv().unwrap();
+                    }
+                    Err("declined".to_owned())
+                },
+                || true,
+            );
+            calls
+        });
+        requests.try_send(()).unwrap();
+        entered.recv_timeout(Duration::from_secs(2)).unwrap();
+        requests.try_send(()).unwrap();
+        release.send(()).unwrap();
+        assert_eq!(
+            delivered.recv_timeout(Duration::from_secs(2)).unwrap(),
+            Err("declined".to_owned())
+        );
+        drop(requests);
+        assert_eq!(worker.join().unwrap(), 1);
+        assert!(matches!(
+            delivered.try_recv(),
+            Err(mpsc::TryRecvError::Disconnected)
+        ));
+    }
+
+    #[test]
+    fn closed_result_receiver_stops_worker_before_queued_restore() {
+        let (requests, pending) = mpsc::sync_channel(1);
+        let (results, delivered) = mpsc::channel();
+        let (started, entered) = mpsc::channel();
+        let (release, resume) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            let mut calls = 0;
+            restore_worker(
+                pending,
+                results,
+                || true,
+                || {
+                    calls += 1;
+                    if calls == 1 {
+                        started.send(()).unwrap();
+                        resume.recv().unwrap();
+                    }
+                    Ok(calls)
+                },
+                || true,
+            );
+            calls
+        });
+        requests.try_send(()).unwrap();
+        entered.recv_timeout(Duration::from_secs(2)).unwrap();
+        requests.try_send(()).unwrap();
+        drop(delivered);
+        release.send(()).unwrap();
+        assert_eq!(worker.join().unwrap(), 1);
+        drop(requests);
+    }
+
+    #[test]
+    fn failed_post_keeps_result_owned_and_worker_available() {
+        let (requests, pending) = mpsc::sync_channel(1);
+        let (results, delivered) = mpsc::channel();
+        let (started, entered) = mpsc::channel();
+        let (release, resume) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            let mut calls = 0;
+            restore_worker(
+                pending,
+                results,
+                || true,
+                || {
+                    calls += 1;
+                    if calls == 1 {
+                        started.send(()).unwrap();
+                        resume.recv().unwrap();
+                    }
+                    Ok(calls)
+                },
+                || false,
+            );
+            calls
+        });
+        requests.try_send(()).unwrap();
+        entered.recv_timeout(Duration::from_secs(2)).unwrap();
+        release.send(()).unwrap();
+        assert_eq!(
+            delivered.recv_timeout(Duration::from_secs(2)).unwrap(),
+            Ok(1)
+        );
+        requests.try_send(()).unwrap();
+        assert_eq!(
+            delivered.recv_timeout(Duration::from_secs(2)).unwrap(),
+            Ok(2)
+        );
+        drop(requests);
+        assert_eq!(worker.join().unwrap(), 2);
+    }
+
+    #[test]
+    fn closed_window_skips_pending_restore_without_invoking_privacy() {
+        let (requests, pending) = mpsc::sync_channel(1);
+        let (results, delivered) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            let mut called = false;
+            restore_worker(
+                pending,
+                results,
+                || false,
+                || {
+                    called = true;
+                    Ok(1)
+                },
+                || true,
+            );
+            called
+        });
+        requests.try_send(()).unwrap();
+        assert!(!worker.join().unwrap());
+        assert!(matches!(
+            delivered.try_recv(),
+            Err(mpsc::TryRecvError::Disconnected)
+        ));
     }
 
     #[test]

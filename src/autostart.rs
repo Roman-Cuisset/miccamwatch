@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::Serialize;
 use std::{os::windows::process::CommandExt, process::Command};
 use winreg::{RegKey, enums::HKEY_CURRENT_USER};
@@ -16,18 +16,18 @@ pub enum AutostartState {
 }
 
 pub fn state() -> Result<AutostartState> {
-    let output = schtasks(&["/Query", "/TN", TASK_NAME, "/FO", "LIST"])?;
-    if output.status.success() {
+    let task = schtasks(&["/Query", "/TN", TASK_NAME, "/FO", "LIST"]);
+    if task.as_ref().is_ok_and(|output| output.status.success()) {
         return Ok(AutostartState::Enabled);
     }
     let run = RegKey::predef(HKEY_CURRENT_USER)
         .open_subkey(RUN_KEY)
         .and_then(|key| key.get_value::<String, _>(RUN_VALUE));
-    Ok(if run.is_ok() {
-        AutostartState::Enabled
-    } else {
-        AutostartState::Disabled
-    })
+    if run.is_ok() {
+        return Ok(AutostartState::Enabled);
+    }
+    task?;
+    Ok(AutostartState::Disabled)
 }
 
 pub fn enable() -> Result<()> {
@@ -42,8 +42,9 @@ pub fn enable() -> Result<()> {
     };
     let output = schtasks(&[
         "/Create", "/TN", TASK_NAME, "/TR", &command, "/SC", "ONLOGON", "/RL", "LIMITED", "/F",
-    ])?;
-    if output.status.success() {
+    ]);
+    if output.as_ref().is_ok_and(|output| output.status.success()) {
+        remove_run_value()?;
         return Ok(());
     }
     let root = RegKey::predef(HKEY_CURRENT_USER);
@@ -56,14 +57,34 @@ pub fn enable() -> Result<()> {
 }
 
 pub fn disable() -> Result<()> {
-    let _ = schtasks(&["/Delete", "/TN", TASK_NAME, "/F"]);
+    let deleted = schtasks(&["/Delete", "/TN", TASK_NAME, "/F"]);
+    // The Run fallback must be removed even when Task Scheduler is unavailable.
+    remove_run_value()?;
+    let deleted =
+        deleted.context("failed to execute Windows Task Scheduler while disabling autostart")?;
+    if !deleted.status.success()
+        && schtasks(&["/Query", "/TN", TASK_NAME, "/FO", "LIST"])?
+            .status
+            .success()
+    {
+        bail!(
+            "failed to disable scheduled autostart: {}",
+            String::from_utf8_lossy(&deleted.stderr)
+        );
+    }
+    Ok(())
+}
+
+fn remove_run_value() -> Result<()> {
     let root = RegKey::predef(HKEY_CURRENT_USER);
-    if let Ok(key) = root.open_subkey_with_flags(RUN_KEY, winreg::enums::KEY_SET_VALUE) {
-        match key.delete_value(RUN_VALUE) {
+    match root.open_subkey_with_flags(RUN_KEY, winreg::enums::KEY_SET_VALUE) {
+        Ok(key) => match key.delete_value(RUN_VALUE) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(error).context("failed to disable per-user autostart"),
-        }
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error).context("failed to open the per-user Run registry key"),
     }
     Ok(())
 }

@@ -14,7 +14,7 @@ use miccamwatch::{
     },
     history,
     i18n::Language,
-    model::MicrophoneMuteState,
+    model::{CollectorHealth, CollectorState, MicrophoneMuteState},
     output,
     platform::PlatformMonitor,
     privacy, settings,
@@ -74,8 +74,9 @@ fn run() -> Result<u8> {
                 .accesses
                 .iter()
                 .any(|access| options.filter.risk.is_none_or(|risk| access.risk >= risk));
+            let code = status_exit_code(has_access, &snapshot.collectors);
             output::print_status(&snapshot, options.output.json, options.filter.risk, lang)?;
-            Ok(u8::from(has_access))
+            Ok(code)
         }
         Command::Watch(options) => {
             let monitor = PlatformMonitor::new(policy.clone())?;
@@ -309,5 +310,34 @@ fn run() -> Result<u8> {
             }
             Ok(0)
         }
+    }
+}
+
+fn status_exit_code(has_access: bool, collectors: &[CollectorHealth]) -> u8 {
+    if collectors
+        .iter()
+        .any(|health| health.state == CollectorState::Unavailable)
+    {
+        2
+    } else {
+        u8::from(has_access)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn status_reports_unavailable_collector_instead_of_false_all_clear() {
+        let failed = CollectorHealth {
+            collector: "wasapi",
+            state: CollectorState::Unavailable,
+            detail: Some("capture unavailable".into()),
+        };
+        assert_eq!(status_exit_code(false, std::slice::from_ref(&failed)), 2);
+        assert_eq!(status_exit_code(true, &[failed]), 2);
+        assert_eq!(status_exit_code(false, &[]), 0);
+        assert_eq!(status_exit_code(true, &[]), 1);
     }
 }

@@ -68,7 +68,7 @@ struct TuiState {
     mute_state: MicrophoneMuteState,
     devices: Vec<Device>,
     health_error: Option<String>,
-    pending_kill: Option<(String, u32, Instant)>,
+    pending_kill: Option<(String, u32, String, Instant)>,
 }
 
 fn tui_loop(
@@ -199,17 +199,19 @@ fn tui_loop(
                 KeyCode::Char('k') => {
                     if let Some(target) = current_accesses.get(state.selected_access)
                         && let Some(pid) = target.pid
+                        && let Some(instance) = target.process.as_ref().map(|p| &p.instance_id)
                     {
                         let confirmed = state.pending_kill.as_ref().is_some_and(
-                            |(key, pending_pid, created)| {
+                            |(key, pending_pid, pending_instance, created)| {
                                 key == &target.key
                                     && *pending_pid == pid
+                                    && pending_instance == instance
                                     && created.elapsed() < Duration::from_secs(3)
                             },
                         );
                         if confirmed {
                             state.pending_kill = None;
-                            match crate::platform::terminate_process_by_pid(pid) {
+                            match crate::platform::terminate_process_by_pid(pid, instance) {
                                 Ok(()) => {
                                     state.status_msg = Some((
                                         format!(
@@ -229,7 +231,8 @@ fn tui_loop(
                                 }
                             }
                         } else {
-                            state.pending_kill = Some((target.key.clone(), pid, Instant::now()));
+                            state.pending_kill =
+                                Some((target.key.clone(), pid, instance.clone(), Instant::now()));
                             state.status_msg = Some((
                                 format!(
                                     "Press [k] again within 3s to terminate {} (PID {})",

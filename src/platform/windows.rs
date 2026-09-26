@@ -10,20 +10,19 @@ use crate::{
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use std::{
-    cell::RefCell,
     collections::{HashMap, HashSet},
     ffi::OsStr,
-    fs,
+    io,
     mem::size_of,
     path::Path,
     ptr, slice,
     sync::mpsc::Sender,
-    time::SystemTime,
 };
 use windows::{
     Win32::{
         Devices::FunctionDiscovery::PKEY_Device_FriendlyName,
         Foundation::{CloseHandle, FILETIME, HANDLE, HWND, NTSTATUS},
+        Globalization::{CSTR_EQUAL, CompareStringOrdinal},
         Media::{
             Audio::{
                 AudioSessionStateActive, DEVICE_STATE_ACTIVE, Endpoints::IAudioEndpointVolume,
@@ -144,7 +143,6 @@ windows::core::link!("ntdll.dll" "system" fn NtQueryInformationProcess(
 
 pub struct PlatformMonitor {
     enumerator: IMMDeviceEnumerator,
-    signature_cache: RefCell<HashMap<String, CachedSignature>>,
     policy: Policy,
     _media_foundation: MediaFoundationGuard,
     _com: ComGuard,
@@ -180,7 +178,6 @@ impl PlatformMonitor {
         };
         Ok(Self {
             enumerator,
-            signature_cache: RefCell::new(HashMap::new()),
             policy,
             _media_foundation: media_foundation,
             _com: com,
@@ -581,7 +578,7 @@ impl PlatformMonitor {
 
                 let signature = executable
                     .as_deref()
-                    .map(|path| self.cached_signature(path));
+                    .map(|path| self.signature_for_path(path));
                 let mut evidence = vec![Evidence::new(
                     EvidenceKind::LiveApi,
                     "WASAPI",
@@ -620,29 +617,12 @@ impl PlatformMonitor {
         Ok(accesses.into_values().collect())
     }
 
-    fn cached_signature(&self, path: &str) -> SignatureInfo {
-        let modified = fs::metadata(path)
-            .and_then(|metadata| metadata.modified())
-            .ok();
-        let key = path.to_ascii_lowercase();
-        if let Some(cached) = self.signature_cache.borrow().get(&key)
-            && cached.modified == modified
-        {
-            return cached.info.clone();
-        }
-        let info = verify_signature_with_policy(path, self.policy.trust_policy);
-        self.signature_cache.borrow_mut().insert(
-            key,
-            CachedSignature {
-                modified,
-                info: info.clone(),
-            },
-        );
-        info
+    fn signature_for_path(&self, path: &str) -> SignatureInfo {
+        signature_for_path(path, self.policy.trust_policy, verify_signature_with_policy)
     }
 
     fn camera_accesses(&self) -> Result<Vec<Access>> {
-        camera_accesses(&self.policy, |path| self.cached_signature(path))
+        camera_accesses(&self.policy, |path| self.signature_for_path(path))
     }
 }
 
@@ -658,12 +638,6 @@ impl CaptureCollector for PlatformMonitor {
     fn diagnostics(&self) -> Vec<DiagnosticCheck> {
         self.doctor()
     }
-}
-
-#[derive(Clone)]
-struct CachedSignature {
-    modified: Option<SystemTime>,
-    info: SignatureInfo,
 }
 
 #[windows::core::implement(IAudioSessionNotification)]
@@ -791,17 +765,97 @@ struct CameraPermission {
     consent: Option<String>,
 }
 
+struct CameraApp {
+    executable: String,
+    permission: CameraPermission,
+    non_packaged: bool,
+}
+
+fn remember_camera_app(
+    apps: &mut HashMap<String, Vec<CameraApp>>,
+    application: &str,
+    app: CameraApp,
+) {
+    apps.entry(application.to_ascii_lowercase())
+        .or_default()
+        .push(app);
+}
+
+// ConsentStore records a path, not just an executable name. This deliberately
+// does not equate short names, junctions or other aliases: those may miss an
+// attribution, but must not inherit another executable's consent or signature.
+fn same_windows_path(left: &str, right: &str) -> bool {
+    if left.is_ascii() && right.is_ascii() {
+        return left.eq_ignore_ascii_case(right);
+    }
+    let left = left.encode_utf16().collect::<Vec<_>>();
+    let right = right.encode_utf16().collect::<Vec<_>>();
+    unsafe { CompareStringOrdinal(&left, &right, true) == CSTR_EQUAL }
+}
+
+fn camera_app_for_process<'a>(apps: &'a [CameraApp], path: &str) -> Option<&'a CameraApp> {
+    apps.iter()
+        .find(|app| app.non_packaged && same_windows_path(&app.executable, path))
+        .or_else(|| apps.iter().find(|app| !app.non_packaged))
+}
+
+fn attributed_registry_pid(
+    matching_pids: &[u32],
+    executable: Option<&str>,
+    mut path_for: impl FnMut(u32) -> Option<String>,
+) -> Option<u32> {
+    let mut matches = matching_pids.iter().copied().filter(|&pid| {
+        executable.is_none_or(|expected| {
+            path_for(pid).is_some_and(|actual| same_windows_path(expected, &actual))
+        })
+    });
+    let pid = matches.next()?;
+    matches.next().is_none().then_some(pid)
+}
+
+// Component boundaries prevent sibling directories (e.g. ZoomEvil) from
+// matching Zoom. This is still lexical, not a reparse-point/security boundary.
+fn path_matches_policy_prefix(path: &str, prefix: &str) -> bool {
+    let Some(head) = path.get(..prefix.len()) else {
+        return false;
+    };
+    same_windows_path(head, prefix)
+        && (path.len() == prefix.len()
+            || prefix.ends_with('\\')
+            || path.as_bytes()[prefix.len()] == b'\\')
+}
+
+fn signature_for_path(
+    path: &str,
+    trust_policy: TrustPolicy,
+    verify: impl FnOnce(&str, TrustPolicy) -> SignatureInfo,
+) -> SignatureInfo {
+    // Re-verify for each capture: pathname and mtime cannot identify a file
+    // that has been replaced while preserving its last-write timestamp.
+    verify(path, trust_policy)
+}
+
+fn webcam_consent_store(opened: io::Result<RegKey>) -> Result<RegKey> {
+    match opened {
+        Ok(key) => Ok(key),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            Err(error).context("webcam consent store key is missing; camera detection unavailable")
+        }
+        Err(error) => {
+            Err(error).context("failed to open webcam consent store; camera detection unavailable")
+        }
+    }
+}
+
 fn camera_accesses(
     policy: &Policy,
     mut signature_for: impl FnMut(&str) -> SignatureInfo,
 ) -> Result<Vec<Access>> {
     let root = RegKey::predef(HKEY_CURRENT_USER);
-    let Ok(webcam) = root.open_subkey(format!(r"{CONSENT_STORE}\webcam")) else {
-        return Ok(Vec::new());
-    };
+    let webcam = webcam_consent_store(root.open_subkey(format!(r"{CONSENT_STORE}\webcam")))?;
     let processes = ProcessTable::load();
     let mut accesses = Vec::new();
-    let mut known_apps: HashMap<String, (String, CameraPermission)> = HashMap::new();
+    let mut known_apps: HashMap<String, Vec<CameraApp>> = HashMap::new();
     let global_consent = webcam.get_value::<String, _>("Value").ok();
 
     for key_name in webcam.enum_keys().filter_map(|item| item.ok()) {
@@ -823,9 +877,14 @@ fn camera_accesses(
                     .and_then(OsStr::to_str)
                     .map(str::to_owned)
                 {
-                    known_apps.insert(
-                        application.to_ascii_lowercase(),
-                        (executable.clone(), CameraPermission { consent }),
+                    remember_camera_app(
+                        &mut known_apps,
+                        &application,
+                        CameraApp {
+                            executable,
+                            permission: CameraPermission { consent },
+                            non_packaged: true,
+                        },
                     );
                 }
                 if is_privacy_active(&sub_key)
@@ -847,9 +906,14 @@ fn camera_accesses(
                 .get_value::<String, _>("Value")
                 .ok()
                 .or_else(|| global_consent.clone());
-            known_apps.insert(
-                key_name.to_ascii_lowercase(),
-                (key_name.clone(), CameraPermission { consent }),
+            remember_camera_app(
+                &mut known_apps,
+                &key_name,
+                CameraApp {
+                    executable: key_name.clone(),
+                    permission: CameraPermission { consent },
+                    non_packaged: false,
+                },
             );
             if is_privacy_active(&sub_key)
                 && let Some(access) = registry_access(
@@ -889,7 +953,7 @@ fn camera_accesses(
         .collect::<Vec<_>>();
 
     let mut candidate_runtime = HashMap::new();
-    for application in known_apps.keys() {
+    for (application, apps) in &known_apps {
         let Some(pids) = processes.by_name.get(application.as_str()) else {
             continue;
         };
@@ -897,11 +961,17 @@ fn camera_accesses(
             if accesses.iter().any(|access| access.pid == Some(pid)) {
                 continue;
             }
+            let Some(executable) = process_path(pid) else {
+                continue;
+            };
+            if camera_app_for_process(apps, &executable).is_none() {
+                continue;
+            }
             let modules = capture_modules_loaded(pid);
             if modules.is_empty() {
                 continue;
             }
-            candidate_runtime.insert(pid, (modules, process_command_line(pid)));
+            candidate_runtime.insert(pid, (executable, modules, process_command_line(pid)));
         }
     }
     let mut packaged_modules = packaged_camera_pids
@@ -914,7 +984,7 @@ fn camera_accesses(
     let busy_capture_services = busy_capture_services(
         candidate_runtime
             .iter()
-            .filter_map(|(&pid, (_, command))| {
+            .filter_map(|(&pid, (_, _, command))| {
                 command
                     .as_deref()
                     .is_some_and(is_video_capture_service)
@@ -928,7 +998,7 @@ fn camera_accesses(
         .keys()
         .any(|pid| busy_capture_services.contains(pid));
 
-    for (application, (executable, permission)) in &known_apps {
+    for (application, apps) in &known_apps {
         let Some(pids) = processes.by_name.get(application.as_str()) else {
             continue;
         };
@@ -936,7 +1006,10 @@ fn camera_accesses(
             if accesses.iter().any(|access| access.pid == Some(pid)) {
                 continue;
             }
-            let Some((modules, command_line)) = candidate_runtime.get(&pid) else {
+            let Some((executable, modules, command_line)) = candidate_runtime.get(&pid) else {
+                continue;
+            };
+            let Some(app) = camera_app_for_process(apps, executable) else {
                 continue;
             };
             let live_capture = !packaged_camera_active && busy_capture_services.contains(&pid);
@@ -947,7 +1020,7 @@ fn camera_accesses(
                 policy,
                 application,
                 executable,
-                permission,
+                &app.permission,
                 command_line.as_deref(),
                 parent_info.as_ref(),
                 &signature,
@@ -1066,7 +1139,7 @@ fn registry_access(
         .get(&application.to_ascii_lowercase())
         .map(Vec::as_slice)
         .unwrap_or_default();
-    let pid = (matching_pids.len() == 1).then(|| matching_pids[0]);
+    let pid = attributed_registry_pid(matching_pids, executable.as_deref(), process_path);
     let context = pid.map(|value| processes.context(value));
     let (parent_pid, parent_name) = context
         .as_ref()
@@ -1123,19 +1196,20 @@ fn assess_policy(
     };
     let publisher = signature.and_then(|value| value.signer.as_deref());
     let publisher_ok = rule.publishers.is_empty()
-        || publisher.is_some_and(|signer| {
-            rule.publishers
-                .iter()
-                .any(|expected| signer.contains(expected))
-        });
+        || signature.is_some_and(|value| value.verified)
+            && publisher.is_some_and(|signer| {
+                rule.publishers
+                    .iter()
+                    .any(|expected| same_windows_path(signer.trim(), expected.trim()))
+            });
     let path_ok = rule.paths.is_empty()
         || executable.is_some_and(|path| {
-            let path = path.to_ascii_lowercase();
             rule.paths
                 .iter()
-                .any(|expected| path.starts_with(&expected.to_ascii_lowercase()))
+                .any(|expected| path_matches_policy_prefix(path, expected))
         });
-    let evidence_complete = (rule.publishers.is_empty() || publisher.is_some())
+    let evidence_complete = (rule.publishers.is_empty()
+        || signature.is_some_and(|value| !value.verified || value.signer.is_some()))
         && (rule.paths.is_empty() || executable.is_some());
 
     if !evidence_complete {
@@ -1857,18 +1931,36 @@ fn immediate_parent(context: &ProcessContext) -> Option<(u32, String)> {
         .map(|parent| (parent.pid, parent.name.clone()))
 }
 
-pub fn terminate_process_by_pid(pid: u32) -> Result<()> {
+fn process_instance_matches(pid: u32, created: FILETIME, expected: &str) -> bool {
+    expected == format!("{pid}:{}", filetime_value(created))
+}
+
+pub fn terminate_process_by_pid(pid: u32, expected_instance: &str) -> Result<()> {
     if pid <= 4 || pid == std::process::id() {
         anyhow::bail!("refusing to terminate a protected process identifier");
     }
-    unsafe {
-        let handle = OpenProcess(PROCESS_TERMINATE, false, pid)
-            .context("failed to open process for termination")?;
-        let result = TerminateProcess(handle, 1);
-        let _ = CloseHandle(handle);
-        result.context("failed to terminate process")?;
-    }
-    Ok(())
+    let handle = unsafe {
+        OpenProcess(
+            PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION,
+            false,
+            pid,
+        )
+        .context("failed to open process for termination")?
+    };
+    let result: Result<()> = (|| {
+        let mut created = FILETIME::default();
+        let mut exited = FILETIME::default();
+        let mut kernel = FILETIME::default();
+        let mut user = FILETIME::default();
+        unsafe { GetProcessTimes(handle, &mut created, &mut exited, &mut kernel, &mut user) }
+            .context("failed to verify process instance before termination")?;
+        if !process_instance_matches(pid, created, expected_instance) {
+            anyhow::bail!("process instance changed or its creation time was unavailable");
+        }
+        unsafe { TerminateProcess(handle, 1) }.context("failed to terminate process")
+    })();
+    let _ = unsafe { CloseHandle(handle) };
+    result
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1925,6 +2017,91 @@ mod tests {
             signer: verified.then(|| "Expected Publisher".to_owned()),
             error: (!verified).then(|| "unsigned".to_owned()),
         }
+    }
+
+    #[test]
+    fn missing_or_unreadable_webcam_store_is_unavailable() {
+        for (kind, detail) in [
+            (io::ErrorKind::NotFound, "key is missing"),
+            (io::ErrorKind::PermissionDenied, "failed to open"),
+            (io::ErrorKind::InvalidData, "failed to open"),
+        ] {
+            let error = webcam_consent_store(Err(io::Error::from(kind)))
+                .expect_err("a missing or unreadable store cannot be healthy");
+            assert!(error.to_string().contains(detail));
+            assert_eq!(
+                error
+                    .root_cause()
+                    .downcast_ref::<io::Error>()
+                    .map(io::Error::kind),
+                Some(kind)
+            );
+        }
+    }
+
+    #[test]
+    fn replacing_executable_with_same_mtime_cannot_inherit_signer_allowance() {
+        let path = std::env::temp_dir().join(format!(
+            "miccamwatch-signer-{}-{}.exe",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(&path, b"signed").unwrap();
+        let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+        let path_str = path.to_str().unwrap();
+        let policy = Policy {
+            applications: vec![ApplicationRule {
+                executable: path.file_name().unwrap().to_str().unwrap().to_owned(),
+                publishers: vec!["Expected Publisher".to_owned()],
+                paths: vec![path.parent().unwrap().to_str().unwrap().to_owned()],
+            }],
+            ..Policy::default()
+        };
+        let simulated_verifier =
+            |path: &str, _: TrustPolicy| signature(std::fs::read(path).unwrap() == b"signed");
+        let mut evidence = Vec::new();
+        assert_eq!(
+            assess_policy(
+                &policy,
+                &policy.applications[0].executable,
+                Some(path_str),
+                Some(&signature_for_path(
+                    path_str,
+                    policy.trust_policy,
+                    simulated_verifier
+                )),
+                &mut evidence,
+            ),
+            (Risk::Expected, EnforcementDecision::Allow)
+        );
+
+        std::fs::write(&path, b"forged").unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(modified)
+            .unwrap();
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().modified().unwrap(),
+            modified
+        );
+        let replacement = signature_for_path(path_str, policy.trust_policy, simulated_verifier);
+        std::fs::remove_file(&path).unwrap();
+        let mut evidence = Vec::new();
+        assert_eq!(
+            assess_policy(
+                &policy,
+                &policy.applications[0].executable,
+                Some(path_str),
+                Some(&replacement),
+                &mut evidence,
+            ),
+            (Risk::Suspicious, EnforcementDecision::Deny)
+        );
     }
 
     #[test]
@@ -2008,6 +2185,65 @@ mod tests {
         assert_eq!(assessment.risk, Risk::Suspicious);
     }
 
+    #[test]
+    fn same_name_consent_records_select_only_the_matching_process_path() {
+        let mut known_apps = HashMap::new();
+        remember_camera_app(
+            &mut known_apps,
+            "capture.exe",
+            CameraApp {
+                executable: r"C:\Program Files\Capture\capture.exe".to_owned(),
+                permission: CameraPermission {
+                    consent: Some("Allow".to_owned()),
+                },
+                non_packaged: true,
+            },
+        );
+        remember_camera_app(
+            &mut known_apps,
+            "CAPTURE.EXE",
+            CameraApp {
+                executable: r"C:\Users\person\Downloads\capture.exe".to_owned(),
+                permission: CameraPermission {
+                    consent: Some("Deny".to_owned()),
+                },
+                non_packaged: true,
+            },
+        );
+        let apps = &known_apps["capture.exe"];
+        let trusted = camera_app_for_process(apps, r"c:\program files\CAPTURE\capture.exe")
+            .expect("trusted path has consent");
+        assert_eq!(trusted.permission.consent.as_deref(), Some("Allow"));
+        let untrusted = camera_app_for_process(apps, r"C:\Users\person\Downloads\capture.exe")
+            .expect("same-name untrusted path has distinct consent");
+        assert_eq!(untrusted.permission.consent.as_deref(), Some("Deny"));
+        assert!(camera_app_for_process(apps, r"C:\Users\person\capture.exe").is_none());
+    }
+
+    #[test]
+    fn active_registry_interval_requires_matching_process_path_for_pid() {
+        let trusted = r"C:\Program Files\Capture\capture.exe";
+        let paths = HashMap::from([
+            (
+                10,
+                Some(r"C:\Users\person\Downloads\capture.exe".to_owned()),
+            ),
+            (20, Some(r"c:\program files\capture\CAPTURE.exe".to_owned())),
+            (30, None),
+        ]);
+        let lookup = |pid| paths.get(&pid).cloned().flatten();
+        assert_eq!(attributed_registry_pid(&[10], Some(trusted), lookup), None);
+        assert_eq!(attributed_registry_pid(&[30], Some(trusted), lookup), None);
+        assert_eq!(
+            attributed_registry_pid(&[10, 20, 30], Some(trusted), lookup),
+            Some(20)
+        );
+        assert_eq!(
+            attributed_registry_pid(&[20, 20], Some(trusted), lookup),
+            None
+        );
+    }
+
     fn explicit_policy() -> Policy {
         Policy {
             applications: vec![ApplicationRule {
@@ -2041,6 +2277,98 @@ mod tests {
             &mut evidence,
         );
         assert_eq!(denied, (Risk::Suspicious, EnforcementDecision::Deny));
+    }
+
+    #[test]
+    fn policy_rejects_unverified_matching_signer_and_sibling_path_prefix() {
+        let policy = explicit_policy();
+        let untrusted_signature = SignatureInfo {
+            verified: false,
+            signer: Some("Expected Publisher".to_owned()),
+            error: Some("untrusted root".to_owned()),
+        };
+        let mut evidence = Vec::new();
+        let unverified = assess_policy(
+            &policy,
+            "capture.exe",
+            Some(r"C:\Program Files\Capture\capture.exe"),
+            Some(&untrusted_signature),
+            &mut evidence,
+        );
+        assert_eq!(unverified, (Risk::Suspicious, EnforcementDecision::Deny));
+
+        let mut evidence = Vec::new();
+        let sibling = assess_policy(
+            &policy,
+            "capture.exe",
+            Some(r"C:\Program Files\CaptureEvil\capture.exe"),
+            Some(&signature(true)),
+            &mut evidence,
+        );
+        assert_eq!(sibling, (Risk::Suspicious, EnforcementDecision::Deny));
+    }
+
+    #[test]
+    fn policy_publisher_requires_exact_verified_identity() {
+        let policy = explicit_policy();
+        for signer in ["Evil Expected Publisher", "Expected Publisher LLC"] {
+            let signature = SignatureInfo {
+                verified: true,
+                signer: Some(signer.to_owned()),
+                error: None,
+            };
+            let mut evidence = Vec::new();
+            assert_eq!(
+                assess_policy(
+                    &policy,
+                    "capture.exe",
+                    Some(r"C:\Program Files\Capture\capture.exe"),
+                    Some(&signature),
+                    &mut evidence,
+                ),
+                (Risk::Suspicious, EnforcementDecision::Deny),
+            );
+        }
+        let signature = SignatureInfo {
+            verified: true,
+            signer: Some("  expected publisher  ".to_owned()),
+            error: None,
+        };
+        let mut evidence = Vec::new();
+        assert_eq!(
+            assess_policy(
+                &policy,
+                "capture.exe",
+                Some(r"C:\Program Files\Capture\capture.exe"),
+                Some(&signature),
+                &mut evidence,
+            ),
+            (Risk::Expected, EnforcementDecision::Allow),
+        );
+    }
+
+    #[test]
+    fn policy_prefix_does_not_include_sibling_directory() {
+        assert!(path_matches_policy_prefix(
+            r"C:\Program Files\Zoom\zoom.exe",
+            r"c:\program files\zoom",
+        ));
+        assert!(!path_matches_policy_prefix(
+            r"C:\Program Files\ZoomEvil\zoom.exe",
+            r"C:\Program Files\Zoom",
+        ));
+    }
+
+    #[test]
+    fn termination_refuses_reused_or_unknown_process_instance() {
+        let created = FILETIME {
+            dwLowDateTime: 42,
+            dwHighDateTime: 1,
+        };
+        assert!(process_instance_matches(120, created, "120:4294967338"));
+        assert!(!process_instance_matches(120, created, "120:4294967339"));
+        assert!(!process_instance_matches(120, created, "120"));
+        assert!(!process_instance_matches(121, created, "120:4294967338"));
     }
 
     #[test]

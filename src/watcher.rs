@@ -2,8 +2,8 @@ use crate::{
     frontends::cli::Filter,
     i18n::Language,
     model::{
-        Access, AccessEvent, Action, Activity, EnforcementDecision, Evidence, EvidenceKind,
-        SCHEMA_VERSION, event_code,
+        Access, AccessEvent, Action, Activity, CollectorState, EnforcementDecision, Evidence,
+        EvidenceKind, SCHEMA_VERSION, Snapshot, event_code,
     },
     output,
     platform::{PlatformMonitor, SessionLockState},
@@ -175,8 +175,18 @@ pub fn watch(
             &mut denial_observations,
             &mut terminated,
         );
-        denial_observations.retain(|key, _| current.contains_key(key));
-        terminated.retain(|key| current.contains_key(key));
+        denial_observations.retain(|(key, instance), _| {
+            current
+                .get(key)
+                .and_then(|access| access.process.as_ref())
+                .is_some_and(|process| &process.instance_id == instance)
+        });
+        terminated.retain(|(key, instance)| {
+            current
+                .get(key)
+                .and_then(|access| access.process.as_ref())
+                .is_some_and(|process| &process.instance_id == instance)
+        });
         previous = current;
     }
 
@@ -187,7 +197,9 @@ pub fn watch(
 }
 
 fn snapshot_by_key(monitor: &PlatformMonitor, filter: &Filter) -> Result<HashMap<String, Access>> {
-    let mut accesses = monitor.snapshot(filter.into())?.accesses;
+    let snapshot = monitor.snapshot(filter.into())?;
+    ensure_collectors_available(&snapshot)?;
+    let mut accesses = snapshot.accesses;
     if crate::platform::session_lock_state() == SessionLockState::Locked {
         for access in &mut accesses {
             if access.activity == Activity::Active {
@@ -203,6 +215,21 @@ fn snapshot_by_key(monitor: &PlatformMonitor, filter: &Filter) -> Result<HashMap
         }
     }
     Ok(by_key(accesses))
+}
+
+fn ensure_collectors_available(snapshot: &Snapshot) -> Result<()> {
+    if let Some(failed) = snapshot
+        .collectors
+        .iter()
+        .find(|collector| collector.state == CollectorState::Unavailable)
+    {
+        anyhow::bail!(
+            "{} collector unavailable: {}",
+            failed.collector,
+            failed.detail.as_deref().unwrap_or("unknown error")
+        );
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -256,8 +283,8 @@ fn access_changed(old: &Access, current: &Access) -> bool {
 fn update_enforcement_candidates<'a>(
     accesses: impl Iterator<Item = &'a Access>,
     enabled: bool,
-    observations: &mut HashMap<String, u8>,
-    terminated: &mut HashSet<String>,
+    observations: &mut HashMap<(String, String), u8>,
+    terminated: &mut HashSet<(String, String)>,
 ) {
     if !enabled {
         observations.clear();
@@ -269,18 +296,33 @@ fn update_enforcement_candidates<'a>(
             || access.risk == crate::model::Risk::Blocked
             || protected_application(&access.application)
         {
-            observations.remove(&access.key);
+            observations.retain(|(key, _), _| key != &access.key);
             continue;
         }
-        let count = observations.entry(access.key.clone()).or_default();
+        let Some(pid) = access.pid else {
+            observations.retain(|(key, _), _| key != &access.key);
+            continue;
+        };
+        let Some(instance) = access
+            .process
+            .as_ref()
+            .map(|context| context.instance_id.as_str())
+        else {
+            observations.retain(|(key, _), _| key != &access.key);
+            continue;
+        };
+        let identity = (access.key.clone(), instance.to_owned());
+        if terminated.contains(&identity) {
+            continue;
+        }
+        let count = observations.entry(identity).or_default();
         *count = count.saturating_add(1);
-        if *count < 2 || terminated.contains(&access.key) {
+        if *count < 2 {
             continue;
         }
-        let Some(pid) = access.pid else { continue };
-        match crate::platform::terminate_process_by_pid(pid) {
+        match crate::platform::terminate_process_by_pid(pid, instance) {
             Ok(()) => {
-                terminated.insert(access.key.clone());
+                terminated.insert((access.key.clone(), instance.to_owned()));
                 eprintln!(
                     "{}",
                     format!(
@@ -409,7 +451,7 @@ fn by_key(accesses: Vec<Access>) -> HashMap<String, Access> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Confidence, Resource, Risk};
+    use crate::model::{Confidence, ProcessContext, Resource, Risk};
 
     fn access(activity: Activity, decision: EnforcementDecision) -> Access {
         Access {
@@ -429,8 +471,24 @@ mod tests {
             started_at: None,
             modules: vec![],
             evidence: vec![],
-            process: None,
+            process: Some(ProcessContext {
+                instance_id: "999999:123".into(),
+                ..ProcessContext::default()
+            }),
         }
+    }
+
+    #[test]
+    fn unavailable_collector_does_not_turn_missing_access_into_a_stop_event() {
+        let snapshot = Snapshot {
+            collectors: vec![crate::model::CollectorHealth {
+                collector: "privacy_store",
+                state: CollectorState::Unavailable,
+                detail: Some("registry access denied".into()),
+            }],
+            accesses: vec![],
+        };
+        assert!(ensure_collectors_available(&snapshot).is_err());
     }
 
     #[test]
@@ -455,7 +513,56 @@ mod tests {
             &mut observations,
             &mut terminated,
         );
-        assert_eq!(observations[&denied.key], 1);
+        assert_eq!(observations[&(denied.key.clone(), "999999:123".into())], 1);
+    }
+
+    #[test]
+    fn replacing_camera_process_starts_new_count_and_retains_kill_identity() {
+        let old = access(Activity::Active, EnforcementDecision::Deny);
+        let mut replacement = old.clone();
+        replacement.process.as_mut().unwrap().instance_id = "999999:456".into();
+        let mut observations = HashMap::new();
+        let mut terminated = HashSet::new();
+        update_enforcement_candidates([&old].into_iter(), true, &mut observations, &mut terminated);
+        let old_identity = (old.key.clone(), "999999:123".into());
+        terminated.insert(old_identity.clone());
+        update_enforcement_candidates(
+            [&replacement].into_iter(),
+            true,
+            &mut observations,
+            &mut terminated,
+        );
+        assert_eq!(observations[&(old.key.clone(), "999999:456".into())], 1);
+        assert!(terminated.contains(&old_identity));
+    }
+
+    #[test]
+    fn missing_process_never_counts_toward_a_new_instance_at_the_same_pid() {
+        let mut missing = access(Activity::Active, EnforcementDecision::Deny);
+        missing.process = None;
+        let mut verified = access(Activity::Active, EnforcementDecision::Deny);
+        verified.process.as_mut().unwrap().instance_id = "999999:456".into();
+        let mut observations = HashMap::new();
+        let mut terminated = HashSet::new();
+
+        update_enforcement_candidates(
+            [&missing].into_iter(),
+            true,
+            &mut observations,
+            &mut terminated,
+        );
+        assert!(observations.is_empty());
+        update_enforcement_candidates(
+            [&verified].into_iter(),
+            true,
+            &mut observations,
+            &mut terminated,
+        );
+        assert_eq!(
+            observations[&(verified.key.clone(), "999999:456".into())],
+            1
+        );
+        assert!(terminated.is_empty());
     }
 
     #[test]
