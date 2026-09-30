@@ -1,6 +1,6 @@
 # miccamwatch
 
-`mcw` is a Windows beta monitoring tool that attributes microphone and camera signals to local processes and explains the evidence behind each assessment. It supports high-contrast terminal colors, multilingual core labels, policy-driven trust validation, JSONL logging, Windows Event Log integration, and desktop toast notifications. Detailed evidence remains in English for stable machine-readable diagnostics.
+`mcw` monitors microphone and camera access with platform-specific evidence. Windows is the release-gated beta with process attribution and privacy controls; Linux and macOS provide native CLI monitoring with narrower evidence. It supports high-contrast terminal colors, multilingual core labels, policy-driven trust validation, JSONL logging, and, on Windows, Event Log integration and desktop toast notifications. Detailed evidence remains in English for stable machine-readable diagnostics.
 
 ## Current capabilities
 
@@ -21,7 +21,7 @@
 - High-contrast terminal color coding for instant status recognition (green, yellow, orange, red).
 - Multilingual user interface with automatic Windows system language detection and 7 supported languages: English (`en`), French (`fr`), German (`de`), Spanish (`es`), Japanese (`ja`), Simplified Chinese (`zh`), Russian (`ru`).
 - Emergency hardware microphone kill-switch (`mcw mute` / `mcw unmute` / `mcw mute --toggle`).
-- Interactive full-terminal live dashboard with keyboard shortcuts (`mcw top`).
+- Interactive full-terminal live dashboard with keyboard shortcuts (`mcw top`); `[b]` blocks connected cameras and `[a]` restores cameras previously blocked by MicCamWatch. Both actions may require Windows administrator approval; the displayed camera state and any failure remain visible.
 - Windows Notification Area background mode with green (idle), yellow (camera-ready), red (confirmed active), and gray (collector error) states (`mcw tray`).
 - Privacy Control Center commands for hardware camera allow/block (administrator approval required), scheduled autostart with a per-user fallback, notification pause, lock policies, profiles, and tray lifecycle control.
 - Persistent settings in `%APPDATA%\MicCamWatch\settings.toml` and rotating JSONL activity history in `%LOCALAPPDATA%\MicCamWatch`.
@@ -94,9 +94,9 @@ The three assessment dimensions are intentionally independent:
 | `risk` | `expected`, `unexplained`, `suspicious`, `blocked` | Security interpretation of all collected evidence. `blocked` means Windows permission is denied; it does not claim that frames bypassed Windows. |
 | `confidence` | `high`, `medium`, `low` | Strength of the activity claim, not a probability or threat score. |
 
-Microphone attribution uses an active WASAPI capture session and has high confidence. An open Capability Access Manager interval provides medium-confidence camera activity. Loaded camera modules provide low-confidence readiness only.
+On Windows, microphone attribution uses an active WASAPI capture session and has high confidence. An open Capability Access Manager interval provides medium-confidence camera activity; loaded camera modules provide low-confidence readiness only. Linux requires running PipeWire nodes and an active capture link for `active`. On macOS 15+, CoreAudio process `isRunningInput` signals microphone `active` only for a process exposed by `AudioHardwareSystem.processes`; AVFoundation `AVCaptureDevice.isInUseByAnotherApplication` signals camera `active` without a PID. Neither signal proves audio samples or camera frame flow.
 
-`mcw` deliberately has no heuristic `unauthorized` result. Enforcement is separate from risk: only an explicit publisher/path policy mismatch produces `enforcement = "deny"`. Automatic termination additionally requires confirmed `active` capture, a PID, two consecutive observations, and a non-protected process.
+`mcw` deliberately has no heuristic `unauthorized` result. Enforcement is separate from risk: only an explicit publisher/path policy mismatch produces `enforcement = "deny"`. Automatic termination additionally requires confirmed `active` capture, a PID, two consecutive observations, and a non-protected process. An unattributed macOS camera observation has unknown enforcement and cannot trigger termination.
 
 ## JSON contract
 
@@ -132,7 +132,7 @@ The output is suitable for diagnostics and monitoring. It is not a forensic proo
 
 Download `miccamwatch-windows-x86_64.msi` from the [latest release](https://github.com/Roman-Cuisset/miccamwatch/releases/latest) for a per-user installation with `mcw` on `PATH` and a Start Menu entry. The portable `miccamwatch-windows-x86_64.zip` remains available.
 
-For MSI installations, upgrade by running the latest MSI from [GitHub Releases](https://github.com/Roman-Cuisset/miccamwatch/releases/latest). For the portable ZIP, stop the tray and replace both `mcw.exe` and `mcw-tray.exe` together. `mcw update` currently replaces only `mcw.exe`: it does not update the companion tray or MSI registration, so do not use it for those two-binary installations.
+For MSI installations, upgrade by running the latest MSI from [GitHub Releases](https://github.com/Roman-Cuisset/miccamwatch/releases/latest). For portable or Cargo-based installs, stop the tray and use `mcw update` to install the matching `mcw.exe` and `mcw-tray.exe` from the same release; alternatively replace both ZIP binaries together. If an active tray locks its executable, the update fails without reporting success: stop the tray and retry. `mcw update` does not update MSI registration, so use the MSI for MSI installations.
 
 The CLI updater verifies the SHA-256 checksum published with the GitHub release. Because the archive and checksum share the same release channel, this protects integrity but is not an independent publisher signature. Production signing is conditional on a configured release certificate; see [Authenticode release signing](docs/SIGNING.md).
 
@@ -173,7 +173,7 @@ If the tray is not running when a webcam reconnects, run `mcw camera allow` afte
 
 For the Windows Camera app, a sustained capture-process workload is treated as active even when Windows stops updating the registry activity interval. Idle browser capture modules remain `ready`; their brief wakeups during Windows Camera capture do not override that app's active attribution. Process CPU is a heuristic, not direct frame telemetry, so simultaneous browser capture while Windows Camera is active cannot be attributed independently.
 
-Autostart first uses a limited per-user Task Scheduler task. On systems that deny task creation, it uses the current user's `Run` registry key instead, without requesting elevation. `mcw autostart disable` removes both mechanisms.
+Autostart first uses a limited per-user Task Scheduler task. On systems that deny task creation, it uses the current user's `Run` registry key instead, without requesting elevation. Autostart refuses a companion tray whose embedded version differs from the CLI, rather than silently starting an older version. Successful `mcw update` refreshes an enabled MicCamWatch autostart registration to the updated tray path, without enabling autostart for users who disabled it. `mcw autostart disable` removes both mechanisms.
 
 Lock policies are opt-in. On transition to a locked session, the tray can mute microphones. Camera device control runs on a worker so the tray remains responsive while approval is pending; it restores a previously allowed camera on unlock only after blocking succeeded. Windows cannot approve the administrator prompt while the session is locked, so `block-camera-on-lock` is not a reliable automatic safeguard. Manually block the cameras before locking when hardware isolation is required. Unknown lock state never triggers enforcement.
 
@@ -184,23 +184,36 @@ The default policy path is `%APPDATA%\MicCamWatch\policy.toml`. It is loaded aut
 Install the stable Rust MSVC toolchain and Visual Studio C++ Build Tools, then run:
 
 ```console
-cargo build --release
+cargo build --release --locked --features windows-tray
 ```
 
-The executable is created at `target/release/mcw.exe`.
+Windows executables are created at `target/release/mcw.exe` and `target/release/mcw-tray.exe`. Without `windows-tray`, only the CLI is built.
+
+For a Linux CLI build, install stable Rust and run `cargo build --release --locked`; `pw-dump` is needed at runtime. On macOS 15+, install Xcode Command Line Tools with a macOS 15 SDK and Swift compiler, then run the same Cargo command. Cargo compiles the native Swift capture helper and embeds it in `mcw`; no development script is needed at runtime.
 
 ## Platform scope
 
-Windows 10 and Windows 11 are supported. The reusable library, collector interface, and separate CLI/TUI/tray frontends establish the boundary for additional backends; see [Architecture](docs/ARCHITECTURE.md).
+| OS / environment | Microphone `active` / PID | Camera `active` / PID | Camera `ready` | Hardware blocking and desktop controls |
+| --- | --- | --- | --- | --- |
+| Windows 10/11 | WASAPI session / validated process | Capture activity evidence / validated process where available | Loaded capture pipeline, unconfirmed | Administrator-approved camera device controls, mute, tray and notifications |
+| Linux desktop with PipeWire | Running source, stream and active capture link / authenticated Client PID validated with `/proc` | Running video source, stream and active capture link / authenticated Client PID validated with `/proc` | Idle stream or direct V4L2 open FD, low confidence | Unavailable; CLI/watch only |
+| macOS 15+ | CoreAudio `AudioHardwareSystem.processes` with `isRunningInput` / validated PID when libproc identity is readable | AVFoundation `isInUseByAnotherApplication` / **unknown PID** | Not inferred from camera availability | Unavailable; CLI/watch only |
+| WSL or virtual/headless runners | No guaranteed access to physical capture hardware or user session | No guaranteed camera signal | Inventory is not access proof | No hardware behavior claim |
 
-Linux requires PipeWire/V4L2 collectors, macOS requires CoreAudio/AVFoundation/TCC collectors, and Android requires a separate application and permission architecture. These are explicit contracts and roadmap targets, not currently implemented support.
+Linux builds a native CLI using the `pw-dump` PipeWire client and `/proc` (no administrator privileges required for the CLI). The Linux host needs an accessible user PipeWire socket (`XDG_RUNTIME_DIR`, optionally `PIPEWIRE_REMOTE`), `pw-dump`, and readable `/proc/<pid>/stat` and `/proc/<pid>/exe` for PID attribution. `mcw status --json`, `mcw devices`, `mcw doctor`, and `mcw watch --json` run on Linux and macOS. `watch --json` emits access-event JSONL and a status document containing `collectors` when health changes; Ctrl+C stops it.
+
+On Linux, only a **running PipeWire capture stream with an active source link and a running source node** is marked `active`. A claimed application PID must match the owning Client's server-authenticated `pipewire.sec.pid`, then pass `/proc` start-time and executable validation; forwarded portal/PulseAudio clients without matching identity remain unattributed. A direct V4L2 open FD never proves frame flow; video health is `degraded` when a camera may be accessed outside PipeWire. An inaccessible or restarting PipeWire socket is `unavailable` (`status` exits 2), not an all-clear. `--include-ready` exposes unconfirmed PipeWire streams and direct `/dev/video*` handles as `ready`, never as active.
+
+On macOS, the camera signal is device-level only: an application name or PID cannot be inferred from AVFoundation's in-use boolean. The camera collector remains `degraded` because it cannot see use by this application and noninteractive TCC/device discovery may miss cameras; an empty scan is not proof of no use. CI is configured to verify backend commands and honest health reports, **not** microphone or camera hardware transitions. No macOS camera/TCC bypass or intrusive probe is attempted. Linux and macOS do not provide hardware-block, mute, tray, autostart, desktop notifications, Windows updater, `top`, or process termination. Android needs a separate application.
+
+Native CI passed on Windows, Ubuntu and macOS arm64 (macOS 26.6.2, deployment target 15.0): format, Clippy, tests, builds and CLI smoke; Windows also passed dependency audit and MSI smoke. See [verified run](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/36677827660). On `serveur-asus` (PipeWire 1.0.5), a temporary virtual `Audio/Source` plus `pw-record` proved idle → active → stopped, authenticated recorder PID and `watch` START/STOP. This was real PipeWire flow, **not a physical microphone test**. The camera inventory listed `/dev/video0` and `/dev/video1`, but opening `/dev/video0` was denied to the SSH user; physical Linux/macOS capture transitions remain unverified. See [Architecture](docs/ARCHITECTURE.md).
 
 ## Privacy
 
 MicCamWatch is designed from the ground up as an offline-first privacy tool:
 - **Offline by default**: monitoring has no telemetry or analytics. Explicit `mcw update` contacts GitHub; a policy with `trust_policy = "online"` can contact certificate-revocation services through Windows.
 - **No media capture**: `mcw` inspects capture session metadata, loaded modules, and registry activity timestamps. It never records audio samples or captures video frames.
-- **Local storage**: Settings and history logs remain strictly on your local machine under your Windows user profile (`%APPDATA%\MicCamWatch` and `%LOCALAPPDATA%\MicCamWatch`).
+- **Local storage**: Settings and history logs remain local: under `%APPDATA%\MicCamWatch` and `%LOCALAPPDATA%\MicCamWatch` on Windows, and XDG/HOME directories on Linux and macOS. macOS extracts its embedded native helper to a private temporary directory, removed on normal exit.
 
 See the full [Privacy Policy](PRIVACY.md).
 

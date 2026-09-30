@@ -1593,6 +1593,7 @@ mod tests {
                 },
             ],
             accesses: vec![camera],
+            observation_gaps: Vec::new(),
         };
         let current = history_current(&old, &snapshot);
         assert!(

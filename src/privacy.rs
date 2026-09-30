@@ -1,5 +1,6 @@
+use crate::model::CameraBlockRecord;
 use anyhow::{Context, Result, bail};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::{
     collections::HashSet,
     fs,
@@ -281,19 +282,6 @@ fn blocked_devices_path() -> Result<std::path::PathBuf> {
     Ok(crate::settings::data_dir()?.join("blocked-camera-devices.json"))
 }
 
-/// Camera devices this tool disabled on the user's behalf.
-///
-/// The two lists differ in intent, which decides what happens when a camera is
-/// plugged back in: `blocked` keeps it off, while `restore_on_arrival` completes
-/// an `allow` that could not be applied because the camera was unplugged.
-#[derive(Debug, Default, Deserialize, PartialEq, Serialize)]
-struct CameraBlockRecord {
-    #[serde(default)]
-    blocked: Vec<String>,
-    #[serde(default)]
-    restore_on_arrival: Vec<String>,
-}
-
 impl CameraBlockRecord {
     fn is_empty(&self) -> bool {
         self.blocked.is_empty() && self.restore_on_arrival.is_empty()
@@ -331,16 +319,9 @@ fn load_record_at(path: &Path) -> Result<Option<CameraBlockRecord>> {
             return Err(error).with_context(|| format!("failed to read {}", path.display()));
         }
     };
-    let invalid = || format!("invalid camera block record {}", path.display());
-    // Releases up to v0.13.3 stored a bare array; those devices were blocked with
-    // no pending intent, so they migrate into `blocked` and keep their state.
-    match serde_json::from_slice::<CameraBlockRecord>(&bytes) {
-        Ok(record) => Ok(Some(record)),
-        Err(_) => Ok(Some(CameraBlockRecord {
-            blocked: serde_json::from_slice(&bytes).with_context(invalid)?,
-            restore_on_arrival: Vec::new(),
-        })),
-    }
+    let record = CameraBlockRecord::from_json(&bytes)
+        .with_context(|| format!("invalid camera block record {}", path.display()))?;
+    Ok(Some(record))
 }
 
 fn save_record(record: &CameraBlockRecord) -> Result<()> {
@@ -1090,20 +1071,23 @@ mod tests {
         save_record_at(&path, &replacement)?;
         assert_eq!(load_record_at(&path)?, Some(replacement));
         assert_eq!(fs::read_dir(&dir.0)?.count(), 1);
+        for legacy in [
+            br#"["USB\\CAMERA_A","USB\\CAMERA_B"]"#.as_slice(),
+            br#"{"devices":["USB\\CAMERA_A","USB\\CAMERA_B"]}"#,
+        ] {
+            fs::write(&path, legacy)?;
+            let migrated = load_record_at(&path)?.expect("legacy record remains readable");
+            assert_eq!(migrated.blocked, ["USB\\CAMERA_A", "USB\\CAMERA_B"]);
+            assert!(migrated.restore_on_arrival.is_empty());
+            save_record_at(&path, &migrated)?;
+            assert_eq!(load_record_at(&path)?, Some(migrated));
+        }
+        fs::write(&path, br#"{"devices":["A"],"blocked":["B"]}"#)?;
+        assert!(
+            load_record_at(&path).is_err(),
+            "ambiguous intent must not be discarded"
+        );
         Ok(())
-    }
-
-    #[test]
-    fn legacy_array_record_migrates_to_blocked_without_pending_restore() {
-        let bytes = br#"["USB\\CAMERA_A","USB\\CAMERA_B"]"#;
-        assert!(serde_json::from_slice::<CameraBlockRecord>(bytes).is_err());
-        let migrated = CameraBlockRecord {
-            blocked: serde_json::from_slice(bytes).expect("legacy array decodes"),
-            restore_on_arrival: Vec::new(),
-        };
-        assert_eq!(migrated.blocked.len(), 2);
-        assert!(migrated.restore_on_arrival.is_empty());
-        assert!(migrated.owns("USB\\CAMERA_A"));
     }
 
     #[test]

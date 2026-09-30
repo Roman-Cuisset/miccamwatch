@@ -1,13 +1,17 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+#[cfg(windows)]
+use std::os::windows::ffi::OsStrExt;
 use std::{
     env, fs,
     io::Write,
-    os::windows::ffi::OsStrExt,
     path::PathBuf,
     sync::atomic::{AtomicU64, Ordering},
 };
+#[cfg(unix)]
+use std::{ffi::OsStr, path::Path};
+#[cfg(windows)]
 use windows::{
     Win32::Storage::FileSystem::{MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW},
     core::PCWSTR,
@@ -95,15 +99,20 @@ fn save_at(settings: &Settings, path: &std::path::Path) -> Result<()> {
         file.write_all(toml::to_string_pretty(settings)?.as_bytes())?;
         file.sync_all()?;
         drop(file);
-        let from: Vec<u16> = temporary.as_os_str().encode_wide().chain(Some(0)).collect();
-        let to: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
-        unsafe {
-            MoveFileExW(
-                PCWSTR(from.as_ptr()),
-                PCWSTR(to.as_ptr()),
-                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
-            )
-        }?;
+        #[cfg(windows)]
+        {
+            let from: Vec<u16> = temporary.as_os_str().encode_wide().chain(Some(0)).collect();
+            let to: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+            unsafe {
+                MoveFileExW(
+                    PCWSTR(from.as_ptr()),
+                    PCWSTR(to.as_ptr()),
+                    MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+                )
+            }?;
+        }
+        #[cfg(unix)]
+        fs::rename(&temporary, path)?;
         Ok(())
     })();
     if result.is_err() {
@@ -112,6 +121,7 @@ fn save_at(settings: &Settings, path: &std::path::Path) -> Result<()> {
     result.with_context(|| format!("failed to replace settings {}", path.display()))
 }
 
+#[cfg(windows)]
 pub fn config_dir() -> Result<PathBuf> {
     env::var_os("APPDATA")
         .map(PathBuf::from)
@@ -119,11 +129,45 @@ pub fn config_dir() -> Result<PathBuf> {
         .context("APPDATA is unavailable")
 }
 
+#[cfg(windows)]
 pub fn data_dir() -> Result<PathBuf> {
     env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
         .map(|path| path.join("MicCamWatch"))
         .context("LOCALAPPDATA is unavailable")
+}
+
+#[cfg(unix)]
+fn unix_app_dir(xdg: Option<&OsStr>, home: Option<&OsStr>, fallback: &str) -> Result<PathBuf> {
+    let base = xdg
+        .map(Path::new)
+        .filter(|path| path.is_absolute())
+        .map(Path::to_path_buf)
+        .or_else(|| {
+            home.map(Path::new)
+                .filter(|path| path.is_absolute())
+                .map(|path| path.join(fallback))
+        })
+        .context("neither an absolute XDG directory nor an absolute HOME is available")?;
+    Ok(base.join("MicCamWatch"))
+}
+
+#[cfg(unix)]
+pub fn config_dir() -> Result<PathBuf> {
+    unix_app_dir(
+        env::var_os("XDG_CONFIG_HOME").as_deref(),
+        env::var_os("HOME").as_deref(),
+        ".config",
+    )
+}
+
+#[cfg(unix)]
+pub fn data_dir() -> Result<PathBuf> {
+    unix_app_dir(
+        env::var_os("XDG_DATA_HOME").as_deref(),
+        env::var_os("HOME").as_deref(),
+        ".local/share",
+    )
 }
 
 pub fn settings_path() -> Result<PathBuf> {
@@ -171,5 +215,25 @@ mod tests {
         assert!(saved.notifications_enabled);
         assert!(saved.block_camera_on_lock);
         fs::remove_file(path).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn xdg_directories_require_absolute_paths_and_fall_back_to_home() {
+        let home = OsStr::new("/home/test");
+        assert_eq!(
+            unix_app_dir(Some(OsStr::new("/custom/config")), None, ".config").unwrap(),
+            PathBuf::from("/custom/config/MicCamWatch")
+        );
+        assert_eq!(
+            unix_app_dir(Some(OsStr::new("relative")), Some(home), ".config").unwrap(),
+            PathBuf::from("/home/test/.config/MicCamWatch")
+        );
+        assert_eq!(
+            unix_app_dir(Some(OsStr::new("")), Some(home), ".local/share").unwrap(),
+            PathBuf::from("/home/test/.local/share/MicCamWatch")
+        );
+        assert!(unix_app_dir(None, None, ".config").is_err());
+        assert!(unix_app_dir(None, Some(OsStr::new("relative")), ".config").is_err());
     }
 }

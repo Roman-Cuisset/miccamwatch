@@ -17,11 +17,11 @@ jobs:
         with:
           components: rustfmt, clippy
       - run: cargo fmt --check
-      - run: cargo clippy --all-targets --locked -- -D warnings
-      - run: cargo test --all-targets --locked
+      - run: cargo clippy --all-targets --features windows-tray --locked -- -D warnings
+      - run: cargo test --all-targets --features windows-tray --locked
       - name: Audit Rust dependencies
         run: cargo install cargo-audit --locked && cargo audit
-      - run: cargo build --release --locked
+      - run: cargo build --release --locked --features windows-tray
       - name: Build and smoke-test per-user MSI
         shell: pwsh
         run: |
@@ -39,3 +39,64 @@ jobs:
           if ($reported -ne "mcw $version") { throw "Installed version mismatch: $reported" }
           $uninstall = Start-Process msiexec.exe -ArgumentList @('/x', $msi, '/qn', '/norestart') -Wait -PassThru
           if ($uninstall.ExitCode -ne 0) { throw "MSI uninstall failed with code $($uninstall.ExitCode)" }
+
+  portable:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets --locked -- -D warnings
+      - run: cargo test --all-targets --locked
+      - run: cargo build --locked
+      - run: cargo build --release --locked
+      - name: Require macOS 15 or newer
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          version=$(sw_vers -productVersion)
+          echo "macOS runner: $version"
+          test "${version%%.*}" -ge 15
+      - name: Smoke Linux collector CLI
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set +e
+          ./target/debug/mcw status --json > "$RUNNER_TEMP/mcw-status.json"
+          status_code=$?
+          ./target/debug/mcw doctor --json > "$RUNNER_TEMP/mcw-doctor.json"
+          doctor_code=$?
+          ./target/debug/mcw devices --json > "$RUNNER_TEMP/mcw-devices.out" 2>&1
+          devices_code=$?
+          timeout --preserve-status -s INT 2s ./target/debug/mcw watch --json > "$RUNNER_TEMP/mcw-watch.jsonl"
+          watch_code=$?
+          set -e
+          case "$status_code" in 0|1|2) ;; *) exit 1 ;; esac
+          case "$doctor_code" in 0|2) ;; *) exit 1 ;; esac
+          case "$devices_code" in 0|2) ;; *) exit 1 ;; esac
+          test "$watch_code" -eq 0
+          python3 -c 'import json, os; from pathlib import Path; p=Path(os.environ["RUNNER_TEMP"]); s=json.loads((p/"mcw-status.json").read_text()); d=json.loads((p/"mcw-doctor.json").read_text()); assert {c["collector"] for c in s["collectors"]} == {"pipewire_audio", "pipewire_video"}; assert len(d) == 2; [json.loads(line) for line in (p/"mcw-watch.jsonl").read_text().splitlines()]'
+      - name: Smoke native macOS collector CLI (no hardware required)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set +e
+          ./target/debug/mcw status --json > "$RUNNER_TEMP/mcw-status.json"
+          status_code=$?
+          ./target/debug/mcw doctor --json > "$RUNNER_TEMP/mcw-doctor.json"
+          doctor_code=$?
+          ./target/debug/mcw devices --json > "$RUNNER_TEMP/mcw-devices.out" 2>&1
+          devices_code=$?
+          python3 -c 'import os, signal, subprocess, time; from pathlib import Path; p=Path(os.environ["RUNNER_TEMP"])/"mcw-watch.jsonl"; f=p.open("w"); proc=subprocess.Popen(["./target/debug/mcw", "watch", "--json"], stdout=f, stderr=subprocess.STDOUT, start_new_session=True); time.sleep(8); os.killpg(proc.pid, signal.SIGINT) if proc.poll() is None else None; result=proc.wait(timeout=15); f.close(); raise SystemExit(result)'
+          watch_code=$?
+          set -e
+          test "$status_code" -eq 2
+          case "$doctor_code" in 0|2) ;; *) exit 1 ;; esac
+          test "$devices_code" -eq 0
+          test "$watch_code" -eq 0
+          python3 -c 'import json, os; from pathlib import Path; p=Path(os.environ["RUNNER_TEMP"]); s=json.loads((p/"mcw-status.json").read_text()); d=json.loads((p/"mcw-doctor.json").read_text()); c={x["collector"]:x for x in s["collectors"]}; assert set(c)=={"coreaudio_input","avfoundation_video"}; assert c["avfoundation_video"]["state"]=="degraded"; assert "capture helper unavailable" not in str(s).lower(); assert {x["name"] for x in d}==set(c); assert all(x["status"] in ("ok","warning","error") for x in d); [json.loads(line) for line in (p/"mcw-watch.jsonl").read_text().splitlines()]'

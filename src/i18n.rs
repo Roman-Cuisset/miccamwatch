@@ -212,6 +212,17 @@ impl Language {
             Self::En => "✔ No microphone or camera activity detected.",
         }
     }
+    pub fn observation_incomplete(&self) -> &'static str {
+        match self {
+            Self::Fr => "Impossible d'observer toute l'activité de capture.",
+            Self::De => "Aufnahmeaktivität konnte nicht vollständig beobachtet werden.",
+            Self::Es => "No se pudo observar toda la actividad de captura.",
+            Self::Ja => "キャプチャの状態を完全には確認できませんでした。",
+            Self::Zh => "无法完整观察采集活动。",
+            Self::Ru => "Не удалось полностью наблюдать активность захвата.",
+            Self::En => "Capture activity could not be fully observed.",
+        }
+    }
 
     pub fn no_matching_activity(&self) -> &'static str {
         match self {
