@@ -136,6 +136,19 @@ For MSI installations, upgrade by running the latest MSI from [GitHub Releases](
 
 The CLI updater verifies the SHA-256 checksum published with the GitHub release. Because the archive and checksum share the same release channel, this protects integrity but is not an independent publisher signature. Production signing is conditional on a configured release certificate; see [Authenticode release signing](docs/SIGNING.md).
 
+### v0.14.0 native CLI packages
+
+| Platform | Release asset | Requirements |
+| --- | --- | --- |
+| Windows x64 | `miccamwatch-windows-x86_64.zip` or `.msi` | Windows 10/11; ZIP includes matching CLI and tray |
+| Linux x64 (experimental) | `miccamwatch-linux-x86_64.tar.gz` | glibc 2.35+; `pw-dump` and accessible user PipeWire socket |
+| macOS Apple Silicon (experimental) | `miccamwatch-macos-aarch64.tar.gz` | macOS 15+ |
+| macOS Intel (experimental) | `miccamwatch-macos-x86_64.tar.gz` | macOS 15+ |
+
+Download the matching archive and `SHA256SUMS` from the release. On Linux use `sha256sum --check --ignore-missing SHA256SUMS`; on macOS compare `shasum -a 256 <archive>` with the named checksum. Extract the archive and run `./mcw --version`, `./mcw doctor --json`, then `./mcw watch --json`. The macOS helper is embedded; no Swift compiler is needed at runtime. Apple Developer ID signing/notarization is not provided; Gatekeeper may require explicit approval under your organization's policy. Do not bypass managed security controls. Unix self-update is unavailable: replace the extracted binary with a verified newer archive.
+
+v0.14.0 adds Linux PipeWire/V4L2 observation, macOS CoreAudio/AVFoundation observation, a shared Unix watcher, multi-OS CI and matched Windows CLI/tray updates. Native-runner smoke is required before publishing each package; physical microphone/camera capture remains unverified. Linux/macOS packages are experimental, not a promise of hardware blocking or complete camera coverage.
+
 ## Policy configuration
 
 Create a TOML policy file to control trust evaluation:
