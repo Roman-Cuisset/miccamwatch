@@ -1,6 +1,9 @@
 use crate::{model::AccessEvent, settings};
-use anyhow::{Context, Result, bail};
+#[cfg(windows)]
+use anyhow::bail;
+use anyhow::{Context, Result};
 use std::{fs, io::Write, path::PathBuf};
+#[cfg(windows)]
 use windows::{
     Win32::{
         Foundation::{CloseHandle, HANDLE, WAIT_ABANDONED, WAIT_OBJECT_0},
@@ -10,10 +13,18 @@ use windows::{
 };
 
 // The CLI and tray may write/rotate/clear the same JSONL files concurrently.
+#[cfg(windows)]
 struct HistoryLock(HANDLE);
 
+// Lock a separate, persistent file: rotation and clear must not replace the lock inode.
+#[cfg(unix)]
+struct HistoryLock {
+    _file: fs::File,
+}
+
+#[cfg(windows)]
 impl HistoryLock {
-    fn acquire() -> Result<Self> {
+    fn acquire(_path: &std::path::Path) -> Result<Self> {
         let handle = unsafe { CreateMutexW(None, false, w!("Local\\MicCamWatch.History")) }
             .context("failed to create history mutex")?;
         let result = unsafe { WaitForSingleObject(handle, INFINITE) };
@@ -25,6 +36,26 @@ impl HistoryLock {
     }
 }
 
+#[cfg(unix)]
+impl HistoryLock {
+    fn acquire(path: &std::path::Path) -> Result<Self> {
+        let lock_path = path.with_extension("jsonl.lock");
+        if let Some(parent) = lock_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let file = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&lock_path)
+            .with_context(|| format!("failed to open history lock {}", lock_path.display()))?;
+        file.lock()
+            .with_context(|| format!("failed to lock history {}", lock_path.display()))?;
+        Ok(Self { _file: file })
+    }
+}
+
+#[cfg(windows)]
 impl Drop for HistoryLock {
     fn drop(&mut self) {
         unsafe {
@@ -46,7 +77,7 @@ pub fn append(event: &AccessEvent) -> Result<()> {
 }
 
 fn append_at(path: &std::path::Path, event: &AccessEvent) -> Result<()> {
-    let _lock = HistoryLock::acquire()?;
+    let _lock = HistoryLock::acquire(path)?;
     if path
         .metadata()
         .is_ok_and(|metadata| metadata.len() >= MAX_HISTORY_BYTES)
@@ -68,7 +99,7 @@ fn append_at(path: &std::path::Path, event: &AccessEvent) -> Result<()> {
 
 pub fn clear() -> Result<()> {
     let base = path()?;
-    let _lock = HistoryLock::acquire()?;
+    let _lock = HistoryLock::acquire(&base)?;
     for index in 0..=HISTORY_FILES {
         let candidate = if index == 0 {
             base.clone()
@@ -164,6 +195,8 @@ mod tests {
             let document: serde_json::Value = serde_json::from_str(line).unwrap();
             assert_eq!(document["action"], "start");
         }
-        fs::remove_file(path).unwrap();
+        fs::remove_file(&path).unwrap();
+        #[cfg(unix)]
+        fs::remove_file(path.with_extension("jsonl.lock")).unwrap();
     }
 }

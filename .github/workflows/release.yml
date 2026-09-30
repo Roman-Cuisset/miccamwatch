@@ -26,7 +26,7 @@ jobs:
           if ($env:GITHUB_REF_NAME -ne "v$version") {
             throw "Tag $env:GITHUB_REF_NAME does not match Cargo version $version"
           }
-      - run: cargo build --release --locked
+      - run: cargo build --release --locked --features windows-tray
       - name: Restore pinned installer toolchain
         run: dotnet tool restore
       - name: Sign executable when release certificate is configured

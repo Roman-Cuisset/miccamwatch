@@ -1,4 +1,4 @@
-use std::{env, fs, path::PathBuf};
+use std::{env, fs, path::PathBuf, process::Command};
 
 /// Embeds the Windows application manifest so the tray renders with per-monitor DPI
 /// awareness (crisp text instead of bitmap-stretched) and themed Common Controls v6 menus.
@@ -33,6 +33,9 @@ const MANIFEST: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?
 "#;
 
 fn main() {
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+        compile_macos_helper();
+    }
     println!("cargo:rerun-if-changed=build.rs");
     if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows")
         || env::var("CARGO_CFG_TARGET_ENV").as_deref() != Ok("msvc")
@@ -57,5 +60,30 @@ fn main() {
     println!(
         "cargo:rustc-link-arg-bins=/MANIFESTINPUT:{}",
         path.display()
+    );
+}
+
+fn compile_macos_helper() {
+    println!("cargo:rerun-if-changed=native/macos_capture.swift");
+    let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("Cargo must set OUT_DIR"));
+    let helper = out_dir.join("mcw-macos-capture");
+    let target = env::var("TARGET").expect("Cargo must set TARGET");
+    let arch = match target.split('-').next() {
+        Some("aarch64") => "arm64",
+        Some("x86_64") => "x86_64",
+        _ => panic!("unsupported macOS helper architecture: {target}"),
+    };
+    let output = Command::new("swiftc")
+        .args(["-target", &format!("{arch}-apple-macosx15.0"), "-O"])
+        .arg("native/macos_capture.swift")
+        .args(["-o"])
+        .arg(&helper)
+        .arg("-lproc")
+        .output()
+        .expect("Swift compiler required to build the embedded macOS capture helper");
+    assert!(
+        output.status.success(),
+        "macOS capture helper did not compile: {}",
+        String::from_utf8_lossy(&output.stderr)
     );
 }

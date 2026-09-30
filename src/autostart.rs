@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
-use std::{os::windows::process::CommandExt, process::Command};
+use std::{io::Read, os::windows::process::CommandExt, path::Path, process::Command};
 use winreg::{RegKey, enums::HKEY_CURRENT_USER};
 
 const TASK_NAME: &str = "MicCamWatch Tray";
@@ -31,7 +31,11 @@ pub fn state() -> Result<AutostartState> {
 }
 
 pub fn enable() -> Result<()> {
-    let executable = tray_executable()?;
+    enable_for_version(env!("CARGO_PKG_VERSION"))
+}
+
+fn enable_for_version(version: &str) -> Result<()> {
+    let executable = tray_executable(version)?;
     let command = if executable
         .file_name()
         .is_some_and(|name| name.eq_ignore_ascii_case("mcw-tray.exe"))
@@ -47,12 +51,26 @@ pub fn enable() -> Result<()> {
         remove_run_value()?;
         return Ok(());
     }
+    // Do not add a Run entry if an older task could still launch another executable.
+    if schtasks(&["/Query", "/TN", TASK_NAME, "/FO", "LIST"])
+        .is_ok_and(|output| output.status.success())
+    {
+        bail!("failed to replace the existing MicCamWatch autostart task");
+    }
     let root = RegKey::predef(HKEY_CURRENT_USER);
     let (key, _) = root
         .create_subkey(RUN_KEY)
         .context("failed to open the per-user Run registry key")?;
     key.set_value(RUN_VALUE, &command)
         .context("failed to configure per-user autostart fallback")?;
+    Ok(())
+}
+
+/// Preserve the user's opt-in while repointing a registration after a binary update.
+pub(crate) fn refresh_if_enabled(version: &str) -> Result<()> {
+    if state()? == AutostartState::Enabled {
+        enable_for_version(version)?;
+    }
     Ok(())
 }
 
@@ -89,10 +107,56 @@ fn remove_run_value() -> Result<()> {
     Ok(())
 }
 
-fn tray_executable() -> Result<std::path::PathBuf> {
+fn tray_executable(version: &str) -> Result<std::path::PathBuf> {
     let current = std::env::current_exe().context("failed to locate mcw executable")?;
     let tray = current.with_file_name("mcw-tray.exe");
-    Ok(if tray.exists() { tray } else { current })
+    if tray.exists() {
+        if !tray_matches_version(&tray, version)? {
+            bail!(
+                "the companion {} does not match mcw {}; install matching binaries before enabling autostart",
+                tray.display(),
+                version
+            );
+        }
+        return Ok(tray);
+    }
+    Ok(current)
+}
+
+/// The tray menu embeds this exact version label, including in older releases
+/// that predate an explicit Windows file-version resource. Inspect it without
+/// executing a possibly stale tray binary.
+pub(crate) fn tray_matches_current_version(path: &Path) -> Result<bool> {
+    tray_contains_marker(
+        path,
+        concat!("miccamwatch v", env!("CARGO_PKG_VERSION")).as_bytes(),
+    )
+}
+
+pub(crate) fn tray_matches_version(path: &Path, version: &str) -> Result<bool> {
+    tray_contains_marker(path, format!("miccamwatch v{version}").as_bytes())
+}
+
+fn tray_contains_marker(path: &Path, marker: &[u8]) -> Result<bool> {
+    let mut file = std::fs::File::open(path)
+        .with_context(|| format!("failed to inspect companion tray {}", path.display()))?;
+    let mut bytes = [0u8; 8192];
+    let mut retained = 0;
+    loop {
+        let count = file.read(&mut bytes[retained..])?;
+        if count == 0 {
+            return Ok(false);
+        }
+        let end = retained + count;
+        if bytes[..end]
+            .windows(marker.len())
+            .any(|part| part == marker)
+        {
+            return Ok(true);
+        }
+        retained = (marker.len() - 1).min(end);
+        bytes.copy_within(end - retained..end, 0);
+    }
 }
 
 fn schtasks(arguments: &[&str]) -> Result<std::process::Output> {

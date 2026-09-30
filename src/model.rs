@@ -1,4 +1,6 @@
 use chrono::{DateTime, Utc};
+#[cfg(any(windows, test))]
+use serde::Deserialize;
 use serde::Serialize;
 use std::fmt;
 
@@ -161,6 +163,7 @@ pub struct CollectorHealth {
 pub struct ProcessAncestor {
     pub pid: u32,
     pub name: String,
+    #[cfg_attr(unix, serde(skip_serializing_if = "Option::is_none"))]
     pub created_at_filetime: Option<u64>,
 }
 
@@ -254,6 +257,50 @@ pub struct Device {
     pub name: String,
 }
 
+/// Camera intent shared by the Windows CLI and tray. An unplugged device in
+/// `restore_on_arrival` remains owed an allow operation after reconnection.
+#[cfg(any(windows, test))]
+#[derive(Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct CameraBlockRecord {
+    pub(crate) blocked: Vec<String>,
+    pub(crate) restore_on_arrival: Vec<String>,
+}
+
+#[cfg(any(windows, test))]
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyCameraDevices {
+    devices: Vec<String>,
+}
+
+#[cfg(any(windows, test))]
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum StoredCameraBlockRecord {
+    Current(CameraBlockRecord),
+    LegacyList(Vec<String>),
+    LegacyDevices(LegacyCameraDevices),
+}
+
+#[cfg(any(windows, test))]
+impl CameraBlockRecord {
+    pub(crate) fn from_json(bytes: &[u8]) -> serde_json::Result<Self> {
+        let stored: StoredCameraBlockRecord = serde_json::from_slice(bytes)?;
+        Ok(match stored {
+            StoredCameraBlockRecord::Current(record) => record,
+            StoredCameraBlockRecord::LegacyList(blocked) => Self {
+                blocked,
+                restore_on_arrival: Vec::new(),
+            },
+            StoredCameraBlockRecord::LegacyDevices(legacy) => Self {
+                blocked: legacy.devices,
+                restore_on_arrival: Vec::new(),
+            },
+        })
+    }
+}
+
 pub fn event_code(action: Action) -> u16 {
     match action {
         Action::Start => 1001,
@@ -324,5 +371,53 @@ mod tests {
         assert_eq!(value["accesses"][0]["risk"], "unexplained");
         assert_eq!(value["accesses"][0]["enforcement"], "alert");
         assert_eq!(value["accesses"][0]["confidence"], "low");
+    }
+
+    #[test]
+    fn camera_record_reads_both_legacy_shapes_without_dropping_device_ids() {
+        for encoded in [
+            br#"["CAMERA_A","CAMERA_B"]"#.as_slice(),
+            br#"{"devices":["CAMERA_A","CAMERA_B"]}"#,
+            br#"{"blocked":["CAMERA_A","CAMERA_B"],"restore_on_arrival":[]}"#,
+        ] {
+            let record = CameraBlockRecord::from_json(encoded).unwrap();
+            assert_eq!(record.blocked, ["CAMERA_A", "CAMERA_B"]);
+            assert!(record.restore_on_arrival.is_empty());
+            let canonical = serde_json::to_value(&record).unwrap();
+            assert_eq!(
+                canonical["blocked"],
+                serde_json::json!(["CAMERA_A", "CAMERA_B"])
+            );
+            assert_eq!(canonical["restore_on_arrival"], serde_json::json!([]));
+        }
+        let owed = CameraBlockRecord::from_json(
+            br#"{"blocked":["CAMERA_A"],"restore_on_arrival":["CAMERA_B"]}"#,
+        )
+        .unwrap();
+        assert_eq!(owed.restore_on_arrival, ["CAMERA_B"]);
+        assert!(
+            CameraBlockRecord::from_json(br#"{"devices":["CAMERA_A"],"blocked":["CAMERA_B"]}"#)
+                .is_err(),
+            "ambiguous records must fail, not silently lose blocked intent"
+        );
+    }
+
+    #[test]
+    fn ancestor_json_preserves_windows_null_and_omits_missing_unix_filetime() {
+        let ancestor = ProcessAncestor {
+            pid: 7,
+            name: "parent".into(),
+            created_at_filetime: None,
+        };
+        let value = serde_json::to_value(&ancestor).unwrap();
+        assert_eq!(value["pid"], 7);
+        #[cfg(windows)]
+        assert!(
+            value
+                .get("created_at_filetime")
+                .is_some_and(|field| field.is_null())
+        );
+        #[cfg(unix)]
+        assert!(value.get("created_at_filetime").is_none());
     }
 }

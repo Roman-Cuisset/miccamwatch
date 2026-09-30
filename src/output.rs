@@ -35,7 +35,13 @@ pub fn print_status(
     }
 
     if visible.is_empty() {
-        if snapshot.accesses.is_empty() {
+        if snapshot
+            .collectors
+            .iter()
+            .any(|health| health.state != crate::model::CollectorState::Healthy)
+        {
+            println!("{}", lang.observation_incomplete().yellow());
+        } else if snapshot.accesses.is_empty() {
             println!("{}", lang.no_activity().green().bold());
         } else {
             println!("{}", lang.no_matching_activity().yellow());

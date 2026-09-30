@@ -1565,12 +1565,12 @@ name = "miccamwatch"
 version = "0.13.5"
 dependencies = [
  "anyhow",
- "base64 0.22.1",
  "chrono",
  "clap",
  "colored",
  "crossterm",
  "ctrlc",
+ "libc",
  "ratatui",
  "self_update",
  "serde",
