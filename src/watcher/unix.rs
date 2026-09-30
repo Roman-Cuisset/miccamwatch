@@ -100,12 +100,11 @@ fn reconcile(
             "pipewire_video" | "avfoundation_video" => Resource::Camera,
             _ => continue,
         };
-        let uncertain = collector.state == CollectorState::Unavailable
-            || (matches!(
-                collector.collector,
-                "coreaudio_input" | "avfoundation_video"
-            ) && collector.state == CollectorState::Degraded);
-        if uncertain {
+        // Limited coverage is not a scan gap unless the collector explicitly
+        // reports one; permanent AVFoundation limitations still permit STOP.
+        if collector.state == CollectorState::Unavailable
+            || snapshot.observation_gaps.contains(&resource)
+        {
             unseen.insert(resource);
         } else if unseen.remove(&resource) {
             // Recovery is not evidence of when an earlier capture stopped.
@@ -187,6 +186,7 @@ mod tests {
                 detail: None,
             }],
             accesses,
+            observation_gaps: Vec::new(),
         }
     }
 
@@ -216,7 +216,7 @@ mod tests {
     }
 
     #[test]
-    fn unverified_mac_camera_does_not_stop_during_degraded_coverage() {
+    fn degraded_camera_scan_preserves_stop_and_subsequent_start() {
         let mut previous = HashMap::new();
         let mut unseen = HashSet::new();
         let mut actions = Vec::new();
@@ -226,16 +226,16 @@ mod tests {
         for snap in [
             named_snapshot(
                 "avfoundation_video",
-                CollectorState::Healthy,
+                CollectorState::Degraded,
                 vec![camera.clone()],
             ),
             named_snapshot("avfoundation_video", CollectorState::Degraded, vec![]),
             named_snapshot(
                 "avfoundation_video",
-                CollectorState::Healthy,
+                CollectorState::Degraded,
                 vec![camera.clone()],
             ),
-            named_snapshot("avfoundation_video", CollectorState::Healthy, vec![]),
+            named_snapshot("avfoundation_video", CollectorState::Degraded, vec![]),
         ] {
             reconcile(&mut previous, &mut unseen, &snap, |_, action| {
                 actions.push(action);
@@ -245,7 +245,68 @@ mod tests {
         }
         assert!(matches!(
             actions.as_slice(),
+            [Action::Start, Action::Stop, Action::Start, Action::Stop]
+        ));
+    }
+
+    fn assert_degraded_gap_rebaselines(resource: Resource, collector: &'static str) {
+        let mut previous = HashMap::new();
+        let mut unseen = HashSet::new();
+        let mut actions = Vec::new();
+        let mut observed = access();
+        observed.resource = resource;
+        let active = named_snapshot(collector, CollectorState::Degraded, vec![observed.clone()]);
+        reconcile(&mut previous, &mut unseen, &active, |_, action| {
+            actions.push(action);
+            Ok(())
+        })
+        .unwrap();
+
+        let mut gap = named_snapshot(collector, CollectorState::Degraded, vec![]);
+        gap.observation_gaps.push(resource);
+        reconcile(&mut previous, &mut unseen, &gap, |_, action| {
+            actions.push(action);
+            Ok(())
+        })
+        .unwrap();
+        assert!(previous.contains_key(&observed.key));
+        assert!(unseen.contains(&resource));
+        assert!(matches!(actions.as_slice(), [Action::Start]));
+
+        // Recovery with no activity must not invent a STOP during the gap.
+        let recovered = named_snapshot(collector, CollectorState::Degraded, vec![]);
+        reconcile(&mut previous, &mut unseen, &recovered, |_, action| {
+            actions.push(action);
+            Ok(())
+        })
+        .unwrap();
+        assert!(previous.is_empty());
+        assert!(unseen.is_empty());
+        assert!(matches!(actions.as_slice(), [Action::Start]));
+
+        reconcile(&mut previous, &mut unseen, &active, |_, action| {
+            actions.push(action);
+            Ok(())
+        })
+        .unwrap();
+        reconcile(&mut previous, &mut unseen, &recovered, |_, action| {
+            actions.push(action);
+            Ok(())
+        })
+        .unwrap();
+        assert!(matches!(
+            actions.as_slice(),
             [Action::Start, Action::Start, Action::Stop]
         ));
+    }
+
+    #[test]
+    fn camera_discovery_gap_retains_access_and_rebaselines() {
+        assert_degraded_gap_rebaselines(Resource::Camera, "avfoundation_video");
+    }
+
+    #[test]
+    fn partial_audio_property_gap_retains_access_and_rebaselines() {
+        assert_degraded_gap_rebaselines(Resource::Microphone, "coreaudio_input");
     }
 }

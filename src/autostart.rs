@@ -145,16 +145,16 @@ fn tray_contains_marker(path: &Path, marker: &[u8]) -> Result<bool> {
     loop {
         let count = file.read(&mut bytes[retained..])?;
         if count == 0 {
-            return Ok(false);
+            return Ok(bytes[..retained].ends_with(marker));
         }
         let end = retained + count;
-        if bytes[..end]
-            .windows(marker.len())
-            .any(|part| part == marker)
-        {
+        if bytes[..end].windows(marker.len() + 1).any(|part| {
+            part.starts_with(marker)
+                && !matches!(part[marker.len()], b'0'..=b'9' | b'.' | b'-' | b'+')
+        }) {
             return Ok(true);
         }
-        retained = (marker.len() - 1).min(end);
+        retained = marker.len().min(end);
         bytes.copy_within(end - retained..end, 0);
     }
 }
@@ -165,4 +165,38 @@ fn schtasks(arguments: &[&str]) -> Result<std::process::Output> {
         .creation_flags(CREATE_NO_WINDOW)
         .output()
         .context("failed to execute Windows Task Scheduler")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tray_version_rejects_prefixes_and_handles_read_boundaries() -> Result<()> {
+        let path =
+            std::env::temp_dir().join(format!("mcw-tray-version-{}.bin", std::process::id()));
+        let check = || -> Result<()> {
+            for padding in [0, 8190, 8192] {
+                for (suffix, expected) in [
+                    ("", true),
+                    ("Microphone unavailable", true),
+                    ("\0", true),
+                    ("0", false),
+                    (".1", false),
+                    ("-beta", false),
+                    ("+build", false),
+                ] {
+                    let mut bytes = vec![0; padding];
+                    bytes.extend_from_slice(b"miccamwatch v0.13.5");
+                    bytes.extend_from_slice(suffix.as_bytes());
+                    std::fs::write(&path, bytes)?;
+                    assert_eq!(tray_matches_version(&path, "0.13.5")?, expected);
+                }
+            }
+            Ok(())
+        };
+        let result = check();
+        let _ = std::fs::remove_file(path);
+        result
+    }
 }

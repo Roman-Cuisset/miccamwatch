@@ -30,6 +30,10 @@ A platform backend implements `CaptureCollector`:
 - **macOS 15+**: Cargo compiles a Swift helper against the macOS 15 SDK and embeds it in the CLI; the runtime invokes its private extracted executable, without a development script or media capture session. CoreAudio `AudioHardwareSystem.processes` yields microphone `Active` only when `AudioHardwareProcess.isRunningInput` is true; PID is exposed only after `libproc` verifies executable and birth time across the property read. An unverified active input has no PID or stable process identity. Mere device enumeration never implies `Ready`. AVFoundation `AVCaptureDevice.isInUseByAnotherApplication` reports usage by **another** application at device level, never the client's identity: camera PID is null, application unknown and enforcement `Unknown`. Camera health is always `Degraded` for own-app/noninteractive visibility gaps; helper failure is `Unavailable`, never a healthy empty scan. No intrusive camera start, TCC bypass, hardware blocking or process termination.
 - **Android**: requires a separate application and permission architecture. Android does not expose a general third-party per-process capture collector, so the desktop contract must not be simulated.
 
+PipeWire application properties are client-supplied: `/proc` alone does not authenticate their PID. Attribution additionally requires matching the owning Client's protocol-authenticated `pipewire.sec.pid`; forwarded PulseAudio/portal identity remains unknown when this cannot be established. See [PipeWire client security properties](https://docs.pipewire.org/page_man_pipewire-props_7.html#client-prop__pipewire_sec_pid).
+
+`Snapshot.observation_gaps` is internal and separate from health: permanently degraded AVFoundation coverage can still contain complete device observations and normal START/STOP cycles. Empty camera discovery or failed CoreAudio process properties create an observation gap; the Unix watcher suppresses STOP and rebaselines after recovery instead of treating missing data as inactivity.
+
 Unsupported backends must report unavailable capabilities rather than emit synthetic activity or confidence.
 
 ## Resource matrix
@@ -37,7 +41,7 @@ Unsupported backends must report unavailable capabilities rather than emit synth
 | OS / environment | Microphone active / PID | Camera active / PID | Camera ready | Blocking / notifications / tray |
 | --- | --- | --- | --- | --- |
 | Windows 10/11 | WASAPI sessions / validated process | Capture evidence / validated process where available | Capture pipeline evidence, unconfirmed | Camera device block requires administrator approval; notifications and tray available |
-| Linux desktop | Running PipeWire capture source link / validated `/proc` PID if readable | Running PipeWire video source link / validated `/proc` PID if readable | Idle stream or V4L2 open FD, low confidence | Unavailable; CLI and watcher only |
+| Linux desktop | Running PipeWire capture source link / authenticated Client PID validated with `/proc` | Running PipeWire video source link / authenticated Client PID validated with `/proc` | Idle stream or V4L2 open FD, low confidence | Unavailable; CLI and watcher only |
 | macOS 15+ | CoreAudio `processes` with `isRunningInput` / validated `libproc` PID if readable | AVFoundation `isInUseByAnotherApplication` / unknown PID | No camera ready inference | Unavailable; CLI and watcher only |
 | WSL / virtual or headless runners | Physical hardware and user session not guaranteed | Physical camera visibility not guaranteed | Inventory is not flow proof | No hardware assertion from CI |
 

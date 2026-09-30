@@ -100,23 +100,50 @@ impl Graph {
         inactive
     }
 
-    fn process_id(&self, stream: &Value) -> Option<u32> {
-        let props = stream.get("info")?.get("props")?;
-        let direct = props.get("application.process.id").and_then(value_u32);
-        if direct.is_some() {
-            return direct;
-        }
-        let client_id = props.get("client.id").and_then(value_u64)?;
-        self.objects
+    fn process_id(&self, stream: &Value) -> Result<u32, String> {
+        let props = stream
+            .get("info")
+            .and_then(|info| info.get("props"))
+            .ok_or_else(|| "capture stream has no PipeWire properties".to_owned())?;
+        let client_id = props
+            .get("client.id")
+            .and_then(value_u64)
+            .ok_or_else(|| "capture stream has no owning client.id".to_owned())?;
+        let client_props = self
+            .objects
             .iter()
             .find(|client| kind(client, "Client") && number(client, &["id"]) == Some(client_id))
-            .and_then(|client| {
-                client
-                    .get("info")?
-                    .get("props")?
-                    .get("application.process.id")
-            })
+            .and_then(|client| client.get("info")?.get("props"))
+            .ok_or_else(|| {
+                format!("owning PipeWire client {client_id} has no Client properties")
+            })?;
+        // Only Client pipewire.* properties are security-safe. Node properties,
+        // including a node's pipewire.sec.pid, are not client credentials.
+        // https://docs.pipewire.org/page_man_pipewire-props_7.html#client-prop__pipewire_sec_pid
+        // For PulseAudio, the secure PID belongs to pipewire-pulse; a different
+        // application PID must remain unattributed rather than inherit its trust.
+        let secure_pid = client_props
+            .get("pipewire.sec.pid")
             .and_then(value_u32)
+            .filter(|pid| *pid != 0)
+            .ok_or_else(|| {
+                format!(
+                    "owning PipeWire client {client_id} has no valid protocol-set pipewire.sec.pid"
+                )
+            })?;
+        let claimed_pid = props
+            .get("application.process.id")
+            .or_else(|| client_props.get("application.process.id"))
+            .and_then(value_u32)
+            .ok_or_else(|| {
+                "capture client has no valid claimed application.process.id".to_owned()
+            })?;
+        if claimed_pid != secure_pid {
+            return Err(format!(
+                "claimed application.process.id {claimed_pid} does not match owning PipeWire client {client_id} protocol-set pipewire.sec.pid {secure_pid}"
+            ));
+        }
+        Ok(secure_pid)
     }
 
     pub(super) fn observe(&self, scope: CaptureScope, boot: Option<&BootTime>) -> Observation {
@@ -162,20 +189,21 @@ impl Graph {
                 continue;
             }
 
-            let pid = self.process_id(stream);
-            let identity = match (pid, boot) {
+            let authenticated_pid = self.process_id(stream);
+            let identity = match (authenticated_pid.as_ref().ok().copied(), boot) {
                 (Some(pid), Some(boot)) => ProcessIdentity::verify(pid, boot).ok(),
                 _ => None,
             };
             if identity.is_none() {
-                warning.get_or_insert_with(|| {
-                    format!("capture node {stream_id} has no verified application.process.id and /proc executable")
-                });
+                let reason = authenticated_pid.as_ref().err().map_or(
+                    "authenticated PipeWire client PID could not be verified against /proc",
+                    String::as_str,
+                );
+                warning.get_or_insert_with(|| format!("capture node {stream_id}: {reason}"));
             }
             let app = identity
                 .as_ref()
                 .map(|id| id.name.as_str())
-                .or_else(|| property(stream, "application.name"))
                 .unwrap_or("Unknown PipeWire capture client");
             let mut evidence = vec![Evidence::new(
                 EvidenceKind::LiveApi,
@@ -185,6 +213,16 @@ impl Graph {
                     state.unwrap_or("unknown")
                 ),
             )];
+            evidence.push(Evidence::new(
+                EvidenceKind::LiveApi,
+                "pipewire_client",
+                match &authenticated_pid {
+                    Ok(pid) => format!(
+                        "application.process.id {pid} matches owning Client protocol-set pipewire.sec.pid"
+                    ),
+                    Err(reason) => format!("process attribution rejected: {reason}"),
+                },
+            ));
             if let Some((source, active)) = source {
                 evidence.push(Evidence::new(
                     EvidenceKind::LiveApi,
@@ -210,7 +248,7 @@ impl Graph {
                 evidence.push(Evidence::new(
                     EvidenceKind::ProcessLineage,
                     "procfs",
-                    "application.process.id could not be validated against /proc/pid/stat and /proc/pid/exe",
+                    "no authenticated capture client PID with verified /proc/pid/stat and /proc/pid/exe identity",
                 ));
             }
             let source_id = source.and_then(|(node, _)| number(node, &["id"]));
@@ -455,12 +493,67 @@ mod tests {
     }
 
     #[test]
-    fn client_process_property_is_used_when_stream_node_does_not_repeat_it() {
+    fn client_process_property_is_used_only_when_it_matches_the_secure_client_pid() {
         let graph = Graph::parse(br#"[
-            {"id":30,"type":"PipeWire:Interface:Client/3","info":{"props":{"application.process.id":321}}},
-            {"id":31,"type":"PipeWire:Interface:Node/3","info":{"state":"idle","props":{"media.class":"Stream/Input/Audio","client.id":30}}}
+            {"id":30,"type":"PipeWire:Interface:Client/3","info":{"props":{"application.process.id":321,"pipewire.sec.pid":"321"}}},
+            {"id":31,"type":"PipeWire:Interface:Node/3","info":{"state":"idle","props":{"media.class":"Stream/Input/Audio","client.id":"30"}}}
         ]"#).unwrap();
         let node = graph.nodes().next().unwrap();
-        assert_eq!(graph.process_id(node), Some(321));
+        assert_eq!(graph.process_id(node), Ok(321));
+    }
+
+    #[test]
+    fn spoofed_stream_pid_cannot_override_authenticated_client_pid() {
+        let graph = Graph::parse(br#"[
+            {"id":5,"type":"PipeWire:Interface:Node/3","info":{"state":"running","props":{"media.class":"Audio/Source","node.name":"mic"}}},
+            {"id":30,"type":"PipeWire:Interface:Client/3","info":{"props":{"application.process.id":654,"pipewire.sec.pid":654}}},
+            {"id":31,"type":"PipeWire:Interface:Node/3","info":{"state":"running","props":{"media.class":"Stream/Input/Audio","client.id":30,"application.process.id":321,"application.name":"Spoofed app","pipewire.sec.pid":321}}},
+            {"id":40,"type":"PipeWire:Interface:Link/3","info":{"input-node-id":31,"output-node-id":5,"state":"active"}}
+        ]"#).unwrap();
+        let stream = graph
+            .nodes()
+            .find(|node| number(node, &["id"]) == Some(31))
+            .unwrap();
+        let rejection = graph.process_id(stream).unwrap_err();
+        assert!(rejection.contains("application.process.id 321"));
+        assert!(rejection.contains("pipewire.sec.pid 654"));
+        let observation = graph.observe(CaptureScope::all(), None);
+        let access = &observation.accesses[0];
+        assert_eq!(access.activity, Activity::Active);
+        assert_eq!(access.confidence, Confidence::Low);
+        assert_eq!(access.enforcement, EnforcementDecision::Unknown);
+        assert_eq!(access.application, "Unknown PipeWire capture client");
+        assert!(access.pid.is_none());
+        assert!(access.executable.is_none());
+        assert!(access.process.is_none());
+        assert!(
+            observation
+                .audio_error
+                .as_deref()
+                .unwrap()
+                .contains(&rejection)
+        );
+        assert!(
+            access
+                .evidence
+                .iter()
+                .any(|evidence| evidence.source == "pipewire_client"
+                    && evidence.detail.contains(&rejection))
+        );
+    }
+
+    #[test]
+    fn node_secure_pid_cannot_replace_missing_client_secure_pid() {
+        let graph = Graph::parse(br#"[
+            {"id":30,"type":"PipeWire:Interface:Client/3","info":{"props":{"application.process.id":321}}},
+            {"id":31,"type":"PipeWire:Interface:Node/3","info":{"state":"idle","props":{"media.class":"Stream/Input/Audio","client.id":30,"application.process.id":321,"pipewire.sec.pid":321}}}
+        ]"#).unwrap();
+        let node = graph.nodes().next().unwrap();
+        assert!(
+            graph
+                .process_id(node)
+                .unwrap_err()
+                .contains("no valid protocol-set pipewire.sec.pid")
+        );
     }
 }

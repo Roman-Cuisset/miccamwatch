@@ -487,6 +487,7 @@ mod tests {
                 detail: Some("registry access denied".into()),
             }],
             accesses: vec![],
+            observation_gaps: Vec::new(),
         };
         assert!(ensure_collectors_available(&snapshot).is_err());
     }

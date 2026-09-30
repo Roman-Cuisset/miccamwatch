@@ -43,6 +43,7 @@ impl PlatformMonitor {
         let mut snapshot = Snapshot {
             collectors: Vec::new(),
             accesses: Vec::new(),
+            observation_gaps: Vec::new(),
         };
         if !scope.microphone && !scope.camera {
             return Ok(snapshot);
@@ -59,6 +60,9 @@ impl PlatformMonitor {
                     let audio = observation
                         .audio
                         .context("helper omitted CoreAudio result")?;
+                    if !audio.available || audio.error.is_some() {
+                        snapshot.observation_gaps.push(Resource::Microphone);
+                    }
                     let mut detail = audio.error.or_else(|| {
                         (!audio.available)
                             .then(|| "CoreAudio process enumeration unavailable".to_owned())
@@ -92,6 +96,9 @@ impl PlatformMonitor {
                     let video = observation
                         .video
                         .context("helper omitted AVFoundation result")?;
+                    if video.error.is_some() || video.devices.is_empty() {
+                        snapshot.observation_gaps.push(Resource::Camera);
+                    }
                     let detail = video.error.unwrap_or_else(|| {
                         if !video.interactive || video.devices.is_empty() {
                             "passive AVFoundation camera discovery is unverified in this session; no camera permission requested; own-app capture and client identity are not observable".to_owned()
@@ -104,8 +111,8 @@ impl PlatformMonitor {
                             snapshot.accesses.push(camera_access(&camera));
                         }
                     }
-                    // A negative is not proof of no camera use: the property excludes
-                    // our own process, and unattended discovery may return no devices.
+                    // Coverage limitations alone do not invalidate device observations.
+                    // Empty discovery and API errors are recorded separately as scan gaps.
                     snapshot.collectors.push(health(
                         "avfoundation_video",
                         CollectorState::Degraded,

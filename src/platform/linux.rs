@@ -107,6 +107,7 @@ impl PlatformMonitor {
         Ok(Snapshot {
             collectors,
             accesses,
+            observation_gaps: Vec::new(),
         })
     }
 

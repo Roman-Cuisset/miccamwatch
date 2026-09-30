@@ -240,6 +240,8 @@ pub struct AccessEvent {
 pub struct Snapshot {
     pub collectors: Vec<CollectorHealth>,
     pub accesses: Vec<Access>,
+    /// Resources whose current scan cannot establish that missing accesses stopped.
+    pub observation_gaps: Vec<Resource>,
 }
 
 #[derive(Debug, Serialize)]
