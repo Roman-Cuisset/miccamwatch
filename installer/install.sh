@@ -4,6 +4,10 @@ set -eu
 umask 077
 LC_ALL=C
 export LC_ALL
+# macOS system tools (lsof/sysctl) must remain available with a minimal PATH.
+# This changes only the installer subprocess, never the caller's environment.
+PATH=${PATH:-/usr/bin:/bin}:/usr/sbin:/sbin
+export PATH
 
 REPOSITORY=https://github.com/Roman-Cuisset/miccamwatch
 VERSION=latest
