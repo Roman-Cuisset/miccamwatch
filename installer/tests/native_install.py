@@ -448,7 +448,8 @@ def fixture_curl(arguments):
 
 def archive_bytes(binary, extra=None, replacement=None):
     output = io.BytesIO()
-    with tarfile.open(fileobj=output, mode="w:gz", format=tarfile.USTAR_FORMAT) as archive:
+    # macOS TMPDIR paths can exceed USTAR's 100-byte linkname field.
+    with tarfile.open(fileobj=output, mode="w:gz", format=tarfile.PAX_FORMAT) as archive:
         for name, content, mode in (("mcw", binary, 0o755), ("README.md", b"fixture readme\n", 0o644), ("LICENSE", b"fixture license\n", 0o644)):
             member = tarfile.TarInfo(name)
             member.mode = mode
