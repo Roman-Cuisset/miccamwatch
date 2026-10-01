@@ -1,0 +1,75 @@
+name: Native Unix installation
+
+on:
+  push:
+    paths:
+      - installer/install.sh
+      - installer/tests/native_install.py
+      - .github/workflows/unix-install.yml
+  pull_request:
+    paths:
+      - installer/install.sh
+      - installer/tests/native_install.py
+      - .github/workflows/unix-install.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  install:
+    name: Public installer / ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macos-15, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      # Pull-request merge SHAs are not public raw-content refs. Verify the
+      # public head commit, including the head repository for forked PRs.
+      SOURCE_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+      SOURCE_REF: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: ${{ env.SOURCE_REPOSITORY }}
+          ref: ${{ env.SOURCE_REF }}
+          persist-credentials: false
+      - name: Ensure supported shells (runner packages only)
+        shell: bash
+        run: |
+          set -eu
+          if [ "$RUNNER_OS" = Linux ]; then
+            missing=""
+            for shell in bash zsh fish; do
+              if ! command -v "$shell" >/dev/null 2>&1; then
+                missing="$missing $shell"
+              fi
+            done
+            if [ -n "$missing" ]; then
+              sudo apt-get update
+              sudo apt-get install --no-install-recommends -y $missing
+            fi
+          else
+            version=$(sw_vers -productVersion)
+            test "${version%%.*}" -ge 15
+            for shell in bash zsh fish; do
+              if ! command -v "$shell" >/dev/null 2>&1; then
+                brew install "$shell"
+              fi
+            done
+          fi
+          for shell in bash zsh fish; do
+            command -v "$shell"
+          done
+          python3 --version
+      - name: Verify public commit-pinned installer and released v0.14.0
+        shell: bash
+        run: |
+          set -eu
+          source_url="https://raw.githubusercontent.com/$SOURCE_REPOSITORY/$SOURCE_REF/installer/install.sh"
+          printf 'Public source: %s\n' "$source_url"
+          python3 installer/tests/native_install.py \
+            --source-url "$source_url" \
+            --version v0.14.0
