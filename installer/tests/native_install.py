@@ -170,8 +170,16 @@ class Sandbox:
             ["/bin/sh", script, "--version", version, "--prefix", self.prefix, *flags],
             env=env or self.env, cwd=self.cwd, codes=codes, timeout=240,
         )
-        require(not list(self.temp.iterdir()), "installer leaked temporary download files")
+        self.check_installer_cleanup()
         return result
+
+    def check_installer_cleanup(self):
+        # A running macOS watcher legitimately keeps its embedded helper in
+        # TMPDIR. Check installer-owned staging/locks, not unrelated live files.
+        patterns = (".mcw-install.*", ".mcw-stage.*", ".mcw-backup.*",
+                    ".mcw-path.*", ".miccamwatch-install.lock")
+        leaked = [path for pattern in patterns for path in self.root.rglob(pattern)]
+        require(not leaked, f"installer staging or locks remained after exit: {leaked}")
 
     def unchanged_configs(self):
         for path, content in self.configs.items():
@@ -266,7 +274,7 @@ def interactive_consent(script, sandbox, version, answer=b"\n"):
         sandbox.version(version, login=True)
     else:
         sandbox.unchanged_configs()
-    require(not list(sandbox.temp.iterdir()), "interactive installer leaked temporary files")
+    sandbox.check_installer_cleanup()
 
 
 def validate_status(document, version):
