@@ -785,17 +785,43 @@ impl Session {
             node.node.set_param(ParamType::Props, 0, pod.pod()?);
         }
         self.roundtrip()?;
-        self.refresh_mute(identity, &state)?;
-        if let Some(error) = self.errors.borrow().get(&proxy_id) {
-            bail!("{error}");
+        // Core sync orders protocol requests, not the adapter's asynchronous
+        // data-loop mutation. Request fresh Props until native readback converges;
+        // never resend the mutation or discard restoration intent on a mismatch.
+        let deadline = Instant::now() + TIMEOUT;
+        loop {
+            self.refresh_mute(identity, &state)?;
+            if let Some(error) = self.errors.borrow().get(&proxy_id) {
+                bail!("{error}");
+            }
+            {
+                let current = state.borrow();
+                if !current.verified
+                    || current.removed
+                    || !current.props_writable
+                    || current.mute_readonly
+                {
+                    bail!("original bound source is unavailable or not writable");
+                }
+                if current.muted == Some(muted) {
+                    return Ok(());
+                }
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                bail!(
+                    "mute readback did not confirm requested state {muted}; original restoration state retained"
+                );
+            }
+            if self
+                .main_loop
+                .loop_()
+                .iterate((deadline - now).min(Duration::from_millis(50)))
+                < 0
+            {
+                bail!("native PipeWire loop iteration failed");
+            }
         }
-        let state = state.borrow();
-        if !state.verified || state.removed || state.muted != Some(muted) {
-            bail!(
-                "mute readback did not confirm requested state {muted}; original restoration state retained"
-            );
-        }
-        Ok(())
     }
 
     fn refresh_mute(

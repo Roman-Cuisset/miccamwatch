@@ -1,4 +1,5 @@
 import AppKit
+import CoreGraphics
 import Foundation
 import UserNotifications
 import os
@@ -30,15 +31,39 @@ private func desktopEmit(_ event: DesktopEvent) {
         try FileHandle.standardOutput.write(contentsOf: bytes)
     } catch { Darwin.exit(1) }
 }
+// Only documented Quartz session keys are used; console/login context is not lock evidence.
+private func desktopGUIContext() -> (available: Bool, detail: String) {
+    guard let session = CGSessionCopyCurrentDictionary() else {
+        return (false, "quartzSession=unavailable euid=\(geteuid())")
+    }
+    let dictionary = session as NSDictionary
+    let uid = (dictionary[kCGSessionUserIDKey] as? NSNumber)?.stringValue ?? "unknown"
+    let onConsole = (dictionary[kCGSessionOnConsoleKey] as? Bool).map { String($0) } ?? "unknown"
+    let loginDone = (dictionary[kCGSessionLoginDoneKey] as? Bool).map { String($0) } ?? "unknown"
+    return (true, "quartzSession=available euid=\(geteuid()) sessionUID=\(uid) onConsole=\(onConsole) loginDone=\(loginDone)")
+}
+private func desktopPolicyName(_ policy: NSApplication.ActivationPolicy) -> String {
+    switch policy {
+    case .regular: return "regular"
+    case .accessory: return "accessory"
+    case .prohibited: return "prohibited"
+    @unknown default: return "unknown(\(policy.rawValue))"
+    }
+}
+private func desktopDiagnostic(_ context: String) {
+    try? FileHandle.standardError.write(contentsOf: Data("MicCamWatch AppKit: \(context)\n".utf8))
+}
 private final class DesktopDelegate: NSObject, NSApplicationDelegate {
     private var item: NSStatusItem?
     private var menu = NSMenu()
     private var stopping = false
     private var pendingClick: DispatchWorkItem?
     func applicationDidFinishLaunching(_ notification: Notification) {
+        desktopDiagnostic("didFinishLaunching policy=\(desktopPolicyName(NSApp.activationPolicy()))")
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         guard let item = item, let button = item.button, item.isVisible else {
-            desktopEmit(DesktopEvent(kind: "error", error: "AppKit could not register a status item"))
+            let context = desktopGUIContext().detail
+            desktopEmit(DesktopEvent(kind: "error", error: "AppKit could not register a visible status item; policy=\(desktopPolicyName(NSApp.activationPolicy())) \(context)"))
             NSApp.terminate(nil)
             return
         }
@@ -48,6 +73,7 @@ private final class DesktopDelegate: NSObject, NSApplicationDelegate {
         button.toolTip = "MicCamWatch"
         button.image = icon("error")
         menu.addItem(withTitle: "MicCamWatch", action: nil, keyEquivalent: "")
+        desktopDiagnostic("statusItem registered visible=\(item.isVisible) buttonWindow=\(button.window != nil)")
         desktopEmit(DesktopEvent(kind: "ready", protocol: 1))
         DispatchQueue.global(qos: .utility).async { [weak self] in self?.readFrames() }
     }
@@ -161,9 +187,26 @@ func desktopMain(args: [String]) -> Never {
     guard args.isEmpty, Thread.isMainThread else {
         desktopEmit(DesktopEvent(kind: "error", error: "desktop requires the main thread and no arguments")); Darwin.exit(1)
     }
+    let gui = desktopGUIContext()
+    guard gui.available else {
+        desktopEmit(DesktopEvent(kind: "error", error: "AppKit menu bar requires a Quartz GUI/WindowServer session for this process; \(gui.detail)")); Darwin.exit(1)
+    }
     let application = NSApplication.shared
-    guard application.setActivationPolicy(.accessory) else {
-        desktopEmit(DesktopEvent(kind: "error", error: "AppKit accessory application unavailable")); Darwin.exit(1)
+    let initialPolicy = application.activationPolicy()
+    let agentBundle = Bundle.main.bundleURL.pathExtension == "app"
+    let uiElement = (Bundle.main.object(forInfoDictionaryKey: "LSUIElement") as? NSNumber)?.boolValue
+    let context = "\(gui.detail) appBundle=\(agentBundle) LSUIElement=\(uiElement.map { String($0) } ?? "unknown") initialPolicy=\(desktopPolicyName(initialPolicy))"
+    // LSUIElement=true already requests accessory policy. The setter reports a
+    // policy switch, not status-item registration; do not require a redundant switch.
+    if initialPolicy != .accessory {
+        let switched = application.setActivationPolicy(.accessory)
+        let resultingPolicy = application.activationPolicy()
+        desktopDiagnostic("startup \(context) switchAccepted=\(switched) resultingPolicy=\(desktopPolicyName(resultingPolicy))")
+        guard switched, resultingPolicy == .accessory else {
+            desktopEmit(DesktopEvent(kind: "error", error: "AppKit rejected the accessory activation policy transition; \(context) switchAccepted=\(switched) resultingPolicy=\(desktopPolicyName(resultingPolicy))")); Darwin.exit(1)
+        }
+    } else {
+        desktopDiagnostic("startup \(context) switch=unnecessary")
     }
     let delegate = DesktopDelegate()
     application.delegate = delegate

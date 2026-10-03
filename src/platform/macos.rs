@@ -593,7 +593,9 @@ impl Helper {
             .args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            // Keep stdout exclusively for desktop protocol frames. AppKit's
+            // bounded launch/session diagnostics belong to the caller's stderr.
+            .stderr(Stdio::inherit())
             .spawn()
             .context("cannot execute embedded AppKit desktop helper")?;
         children.retain(|pid| process_may_be_running(*pid));

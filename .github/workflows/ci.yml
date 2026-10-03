@@ -205,6 +205,11 @@ jobs:
                   record("camera-help-" + language, [binary, "--lang", language, "help", "camera"])
               if linux:
                   record("display", ["xdpyinfo"])
+                  # dbus-run-session starts before Xvfb/Python set the disposable
+                  # desktop environment. Update only this private bus, not systemd.
+                  record("desktop-activation-environment", ["dbus-update-activation-environment",
+                         "DISPLAY", "XAUTHORITY", "HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME",
+                         "XDG_STATE_HOME", "XDG_RUNTIME_DIR"])
                   launch("window-manager", ["openbox"])
                   # Configure the real XFCE panel's built-in StatusNotifier-capable tray.
                   for args in (
@@ -255,8 +260,19 @@ jobs:
                   assert any(row["state"] == "healthy" for row in current["collectors"]), current
                   record("virtual-source", ["pw-cli", "create-node", "adapter",
                          "{ factory.name=support.null-audio-sink node.name=MCW_CI_Source media.class=Audio/Source object.linger=true audio.position=[MONO] }"])
-                  capture = launch("virtual-capture", ["pw-cat", "--record", "--raw", "--rate=48000", "--channels=1",
+                  capture = launch("virtual-capture", ["pw-cat", "--record", "--rate=48000", "--channels=1",
                                    "--format=s16", "--target=MCW_CI_Source", "--properties={ node.name=MCW_CI_Record }", "/dev/null"])
+                  def virtual_node(name):
+                      graph = json.loads(subprocess.check_output(["pw-dump"]))
+                      return next((row for row in graph
+                                   if row.get("info", {}).get("props", {}).get("node.name") == name), None)
+                  until(lambda: virtual_node("MCW_CI_Record") is not None, "Virtual capture node was not exported")
+                  # Without a hardware session manager both adapters need explicit
+                  # native port configuration. The null sink's monitor is our source.
+                  for name, monitor in (("MCW_CI_Source", "true"), ("MCW_CI_Record", "false")):
+                      record("virtual-port-config-" + name, ["pw-cli", "set-param", str(virtual_node(name)["id"]),
+                             "PortConfig", "{ direction=Input mode=dsp monitor=" + monitor
+                             + " format={ mediaType=audio mediaSubtype=raw format=F32P rate=48000 channels=1 position=[MONO] } }"])
                   def link_virtual():
                       outputs = subprocess.check_output(["pw-link", "-o"], text=True).splitlines()
                       inputs = subprocess.check_output(["pw-link", "-i"], text=True).splitlines()
@@ -266,21 +282,28 @@ jobs:
                   until(link_virtual, "Virtual PipeWire source/record ports were not available")
                   until(lambda: any(a.get("pid") == capture.pid and a.get("activity") == "active"
                                     for a in status("virtual-status")["accesses"]), "Native virtual capture PID not observed")
+                  record("virtual-active-graph", ["pw-dump"])
                   def virtual_source():
-                      graph = json.loads(subprocess.check_output(["pw-dump"]))
-                      return next(row for row in graph if row.get("info", {}).get("props", {}).get("node.name") == "MCW_CI_Source")
+                      return virtual_node("MCW_CI_Source")
                   def virtual_muted():
                       return any(parameter.get("mute") is True
                                  for parameter in virtual_source()["info"]["params"].get("Props", []))
-                  record("virtual-mute", [binary, "mute"])
+                  assert not virtual_muted(), "Owned virtual source did not start unmuted"
+                  def virtual_control(name, command):
+                      try:
+                          record(name, [binary, command])
+                      finally:
+                          # Keep independent graph evidence even if native control fails.
+                          record(name + "-readback", ["pw-dump"])
+                  virtual_control("virtual-mute", "mute")
                   until(virtual_muted, "Native mute did not change the owned virtual source")
-                  record("virtual-unmute", [binary, "unmute"])
+                  virtual_control("virtual-unmute", "unmute")
                   until(lambda: not virtual_muted(), "Owned restoration did not restore the virtual source")
                   source_id = str(virtual_source()["id"])
                   record("virtual-premute", ["pw-cli", "set-param", source_id, "Props", "{ mute=true }"])
                   until(virtual_muted, "Fixture pre-mute did not reach the virtual source")
-                  record("virtual-premuted-mute", [binary, "mute"])
-                  record("virtual-premuted-restore", [binary, "unmute"])
+                  virtual_control("virtual-premuted-mute", "mute")
+                  virtual_control("virtual-premuted-restore", "unmute")
                   assert virtual_muted(), "Owned restoration incorrectly unmuted a previously muted source"
                   record("virtual-reset", ["pw-cli", "set-param", source_id, "Props", "{ mute=false }"])
                   until(lambda: not virtual_muted(), "Virtual source fixture cleanup did not restore its own state")

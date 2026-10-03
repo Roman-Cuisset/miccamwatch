@@ -1,6 +1,6 @@
 # miccamwatch
 
-`mcw` monitors microphone and camera access with platform-specific evidence. Windows is the release-gated beta with process attribution and privacy controls; Linux and macOS provide native CLI monitoring with narrower evidence. It supports high-contrast terminal colors, multilingual core labels, policy-driven trust validation, JSONL logging, and, on Windows, Event Log integration and desktop toast notifications. Detailed evidence remains in English for stable machine-readable diagnostics.
+`mcw` monitors microphone and camera access using platform-specific evidence. Windows uses native capture and privacy APIs; Linux and macOS 15+ provide native monitoring, desktop frontends and scoped controls with narrower evidence. It supports high-contrast terminal colors, seven display languages, policy-driven trust validation, JSONL history and native event notifications. Detailed evidence remains in English for stable machine-readable diagnostics. The public `v0.14.0` Unix packages are monitoring-only; the expanded native implementation is in the `0.15.0` source.
 
 ## Current capabilities
 
@@ -16,20 +16,20 @@
 - Supports human-readable and versioned JSON output.
 - Filters output by minimum risk level (`--risk`).
 - Writes JSONL event logs to file (`--log`).
-- Optionally writes events to the Windows Application event log (`--eventlog`).
-- Sends Windows desktop toast notifications on access events (`--notify`).
+- Optionally writes events to the native system journal (`--eventlog`): Windows Application Event Log, Linux syslog, or macOS Unified Logging.
+- Sends native desktop notifications on access events (`--notify`), subject to the desktop service and user authorization.
 - High-contrast terminal color coding for instant status recognition (green, yellow, orange, red).
-- Multilingual user interface with automatic Windows system language detection and 7 supported languages: English (`en`), French (`fr`), German (`de`), Spanish (`es`), Japanese (`ja`), Simplified Chinese (`zh`), Russian (`ru`).
+- Seven display/help languages with native locale detection: English (`en`), French (`fr`), German (`de`), Spanish (`es`), Japanese (`ja`), Simplified Chinese (`zh`), Russian (`ru`).
 - Microphone mute/query/owned restoration (`mcw mute` / `mcw unmute` / `mcw mute --toggle`): Windows capture endpoints, Linux PipeWire session sources, or writable macOS CoreAudio inputs. This is not a universal hardware kill-switch or a guarantee against bypassing those scopes.
 - Interactive full-terminal live dashboard (`mcw top`) with keyboard and left-click controls. Shortcuts accept either case; `[b]` blocks connected Windows cameras and `[a]` restores cameras previously blocked by MicCamWatch. The controls wrap on narrow terminals. `[k]` requires a second confirmation for the same live process identity; Esc cancels without quitting. Camera approval runs off the UI thread; pending operations prevent an unsafe quit and failures remain visible.
-- Windows Notification Area background mode with green (idle), yellow (camera-ready), red (confirmed active), and gray (collector error) states (`mcw tray`).
-- Privacy Control Center commands for hardware camera allow/block (administrator approval required), scheduled autostart with a per-user fallback, notification pause, lock policies, profiles, and tray lifecycle control.
-- Persistent settings in `%APPDATA%\MicCamWatch\settings.toml` and rotating JSONL activity history in `%LOCALAPPDATA%\MicCamWatch`.
-- Single-instance tray service with local Windows message IPC (`mcw tray status` / `mcw tray stop`).
+- Native desktop mode (`mcw tray`): Windows Notification Area, Linux StatusNotifierItem on a supporting desktop, or macOS AppKit menu bar.
+- Privacy commands expose the actual platform scope: Windows device blocking, Linux session-source mute, and writable macOS input mute plus an explicitly approved owned camera profile. Unsupported controls are disabled or refused, never reported as successful.
+- Persistent settings and rotating JSONL history use application-data directories on Windows and XDG/HOME directories on Unix. Query exact paths with `mcw config settings-path` and `mcw history path`.
+- Single-instance per-user desktop service with native lifecycle IPC (`mcw tray status` / `mcw tray stop`).
 - Opt-in termination of explicitly policy-denied active capture processes after two consecutive observations (`--kill-unauthorized`, disabled by default).
-- Three-state workstation lock detection; unknown lock state never triggers enforcement.
+- Three-state session lock detection on Windows/Linux; unknown lock state never triggers enforcement. Public macOS lock state stays unknown and enabling lock policy is refused.
 - Discreet native audio chime upon confirmed capture initiation (`--sound`).
-- Monitoring runs without administrator privileges; disabling or re-enabling camera devices prompts for administrator approval.
+- Monitoring runs without administrator privileges. Windows camera device changes request administrator approval; macOS camera profile installation/removal requires manual approval in System Settings.
 
 ## Commands
 
@@ -197,8 +197,8 @@ paths = ["C:\\Program Files\\Zoom"]
 ```
 
 - **strict**: escalates heuristic `unexplained` assessments to `suspicious`; it does not authorize termination.
-- **online**: performs live certificate revocation checking (CRL/OCSP) instead of cache-only.
-- **applications**: explicit per-executable publisher and path rules. Publisher names must match the verified Authenticode signer exactly (case-insensitive); path prefixes end at a Windows directory boundary. These are lexical checks, not a defense against reparse-point redirects. A fully observed mismatch produces `enforcement = "deny"`; missing identity evidence produces `unknown`, never termination.
+- **online**: permits native online trust checks; offline monitoring never enables retrieval implicitly. Windows uses certificate revocation checks; macOS uses Apple's configured code-signing validation without a guarantee of fresh online revocation data. Linux detached OpenPGP verification permits key retrieval only when explicitly configured online.
+- **applications**: explicit per-executable publisher and path rules. Windows publisher names match the verified Authenticode signer; Linux publishers pin `openpgp:<FULL_UPPERCASE_PRIMARY_FINGERPRINT>` of the verified detached `<executable>.sig`; macOS uses native trusted certificate identity, never ad-hoc integrity as publisher trust. Path prefixes must end at a directory-component boundary. Publisher and path groups are both required when configured. Missing identity evidence produces `unknown`, never termination. These are lexical path checks, not a defense against reparse-point or symlink redirection.
 
 Validate a policy file:
 
@@ -224,6 +224,40 @@ Lock policies are opt-in. On transition to a locked session, the tray can mute m
 
 The default policy path is `%APPDATA%\MicCamWatch\policy.toml`. It is loaded automatically when present; `--config` overrides it. Application settings and rotating history paths are available through `mcw config settings-path` and `mcw history path`.
 
+### Unix desktop controls
+
+`mcw top` uses the shared dashboard. `mcw tray` stays in the foreground when
+started interactively; opt-in `mcw autostart enable` registers native
+desktop-session startup without a terminal (`.desktop` on Linux, a per-user
+LaunchAgent on macOS). No installer implicitly enables it. Owned registration
+is refreshed during managed update; unrelated or externally changed entries
+are not overwritten or removed.
+
+Linux microphone controls mute PipeWire session sources through native Props,
+retain original values, and restore only MCW-owned changes in the same live
+server/node identity. They do not deny direct ALSA access. Global Linux camera
+blocking is unsupported: direct V4L2 access can bypass PipeWire.
+
+macOS microphone controls operate only on writable CoreAudio input-mute
+properties. Missing/read-only properties are unavailable, not muted.
+`mcw camera block` prepares an owned Restrictions profile and opens the manual
+approval path in System Settings; pending approval is not a block.
+`mcw camera allow` requests removal of that exact owned profile. Profile
+installation metadata is not proof of physical capture denial. There is no
+universal microphone deny or private lock-state fallback.
+
+Mute and profile ownership records survive uninstall so restoration remains
+possible. Restore owned changes explicitly before uninstall if desired.
+`mcw update` requires a public-installer receipt on Unix; stop an active
+installed watcher/tray first. Native notifications, sound and menu-bar/tray
+registration need the corresponding graphical session and services.
+
+Human STOP output labels its retained access details as the **last observation**,
+not current capture. JSON keeps the schema-3 event contract: a STOP can carry
+the last `active` evidence after capture ended. CoreAudio output-device lists
+do not identify Sound/Telegram's microphone; incomplete input-device identity
+remains unknown.
+
 ## Build from source
 
 Install the stable Rust MSVC toolchain and Visual Studio C++ Build Tools, then run:
@@ -234,29 +268,29 @@ cargo build --release --locked --features windows-tray
 
 Windows executables are created at `target/release/mcw.exe` and `target/release/mcw-tray.exe`. Without `windows-tray`, only the CLI is built.
 
-For a Linux CLI build, install stable Rust and run `cargo build --release --locked`; `pw-dump` is needed at runtime. On macOS 15+, install Xcode Command Line Tools with a macOS 15 SDK and Swift compiler, then run the same Cargo command. Cargo compiles the native Swift capture helper and embeds it in `mcw`; no development script is needed at runtime.
+For Linux, install stable Rust, `pkg-config`, PipeWire/SPA development headers and libclang, then run `cargo build --release --locked`. Runtime monitoring needs the user PipeWire service and `pw-dump`; detached signature rules need GnuPG. Ubuntu 22.04's stock PipeWire 0.3.48 headers are supported. On macOS 15+, install Xcode Command Line Tools with a macOS 15 SDK and Swift compiler, then run the same Cargo command. Cargo embeds a private ad-hoc-signed native helper application in `mcw`; no development script is needed at runtime. Ad-hoc signing establishes helper integrity/identity, not Developer ID trust or notarization.
 
 ## Platform scope
 
 | OS / environment | Microphone `active` / PID | Camera `active` / PID | Camera `ready` | Hardware blocking and desktop controls |
 | --- | --- | --- | --- | --- |
 | Windows 10/11 | WASAPI session / validated process | Capture activity evidence / validated process where available | Loaded capture pipeline, unconfirmed | Administrator-approved camera device controls, mute, tray and notifications |
-| Linux desktop with PipeWire | Running source, stream and active capture link / authenticated Client PID validated with `/proc` | Running video source, stream and active capture link / authenticated Client PID validated with `/proc` | Idle stream or direct V4L2 open FD, low confidence | Unavailable; CLI/watch only |
-| macOS 15+ | CoreAudio `AudioHardwareSystem.processes` with `isRunningInput` / validated PID when libproc identity is readable | AVFoundation `isInUseByAnotherApplication` / **unknown PID** | Not inferred from camera availability | Unavailable; CLI/watch only |
+| Linux desktop with PipeWire | Running source, stream and active capture link / authenticated Client PID validated with `/proc` | Running video source, stream and active capture link / validated authenticated PID | Idle stream or direct V4L2 open FD, low confidence | Session-source mute; no global camera block; native TUI, notifications and StatusNotifierItem host required |
+| macOS 15+ | CoreAudio input activity / validated PID when libproc identity is readable | AVFoundation other-application use / **unknown PID** | Not inferred from camera availability | Writable input mute, manually approved owned camera profile, native TUI and AppKit menu bar |
 | WSL or virtual/headless runners | No guaranteed access to physical capture hardware or user session | No guaranteed camera signal | Inventory is not access proof | No hardware behavior claim |
 
 Linux builds a native CLI using the `pw-dump` PipeWire client and `/proc` (no administrator privileges required for the CLI). The Linux host needs an accessible user PipeWire socket (`XDG_RUNTIME_DIR`, optionally `PIPEWIRE_REMOTE`), `pw-dump`, and readable `/proc/<pid>/stat` and `/proc/<pid>/exe` for PID attribution. `mcw status --json`, `mcw devices`, `mcw doctor`, and `mcw watch --json` run on Linux and macOS. `watch --json` emits access-event JSONL and a status document containing `collectors` when health changes; Ctrl+C stops it.
 
 On Linux, only a **running PipeWire capture stream with an active source link and a running source node** is marked `active`. A claimed application PID must match the owning Client's server-authenticated `pipewire.sec.pid`, then pass `/proc` start-time and executable validation; forwarded portal/PulseAudio clients without matching identity remain unattributed. A direct V4L2 open FD never proves frame flow; video health is `degraded` when a camera may be accessed outside PipeWire. An inaccessible or restarting PipeWire socket is `unavailable` (`status` exits 2), not an all-clear. `--include-ready` exposes unconfirmed PipeWire streams and direct `/dev/video*` handles as `ready`, never as active.
 
-On macOS, the camera signal is device-level only: an application name or PID cannot be inferred from AVFoundation's in-use boolean. The camera collector remains `degraded` because it cannot see use by this application and noninteractive TCC/device discovery may miss cameras; an empty scan is not proof of no use. CI is configured to verify backend commands and honest health reports, **not** microphone or camera hardware transitions. No macOS camera/TCC bypass or intrusive probe is attempted. Linux and macOS do not provide hardware-block, mute, tray, autostart, desktop notifications, Windows updater, `top`, or process termination. Android needs a separate application.
+On macOS, camera usage is device-level only: an application name or PID cannot be inferred from AVFoundation's in-use boolean. Camera health stays `degraded` because own-application use and noninteractive TCC/device discovery can be missed; an empty scan is not proof of no use. CI verifies backend commands and honest health reports, **not** physical microphone/camera transitions. No camera/TCC bypass or intrusive probe is attempted. Linux enforcement requires stable pidfd authority; macOS requires retained task/audit-token authority and refuses protected or inaccessible targets. Android needs a separate application.
 
 Native CI passed on Windows, Ubuntu and macOS arm64 (macOS 26.6.2, deployment target 15.0): format, Clippy, tests, builds and CLI smoke; Windows also passed dependency audit and MSI smoke. See [verified run](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/36677827660). On `serveur-asus` (PipeWire 1.0.5), a temporary virtual `Audio/Source` plus `pw-record` proved idle → active → stopped, authenticated recorder PID and `watch` START/STOP. This was real PipeWire flow, **not a physical microphone test**. The camera inventory listed `/dev/video0` and `/dev/video1`, but opening `/dev/video0` was denied to the SSH user; physical Linux/macOS capture transitions remain unverified. See [Architecture](docs/ARCHITECTURE.md).
 
 ## Privacy
 
 MicCamWatch is designed from the ground up as an offline-first privacy tool:
-- **Offline by default**: monitoring has no telemetry or analytics. Explicit `mcw update` contacts GitHub; a policy with `trust_policy = "online"` can contact certificate-revocation services through Windows.
+- **Offline by default**: monitoring has no telemetry or analytics. Explicit `mcw update` contacts GitHub; an explicitly online trust policy permits the native trust-network behavior described above.
 - **No media capture**: `mcw` inspects capture session metadata, loaded modules, and registry activity timestamps. It never records audio samples or captures video frames.
 - **Local storage**: Settings and history logs remain local: under `%APPDATA%\MicCamWatch` and `%LOCALAPPDATA%\MicCamWatch` on Windows, and XDG/HOME directories on Linux and macOS. macOS extracts its embedded native helper to a private temporary directory, removed on normal exit.
 
