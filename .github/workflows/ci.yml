@@ -110,12 +110,14 @@ jobs:
           root = pathlib.Path(os.environ["RUNNER_TEMP"])
           source = root / "native-chime.rs"
           source.write_text('fn main() { match miccamwatch::platform::play_chime() { Ok(()) => println!("native playback accepted"), Err(error) => { eprintln!("{error:#}"); std::process::exit(2); } } }\n')
-          libraries = list(pathlib.Path("target/debug/deps").glob("libmiccamwatch-*.rlib"))
-          assert len(libraries) == 1, libraries
-          subprocess.run(["rustc", "--edition=2024", "--crate-name=mcw_native_chime", str(source),
-                          "--extern", "miccamwatch=" + str(libraries[0]), "-L", "dependency=target/debug/deps",
-                          "-o", str(root / "native-chime")], check=True)
-          source.unlink()
+          library = pathlib.Path("target/debug/libmiccamwatch.rlib")
+          assert library.is_file(), library
+          try:
+              subprocess.run(["rustc", "--edition=2024", "--crate-name=mcw_native_chime", str(source),
+                              "--extern", "miccamwatch=" + str(library), "-L", "dependency=target/debug/deps",
+                              "-o", str(root / "native-chime")], check=True)
+          finally:
+              source.unlink()
           PY
           cat > "$RUNNER_TEMP/native-smoke.py" <<'PY'
           import errno, fcntl, json, os, pathlib, pty, re, select, shutil, signal, struct, subprocess, tempfile, termios, time
