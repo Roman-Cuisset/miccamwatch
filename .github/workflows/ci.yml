@@ -73,7 +73,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y pkg-config libpipewire-0.3-dev libspa-0.2-dev libclang-dev pipewire pipewire-bin gnupg dbus-x11 xvfb openbox xfce4-panel xfconf xfce4-notifyd libnotify-bin x11-utils xdotool imagemagick
+          sudo apt-get install -y pkg-config libpipewire-0.3-dev libspa-0.2-dev libclang-dev pipewire pipewire-bin gnupg dbus-x11 xvfb openbox xfce4-panel xfconf xfce4-notifyd libnotify-bin x11-utils xdotool imagemagick pulseaudio gnome-session-canberra sound-theme-freedesktop
           pkg-config --modversion libpipewire-0.3
           pw-dump --version
       - name: Verify native architecture and minimum macOS version
@@ -105,14 +105,27 @@ jobs:
           mkdir -p "$RUNNER_TEMP/native-proof/package"
           tar -xzf "$PACKAGE" -C "$RUNNER_TEMP/native-proof/package"
           echo "MCW_RELEASE_BINARY=$RUNNER_TEMP/native-proof/package/mcw" >> "$GITHUB_ENV"
+          python3 - <<'PY'
+          import os, pathlib, subprocess
+          root = pathlib.Path(os.environ["RUNNER_TEMP"])
+          source = root / "native-chime.rs"
+          source.write_text('fn main() { match miccamwatch::platform::play_chime() { Ok(()) => println!("native playback accepted"), Err(error) => { eprintln!("{error:#}"); std::process::exit(2); } } }\n')
+          libraries = list(pathlib.Path("target/debug/deps").glob("libmiccamwatch-*.rlib"))
+          assert len(libraries) == 1, libraries
+          subprocess.run(["rustc", "--edition=2024", "--crate-name=mcw_native_chime", str(source),
+                          "--extern", "miccamwatch=" + str(libraries[0]), "-L", "dependency=target/debug/deps",
+                          "-o", str(root / "native-chime")], check=True)
+          source.unlink()
+          PY
           cat > "$RUNNER_TEMP/native-smoke.py" <<'PY'
           import errno, fcntl, json, os, pathlib, pty, re, select, shutil, signal, struct, subprocess, tempfile, termios, time
           proof = pathlib.Path(os.environ["RUNNER_TEMP"]) / "native-proof"
           binary = os.environ["MCW_RELEASE_BINARY"]
           linux = os.environ["RUNNER_OS"] == "Linux"
           version = json.loads(subprocess.check_output(["cargo", "metadata", "--no-deps", "--format-version", "1"]))["packages"][0]["version"]
+          login_environment = os.environ.copy()
           home = pathlib.Path(tempfile.mkdtemp(prefix="mcw-", dir="/tmp")).resolve()
-          # No desktop settings, permissions, autostart or hardware state of the runner are changed.
+          # Isolate state; only owned fixture services/registrations are changed.
           os.environ.update(HOME=str(home), XDG_CONFIG_HOME=str(home / "config"), XDG_DATA_HOME=str(home / "data"),
                             XDG_STATE_HOME=str(home / "state"), XDG_RUNTIME_DIR=str(home / "run"), TERM="xterm-256color")
           (home / "run").mkdir(mode=0o700)
@@ -120,8 +133,8 @@ jobs:
               os.environ.update(PIPEWIRE_RUNTIME_DIR=str(home / "run"), PIPEWIRE_REMOTE="pipewire-0")
           children = []
           handles = []
-          def record(name, args, allowed=(0,), timeout=45):
-              result = subprocess.run(args, capture_output=True, timeout=timeout)
+          def record(name, args, allowed=(0,), timeout=45, env=None):
+              result = subprocess.run(args, capture_output=True, timeout=timeout, env=env)
               (proof / (name + ".stdout")).write_bytes(result.stdout)
               (proof / (name + ".stderr")).write_bytes(result.stderr)
               (proof / (name + ".exit")).write_text(str(result.returncode))
@@ -260,24 +273,32 @@ jobs:
                   assert any(row["state"] == "healthy" for row in current["collectors"]), current
                   record("virtual-source", ["pw-cli", "create-node", "adapter",
                          "{ factory.name=support.null-audio-sink node.name=MCW_CI_Source media.class=Audio/Source object.linger=true audio.position=[MONO] }"])
+                  # PipeWire 0.3.48 accepts only numeric targets and has no
+                  # --properties option. Manual linking needs no target hint.
                   capture = launch("virtual-capture", ["pw-cat", "--record", "--rate=48000", "--channels=1",
-                                   "--format=s16", "--target=MCW_CI_Source", "--properties={ node.name=MCW_CI_Record }", "/dev/null"])
+                                   "--format=s16", "--target=0", "/dev/null"])
                   def virtual_node(name):
                       graph = json.loads(subprocess.check_output(["pw-dump"]))
                       return next((row for row in graph
                                    if row.get("info", {}).get("props", {}).get("node.name") == name), None)
-                  until(lambda: virtual_node("MCW_CI_Record") is not None, "Virtual capture node was not exported")
+                  def virtual_capture():
+                      graph = json.loads(subprocess.check_output(["pw-dump"]))
+                      return next((row for row in graph if
+                                   str(row.get("info", {}).get("props", {}).get("application.process.id")) == str(capture.pid)
+                                   and row.get("info", {}).get("props", {}).get("media.class") == "Stream/Input/Audio"), None)
+                  until(lambda: virtual_capture() is not None, "Owned virtual capture node was not exported")
                   # Without a hardware session manager both adapters need explicit
                   # native port configuration. The null sink's monitor is our source.
-                  for name, monitor in (("MCW_CI_Source", "true"), ("MCW_CI_Record", "false")):
-                      record("virtual-port-config-" + name, ["pw-cli", "set-param", str(virtual_node(name)["id"]),
+                  for node, monitor in ((virtual_node("MCW_CI_Source"), "true"), (virtual_capture(), "false")):
+                      record("virtual-port-config-" + str(node["id"]), ["pw-cli", "set-param", str(node["id"]),
                              "PortConfig", "{ direction=Input mode=dsp monitor=" + monitor
                              + " format={ mediaType=audio mediaSubtype=raw format=F32P rate=48000 channels=1 position=[MONO] } }"])
                   def link_virtual():
                       outputs = subprocess.check_output(["pw-link", "-o"], text=True).splitlines()
                       inputs = subprocess.check_output(["pw-link", "-i"], text=True).splitlines()
                       source = next((p.strip() for p in outputs if "MCW_CI_Source:" in p), None)
-                      sink = next((p.strip() for p in inputs if "MCW_CI_Record:" in p), None)
+                      sink = next((p.strip() for p in inputs if p.strip().startswith(
+                                  virtual_capture()["info"]["props"]["node.name"] + ":")), None)
                       return bool(source and sink and subprocess.run(["pw-link", source, sink], capture_output=True).returncode == 0)
                   until(link_virtual, "Virtual PipeWire source/record ports were not available")
                   until(lambda: any(a.get("pid") == capture.pid and a.get("activity") == "active"
@@ -309,11 +330,24 @@ jobs:
                   until(lambda: not virtual_muted(), "Virtual source fixture cleanup did not restore its own state")
                   tui("tui-uppercase-cancel-quit", cancel=True)
                   assert capture.poll() is None, "Cancelled TUI action terminated virtual capture"
+                  pulse_socket = home / "run/pulse-native"
+                  os.environ.update(PULSE_SERVER="unix:" + str(pulse_socket), CANBERRA_DRIVER="pulse")
+                  launch("virtual-sound-server", ["pulseaudio", "--daemonize=no", "--exit-idle-time=-1",
+                         "--use-pid-file=no", "--disable-shm=yes", "-n",
+                         "--load=module-native-protocol-unix socket=" + str(pulse_socket),
+                         "--load=module-null-sink sink_name=MCW_CI_Sound"])
+                  until(pulse_socket.exists, "Owned virtual sound server did not start")
+                  record("native-chime", [str(pathlib.Path(os.environ["RUNNER_TEMP"]) / "native-chime")])
               else:
                   tui("tui-uppercase-quit")
                   (proof / "tui-cancel-prerequisite.txt").write_text(
                       "Esc cancellation is exercised on Linux's isolated, identified virtual capture process. "
                       "macOS runner has no authorized disposable CoreAudio capture client; no hardware capture is opened to manufacture one.\n")
+                  chime = record("native-chime", [str(pathlib.Path(os.environ["RUNNER_TEMP"]) / "native-chime")], (0, 2))
+                  if chime.returncode == 2:
+                      (proof / "sound-prerequisite.txt").write_text(
+                          "Native NSSound rejected playback on this runner; actual native error is retained. "
+                          "No physical speaker/output-device behavior is asserted.\n")
               if linux:
                   launch("notification-native-traffic", ["dbus-monitor", "--session",
                          "type='method_call',interface='org.freedesktop.Notifications',member='Notify'"])
@@ -412,6 +446,34 @@ jobs:
                       assert entry.read_bytes() == unmanaged, "An unmanaged desktop entry was modified"
                   finally:
                       entry.unlink()
+              elif ready:
+                  service = "gui/" + str(os.getuid()) + "/com.roman-cuisset.miccamwatch.tray"
+                  existing = record("launchagent-before", ["launchctl", "print", service], (3, 113))
+                  assert existing.returncode != 0, "An unrelated LaunchAgent must not be replaced"
+                  real_state = []
+                  for command in (["config", "settings-path"], ["history", "path"]):
+                      path = pathlib.Path(record("login-" + command[0] + "-path",
+                             [binary, *command], env=login_environment).stdout.decode().strip())
+                      assert not path.parent.exists(), "Existing login-session MCW state must remain untouched"
+                      real_state.append(path.parent)
+                  entry = home / "Library/LaunchAgents/com.roman-cuisset.miccamwatch.tray.plist"
+                  try:
+                      record("autostart-enable", [binary, "autostart", "enable"])
+                      record("autostart-enabled", [binary, "autostart", "status"])
+                      record("launchagent-loaded", ["launchctl", "print", service])
+                      until(lambda: subprocess.run([binary, "tray", "status"], env=login_environment,
+                            capture_output=True, timeout=15).returncode == 0,
+                            "The owned native LaunchAgent did not start the menu bar in its login environment")
+                      record("autostart-native-tray", [binary, "tray", "status"], env=login_environment)
+                  finally:
+                      record("autostart-disable", [binary, "autostart", "disable"])
+                      subprocess.run([binary, "tray", "stop"], env=login_environment, capture_output=True, timeout=15)
+                      for directory in set(real_state):
+                          if directory.exists():
+                              shutil.rmtree(directory)
+                  record("autostart-disabled", [binary, "autostart", "status"])
+                  record("launchagent-unloaded", ["launchctl", "print", service], (3, 113))
+                  assert not entry.exists(), "Owned LaunchAgent remained after disable"
               (proof / "scope.txt").write_text(
                   "Extracted native package; real CLI, PTY and native tray/control lifecycle. Linux uses real XFCE StatusNotifier "
                   "panel, notification daemon, session D-Bus and isolated PipeWire virtual source; never a mock GUI. "
@@ -422,6 +484,7 @@ jobs:
                   stop(process)
               for handle in handles:
                   handle.close()
+              pathlib.Path(os.environ["RUNNER_TEMP"], "native-chime").unlink(missing_ok=True)
               shutil.rmtree(home)
           PY
       - name: Exercise native Linux desktop and extracted package
