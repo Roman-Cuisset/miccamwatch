@@ -110,6 +110,7 @@ jobs:
           proof = pathlib.Path(os.environ["RUNNER_TEMP"]) / "native-proof"
           binary = os.environ["MCW_RELEASE_BINARY"]
           linux = os.environ["RUNNER_OS"] == "Linux"
+          version = json.loads(subprocess.check_output(["cargo", "metadata", "--no-deps", "--format-version", "1"]))["packages"][0]["version"]
           home = pathlib.Path(tempfile.mkdtemp(prefix="mcw-", dir="/tmp")).resolve()
           # No desktop settings, permissions, autostart or hardware state of the runner are changed.
           os.environ.update(HOME=str(home), XDG_CONFIG_HOME=str(home / "config"), XDG_DATA_HOME=str(home / "data"),
@@ -198,7 +199,6 @@ jobs:
                   text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", output.decode(errors="replace"))
                   (proof / (name + ".txt")).write_text(text)
           try:
-              version = json.loads(subprocess.check_output(["cargo", "metadata", "--no-deps", "--format-version", "1"]))["packages"][0]["version"]
               assert record("version", [binary, "--version"]).stdout.decode().strip() == "mcw " + version
               for language in ("en", "fr", "de", "es", "ja", "zh", "ru"):
                   record("help-" + language, [binary, "--lang", language, "--help"])
