@@ -565,22 +565,23 @@ fn pnputil_elevated(action: &str, instance_ids: &[String]) -> Result<()> {
     if instance_ids.is_empty() {
         return Ok(());
     }
+    let pnputil = crate::windows_tools::system_executable("pnputil.exe")?;
     let (file, parameters) = if instance_ids.len() == 1 {
-        (
-            "pnputil.exe".to_owned(),
-            format!("/{action}-device \"{}\"", instance_ids[0]),
-        )
+        (pnputil, format!("/{action}-device \"{}\"", instance_ids[0]))
     } else {
         let commands = instance_ids
             .iter()
-            .map(|id| format!("pnputil.exe /{action}-device \"{id}\""))
+            .map(|id| format!("\"{}\" /{action}-device \"{id}\"", pnputil.display()))
             .collect::<Vec<_>>()
             .join(" & ");
-        ("cmd.exe".to_owned(), format!("/d /c {commands}"))
+        (
+            pnputil.with_file_name("cmd.exe"),
+            format!("/d /s /c \"{commands}\""),
+        )
     };
 
     let wide_verb: Vec<u16> = "runas\0".encode_utf16().collect();
-    let wide_file: Vec<u16> = file.encode_utf16().chain(Some(0)).collect();
+    let wide_file: Vec<u16> = file.as_os_str().encode_wide().chain(Some(0)).collect();
     let wide_params: Vec<u16> = parameters.encode_utf16().chain(Some(0)).collect();
 
     let mut info = SHELLEXECUTEINFOW {

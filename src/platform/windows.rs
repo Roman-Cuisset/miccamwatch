@@ -1,3 +1,5 @@
+#[cfg(test)]
+use crate::policy::path_matches_policy_prefix;
 use crate::{
     collector::{CaptureCollector, CaptureScope},
     config::{Policy, Profile, TrustPolicy},
@@ -6,23 +8,17 @@ use crate::{
         DiagnosticStatus, EnforcementDecision, Evidence, EvidenceKind, MicrophoneMuteState,
         ProcessAncestor, ProcessContext, Resource, Risk, SignatureInfo, Snapshot,
     },
+    policy::{assess_policy, same_windows_path, signature_for_path},
 };
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use std::{
-    collections::{HashMap, HashSet},
-    ffi::OsStr,
-    io,
-    mem::size_of,
-    path::Path,
-    ptr, slice,
-    sync::mpsc::Sender,
+    collections::HashMap, ffi::OsStr, io, mem::size_of, path::Path, ptr, slice, sync::mpsc::Sender,
 };
 use windows::{
     Win32::{
         Devices::FunctionDiscovery::PKEY_Device_FriendlyName,
         Foundation::{CloseHandle, FILETIME, HANDLE, HWND, NTSTATUS},
-        Globalization::{CSTR_EQUAL, CompareStringOrdinal},
         Media::{
             Audio::{
                 AudioSessionStateActive, DEVICE_STATE_ACTIVE, Endpoints::IAudioEndpointVolume,
@@ -84,6 +80,9 @@ use windows::{
     core::{Interface, PCWSTR, PWSTR},
 };
 use winreg::{RegKey, enums::HKEY_CURRENT_USER};
+
+#[path = "windows_camera.rs"]
+mod camera_activity;
 const CONSENT_STORE: &str =
     r"Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore";
 const WINDOWS_TO_UNIX_EPOCH_100NS: i128 = 116_444_736_000_000_000;
@@ -217,6 +216,50 @@ impl PlatformMonitor {
                         &error,
                     ));
                 }
+            }
+        }
+        if scope.camera {
+            match self.sensor_camera_accesses() {
+                Ok((native, reported_instances)) => {
+                    let incomplete_attribution = native.iter().any(|access| access.pid.is_none());
+                    // Replace a fallback only when the actual process instance
+                    // is reported streaming; keep residual pipelines Ready
+                    // after an explicit non-streaming report.
+                    accesses.retain_mut(|access| {
+                        if access.resource != Resource::Camera {
+                            return true;
+                        }
+                        let Some(instance) = access.process.as_ref().map(|process| &process.instance_id) else {
+                            return true;
+                        };
+                        if !reported_instances.contains(instance) {
+                            return true;
+                        }
+                        if native.iter().any(|native| native.process.as_ref()
+                            .is_some_and(|process| &process.instance_id == instance)) {
+                            return false;
+                        }
+                        access.activity = Activity::Ready;
+                        access.confidence = Confidence::Low;
+                        access.evidence.push(Evidence::new(
+                            EvidenceKind::LiveApi,
+                            "IMFSensorProcessActivity::GetStreamingState",
+                            "Windows reports this process's sensor session is not streaming; an open privacy interval or loaded pipeline is not current capture.",
+                        ));
+                        true
+                    });
+                    accesses.extend(native);
+                    collectors.push(CollectorHealth {
+                        collector: "sensor_activity",
+                        state: if incomplete_attribution { CollectorState::Degraded } else { CollectorState::Healthy },
+                        detail: Some("Windows sensor streaming reports; cameras or capture paths not exposed by this API still rely on privacy intervals. No camera media is opened.".to_owned()),
+                    });
+                }
+                Err(error) => collectors.push(unhealthy(
+                    "sensor_activity",
+                    CollectorState::Unavailable,
+                    &error,
+                )),
             }
         }
         if !scope.include_ready {
@@ -625,6 +668,118 @@ impl PlatformMonitor {
     fn camera_accesses(&self) -> Result<Vec<Access>> {
         camera_accesses(&self.policy, |path| self.signature_for_path(path))
     }
+
+    fn sensor_camera_accesses(&self) -> Result<(Vec<Access>, std::collections::HashSet<String>)> {
+        let cameras = camera_devices()?;
+        let reports = camera_activity::collect(&cameras)?;
+        let processes = ProcessTable::load();
+        let mut accesses = Vec::new();
+        let mut reported_instances = std::collections::HashSet::new();
+        for camera in cameras {
+            let Some(activities) = reports.get(&camera.id) else {
+                continue;
+            };
+            for (index, activity) in activities.iter().enumerate() {
+                let mut pid = activity.attributed_pid(process_creation_time(activity.pid));
+                // A non-streaming sensor session is not frame flow. Do not
+                // retain a native Active row after an explicit stop report.
+                if !activity.streaming {
+                    if let Some(pid) = pid {
+                        reported_instances
+                            .insert(format!("{pid}:{}", activity.created_at.unwrap()));
+                    }
+                    continue;
+                }
+                let mut executable = pid.and_then(process_path);
+                let mut context = pid.map(|pid| processes.context(pid));
+                let mut signature = executable
+                    .as_deref()
+                    .map(|path| self.signature_for_path(path));
+                // Identity queries and signature verification can outlast the
+                // client. Never attach a report to a later occupant of its PID.
+                let stable_instance = pid.is_some_and(|pid| {
+                    activity.attributed_pid(process_creation_time(pid)) == Some(pid)
+                        && context.as_ref().is_some_and(|context| {
+                            context.instance_id == format!("{pid}:{}", activity.created_at.unwrap())
+                        })
+                        && processes
+                            .by_pid
+                            .get(&pid)
+                            .is_some_and(|node| node.created_at_filetime == activity.created_at)
+                });
+                if !stable_instance {
+                    pid = None;
+                    executable = None;
+                    context = None;
+                    signature = None;
+                }
+                if let Some(pid) = pid {
+                    reported_instances.insert(format!("{pid}:{}", activity.created_at.unwrap()));
+                }
+                let application = executable
+                    .as_deref()
+                    .and_then(|path| Path::new(path).file_name())
+                    .and_then(OsStr::to_str)
+                    .map(str::to_owned)
+                    .or_else(|| {
+                        pid.and_then(|pid| processes.by_pid.get(&pid).map(|node| node.name.clone()))
+                    })
+                    .unwrap_or_else(|| "Unattributed camera stream".to_owned());
+                let mut evidence = vec![Evidence::new(
+                    EvidenceKind::LiveApi,
+                    "IMFSensorProcessActivity::GetStreamingState",
+                    format!(
+                        "Windows reports this camera sensor streaming (report FILETIME: {:?}). This is streaming state, not inspection of private frames.",
+                        activity.reported_at
+                    ),
+                )];
+                let (risk, enforcement) = if pid.is_some() {
+                    assess_policy(
+                        &self.policy,
+                        &application,
+                        executable.as_deref(),
+                        signature.as_ref(),
+                        &mut evidence,
+                    )
+                } else {
+                    evidence.push(Evidence::new(
+                        EvidenceKind::LiveApi,
+                        "IMFSensorProcessActivity::GetProcessId",
+                        "The stream could not be correlated with a verifiable current process instance; no client PID or kill authorization is inferred.",
+                    ));
+                    (Risk::Unexplained, EnforcementDecision::Unknown)
+                };
+                let (parent_pid, parent_name) = context
+                    .as_ref()
+                    .and_then(immediate_parent)
+                    .map_or((None, None), |(pid, name)| (Some(pid), Some(name)));
+                let instance = pid
+                    .zip(activity.created_at)
+                    .map(|(pid, created)| format!("{pid}:{created}"))
+                    .unwrap_or_else(|| format!("unknown:{index}"));
+                accesses.push(Access {
+                    key: format!("camera:sensor:{}:{instance}", camera.id),
+                    resource: Resource::Camera,
+                    activity: Activity::Active,
+                    risk,
+                    confidence: Confidence::High,
+                    enforcement,
+                    application,
+                    pid,
+                    parent_pid,
+                    parent_name,
+                    executable,
+                    signature,
+                    device: Some(camera.name.clone()),
+                    started_at: None,
+                    modules: Vec::new(),
+                    evidence,
+                    process: context,
+                });
+            }
+        }
+        Ok((accesses, reported_instances))
+    }
 }
 
 impl CaptureCollector for PlatformMonitor {
@@ -782,18 +937,6 @@ fn remember_camera_app(
         .push(app);
 }
 
-// ConsentStore records a path, not just an executable name. This deliberately
-// does not equate short names, junctions or other aliases: those may miss an
-// attribution, but must not inherit another executable's consent or signature.
-fn same_windows_path(left: &str, right: &str) -> bool {
-    if left.is_ascii() && right.is_ascii() {
-        return left.eq_ignore_ascii_case(right);
-    }
-    let left = left.encode_utf16().collect::<Vec<_>>();
-    let right = right.encode_utf16().collect::<Vec<_>>();
-    unsafe { CompareStringOrdinal(&left, &right, true) == CSTR_EQUAL }
-}
-
 fn camera_app_for_process<'a>(apps: &'a [CameraApp], path: &str) -> Option<&'a CameraApp> {
     apps.iter()
         .find(|app| app.non_packaged && same_windows_path(&app.executable, path))
@@ -812,28 +955,6 @@ fn attributed_registry_pid(
     });
     let pid = matches.next()?;
     matches.next().is_none().then_some(pid)
-}
-
-// Component boundaries prevent sibling directories (e.g. ZoomEvil) from
-// matching Zoom. This is still lexical, not a reparse-point/security boundary.
-fn path_matches_policy_prefix(path: &str, prefix: &str) -> bool {
-    let Some(head) = path.get(..prefix.len()) else {
-        return false;
-    };
-    same_windows_path(head, prefix)
-        && (path.len() == prefix.len()
-            || prefix.ends_with('\\')
-            || path.as_bytes()[prefix.len()] == b'\\')
-}
-
-fn signature_for_path(
-    path: &str,
-    trust_policy: TrustPolicy,
-    verify: impl FnOnce(&str, TrustPolicy) -> SignatureInfo,
-) -> SignatureInfo {
-    // Re-verify for each capture: pathname and mtime cannot identify a file
-    // that has been replaced while preserving its last-write timestamp.
-    verify(path, trust_policy)
 }
 
 fn webcam_consent_store(opened: io::Result<RegKey>) -> Result<RegKey> {
@@ -931,28 +1052,6 @@ fn camera_accesses(
         }
     }
 
-    // Packaged camera applications run under their executable name, not their
-    // package-family consent key. The registry interval can remain stale while
-    // a packaged application continues capturing frames.
-    let camera_package = "microsoft.windowscamera_";
-    let packaged_camera = webcam
-        .enum_keys()
-        .filter_map(Result::ok)
-        .find(|key| key.to_ascii_lowercase().starts_with(camera_package));
-    let packaged_camera_pids = packaged_camera
-        .as_ref()
-        .and_then(|_| processes.by_name.get("windowscamera.exe"))
-        .into_iter()
-        .flatten()
-        .filter_map(|&pid| {
-            let executable = process_path(pid)?;
-            executable
-                .to_ascii_lowercase()
-                .contains(camera_package)
-                .then_some((pid, executable))
-        })
-        .collect::<Vec<_>>();
-
     let mut candidate_runtime = HashMap::new();
     for (application, apps) in &known_apps {
         let Some(pids) = processes.by_name.get(application.as_str()) else {
@@ -975,29 +1074,6 @@ fn camera_accesses(
             candidate_runtime.insert(pid, (executable, modules, process_command_line(pid)));
         }
     }
-    let mut packaged_modules = packaged_camera_pids
-        .iter()
-        .filter_map(|(pid, _)| {
-            let modules = capture_modules_loaded(*pid);
-            (!modules.is_empty()).then_some((*pid, modules))
-        })
-        .collect::<HashMap<_, _>>();
-    let busy_capture_services = busy_capture_services(
-        candidate_runtime
-            .iter()
-            .filter_map(|(&pid, (_, _, command))| {
-                command
-                    .as_deref()
-                    .is_some_and(is_video_capture_service)
-                    .then_some(pid)
-            })
-            .chain(packaged_modules.keys().copied()),
-    );
-    // Opening Windows Camera wakes idle browser capture services too. CPU time
-    // cannot attribute those wakeups to the browser while Camera is capturing.
-    let packaged_camera_active = packaged_modules
-        .keys()
-        .any(|pid| busy_capture_services.contains(pid));
 
     for (application, apps) in &known_apps {
         let Some(pids) = processes.by_name.get(application.as_str()) else {
@@ -1013,11 +1089,10 @@ fn camera_accesses(
             let Some(app) = camera_app_for_process(apps, executable) else {
                 continue;
             };
-            let live_capture = !packaged_camera_active && busy_capture_services.contains(&pid);
             let context = processes.context(pid);
             let parent_info = immediate_parent(&context);
             let signature = signature_for(executable);
-            let mut assessment = classify_forensic(
+            let assessment = classify_forensic(
                 policy,
                 application,
                 executable,
@@ -1027,30 +1102,15 @@ fn camera_accesses(
                 &signature,
                 modules,
             );
-            if live_capture {
-                assessment.evidence.push(Evidence::new(
-                    EvidenceKind::ApplicationProfile,
-                    "ProcessTimes",
-                    "Sustained CPU activity in the browser video-capture service; frame flow is inferred, not directly observed.",
-                ));
-            }
             let (parent_pid, parent_name) = parent_info
                 .clone()
                 .map_or((None, None), |(ppid, name)| (Some(ppid), Some(name)));
             accesses.push(Access {
                 key: format!("camera:forensic:{}", process_identity(pid)),
                 resource: Resource::Camera,
-                activity: if live_capture {
-                    Activity::Active
-                } else {
-                    Activity::Ready
-                },
+                activity: Activity::Ready,
                 risk: assessment.risk,
-                confidence: if live_capture {
-                    Confidence::Medium
-                } else {
-                    assessment.confidence
-                },
+                confidence: assessment.confidence,
                 enforcement: assessment.enforcement,
                 application: application.clone(),
                 pid: Some(pid),
@@ -1065,47 +1125,6 @@ fn camera_accesses(
                 process: Some(context),
             });
         }
-    }
-    for (pid, executable) in packaged_camera_pids {
-        if !busy_capture_services.contains(&pid) {
-            continue;
-        }
-        let context = processes.context(pid);
-        let signature = signature_for(&executable);
-        let mut evidence = vec![Evidence::new(
-            EvidenceKind::ApplicationProfile,
-            "ProcessTimes",
-            "Sustained CPU activity in the Windows Camera capture process; frame flow is inferred, not directly observed.",
-        )];
-        let application = "WindowsCamera.exe";
-        let (risk, enforcement) = assess_policy(
-            policy,
-            application,
-            Some(&executable),
-            Some(&signature),
-            &mut evidence,
-        );
-        let (parent_pid, parent_name) =
-            immediate_parent(&context).map_or((None, None), |(pid, name)| (Some(pid), Some(name)));
-        accesses.push(Access {
-            key: format!("camera:forensic:{}", process_identity(pid)),
-            resource: Resource::Camera,
-            activity: Activity::Active,
-            risk,
-            confidence: Confidence::Medium,
-            enforcement,
-            application: application.to_owned(),
-            pid: Some(pid),
-            parent_pid,
-            parent_name,
-            executable: Some(executable),
-            signature: Some(signature),
-            device: None,
-            started_at: None,
-            modules: packaged_modules.remove(&pid).unwrap_or_default(),
-            evidence,
-            process: Some(context),
-        });
     }
     Ok(accesses)
 }
@@ -1184,73 +1203,6 @@ fn registry_access(
 // ---------------------------------------------------------------------------
 // Forensic classification with Authenticode and Parent analysis
 // ---------------------------------------------------------------------------
-
-fn assess_policy(
-    policy: &Policy,
-    application: &str,
-    executable: Option<&str>,
-    signature: Option<&SignatureInfo>,
-    evidence: &mut Vec<Evidence>,
-) -> (Risk, EnforcementDecision) {
-    let Some(rule) = policy.application(application) else {
-        return (Risk::Expected, EnforcementDecision::Alert);
-    };
-    let publisher = signature.and_then(|value| value.signer.as_deref());
-    let publisher_ok = rule.publishers.is_empty()
-        || signature.is_some_and(|value| value.verified)
-            && publisher.is_some_and(|signer| {
-                rule.publishers
-                    .iter()
-                    .any(|expected| same_windows_path(signer.trim(), expected.trim()))
-            });
-    let path_ok = rule.paths.is_empty()
-        || executable.is_some_and(|path| {
-            rule.paths
-                .iter()
-                .any(|expected| path_matches_policy_prefix(path, expected))
-        });
-    let evidence_complete = (rule.publishers.is_empty()
-        || signature.is_some_and(|value| !value.verified || value.signer.is_some()))
-        && (rule.paths.is_empty() || executable.is_some());
-
-    if !evidence_complete {
-        evidence.push(Evidence::new(
-            EvidenceKind::ApplicationProfile,
-            "policy",
-            "Policy rule matched the executable name, but required identity evidence is unavailable.",
-        ));
-        return (Risk::Unexplained, EnforcementDecision::Unknown);
-    }
-    if publisher_ok && path_ok {
-        evidence.push(Evidence::new(
-            EvidenceKind::ApplicationProfile,
-            "policy",
-            "Application matches its configured policy rule.",
-        ));
-        return (Risk::Expected, EnforcementDecision::Allow);
-    }
-    if !publisher_ok {
-        evidence.push(Evidence::new(
-            EvidenceKind::Signature,
-            "policy",
-            format!(
-                "Publisher mismatch: expected one of {:?}, got {:?}.",
-                rule.publishers, publisher
-            ),
-        ));
-    }
-    if !path_ok {
-        evidence.push(Evidence::new(
-            EvidenceKind::FileLocation,
-            "policy",
-            format!(
-                "Path mismatch: expected a prefix in {:?}, executable at {:?}.",
-                rule.paths, executable
-            ),
-        ));
-    }
-    (Risk::Suspicious, EnforcementDecision::Deny)
-}
 
 struct Assessment {
     risk: Risk,
@@ -1644,52 +1596,6 @@ fn process_identity(pid: u32) -> String {
         return pid.to_string();
     };
     format!("{pid}:{created}")
-}
-
-fn busy_capture_services(pids: impl Iterator<Item = u32>) -> HashSet<u32> {
-    let before = pids
-        .filter_map(|pid| process_cpu_time(pid).map(|time| (pid, time)))
-        .collect::<HashMap<_, _>>();
-    if before.is_empty() {
-        return HashSet::new();
-    }
-    std::thread::sleep(std::time::Duration::from_millis(500));
-    let midpoint = before
-        .into_iter()
-        .filter_map(|(pid, prior)| {
-            let current = process_cpu_time(pid)?;
-            (current.saturating_sub(prior) >= 150_000).then_some((pid, current))
-        })
-        .collect::<HashMap<_, _>>();
-    if midpoint.is_empty() {
-        return HashSet::new();
-    }
-    std::thread::sleep(std::time::Duration::from_millis(500));
-    midpoint
-        .into_iter()
-        .filter_map(|(pid, prior)| {
-            process_cpu_time(pid)
-                .is_some_and(|current| current.saturating_sub(prior) >= 150_000)
-                .then_some(pid)
-        })
-        .collect()
-}
-fn is_video_capture_service(command_line: &str) -> bool {
-    let command = command_line.to_ascii_lowercase();
-    command.contains("video_capture") || command.contains("videocaptureservice")
-}
-
-fn process_cpu_time(pid: u32) -> Option<u64> {
-    let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()? };
-    let mut created = FILETIME::default();
-    let mut exited = FILETIME::default();
-    let mut kernel = FILETIME::default();
-    let mut user = FILETIME::default();
-    let result =
-        unsafe { GetProcessTimes(process, &mut created, &mut exited, &mut kernel, &mut user) };
-    let _ = unsafe { CloseHandle(process) };
-    result.ok()?;
-    Some(filetime_value(kernel) + filetime_value(user))
 }
 
 fn filetime_value(value: FILETIME) -> u64 {
@@ -2112,13 +2018,6 @@ mod tests {
         assert!(privacy_interval_active(300, 200));
         assert!(!privacy_interval_active(200, 300));
         assert!(!privacy_interval_active(300, 300));
-    }
-    #[test]
-    fn recognizes_browser_video_capture_service_commands() {
-        assert!(is_video_capture_service(
-            "--utility-sub-type=video_capture.mojom.VideoCaptureService"
-        ));
-        assert!(!is_video_capture_service("--type=renderer"));
     }
 
     #[test]

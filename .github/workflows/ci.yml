@@ -4,12 +4,21 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      native-only:
+        type: boolean
+        default: false
+      release-packages:
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 jobs:
   windows:
+    if: ${{ !inputs.native-only }}
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -42,61 +51,323 @@ jobs:
 
   portable:
     strategy:
+      fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+        include:
+          - runner: ubuntu-22.04
+            platform: linux
+            arch: x86_64
+          - runner: macos-15
+            platform: macos
+            arch: aarch64
+          - runner: macos-15-intel
+            platform: macos
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           components: rustfmt, clippy
+      - name: Install ephemeral Linux native and desktop prerequisites
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libpipewire-0.3-dev libspa-0.2-dev libclang-dev pipewire pipewire-bin dbus-x11 xvfb openbox xfce4-panel xfconf xfce4-notifyd libnotify-bin x11-utils xdotool imagemagick
+          pkg-config --modversion libpipewire-0.3
+          pw-dump --version
+      - name: Verify native architecture and minimum macOS version
+        shell: bash
+        env:
+          EXPECTED_ARCH: ${{ matrix.arch }}
+          RELEASE_PACKAGES: ${{ inputs.release-packages }}
+        run: |
+          actual=$(uname -m)
+          case "$actual" in arm64) actual=aarch64 ;; esac
+          test "$actual" = "$EXPECTED_ARCH"
+          if [ "$RUNNER_OS" = macOS ]; then
+            version=$(sw_vers -productVersion)
+            echo "macOS runtime: $version"
+            test "${version%%.*}" -ge 15
+          fi
+          python3 -c 'import json, os, subprocess; v=json.loads(subprocess.check_output(["cargo","metadata","--no-deps","--format-version","1"]))["packages"][0]["version"]; assert os.environ["RELEASE_PACKAGES"] != "true" or os.environ["GITHUB_REF_TYPE"] != "tag" or os.environ["GITHUB_REF_NAME"] == "v" + v'
       - run: cargo fmt --check
       - run: cargo clippy --all-targets --locked -- -D warnings
       - run: cargo test --all-targets --locked
       - run: cargo build --locked
       - run: cargo build --release --locked
-      - name: Require macOS 15 or newer
-        if: runner.os == 'macOS'
+      - name: Extract package and prepare disposable native smoke
         shell: bash
+        env:
+          PACKAGE: miccamwatch-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz
         run: |
-          version=$(sw_vers -productVersion)
-          echo "macOS runner: $version"
-          test "${version%%.*}" -ge 15
-      - name: Smoke Linux collector CLI
+          tar -czf "$PACKAGE" -C target/release mcw -C "$GITHUB_WORKSPACE" README.md LICENSE
+          mkdir -p "$RUNNER_TEMP/native-proof/package"
+          tar -xzf "$PACKAGE" -C "$RUNNER_TEMP/native-proof/package"
+          echo "MCW_RELEASE_BINARY=$RUNNER_TEMP/native-proof/package/mcw" >> "$GITHUB_ENV"
+          cat > "$RUNNER_TEMP/native-smoke.py" <<'PY'
+          import errno, fcntl, json, os, pathlib, pty, re, select, signal, struct, subprocess, tempfile, termios, time
+          proof = pathlib.Path(os.environ["RUNNER_TEMP"]) / "native-proof"
+          binary = os.environ["MCW_RELEASE_BINARY"]
+          linux = os.environ["RUNNER_OS"] == "Linux"
+          home = pathlib.Path(tempfile.mkdtemp(prefix="mcw-", dir="/tmp"))
+          # No desktop settings, permissions, autostart or hardware state of the runner are changed.
+          os.environ.update(HOME=str(home), XDG_CONFIG_HOME=str(home / "config"), XDG_DATA_HOME=str(home / "data"),
+                            XDG_STATE_HOME=str(home / "state"), XDG_RUNTIME_DIR=str(home / "run"), TERM="xterm-256color")
+          (home / "run").mkdir(mode=0o700)
+          if linux:
+              os.environ.update(PIPEWIRE_RUNTIME_DIR=str(home / "run"), PIPEWIRE_REMOTE="pipewire-0")
+          children = []
+          handles = []
+          def record(name, args, allowed=(0,), timeout=45):
+              result = subprocess.run(args, capture_output=True, timeout=timeout)
+              (proof / (name + ".stdout")).write_bytes(result.stdout)
+              (proof / (name + ".stderr")).write_bytes(result.stderr)
+              (proof / (name + ".exit")).write_text(str(result.returncode))
+              assert result.returncode in allowed, (name, result.returncode, result.stderr.decode(errors="replace"))
+              return result
+          def launch(name, args):
+              handle = (proof / (name + ".log")).open("wb")
+              errors = (proof / (name + ".stderr")).open("wb")
+              handles.extend((handle, errors))
+              process = subprocess.Popen(args, stdout=handle, stderr=errors, start_new_session=True)
+              children.append(process)
+              return process
+          def stop(process, sig=signal.SIGTERM):
+              if process.poll() is None:
+                  os.killpg(process.pid, sig)
+                  process.wait(timeout=20)
+          def until(fn, description, seconds=30):
+              deadline = time.monotonic() + seconds
+              while time.monotonic() < deadline:
+                  if fn():
+                      return
+                  time.sleep(.25)
+              raise AssertionError(description)
+          def status(name):
+              result = record(name, [binary, "status", "--json"], (0, 1, 2))
+              document = json.loads(result.stdout)
+              assert document["collectors"], document
+              assert all(row["state"] in ("healthy", "degraded", "unavailable") for row in document["collectors"])
+              assert all(row.get("detail") for row in document["collectors"] if row["state"] != "healthy")
+              return document
+          def tui(name, cancel=False):
+              master, slave = pty.openpty()
+              fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 140, 0, 0))
+              def controlling_terminal():
+                  os.setsid()
+                  fcntl.ioctl(0, termios.TIOCSCTTY, 0)
+              process = subprocess.Popen([binary, "--lang", "en", "top"], stdin=slave, stdout=slave, stderr=slave,
+                                         preexec_fn=controlling_terminal, close_fds=True)
+              os.close(slave)
+              output = bytearray()
+              def drain(seconds):
+                  deadline = time.monotonic() + seconds
+                  while time.monotonic() < deadline:
+                      if select.select([master], [], [], .1)[0]:
+                          try:
+                              chunk = os.read(master, 65536)
+                          except OSError as error:
+                              if error.errno == errno.EIO:
+                                  return
+                              raise
+                          if not chunk:
+                              return
+                          output.extend(chunk)
+              try:
+                  drain(6)
+                  assert process.poll() is None, "TUI exited before keyboard input"
+                  os.write(master, b"R")
+                  drain(2)
+                  if cancel:
+                      os.write(master, b"K")  # Never send a second K: no termination is authorized.
+                      drain(.5)
+                      assert b"Esc cancels" in output, "No real identified access to arm cancellation"
+                      os.write(master, b"\x1b")
+                      drain(.5)
+                      assert b"Termination cancelled" in output, "Esc did not cancel the pending action"
+                      assert process.poll() is None, "Cancel incorrectly quit the TUI"
+                  os.write(master, b"Q")
+                  drain(2)
+                  assert process.wait(timeout=15) == 0
+              finally:
+                  if process.poll() is None:
+                      stop(process, signal.SIGINT)
+                  os.close(master)
+                  (proof / (name + ".ansi")).write_bytes(output)
+                  text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", output.decode(errors="replace"))
+                  (proof / (name + ".txt")).write_text(text)
+          try:
+              version = json.loads(subprocess.check_output(["cargo", "metadata", "--no-deps", "--format-version", "1"]))["packages"][0]["version"]
+              assert record("version", [binary, "--version"]).stdout.decode().strip() == "mcw " + version
+              if linux:
+                  record("display", ["xdpyinfo"])
+                  launch("window-manager", ["openbox"])
+                  # Configure the real XFCE panel's built-in StatusNotifier-capable tray.
+                  for args in (
+                      ["-p", "/configver", "-n", "-t", "int", "-s", "2"],
+                      ["-p", "/panels", "-n", "-a", "-t", "int", "-s", "1"],
+                      ["-p", "/panels/panel-1/position", "-n", "-t", "string", "-s", "p=6;x=640;y=20"],
+                      ["-p", "/panels/panel-1/length", "-n", "-t", "uint", "-s", "100"],
+                      ["-p", "/panels/panel-1/plugin-ids", "-n", "-a", "-t", "int", "-s", "1"],
+                      ["-p", "/plugins/plugin-1", "-n", "-t", "string", "-s", "systray"],
+                  ):
+                      record("panel-config-" + str(len(handles)) + args[1].replace("/", "-"),
+                             ["xfconf-query", "-c", "xfce4-panel", *args])
+                  launch("panel", ["xfce4-panel", "--disable-wm-check"])
+                  host = ["gdbus", "call", "--session", "--dest", "org.kde.StatusNotifierWatcher",
+                          "--object-path", "/StatusNotifierWatcher", "--method", "org.freedesktop.DBus.Properties.Get",
+                          "org.kde.StatusNotifierWatcher", "IsStatusNotifierHostRegistered"]
+                  until(lambda: b"true" in subprocess.run(host, capture_output=True).stdout,
+                        "Real XFCE StatusNotifier host was not registered")
+                  record("status-notifier-host", host)
+                  record("notification-daemon", ["notify-send", "--expire-time=10000", "Native smoke session",
+                                                 "Real desktop host; no physical capture or hardware mutation is tested"])
+                  record("notification-owner", ["gdbus", "call", "--session", "--dest", "org.freedesktop.DBus",
+                         "--object-path", "/org/freedesktop/DBus", "--method", "org.freedesktop.DBus.GetNameOwner",
+                         "org.freedesktop.Notifications"])
+                  # PipeWire alone does not discover ALSA/V4L2 devices. Deliberately do not run a hardware session manager.
+                  pipewire = launch("pipewire", ["pipewire"])
+                  until(lambda: (home / "run/pipewire-0").exists(), "Isolated PipeWire socket not ready")
+                  record("pipewire-graph", ["pw-dump"])
+              else:
+                  gui = record("aqua-session", ["launchctl", "print", "gui/" + str(os.getuid())], tuple(range(256)))
+                  (proof / "macos-prerequisites.txt").write_text(
+                      "Menu bar needs this user's Aqua/WindowServer session. Screenshot needs Screen Recording approval "
+                      "for the runner process; notifications need native authorization. No TCC edits, permission requests, "
+                      "camera profiles or writable-input mute mutations are performed. Public macOS lock state remains Unknown.\n")
+              current = status("status")
+              doctor = record("doctor", [binary, "doctor", "--json"], (0, 2))
+              checks = json.loads(doctor.stdout)
+              assert checks and all(row["status"] in ("ok", "warning", "error") and row.get("detail") for row in checks)
+              devices = record("devices", [binary, "devices", "--json"], (0, 2))
+              if devices.returncode == 0:
+                  json.loads(devices.stdout)
+              record("camera-query", [binary, "camera", "status"], (0, 2))
+              record("mute-query", [binary, "mute", "--status"], (0, 2))
+              record("autostart-query", [binary, "autostart", "status"], (0, 1, 2))
+              record("notifications-query", [binary, "notifications", "status"], (0, 2))
+              record("lock-query", [binary, "lock-policy", "status"], (0, 2))
+              if linux:
+                  assert any(row["state"] == "healthy" for row in current["collectors"]), current
+                  record("virtual-source", ["pw-cli", "create-node", "adapter",
+                         "{ factory.name=support.null-audio-sink node.name=MCW_CI_Source media.class=Audio/Source object.linger=true audio.position=[MONO] }"])
+                  capture = launch("virtual-capture", ["pw-cat", "--record", "--raw", "--rate=48000", "--channels=1",
+                                   "--format=s16", "--target=MCW_CI_Source", "--properties={ node.name=MCW_CI_Record }", "/dev/null"])
+                  def link_virtual():
+                      outputs = subprocess.check_output(["pw-link", "-o"], text=True).splitlines()
+                      inputs = subprocess.check_output(["pw-link", "-i"], text=True).splitlines()
+                      source = next((p.strip() for p in outputs if "MCW_CI_Source:" in p), None)
+                      sink = next((p.strip() for p in inputs if "MCW_CI_Record:" in p), None)
+                      return bool(source and sink and subprocess.run(["pw-link", source, sink], capture_output=True).returncode == 0)
+                  until(link_virtual, "Virtual PipeWire source/record ports were not available")
+                  until(lambda: any(a.get("pid") == capture.pid and a.get("activity") == "active"
+                                    for a in status("virtual-status")["accesses"]), "Native virtual capture PID not observed")
+                  tui("tui-uppercase-cancel-quit", cancel=True)
+                  assert capture.poll() is None, "Cancelled TUI action terminated virtual capture"
+              else:
+                  tui("tui-uppercase-quit")
+                  (proof / "tui-cancel-prerequisite.txt").write_text(
+                      "Esc cancellation is exercised on Linux's isolated, identified virtual capture process. "
+                      "macOS runner has no authorized disposable CoreAudio capture client; no hardware capture is opened to manufacture one.\n")
+              if linux:
+                  launch("notification-native-traffic", ["dbus-monitor", "--session",
+                         "type='method_call',interface='org.freedesktop.Notifications',member='Notify'"])
+                  time.sleep(.5)
+              watch = launch("watch", [binary, "--lang", "en", "watch", "--json", "--interval", "200",
+                             *(["--notify"] if linux else [])])
+              time.sleep(5)
+              assert watch.poll() is None
+              if linux:
+                  traffic = (proof / "notification-native-traffic.log").read_text(errors="replace")
+                  assert "member=Notify" in traffic, "Real mcw notification was not delivered to the native daemon"
+                  record("native-notification-screenshot", ["import", "-window", "root", str(proof / "notification.png")])
+                  before = (proof / "watch.log").stat().st_size
+                  stop(pipewire)
+                  # Preserve live-watch continuity across a real session-service outage.
+                  time.sleep(5)
+                  unavailable = status("status-outage")
+                  assert all(row["state"] == "unavailable" for row in unavailable["collectors"]), unavailable
+                  outage_doctor = json.loads(record("doctor-outage", [binary, "doctor", "--json"], (2,)).stdout)
+                  assert any(row["status"] == "error" for row in outage_doctor)
+                  outage = (proof / "watch.log").read_bytes()[before:]
+                  (proof / "watch-outage.jsonl").write_bytes(outage)
+                  records = [json.loads(line) for line in outage.splitlines()]
+                  assert any(row.get("collectors") for row in records), "Watch did not report service outage coverage"
+                  assert all(row.get("action") not in ("start", "stop") for row in records), outage
+              stop(watch, signal.SIGINT)
+              assert watch.returncode == 0, watch.returncode
+              for line in (proof / "watch.log").read_bytes().splitlines():
+                  json.loads(line)
+              # Native lifecycle is exercised even if screenshot authorization is absent.
+              tray = launch("tray", [binary, "--lang", "en", "tray", "run"])
+              ready = False
+              deadline = time.monotonic() + 35
+              while time.monotonic() < deadline and tray.poll() is None:
+                  result = subprocess.run([binary, "tray", "status"], capture_output=True, timeout=15)
+                  (proof / "tray-status.stdout").write_bytes(result.stdout)
+                  (proof / "tray-status.stderr").write_bytes(result.stderr)
+                  if result.returncode == 0:
+                      ready = True
+                      break
+                  time.sleep(.5)
+              if not ready and not linux and gui.returncode != 0:
+                  (proof / "gui-unavailable.txt").write_text(
+                      "Native tray attempted but this runner lacks a launchctl gui/<uid> Aqua session. "
+                      "A logged-in graphical macOS 15+ runner is required; see aqua-session and tray native output.\n")
+                  print("::warning::macOS native GUI prerequisite missing: logged-in Aqua/WindowServer session")
+              else:
+                  assert ready, (proof / "tray.stderr").read_text(errors="replace")
+                  record("tray-ready", [binary, "tray", "status"])
+                  if linux:
+                      record("registered-tray-items", ["gdbus", "call", "--session", "--dest", "org.kde.StatusNotifierWatcher",
+                             "--object-path", "/StatusNotifierWatcher", "--method", "org.freedesktop.DBus.Properties.Get",
+                             "org.kde.StatusNotifierWatcher", "RegisteredStatusNotifierItems"])
+                      record("desktop-screenshot", ["import", "-window", "root", str(proof / "desktop.png")])
+                  else:
+                      screenshot = record("desktop-screenshot", ["screencapture", "-x", str(proof / "desktop.png")], (0, 1))
+                      if screenshot.returncode != 0:
+                          (proof / "screenshot-unavailable.txt").write_text(
+                              "screencapture could not capture the native display. A visible Aqua desktop and Screen Recording "
+                              "authorization for the runner process are required; native stderr is preserved, no TCC changes made.\n")
+                          print("::warning::macOS screenshot unavailable; native output retained; inspect Screen Recording/Aqua prerequisites")
+                  record("tray-stop", [binary, "tray", "stop"])
+                  assert tray.wait(timeout=20) == 0, "Native helper did not exit cleanly after owned stop"
+                  assert record("tray-stopped", [binary, "tray", "status"], (1,)).stdout.strip() == b"stopped"
+                  if linux:
+                      record("desktop-after-stop", ["import", "-window", "root", str(proof / "desktop-after-stop.png")])
+                  else:
+                      record("desktop-after-stop", ["screencapture", "-x", str(proof / "desktop-after-stop.png")], (0, 1))
+              (proof / "scope.txt").write_text(
+                  "Extracted native package; real CLI, PTY and native tray/control lifecycle. Linux uses real XFCE StatusNotifier "
+                  "panel, notification daemon, session D-Bus and isolated PipeWire virtual source; never a mock GUI. "
+                  "Screenshots require human review. No physical capture, hardware mute/camera mutation, macOS profile installation, "
+                  "notification permission grant, real lock/unlock transition, signing or AV-clearance proof is asserted.\n")
+          finally:
+              for process in reversed(children):
+                  stop(process)
+              for handle in handles:
+                  handle.close()
+          PY
+      - name: Exercise native Linux desktop and extracted package
         if: runner.os == 'Linux'
         shell: bash
-        run: |
-          set +e
-          ./target/debug/mcw status --json > "$RUNNER_TEMP/mcw-status.json"
-          status_code=$?
-          ./target/debug/mcw doctor --json > "$RUNNER_TEMP/mcw-doctor.json"
-          doctor_code=$?
-          ./target/debug/mcw devices --json > "$RUNNER_TEMP/mcw-devices.out" 2>&1
-          devices_code=$?
-          timeout --preserve-status -s INT 2s ./target/debug/mcw watch --json > "$RUNNER_TEMP/mcw-watch.jsonl"
-          watch_code=$?
-          set -e
-          case "$status_code" in 0|1|2) ;; *) exit 1 ;; esac
-          case "$doctor_code" in 0|2) ;; *) exit 1 ;; esac
-          case "$devices_code" in 0|2) ;; *) exit 1 ;; esac
-          test "$watch_code" -eq 0
-          python3 -c 'import json, os; from pathlib import Path; p=Path(os.environ["RUNNER_TEMP"]); s=json.loads((p/"mcw-status.json").read_text()); d=json.loads((p/"mcw-doctor.json").read_text()); assert {c["collector"] for c in s["collectors"]} == {"pipewire_audio", "pipewire_video"}; assert len(d) == 2; [json.loads(line) for line in (p/"mcw-watch.jsonl").read_text().splitlines()]'
-      - name: Smoke native macOS collector CLI (no hardware required)
+        run: dbus-run-session -- xvfb-run --auto-servernum --server-args="-screen 0 1280x800x24" python3 "$RUNNER_TEMP/native-smoke.py"
+      - name: Exercise native macOS menu bar and extracted package
         if: runner.os == 'macOS'
         shell: bash
-        run: |
-          set +e
-          ./target/debug/mcw status --json > "$RUNNER_TEMP/mcw-status.json"
-          status_code=$?
-          ./target/debug/mcw doctor --json > "$RUNNER_TEMP/mcw-doctor.json"
-          doctor_code=$?
-          ./target/debug/mcw devices --json > "$RUNNER_TEMP/mcw-devices.out" 2>&1
-          devices_code=$?
-          python3 -c 'import os, signal, subprocess, time; from pathlib import Path; p=Path(os.environ["RUNNER_TEMP"])/"mcw-watch.jsonl"; f=p.open("w"); proc=subprocess.Popen(["./target/debug/mcw", "watch", "--json"], stdout=f, stderr=subprocess.STDOUT, start_new_session=True); time.sleep(8); os.killpg(proc.pid, signal.SIGINT) if proc.poll() is None else None; result=proc.wait(timeout=15); f.close(); raise SystemExit(result)'
-          watch_code=$?
-          set -e
-          test "$status_code" -eq 2
-          case "$doctor_code" in 0|2) ;; *) exit 1 ;; esac
-          test "$devices_code" -eq 0
-          test "$watch_code" -eq 0
-          python3 -c 'import json, os; from pathlib import Path; p=Path(os.environ["RUNNER_TEMP"]); s=json.loads((p/"mcw-status.json").read_text()); d=json.loads((p/"mcw-doctor.json").read_text()); c={x["collector"]:x for x in s["collectors"]}; assert set(c)=={"coreaudio_input","avfoundation_video"}; assert c["avfoundation_video"]["state"]=="degraded"; assert "capture helper unavailable" not in str(s).lower(); assert {x["name"] for x in d}==set(c); assert all(x["status"] in ("ok","warning","error") for x in d); [json.loads(line) for line in (p/"mcw-watch.jsonl").read_text().splitlines()]'
+        run: python3 "$RUNNER_TEMP/native-smoke.py"
+      - name: Upload native output and visual evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-proof-${{ matrix.platform }}-${{ matrix.arch }}
+          if-no-files-found: warn
+          path: ${{ runner.temp }}/native-proof
+      - name: Upload extracted and exercised release package
+        if: inputs.release-packages
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-${{ matrix.platform }}-${{ matrix.arch }}
+          if-no-files-found: error
+          path: miccamwatch-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz

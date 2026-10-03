@@ -8,33 +8,55 @@ use crate::{
     },
 };
 use anyhow::{Context, Result, bail};
-use serde::Deserialize;
+use serde::{Deserialize, de::DeserializeOwned};
 use std::{
     fs::{self, File, OpenOptions},
-    io::{Read, Write},
+    io::{Read, Seek, SeekFrom, Write},
     os::unix::fs::{DirBuilderExt, OpenOptionsExt},
-    path::PathBuf,
-    process::{Command, Stdio},
+    path::{Component, Path, PathBuf},
+    process::{Child, Command, Stdio},
     sync::{
-        LazyLock,
+        LazyLock, Mutex,
         atomic::{AtomicU64, Ordering},
     },
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-const HELPER: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/mcw-macos-capture"));
+pub(crate) mod control;
+pub(crate) mod signature;
+
+const HELPER: &[u8] = include_bytes!(concat!(
+    env!("OUT_DIR"),
+    "/MicCamWatchHelper.app/Contents/MacOS/MicCamWatchHelper"
+));
+const HELPER_PLIST: &[u8] = include_bytes!(concat!(
+    env!("OUT_DIR"),
+    "/MicCamWatchHelper.app/Contents/Info.plist"
+));
+const HELPER_RESOURCES: &[u8] = include_bytes!(concat!(
+    env!("OUT_DIR"),
+    "/MicCamWatchHelper.app/Contents/_CodeSignature/CodeResources"
+));
 const MAX_OUTPUT: u64 = 1024 * 1024;
 const TIMEOUT: Duration = Duration::from_secs(5);
+const MAX_ARGUMENTS: usize = 65_536;
 static BINARY: LazyLock<Result<Helper, String>> =
     LazyLock::new(|| Helper::install().map_err(|error| format!("{error:#}")));
 static SCAN_ID: AtomicU64 = AtomicU64::new(0);
 
-pub struct PlatformMonitor;
+pub struct PlatformMonitor {
+    policy: Policy,
+}
 
 impl PlatformMonitor {
-    pub fn new(_policy: Policy) -> Result<Self> {
-        Ok(Self)
+    pub fn new(policy: Policy) -> Result<Self> {
+        Ok(Self { policy })
+    }
+
+    pub(crate) fn set_policy(&mut self, policy: Policy) {
+        // CoreAudio control originals live in the durable journal, not in policy.
+        self.policy = policy;
     }
 
     pub fn snapshot(&self, scope: CaptureScope) -> Result<Snapshot> {
@@ -75,11 +97,17 @@ impl PlatformMonitor {
                         CollectorState::Healthy
                     };
                     if audio.available {
+                        let first = snapshot.accesses.len();
                         for (index, process) in audio.processes.into_iter().enumerate() {
                             if !process.has_identity() {
                                 detail.get_or_insert_with(|| "active CoreAudio input client has no stable process identity".to_owned());
                             }
                             snapshot.accesses.push(microphone_access(process, index));
+                        }
+                        if let Some(error) =
+                            self.assess_microphones(&mut snapshot.accesses[first..])
+                        {
+                            detail.get_or_insert(error);
                         }
                     }
                     snapshot.collectors.push(health(
@@ -191,6 +219,90 @@ impl PlatformMonitor {
             }],
         }
     }
+
+    fn apply_policy(&self, access: &mut Access) {
+        (access.risk, access.enforcement) = crate::policy::assess_policy(
+            &self.policy,
+            &access.application,
+            access.executable.as_deref(),
+            access.signature.as_ref(),
+            &mut access.evidence,
+        );
+    }
+
+    fn assess_microphones(&self, accesses: &mut [Access]) -> Option<String> {
+        let mut attributed = false;
+        for access in accesses
+            .iter_mut()
+            .filter(|access| access.process.is_some())
+        {
+            let Some(path) = access.executable.as_deref() else {
+                continue;
+            };
+            attributed = true;
+            match signature::verify_signature_with_policy(path, self.policy.trust_policy) {
+                Ok(signature) => access.signature = Some(signature),
+                Err(error) => access.evidence.push(Evidence::new(
+                    EvidenceKind::Signature,
+                    "security_framework",
+                    format!("Native executable signature evidence unavailable: {error:#}"),
+                )),
+            }
+        }
+        if !attributed {
+            return None;
+        }
+        // The signing helper verifies a file, not a PID. Re-read libproc identity
+        // through the passive input collector before attaching its verdict or
+        // permitting path/name rules to authorize enforcement.
+        let current = observe("audio").and_then(|observation| {
+            let audio = observation
+                .audio
+                .context("helper omitted identity revalidation")?;
+            if !audio.available {
+                bail!(
+                    "{}",
+                    audio
+                        .error
+                        .as_deref()
+                        .unwrap_or("CoreAudio identity revalidation unavailable")
+                );
+            }
+            Ok(audio.processes)
+        });
+        let mut unstable = false;
+        for access in accesses
+            .iter_mut()
+            .filter(|access| access.process.is_some())
+        {
+            if current.as_ref().is_ok_and(|processes| {
+                processes
+                    .iter()
+                    .any(|process| process.matches_access(access))
+            }) {
+                self.apply_policy(access);
+            } else {
+                unstable = true;
+                access.signature = None;
+                access.evidence.push(Evidence::new(
+                    EvidenceKind::Signature,
+                    "libproc",
+                    "Process birth/executable identity could not be revalidated after signature verification; no policy decision is authorized.",
+                ));
+            }
+        }
+        if unstable {
+            Some(match current {
+                Ok(_) => {
+                    "CoreAudio process identity changed or disappeared during policy assessment"
+                        .to_owned()
+                }
+                Err(error) => format!("CoreAudio identity revalidation unavailable: {error:#}"),
+            })
+        } else {
+            None
+        }
+    }
 }
 
 fn health(
@@ -232,7 +344,28 @@ impl AudioProcess {
     fn has_identity(&self) -> bool {
         matches!((self.pid, self.start_seconds, self.start_microseconds, &self.executable),
             (Some(pid), Some(seconds), Some(micros), Some(path))
-            if pid > 0 && seconds > 0 && micros < 1_000_000 && !path.is_empty())
+            if pid > 0 && pid <= i32::MAX as u32 && seconds > 0 && micros < 1_000_000
+                && !path.contains('\0')
+                && Path::new(path).is_absolute()
+                && Path::new(path).file_name().is_some()
+                && !Path::new(path).components().any(|part| part == Component::ParentDir))
+    }
+
+    fn matches_access(&self, access: &Access) -> bool {
+        if !self.has_identity() || self.pid != access.pid || self.executable != access.executable {
+            return false;
+        }
+        let Some(context) = &access.process else {
+            return false;
+        };
+        let Some(identity) = context.instance_id.strip_prefix("macos:microphone:") else {
+            return false;
+        };
+        let mut parts = identity.split(':');
+        parts.next().and_then(|part| part.parse::<u32>().ok()) == self.pid
+            && parts.next().and_then(|part| part.parse::<u64>().ok()) == self.start_seconds
+            && parts.next().and_then(|part| part.parse::<u64>().ok()) == self.start_microseconds
+            && parts.next().is_none()
     }
 }
 
@@ -336,6 +469,7 @@ fn camera_access(camera: &CameraDevice) -> Access {
 struct Helper {
     directory: PathBuf,
     binary: PathBuf,
+    desktop_children: Mutex<Vec<u32>>,
 }
 
 impl Helper {
@@ -346,18 +480,29 @@ impl Helper {
                 .join(format!("mcw-{}-{timestamp}-{attempt}", std::process::id()));
             match fs::DirBuilder::new().mode(0o700).create(&directory) {
                 Ok(()) => {
+                    let bundle = directory.join("MicCamWatchHelper.app");
                     let installation = Self {
-                        binary: directory.join("capture"),
+                        binary: bundle.join("Contents/MacOS/MicCamWatchHelper"),
                         directory,
+                        desktop_children: Mutex::new(Vec::new()),
                     };
-                    let mut file = OpenOptions::new()
-                        .write(true)
-                        .create_new(true)
-                        .mode(0o700)
-                        .open(&installation.binary)?;
-                    file.write_all(HELPER)?;
+                    for directory in [
+                        &bundle,
+                        &bundle.join("Contents"),
+                        &bundle.join("Contents/MacOS"),
+                        &bundle.join("Contents/_CodeSignature"),
+                    ] {
+                        fs::DirBuilder::new().mode(0o700).create(directory)?;
+                    }
+                    write_private(&installation.binary, HELPER, 0o700)?;
+                    write_private(&bundle.join("Contents/Info.plist"), HELPER_PLIST, 0o600)?;
+                    write_private(
+                        &bundle.join("Contents/_CodeSignature/CodeResources"),
+                        HELPER_RESOURCES,
+                        0o600,
+                    )?;
                     if unsafe { libc::atexit(remove_embedded_helper) } != 0 {
-                        bail!("cannot register macOS capture helper cleanup");
+                        bail!("cannot register macOS helper cleanup");
                     }
                     return Ok(installation);
                 }
@@ -368,7 +513,12 @@ impl Helper {
         bail!("cannot reserve private directory for embedded macOS capture helper")
     }
 
-    fn run(&self, mode: &str) -> Result<Observation> {
+    fn request<T: DeserializeOwned>(
+        &self,
+        mode: &str,
+        args: &[&str],
+        timeout: Duration,
+    ) -> Result<T> {
         let number = SCAN_ID.fetch_add(1, Ordering::Relaxed);
         let output_path = self.directory.join(format!("output-{number}"));
         let error_path = self.directory.join(format!("error-{number}"));
@@ -376,61 +526,196 @@ impl Helper {
             output: output_path.clone(),
             error: error_path.clone(),
         };
-        let stdout = OpenOptions::new()
+        let mut stdout = OpenOptions::new()
+            .read(true)
             .write(true)
             .create_new(true)
             .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
             .open(&output_path)?;
-        let stderr = OpenOptions::new()
+        let mut stderr = OpenOptions::new()
+            .read(true)
             .write(true)
             .create_new(true)
             .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
             .open(&error_path)?;
-        let mut child = Command::new(&self.binary)
-            .arg(mode)
-            .stdin(Stdio::null())
-            .stdout(Stdio::from(stdout))
-            .stderr(Stdio::from(stderr))
-            .spawn()
-            .context("cannot execute embedded macOS capture helper")?;
         let start = Instant::now();
-        let status = loop {
-            if let Some(status) = child.try_wait()? {
-                break status;
-            }
-            if start.elapsed() >= TIMEOUT {
-                let _ = child.kill();
-                let _ = child.wait();
-                bail!(
-                    "macOS capture helper exceeded {}s timeout",
-                    TIMEOUT.as_secs()
-                );
-            }
-            thread::sleep(Duration::from_millis(20));
+        let mut child = RunningChild {
+            child: Command::new(&self.binary)
+                .arg(mode)
+                .args(args)
+                .stdin(Stdio::null())
+                .stdout(Stdio::from(stdout.try_clone()?))
+                .stderr(Stdio::from(stderr.try_clone()?))
+                .spawn()
+                .context("cannot execute embedded macOS helper")?,
+            reaped: false,
         };
-        if !status.success() {
-            let mut stderr = String::new();
-            File::open(&error_path)?
-                .take(MAX_OUTPUT)
-                .read_to_string(&mut stderr)?;
-            bail!("macOS capture helper exited {status}: {}", stderr.trim());
-        }
-        let file = File::open(&output_path)?;
-        if file.metadata()?.len() > MAX_OUTPUT {
-            bail!("macOS capture helper response exceeds size limit");
-        }
-        let observation: Observation =
-            serde_json::from_reader(file).context("invalid macOS capture helper response")?;
-        validate_observation(mode, &observation)?;
-        Ok(observation)
+        let result = (|| {
+            let status = loop {
+                if stdout.metadata()?.len() > MAX_OUTPUT || stderr.metadata()?.len() > MAX_OUTPUT {
+                    bail!("macOS helper output exceeds {MAX_OUTPUT}-byte size limit");
+                }
+                if let Some(status) = child.child.try_wait()? {
+                    child.reaped = true;
+                    break status;
+                }
+                if start.elapsed() >= timeout {
+                    bail!("macOS helper exceeded {}ms timeout", timeout.as_millis());
+                }
+                thread::sleep(Duration::from_millis(20));
+            };
+            if !status.success() {
+                bail!("macOS helper exited {status}");
+            }
+            // Check again after exit: the final write can race the polling check.
+            if stdout.metadata()?.len() > MAX_OUTPUT || stderr.metadata()?.len() > MAX_OUTPUT {
+                bail!("macOS helper output exceeds {MAX_OUTPUT}-byte size limit");
+            }
+            stdout.seek(SeekFrom::Start(0))?;
+            serde_json::from_reader((&mut stdout).take(MAX_OUTPUT))
+                .context("invalid macOS helper JSON response")
+        })();
+        // Every wait/metadata/decode failure terminates and reaps an unreaped
+        // child before reading diagnostics or deleting its private output files.
+        drop(child);
+        result.with_context(|| format!("macOS helper {mode}: {}", helper_diagnostics(&mut stderr)))
+    }
+
+    fn desktop(&self, args: &[&str]) -> Result<Child> {
+        let mut children = self
+            .desktop_children
+            .lock()
+            .map_err(|_| anyhow::anyhow!("macOS desktop ownership lock poisoned"))?;
+        // Never rewrite/reinstall this bundle beneath a running desktop host.
+        let child = Command::new(&self.binary)
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .context("cannot execute embedded AppKit desktop helper")?;
+        children.retain(|pid| process_may_be_running(*pid));
+        children.push(child.id());
+        Ok(child)
     }
 }
 
 impl Helper {
     fn remove_files(&self) {
-        let _ = fs::remove_file(&self.binary);
-        let _ = fs::remove_dir(&self.directory);
+        // The returned Child belongs to the desktop host. On a normal shutdown
+        // it is reaped first. If it still runs (or liveness is uncertain), retain
+        // the bundle instead of removing resources out from under AppKit.
+        let Ok(children) = self.desktop_children.lock() else {
+            return;
+        };
+        if children.iter().any(|pid| process_may_be_running(*pid)) {
+            return;
+        }
+        let _ = fs::remove_dir_all(&self.directory);
     }
+}
+
+fn write_private(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(mode)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(path)?;
+    file.write_all(bytes)?;
+    Ok(())
+}
+
+fn process_may_be_running(pid: u32) -> bool {
+    // Signal zero checks liveness only, never terminates a PID. A reused PID or
+    // an unexpected credential error conservatively retains the private bundle.
+    let status = unsafe { libc::kill(pid as libc::pid_t, 0) };
+    status == 0 || std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+}
+
+struct RunningChild {
+    child: Child,
+    reaped: bool,
+}
+impl Drop for RunningChild {
+    fn drop(&mut self) {
+        if !self.reaped {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
+}
+
+fn helper_diagnostics(file: &mut File) -> String {
+    let mut bytes = Vec::new();
+    if file
+        .seek(SeekFrom::Start(0))
+        .and_then(|_| file.take(MAX_OUTPUT).read_to_end(&mut bytes))
+        .is_err()
+    {
+        return "helper diagnostics unavailable".to_owned();
+    }
+    let text = String::from_utf8_lossy(&bytes);
+    if text.trim().is_empty() {
+        "no helper diagnostics".to_owned()
+    } else {
+        text.trim().to_owned()
+    }
+}
+
+fn helper() -> Result<&'static Helper> {
+    match &*BINARY {
+        Ok(helper) => Ok(helper),
+        Err(error) => bail!("cannot install embedded macOS helper: {error}"),
+    }
+}
+
+pub(crate) fn native_request<T: DeserializeOwned>(
+    mode: &str,
+    args: &[&str],
+    timeout: Duration,
+) -> Result<T> {
+    validate_request(mode, args)?;
+    if timeout.is_zero() || timeout > Duration::from_secs(120) {
+        bail!("macOS helper timeout must be positive and at most 120 seconds");
+    }
+    helper()?.request(mode, args, timeout)
+}
+
+pub(crate) fn desktop_process(args: &[&str]) -> Result<Child> {
+    if args != ["desktop"] {
+        bail!("persistent macOS helper requires exactly the desktop mode");
+    }
+    helper()?.desktop(args)
+}
+
+fn validate_request(mode: &str, args: &[&str]) -> Result<()> {
+    let valid = match mode {
+        "audio"
+        | "video"
+        | "both"
+        | "devices"
+        | "locale"
+        | "session-lock"
+        | "notification-identity"
+        | "sound" => args.is_empty(),
+        "control" | "log" => args.len() == 1,
+        "terminate" | "notify" => args.len() == 2,
+        "signature" => args.len() == 2 && matches!(args[1], "offline" | "online"),
+        _ => false,
+    };
+    if !valid {
+        bail!("invalid macOS helper mode or argument count");
+    }
+    let bytes = args
+        .iter()
+        .fold(mode.len(), |total, arg| total.saturating_add(arg.len()));
+    if bytes > MAX_ARGUMENTS || mode.contains('\0') || args.iter().any(|arg| arg.contains('\0')) {
+        bail!("macOS helper arguments contain NUL or exceed the size limit");
+    }
+    Ok(())
 }
 
 impl Drop for Helper {
@@ -440,8 +725,8 @@ impl Drop for Helper {
 }
 
 extern "C" fn remove_embedded_helper() {
-    // Statics are never dropped; remove this process's private helper on normal
-    // CLI/watch exit. Abrupt termination can still leave an orphaned directory.
+    // Statics are never dropped. Abrupt termination or a still-running owned
+    // desktop can leave a private directory; cleanup never kills the desktop.
     if let Ok(helper) = &*BINARY {
         helper.remove_files();
     }
@@ -468,10 +753,9 @@ fn validate_observation(mode: &str, observation: &Observation) -> Result<()> {
 }
 
 fn observe(mode: &str) -> Result<Observation> {
-    match &*BINARY {
-        Ok(helper) => helper.run(mode),
-        Err(error) => bail!("cannot install embedded capture helper: {error}"),
-    }
+    let observation = native_request(mode, &[], TIMEOUT)?;
+    validate_observation(mode, &observation)?;
+    Ok(observation)
 }
 
 impl CaptureCollector for PlatformMonitor {
@@ -515,8 +799,13 @@ mod tests {
 
     #[test]
     fn rejects_partial_or_invalid_birth_identity() {
-        for (seconds, micros, path) in [(0, 0, "/bin/app"), (1, 1_000_000, "/bin/app"), (1, 0, "")]
-        {
+        for (seconds, micros, path) in [
+            (0, 0, "/bin/app"),
+            (1, 1_000_000, "/bin/app"),
+            (1, 0, ""),
+            (1, 0, "bin/app"),
+            (1, 0, "/bin/../app"),
+        ] {
             let process = AudioProcess {
                 pid: Some(42),
                 start_seconds: Some(seconds),
@@ -526,6 +815,79 @@ mod tests {
             assert!(!process.has_identity());
             assert_eq!(microphone_access(process, 0).pid, None);
         }
+    }
+
+    #[test]
+    fn birth_or_executable_changes_invalidate_signature_attribution() {
+        let access = microphone_access(
+            AudioProcess {
+                pid: Some(51),
+                start_seconds: Some(10),
+                start_microseconds: Some(2),
+                executable: Some("/Applications/Recorder.app/Contents/MacOS/Recorder".into()),
+            },
+            0,
+        );
+        let mut current = AudioProcess {
+            pid: Some(51),
+            start_seconds: Some(10),
+            start_microseconds: Some(2),
+            executable: access.executable.clone(),
+        };
+        assert!(current.matches_access(&access));
+        current.start_microseconds = Some(3);
+        assert!(!current.matches_access(&access));
+        current.start_microseconds = Some(2);
+        current.executable = Some("/other/Recorder".into());
+        assert!(!current.matches_access(&access));
+        current.executable = access.executable.clone();
+        current.pid = Some(52);
+        assert!(!current.matches_access(&access));
+    }
+
+    #[test]
+    fn changed_policy_affects_future_assessments_without_native_side_effects() {
+        let mut monitor = PlatformMonitor::new(Policy::default()).unwrap();
+        let mut access = microphone_access(
+            AudioProcess {
+                pid: Some(51),
+                start_seconds: Some(10),
+                start_microseconds: Some(2),
+                executable: Some("/Applications/Recorder.app/Contents/MacOS/Recorder".into()),
+            },
+            0,
+        );
+        monitor.apply_policy(&mut access);
+        assert_eq!(access.enforcement, EnforcementDecision::Alert);
+        let instance = access.process.clone();
+        monitor.set_policy(Policy {
+            applications: vec![crate::config::ApplicationRule {
+                executable: "Recorder".into(),
+                paths: vec!["/Applications/Recorder.app".into()],
+                publishers: Vec::new(),
+            }],
+            ..Policy::default()
+        });
+        monitor.apply_policy(&mut access);
+        assert_eq!(access.enforcement, EnforcementDecision::Allow);
+        assert_eq!(access.process, instance);
+        monitor.set_policy(Policy {
+            applications: vec![crate::config::ApplicationRule {
+                executable: "Recorder".into(),
+                paths: vec!["/other".into()],
+                publishers: vec!["Trusted publisher".into()],
+            }],
+            ..Policy::default()
+        });
+        monitor.apply_policy(&mut access);
+        assert_eq!(access.enforcement, EnforcementDecision::Unknown);
+        access.signature = Some(crate::model::SignatureInfo {
+            verified: false,
+            signer: None,
+            error: Some("Unsigned executable".into()),
+        });
+        monitor.apply_policy(&mut access);
+        assert_eq!(access.enforcement, EnforcementDecision::Deny);
     }
 
     #[test]
@@ -564,5 +926,10 @@ mod tests {
         assert!(validate_observation("audio", &empty).is_err());
         assert!(validate_observation("video", &empty).is_err());
         assert!(validate_observation("devices", &empty).is_err());
+        assert!(validate_request("desktop", &[]).is_err());
+        assert!(validate_request("signature", &["/bin/app", "unchecked"]).is_err());
+        assert!(validate_request("control", &["{}\0"]).is_err());
+        assert!(validate_request("log", &[&"x".repeat(MAX_ARGUMENTS)]).is_err());
+        assert!(validate_request("control", &["{}"]).is_ok());
     }
 }

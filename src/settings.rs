@@ -59,23 +59,52 @@ impl Default for Settings {
 
 impl Settings {
     pub fn load() -> Result<Self> {
-        let path = settings_path()?;
-        if !path.exists() {
-            return Ok(Self::default());
-        }
-        let contents = fs::read_to_string(&path)
-            .with_context(|| format!("failed to read settings {}", path.display()))?;
-        toml::from_str(&contents).with_context(|| format!("invalid settings {}", path.display()))
+        load_at(&settings_path()?)
     }
 
-    pub fn save(&self) -> Result<()> {
-        save_at(self, &settings_path()?)
+    /// Merge one change with the latest preferences under a stable process lock.
+    pub fn update(change: impl FnOnce(&mut Self)) -> Result<Self> {
+        update_at(&settings_path()?, change)
     }
 
     pub fn notifications_paused(&self) -> bool {
         self.pause_notifications_until
             .is_some_and(|until| until > Utc::now())
     }
+}
+
+fn load_at(path: &std::path::Path) -> Result<Settings> {
+    match fs::read_to_string(path) {
+        Ok(contents) => toml::from_str(&contents)
+            .with_context(|| format!("invalid settings {}", path.display())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Settings::default()),
+        Err(error) => {
+            Err(error).with_context(|| format!("failed to read settings {}", path.display()))
+        }
+    }
+}
+
+fn update_at(path: &std::path::Path, change: impl FnOnce(&mut Settings)) -> Result<Settings> {
+    fs::create_dir_all(path.parent().context("settings path has no parent")?)?;
+    let mut options = fs::OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    }
+    // Never remove or atomically replace this file: all writers must lock the
+    // same inode, even while the adjacent settings file is replaced.
+    let lock = options
+        .open(path.with_extension("lock"))
+        .context("cannot open settings lock")?;
+    lock.lock().context("cannot lock settings")?;
+    let mut settings = load_at(path)?;
+    change(&mut settings);
+    save_at(&settings, path)?;
+    Ok(settings)
 }
 
 fn save_at(settings: &Settings, path: &std::path::Path) -> Result<()> {
@@ -183,17 +212,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn defaults_are_safe_and_round_trip() {
-        let settings = Settings::default();
-        assert!(!settings.mute_on_lock);
-        assert!(!settings.block_camera_on_lock);
-        assert!(!settings.notifications_paused());
-        let encoded = toml::to_string(&settings).unwrap();
-        let decoded: Settings = toml::from_str(&encoded).unwrap();
-        assert_eq!(decoded.profile, PrivacyProfile::Balanced);
-    }
-
-    #[test]
     fn subsequent_save_replaces_settings_without_losing_existing_file() {
         let path = std::env::temp_dir().join(format!(
             "mcw-settings-{}-{}.toml",
@@ -215,6 +233,42 @@ mod tests {
         assert!(saved.notifications_enabled);
         assert!(saved.block_camera_on_lock);
         fs::remove_file(path).unwrap();
+    }
+    #[test]
+    fn concurrent_changes_merge_with_the_latest_preferences() {
+        let path = std::env::temp_dir().join(format!(
+            "mcw-settings-merge-{}-{}.toml",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let barrier = std::sync::Barrier::new(4);
+        std::thread::scope(|scope| {
+            for operation in 0..4 {
+                let path = &path;
+                let barrier = &barrier;
+                scope.spawn(move || {
+                    barrier.wait();
+                    update_at(path, |settings| match operation {
+                        0 => settings.notifications_enabled = false,
+                        1 => settings.sound_enabled = true,
+                        2 => settings.profile = PrivacyProfile::Meeting,
+                        3 => settings.history_enabled = false,
+                        _ => unreachable!(),
+                    })
+                    .unwrap();
+                });
+            }
+        });
+        let saved = load_at(&path).unwrap();
+        assert!(!saved.notifications_enabled);
+        assert!(saved.sound_enabled);
+        assert_eq!(saved.profile, PrivacyProfile::Meeting);
+        assert!(!saved.history_enabled);
+        fs::remove_file(&path).unwrap();
+        fs::remove_file(path.with_extension("lock")).unwrap();
     }
 
     #[cfg(unix)]

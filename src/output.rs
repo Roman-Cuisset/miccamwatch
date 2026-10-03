@@ -198,6 +198,9 @@ fn print_access(access: &Access, action: Option<Action>, lang: Language) {
     println!(
         "{resource_col}  {state_col}  {risk_col}  {app_col}  {pid_col}  {device_col}  {conf_badge}"
     );
+    if matches!(action, Some(Action::Stop)) {
+        println!("     {}", lang.historical_observation_note().dimmed());
+    }
 
     if let (Some(parent_pid), Some(parent_name)) = (access.parent_pid, &access.parent_name) {
         println!(

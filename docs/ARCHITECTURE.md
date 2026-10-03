@@ -13,6 +13,34 @@ MicCamWatch has a shared Rust library and CLI. Windows is the release-gated capt
 
 The observable activity state, heuristic risk, confidence, and enforcement decision remain independent. A collector must not convert incomplete evidence into an enforcement denial.
 
+## Unix installer boundary
+
+`installer/install.sh` selects the published OS/CPU archive, resolves `latest`
+to a concrete release tag, and verifies its named SHA-256 manifest entry before
+extracting the CLI. Installation is per-user, without `sudo`; the executable is
+staged on the destination filesystem and checked before atomic replacement.
+Running, unmanaged, or externally modified executables are not overwritten.
+
+The install receipt and exact managed PATH blocks belong to the installer, not
+to capture collection or application preferences. Explicit `--add-path` or
+terminal consent updates the active bash, zsh, or fish configuration;
+noninteractive installation does not change it by default. Uninstall removes
+only owned, unchanged artifacts and preserves unrelated configuration and data.
+Installer staging and locks live under the install prefix or configuration
+directory; a live macOS watcher's extracted helper in `TMPDIR` is not an
+installer download leak.
+
+The public installer currently distributes the Unix CLI. Installing it does
+not make Windows-only device blocking or desktop frontends available.
+
+
+The [public installer verification run 36827199694](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/36827199694)
+passed on Ubuntu 22.04, macOS 15 arm64, and macOS 15 Intel, downloading the
+commit-pinned public script and released `v0.14.0` archives. It exercised fresh
+interactive/login shells, PATH consent and idempotence, native CLI/watch,
+same-version atomic replacement, hostile downloads, and uninstall preservation.
+This run does not establish physical capture coverage or cross-version upgrades.
+
 ## Collector contract
 
 A platform backend implements `CaptureCollector`:
@@ -50,3 +78,43 @@ Linux device inventory does not imply access permission. Direct V4L2 capture can
 ## Frontend invariants
 
 CLI, TUI, and tray may format, filter, and initiate explicit user controls. They do not collect evidence or reinterpret enforcement. New frontends consume the public library contract instead of importing Windows internals.
+
+## Functional parity baseline and native targets
+
+This inventory is based on `v0.14.0` and the current source, not a claim that
+the targets below have already passed native runtime verification.
+
+| Family | Windows baseline | Linux target / prerequisite | macOS target / prerequisite |
+| --- | --- | --- | --- |
+| Observation and CLI | WASAPI, camera privacy intervals and pipeline evidence; incorrect camera Ready reports are being corrected with native sensor activity | Keep authenticated PipeWire graph and read-only V4L2 evidence | Keep CoreAudio input and unattributed AVFoundation camera evidence |
+| Policy and trust | Executable, publisher and path rules; offline/explicit-online Authenticode | Native path/rule assessment; verified native signatures or package provenance only, otherwise unknown | Native code-signing trust assessment, never a fabricated Authenticode verdict |
+| Events and storage | START/UPDATE/STOP, schema 3, JSONL, rotating history | Preserve observation-gap reconciliation, history and persistent locks | Same portable contracts; STOP retains the last observed active evidence |
+| System journals | Windows Application Event Log | Native journal/syslog delivery on explicit `--eventlog` | Native Unified Logging on explicit `--eventlog` |
+| Microphone controls | WASAPI endpoint mute, not an access-denial guarantee | Approved scope: session PipeWire mute/restoration, not direct ALSA blocking | Approved scope: input mute properties that are actually writable |
+| Camera controls | Approved PnP disable and owned-device restoration | Global camera blocking is outside the approved limited PipeWire scope | Approved scope: manually approved camera restriction profile; pending approval is not blocked |
+| TUI | Dashboard, mic/camera actions, verified double-confirmed termination | Shared dashboard consuming the existing collector; unsupported controls visibly disabled | Same dashboard, with explicit profile-approval and supported-input control scope |
+| Tray / menu bar | Win32 icons, popup actions, singleton and stop/status IPC | Native StatusNotifierItem, supported desktop host and per-user IPC | Native AppKit status item and per-user IPC |
+| Notifications and sound | WinRT, event cooldown, pause, optional chime | Native notification service and desktop sound availability | Native application identity, notification authorization and system sound |
+| Autostart | Limited per-user Task Scheduler / Run registration | Opt-in native desktop-session registration | Opt-in per-user LaunchAgent in a graphical login session |
+| Session lock and profiles | Native lock tri-state; opt-in tray actions and owned restoration | Native session lock reports; never infer a graphical unlock from SSH | Public native lock reports only; manual profile approval cannot run silently while locked |
+| Enforcement | Active + explicit Deny, two observations, process-instance revalidation | Same safeguards and stable process handle before termination | Same safeguards; native process authority and protected-process restrictions must remain visible |
+| Languages and help | Seven display languages; several help/menu strings remain English | Seven-language native locale detection and truthful command availability | Same; no Windows privacy/task/session descriptions |
+| Distribution and update | ZIP/MSI, paired updater and autostart refresh | Public installer receipt, atomic CLI upgrade and preserved opt-in | Same-version embedded helpers/frontends, public archives and preserved opt-in |
+
+Camera restrictions and microphone mute are different operations. Apple allows
+manual installation of the [Restrictions payload](https://developer.apple.com/documentation/devicemanagement/restrictions);
+[PPPC camera/microphone denials](https://support.apple.com/en-gb/guide/deployment/dep38df53c2a/web)
+are per-application controls requiring device management. The user explicitly
+approved limited native controls instead of a universal macOS microphone block.
+
+The user also approved limited Linux session PipeWire controls. They do not
+deny direct ALSA/V4L2 access. PipeWire [access policy](https://docs.pipewire.org/page_module_access.html)
+and [node mute](https://pipewire.pages.freedesktop.org/wireplumber/man/wpctl.html)
+are not kernel device revocation. The kernel documents that
+[V4L2 unregister](https://docs.kernel.org/driver-api/media/v4l2-dev.html)
+rejects new opens and existing file operations; changing a pathname or presenting
+a suspended PipeWire node must not be advertised as that operation.
+
+CoreAudio [`AudioHardwareProcess.devices`](https://developer.apple.com/documentation/coreaudio/audiohardwareprocess)
+describes output devices. It is not evidence identifying the microphone used by
+Sound or Telegram; their input-device attribution remains unknown.

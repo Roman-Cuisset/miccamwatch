@@ -34,6 +34,7 @@ pub(super) struct ProcessIdentity {
     pub(super) pid: u32,
     pub(super) instance_id: String,
     pub(super) executable: String,
+    pub(super) executable_file: fs::Metadata,
     pub(super) name: String,
     pub(super) parent_pid: Option<u32>,
     pub(super) uid: u32,
@@ -47,16 +48,33 @@ impl ProcessIdentity {
         let first = fs::read_to_string(&stat_path)
             .with_context(|| format!("cannot read {}", stat_path.display()))?;
         let (parent, start_ticks) = parse_process_stat(&first, pid)?;
-        let executable = fs::read_link(dir.join("exe"))
-            .with_context(|| format!("cannot resolve /proc/{pid}/exe"))?
-            .to_string_lossy()
-            .into_owned();
+        let executable_link = dir.join("exe");
+        let executable_path = fs::read_link(&executable_link)
+            .with_context(|| format!("cannot resolve /proc/{pid}/exe"))?;
+        if !executable_path.is_absolute() {
+            bail!("PID {pid} executable is not an absolute filesystem path");
+        }
+        let executable = executable_path
+            .to_str()
+            .context("process executable path is not valid UTF-8")?
+            .to_owned();
+        let process_executable = fs::metadata(&executable_link)?;
+        let path_executable = fs::metadata(&executable_path)
+            .context("process executable is deleted or no longer available at its path")?;
+        if !same_executable(&process_executable, &path_executable) {
+            bail!("PID {pid} executable path no longer identifies its running executable");
+        }
         let uid = fs::metadata(&dir)?.uid();
-        // Re-check after resolving exe: a PID reused during the read cannot inherit the
-        // previous process's identity or executable.
+        // Re-check process and executable identity: exec does not change starttime,
+        // and replacing a pathname must not authenticate a different running inode.
         let second = fs::read_to_string(&stat_path)?;
-        if parse_process_stat(&second, pid)?.1 != start_ticks {
-            bail!("PID {pid} changed process instance during observation");
+        if parse_process_stat(&second, pid)?.1 != start_ticks
+            || fs::read_link(&executable_link)? != executable_path
+            || fs::metadata(&dir)?.uid() != uid
+            || !same_executable(&process_executable, &fs::metadata(&executable_link)?)
+            || !same_executable(&process_executable, &fs::metadata(&executable_path)?)
+        {
+            bail!("PID {pid} changed process or executable identity during observation");
         }
         let name = Path::new(&executable)
             .file_name()
@@ -66,12 +84,25 @@ impl ProcessIdentity {
             pid,
             instance_id: format!("linux:{pid}:{}:{start_ticks}", boot.seconds),
             executable,
+            executable_file: process_executable,
             name,
             parent_pid: (parent != 0).then_some(parent),
             uid,
             created_at: boot.instant(start_ticks)?,
         })
     }
+}
+
+pub(super) fn same_executable(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    left.is_file()
+        && right.is_file()
+        && left.dev() == right.dev()
+        && left.ino() == right.ino()
+        && left.len() == right.len()
+        && left.mtime() == right.mtime()
+        && left.mtime_nsec() == right.mtime_nsec()
+        && left.ctime() == right.ctime()
+        && left.ctime_nsec() == right.ctime_nsec()
 }
 
 fn parse_boot_time(contents: &str) -> Result<u64> {

@@ -10,6 +10,7 @@ use crate::{
     settings::{PrivacyProfile, Settings},
 };
 use anyhow::{Context, Result};
+use parking_lot::Mutex;
 use std::{
     collections::HashMap,
     ffi::OsStr,
@@ -33,7 +34,7 @@ use windows::{
             BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CreateBitmap, CreateDIBSection, DIB_RGB_COLORS,
             DeleteObject,
         },
-        System::Threading::CreateMutexW,
+        System::Threading::{CreateMutexW, GetCurrentProcessId},
         UI::{
             Shell::{
                 NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW,
@@ -77,6 +78,10 @@ const WM_TRAY_CALLBACK: u32 = WM_APP + 1;
 const WM_CAMERA_RESULT: u32 = WM_APP + 2;
 const WM_TRAY_REFRESH: u32 = WM_APP + 3;
 const WM_RESTORE_RESULT: u32 = WM_APP + 4;
+/// Cooperative updater shutdown. Older trays do not acknowledge this message.
+pub(crate) const WM_UPDATE_STOP: u32 = WM_APP + 41;
+pub(crate) const UPDATE_STOPPED: usize = 0x4d435731;
+pub(crate) const UPDATE_BUSY: usize = 0x4d435732;
 const TIMER_POLL_ID: usize = 1;
 const CAMERA_POLL_INTERVAL: Duration = Duration::from_secs(5);
 const CMD_TOGGLE_MUTE: usize = 101;
@@ -137,6 +142,21 @@ enum CameraRequest {
 type CameraResult = (CameraRequest, Result<CameraPrivacyState, String>);
 type CameraWorker = (Sender<CameraRequest>, Receiver<CameraResult>);
 
+#[derive(Debug, Default)]
+struct RestoreActivity {
+    pending: usize,
+    closing: bool,
+}
+
+#[derive(Debug)]
+struct RestorePermit(Arc<Mutex<RestoreActivity>>);
+
+impl Drop for RestorePermit {
+    fn drop(&mut self) {
+        self.0.lock().pending -= 1;
+    }
+}
+
 struct TrayAppState {
     monitor: PlatformMonitor,
     lang: Language,
@@ -168,6 +188,7 @@ struct TrayAppState {
     deferred_lock_block: bool,
     pending_lock_block: Option<u64>,
     pending_lock_restore: Option<u64>,
+    restore_activity: Arc<Mutex<RestoreActivity>>,
 }
 
 impl Drop for TrayAppState {
@@ -185,7 +206,8 @@ fn start_refresh_worker(
     hwnd_cell: Arc<AtomicIsize>,
     camera_dirty: Arc<AtomicBool>,
     camera_sequence: Arc<AtomicU64>,
-    restore_requests: SyncSender<()>,
+    restore_requests: SyncSender<RestorePermit>,
+    restore_activity: Arc<Mutex<RestoreActivity>>,
     policy: crate::config::Policy,
 ) -> Receiver<TrayRefresh> {
     let (sender, receiver) = mpsc::channel();
@@ -283,7 +305,12 @@ fn start_refresh_worker(
             )
             .is_empty()
             {
-                let _ = restore_requests.try_send(());
+                let mut activity = restore_activity.lock();
+                if !activity.closing {
+                    activity.pending += 1;
+                    drop(activity);
+                    let _ = restore_requests.try_send(RestorePermit(Arc::clone(&restore_activity)));
+                }
             }
             thread::sleep(Duration::from_millis(500));
         }
@@ -306,6 +333,7 @@ pub fn run_tray(
     let hwnd_cell = Arc::new(AtomicIsize::new(0));
     let camera_dirty = Arc::new(AtomicBool::new(false));
     let camera_sequence = Arc::new(AtomicU64::new(0));
+    let restore_activity = Arc::new(Mutex::new(RestoreActivity::default()));
     let (restore_requests, restore_results) = start_restore_worker(Arc::clone(&hwnd_cell));
     let (camera_requests, camera_results) = start_camera_worker(Arc::clone(&hwnd_cell));
     let refreshes = start_refresh_worker(
@@ -313,6 +341,7 @@ pub fn run_tray(
         Arc::clone(&camera_dirty),
         Arc::clone(&camera_sequence),
         restore_requests,
+        Arc::clone(&restore_activity),
         policy,
     );
     // The shell downsamples anything larger than the small-icon metric, which is what
@@ -339,6 +368,7 @@ pub fn run_tray(
         camera_generation: 0,
         hwnd_cell: Arc::clone(&hwnd_cell),
         restore_results,
+        restore_activity,
         restore_camera: None,
         camera_requests,
         camera_results,
@@ -445,12 +475,7 @@ pub fn is_running() -> bool {
 }
 
 pub fn stop_running() -> Result<bool> {
-    let class_name = format_wide("MicCamWatchTrayClass");
-    let Ok(hwnd) = (unsafe { FindWindowW(PCWSTR(class_name.as_ptr()), PCWSTR::null()) }) else {
-        return Ok(false);
-    };
-    unsafe { PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0))? };
-    Ok(true)
+    crate::updater::stop_installed_tray()
 }
 
 fn state(hwnd: HWND) -> Option<&'static mut TrayAppState> {
@@ -470,6 +495,13 @@ unsafe extern "system" fn tray_wnd_proc(
         return LRESULT(1);
     }
     match message {
+        WM_UPDATE_STOP => {
+            if wparam.0 != unsafe { GetCurrentProcessId() } as usize {
+                return LRESULT(0);
+            }
+            LRESULT(request_safe_close(hwnd) as isize)
+        }
+        WM_CLOSE => LRESULT(request_safe_close(hwnd) as isize),
         WM_TRAY_REFRESH | WM_TIMER => {
             if let Some(state) = state(hwnd) {
                 // Timer fallback also consumes results if a worker's PostMessage failed.
@@ -501,9 +533,12 @@ unsafe extern "system" fn tray_wnd_proc(
                 CMD_TOGGLE_NOTIFICATIONS => toggle_notifications(hwnd),
                 CMD_TOGGLE_AUTOSTART => toggle_autostart(hwnd),
                 CMD_CYCLE_PROFILE => cycle_profile(hwnd),
-                CMD_EXIT => unsafe {
-                    let _ = DestroyWindow(hwnd);
-                },
+                CMD_EXIT if request_safe_close(hwnd) == UPDATE_BUSY => {
+                    notify_async(
+                        "MicCamWatch",
+                        "Finish the pending camera operation or UAC prompt before exiting. Nothing was cancelled.",
+                    );
+                }
                 _ => {}
             }
             LRESULT(0)
@@ -517,6 +552,31 @@ unsafe extern "system" fn tray_wnd_proc(
         }
         _ => unsafe { DefWindowProcW(hwnd, message, wparam, lparam) },
     }
+}
+
+fn request_safe_close(hwnd: HWND) -> usize {
+    let Some(state) = state(hwnd) else {
+        return UPDATE_BUSY;
+    };
+    let mut activity = state.restore_activity.lock();
+    if !can_close_tray(
+        state.pending_manual,
+        state.pending_lock_block.is_some(),
+        state.pending_lock_restore.is_some(),
+        activity.pending,
+    ) {
+        return UPDATE_BUSY;
+    }
+    activity.closing = true;
+    drop(activity);
+    unsafe {
+        let _ = DestroyWindow(hwnd);
+    }
+    UPDATE_STOPPED
+}
+
+fn can_close_tray(manual: usize, block: bool, restore: bool, arrivals: usize) -> bool {
+    manual == 0 && !block && !restore && arrivals == 0
 }
 
 fn start_camera_worker(hwnd_cell: Arc<AtomicIsize>) -> CameraWorker {
@@ -836,17 +896,18 @@ fn summarize(accesses: &[&crate::model::Access]) -> String {
 
 fn toggle_mute(hwnd: HWND) {
     let Some(state) = state(hwnd) else { return };
-    match state.monitor.toggle_microphone_mute() {
-        Ok(muted) => {
-            state.mute_state = if muted {
-                MicrophoneMuteState::Muted
-            } else {
-                MicrophoneMuteState::Unmuted
-            };
-            let message = if muted {
-                "Microphone muted"
-            } else {
-                "Microphone unmuted"
+    let result = state
+        .monitor
+        .toggle_microphone_mute()
+        .and_then(|_| state.monitor.microphone_mute_state());
+    match result {
+        Ok(actual) => {
+            state.mute_state = actual;
+            let message = match actual {
+                MicrophoneMuteState::Muted => "Microphone muted",
+                MicrophoneMuteState::Unmuted => "Microphone unmuted",
+                MicrophoneMuteState::Mixed => "Microphone mute states are mixed",
+                MicrophoneMuteState::Unavailable => "Microphone mute state unavailable",
             };
             notify_async("miccamwatch", message);
         }
@@ -890,7 +951,7 @@ fn take_fresh_arrivals<E>(arrived: Result<&[String], E>, offered: &mut Vec<Strin
 // A one-slot queue coalesces multiple arrivals while a UAC prompt is in flight.
 fn start_restore_worker(
     hwnd_cell: Arc<AtomicIsize>,
-) -> (SyncSender<()>, Receiver<Result<usize, String>>) {
+) -> (SyncSender<RestorePermit>, Receiver<Result<usize, String>>) {
     let (requests, pending) = mpsc::sync_channel(1);
     let (results, delivered) = mpsc::channel();
     thread::spawn(move || {
@@ -898,6 +959,7 @@ fn start_restore_worker(
             pending,
             results,
             || hwnd_cell.load(Ordering::Relaxed) != 0,
+            // The request's RAII permit counts queued and active UAC operations.
             || crate::privacy::restore_arrived().map_err(|error| format!("{error:#}")),
             || {
                 let h = hwnd_cell.load(Ordering::Relaxed);
@@ -917,14 +979,14 @@ fn start_restore_worker(
     (requests, delivered)
 }
 
-fn restore_worker(
-    requests: Receiver<()>,
+fn restore_worker<T>(
+    requests: Receiver<T>,
     results: mpsc::Sender<Result<usize, String>>,
     alive: impl Fn() -> bool,
     mut restore: impl FnMut() -> Result<usize, String>,
     mut notify: impl FnMut() -> bool,
 ) {
-    while requests.recv().is_ok() {
+    while let Ok(_request) = requests.recv() {
         if !alive() {
             break;
         }
@@ -1134,13 +1196,18 @@ fn handle_camera_result(state: &mut TrayAppState, result: Result<CameraPrivacySt
 
 fn toggle_notifications(hwnd: HWND) {
     let Some(state) = state(hwnd) else { return };
-    state.settings.pause_notifications_until = if state.settings.notifications_paused() {
-        None
-    } else {
-        Some(chrono::Utc::now() + chrono::Duration::hours(1))
-    };
-    if let Err(error) = state.settings.save() {
-        state.summary = format!("miccamwatch: settings save failed: {error}");
+    match Settings::update(|settings| {
+        settings.pause_notifications_until = if settings.notifications_paused() {
+            None
+        } else {
+            Some(chrono::Utc::now() + chrono::Duration::hours(1))
+        };
+    }) {
+        Ok(settings) => state.settings = settings,
+        Err(error) => {
+            state.summary = format!("miccamwatch: settings update failed: {error:#}");
+            notify_async("MicCamWatch settings", &state.summary);
+        }
     }
 }
 
@@ -1159,14 +1226,19 @@ fn toggle_autostart(hwnd: HWND) {
 
 fn cycle_profile(hwnd: HWND) {
     let Some(state) = state(hwnd) else { return };
-    state.settings.profile = match state.settings.profile {
-        PrivacyProfile::Balanced => PrivacyProfile::Private,
-        PrivacyProfile::Private => PrivacyProfile::Meeting,
-        PrivacyProfile::Meeting => PrivacyProfile::Development,
-        PrivacyProfile::Development => PrivacyProfile::Balanced,
-    };
-    if let Err(error) = state.settings.save() {
-        state.summary = format!("miccamwatch: settings save failed: {error}");
+    match Settings::update(|settings| {
+        settings.profile = match settings.profile {
+            PrivacyProfile::Balanced => PrivacyProfile::Private,
+            PrivacyProfile::Private => PrivacyProfile::Meeting,
+            PrivacyProfile::Meeting => PrivacyProfile::Development,
+            PrivacyProfile::Development => PrivacyProfile::Balanced,
+        };
+    }) {
+        Ok(settings) => state.settings = settings,
+        Err(error) => {
+            state.summary = format!("miccamwatch: settings update failed: {error:#}");
+            notify_async("MicCamWatch settings", &state.summary);
+        }
     }
 }
 
@@ -1397,6 +1469,56 @@ fn line_distance(x: f32, y: f32, x1: f32, y1: f32, x2: f32, y2: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn safe_close_refuses_every_pending_camera_operation() {
+        assert!(can_close_tray(0, false, false, 0));
+        assert!(!can_close_tray(1, false, false, 0));
+        assert!(!can_close_tray(0, true, false, 0));
+        assert!(!can_close_tray(0, false, true, 0));
+        assert!(!can_close_tray(0, false, false, 1));
+    }
+
+    #[test]
+    fn restore_permits_cover_queued_and_active_operations() {
+        let activity = Arc::new(Mutex::new(RestoreActivity::default()));
+        activity.lock().pending += 1;
+        let permit = RestorePermit(Arc::clone(&activity));
+        let (sender, receiver) = mpsc::channel();
+        sender.send(permit).unwrap();
+        assert_eq!(activity.lock().pending, 1);
+        let active = receiver.recv().unwrap();
+        assert_eq!(activity.lock().pending, 1);
+        drop(active);
+        assert_eq!(activity.lock().pending, 0);
+    }
+
+    #[test]
+    fn declined_restore_drains_permits_without_cancelling_active_work() {
+        let activity = Arc::new(Mutex::new(RestoreActivity::default()));
+        let (sender, receiver) = mpsc::channel();
+        for _ in 0..2 {
+            activity.lock().pending += 1;
+            sender.send(RestorePermit(Arc::clone(&activity))).unwrap();
+        }
+        drop(sender);
+        let (results, delivered) = mpsc::channel();
+        let mut calls = 0;
+        restore_worker(
+            receiver,
+            results,
+            || true,
+            || {
+                assert_eq!(activity.lock().pending, 2);
+                calls += 1;
+                Err("UAC declined".into())
+            },
+            || true,
+        );
+        assert_eq!(calls, 1);
+        assert_eq!(activity.lock().pending, 0);
+        assert!(delivered.recv().unwrap().is_err());
+    }
     fn observed(resource: Resource, key: &str) -> Access {
         Access {
             key: key.to_owned(),

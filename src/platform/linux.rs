@@ -1,23 +1,59 @@
+mod control;
 mod pipewire;
 mod procfs;
+mod signature;
 mod v4l2;
 
 use crate::{
     collector::{CaptureCollector, CaptureScope},
     config::Policy,
-    model::{CollectorHealth, CollectorState, Device, DiagnosticCheck, DiagnosticStatus, Snapshot},
+    model::{
+        Access, CollectorHealth, CollectorState, Device, DiagnosticCheck, DiagnosticStatus,
+        Evidence, EvidenceKind, MicrophoneMuteState, Resource, Snapshot,
+    },
+    policy::assess_policy,
 };
-use anyhow::Result;
+use anyhow::{Context, Result, bail};
 use pipewire::Graph;
-use procfs::BootTime;
+use procfs::{BootTime, ProcessIdentity};
 
 /// Linux captures are derived from PipeWire's live graph. Direct V4L2 FDs
 /// provide only low-confidence readiness and never prove frame flow.
-pub struct PlatformMonitor;
+pub struct PlatformMonitor {
+    policy: Policy,
+    control: control::Control,
+}
 
 impl PlatformMonitor {
-    pub fn new(_policy: Policy) -> Result<Self> {
-        Ok(Self)
+    pub fn new(policy: Policy) -> Result<Self> {
+        Ok(Self {
+            policy,
+            control: control::Control::new(),
+        })
+    }
+
+    pub(crate) fn set_policy(&mut self, policy: Policy) {
+        self.policy = policy;
+    }
+
+    pub fn microphone_mute_state(&self) -> Result<MicrophoneMuteState> {
+        self.control.microphone_mute_state()
+    }
+
+    pub fn set_microphone_mute(&self, muted: bool) -> Result<usize> {
+        self.control.set_microphone_mute(muted)
+    }
+
+    pub fn toggle_microphone_mute(&self) -> Result<bool> {
+        self.control.toggle_microphone_mute()
+    }
+
+    pub fn begin_lock_microphone_mute(&self) -> Result<()> {
+        self.control.begin_lock_mute()
+    }
+
+    pub fn restore_lock_microphone_mute(&self) -> Result<()> {
+        self.control.restore_lock_mute()
     }
 
     pub fn snapshot(&self, scope: CaptureScope) -> Result<Snapshot> {
@@ -104,11 +140,95 @@ impl PlatformMonitor {
                 detail,
             ));
         }
+        for access in &mut accesses {
+            self.assess_access(access, boot.as_ref().ok());
+        }
+        let mut observation_gaps = Vec::new();
+        if graph.is_err() {
+            if scope.microphone {
+                observation_gaps.push(Resource::Microphone);
+            }
+            if scope.camera {
+                observation_gaps.push(Resource::Camera);
+            }
+        }
         Ok(Snapshot {
             collectors,
             accesses,
-            observation_gaps: Vec::new(),
+            observation_gaps,
         })
+    }
+
+    fn assess_access(&self, access: &mut Access, boot: Option<&BootTime>) {
+        let identity = (|| {
+            let boot = boot.context("Linux boot time is unavailable")?;
+            let before = validated_access_identity(access, boot)?;
+            let signature = signature::verify_signature_with_policy(
+                access
+                    .executable
+                    .as_deref()
+                    .context("executable is unavailable")?,
+                self.policy.trust_policy,
+            );
+            // A long-running verifier must not grant policy trust after PID reuse
+            // or exec. The signature authenticates the on-disk file, not pages
+            // already loaded by the process.
+            let after = validated_access_identity(access, boot)?;
+            if !procfs::same_executable(&before.executable_file, &after.executable_file) {
+                bail!("running executable changed during detached signature verification");
+            }
+            Ok::<_, anyhow::Error>(signature)
+        })();
+        let executable = match identity {
+            Ok(signature) => {
+                access.signature = match signature {
+                    Ok(signature) => {
+                        access.evidence.push(Evidence::new(
+                            EvidenceKind::Signature,
+                            "openpgp",
+                            if signature.verified {
+                                format!(
+                                    "Detached executable signature verified for {}; this does not attest loaded process pages",
+                                    signature.signer.as_deref().unwrap_or("unknown signer")
+                                )
+                            } else {
+                                signature.error.clone().unwrap_or_else(|| {
+                                    "Detached executable signature did not verify".to_owned()
+                                })
+                            },
+                        ));
+                        Some(signature)
+                    }
+                    Err(error) => {
+                        access.evidence.push(Evidence::new(
+                            EvidenceKind::Signature,
+                            "openpgp",
+                            format!(
+                                "Detached executable signature evidence unavailable: {error:#}"
+                            ),
+                        ));
+                        None
+                    }
+                };
+                access.executable.as_deref()
+            }
+            Err(error) => {
+                access.signature = None;
+                access.evidence.push(Evidence::new(
+                    EvidenceKind::ProcessLineage,
+                    "procfs",
+                    format!("Policy executable identity unavailable: {error:#}"),
+                ));
+                None
+            }
+        };
+        (access.risk, access.enforcement) = assess_policy(
+            &self.policy,
+            &access.application,
+            executable,
+            access.signature.as_ref(),
+            &mut access.evidence,
+        );
     }
 
     pub fn devices(&self) -> Result<Vec<Device>> {
@@ -125,7 +245,7 @@ impl PlatformMonitor {
     }
 
     pub fn doctor(&self) -> Vec<DiagnosticCheck> {
-        match self.snapshot(CaptureScope {
+        let mut checks = match self.snapshot(CaptureScope {
             include_ready: true,
             ..CaptureScope::all()
         }) {
@@ -149,8 +269,81 @@ impl PlatformMonitor {
                 status: DiagnosticStatus::Error,
                 detail: format!("cannot inspect Linux capture collectors: {error:#}"),
             }],
+        };
+        checks.push(DiagnosticCheck {
+            name: "linux_control_scope",
+            status: DiagnosticStatus::Warning,
+            detail: "Signal mute applies only to writable capture sources in the connected PipeWire session, including virtual and monitor sources when supported. It does not deny microphone access or control direct ALSA, other PipeWire sessions, V4L2 cameras, or physical hardware.".to_owned(),
+        });
+        match self.control.capabilities() {
+            Ok(report) => {
+                let writable = report.sources.iter().filter(|source| source.writable).count();
+                checks.push(DiagnosticCheck {
+                    name: "pipewire_source_mute",
+                    status: if writable == 0 { DiagnosticStatus::Warning } else { DiagnosticStatus::Ok },
+                    detail: format!(
+                        "{writable}/{} session capture sources have writable mute controls; {} original mute states retained, {} restorations pending; lock active={}, suppressed by manual intent={}",
+                        report.sources.len(), report.retained_original_states,
+                        report.pending_restorations.len(), report.lock_active,
+                        report.lock_suppressed_by_manual_intent,
+                    ),
+                });
+                for source in report.sources.iter().filter(|source| !source.writable) {
+                    checks.push(DiagnosticCheck {
+                        name: "pipewire_unsupported_source",
+                        status: DiagnosticStatus::Warning,
+                        detail: format!(
+                            "{} ({:?}): {}",
+                            source.name, source.kind,
+                            source.unsupported_reason.as_deref().unwrap_or("writable mute control unavailable"),
+                        ),
+                    });
+                }
+                for pending in report.pending_restorations {
+                    checks.push(DiagnosticCheck {
+                        name: "pipewire_pending_restoration",
+                        status: DiagnosticStatus::Warning,
+                        detail: format!("{}: {}", pending.name, pending.reason),
+                    });
+                }
+            }
+            Err(error) => checks.push(DiagnosticCheck {
+                name: "pipewire_source_mute",
+                status: DiagnosticStatus::Error,
+                detail: format!("Cannot inspect session mute controls or retained restoration records: {error:#}"),
+            }),
         }
+        checks
     }
+}
+
+/// The existing procfs instance identifier is also the pidfd authority token.
+pub(crate) fn verified_process_identity(pid: u32) -> Result<(String, String, u32)> {
+    let identity = ProcessIdentity::verify(pid, &BootTime::read()?)?;
+    Ok((identity.instance_id, identity.executable, identity.uid))
+}
+
+fn validated_access_identity(access: &Access, boot: &BootTime) -> Result<ProcessIdentity> {
+    let pid = access
+        .pid
+        .context("authenticated capture PID is unavailable")?;
+    let observed = access
+        .process
+        .as_ref()
+        .context("capture process instance is unavailable")?;
+    let identity = ProcessIdentity::verify(pid, boot)?;
+    if observed.instance_id != identity.instance_id
+        || access.executable.as_deref() != Some(identity.executable.as_str())
+        || access.application != identity.name
+        || observed
+            .user
+            .as_deref()
+            .and_then(|uid| uid.parse::<u32>().ok())
+            != Some(identity.uid)
+    {
+        bail!("capture process or executable no longer matches its validated observation");
+    }
+    Ok(identity)
 }
 
 fn health(

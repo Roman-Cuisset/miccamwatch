@@ -1,22 +1,22 @@
 use anyhow::Result;
 use clap::Parser;
-#[cfg(windows)]
 use colored::Colorize;
+#[cfg(any(windows, target_os = "macos"))]
+use miccamwatch::frontends::cli::CameraCommand;
 #[cfg(not(windows))]
 use miccamwatch::model::DiagnosticStatus;
+#[cfg(any(windows, target_os = "macos"))]
+use miccamwatch::privacy;
 #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
 use miccamwatch::watcher;
-#[cfg(windows)]
 use miccamwatch::{
     autostart,
     frontends::{
-        cli::{
-            AutostartCommand, CameraCommand, LockPolicyCommand, NotificationCommand, TrayCommand,
-        },
+        cli::{AutostartCommand, LockPolicyCommand, NotificationCommand, TrayCommand},
         tray, tui,
     },
     model::MicrophoneMuteState,
-    privacy, updater,
+    updater,
 };
 use miccamwatch::{
     collector::CaptureScope,
@@ -44,36 +44,25 @@ fn main() -> ExitCode {
     }
 }
 
-#[cfg(not(windows))]
-fn unsupported_command(command: &Command, policy: &Policy) -> Option<&'static str> {
-    match command {
-        Command::Tray { .. } => Some("tray is only supported on Windows"),
-        Command::Autostart { .. } => Some("autostart is only supported on Windows"),
-        Command::Camera { .. } => Some("camera privacy control is only supported on Windows"),
-        Command::LockPolicy { .. } => Some("lock-policy is only supported on Windows"),
-        Command::Update => Some("update is only supported on Windows"),
-        Command::Mute(_) | Command::Unmute => {
-            Some("microphone mute control is only supported on Windows")
-        }
-        Command::Notifications { .. } => Some("notifications are only supported on Windows"),
-        Command::Top => Some("top is only supported on Windows"),
-        Command::Watch(options) if options.eventlog => {
-            Some("--eventlog is only supported on Windows")
-        }
-        Command::Watch(options) if options.notify => Some("--notify is only supported on Windows"),
-        Command::Watch(options) if options.sound => Some("--sound is only supported on Windows"),
-        Command::Watch(options) if options.kill_unauthorized => {
-            Some("--kill-unauthorized is only supported on Windows")
-        }
-        Command::Watch(options) if !options.no_kill && policy.action == DefensiveAction::Kill => {
-            Some("policy action Kill is only supported on Windows")
-        }
-        _ => None,
-    }
-}
-
 fn run() -> Result<u8> {
     let cli = Cli::parse();
+    #[cfg(unix)]
+    let tray_eventlog = match &cli.command {
+        Command::Tray { eventlog, .. } => *eventlog,
+        _ => false,
+    };
+    #[cfg(unix)]
+    if matches!(
+        &cli.command,
+        Command::Autostart {
+            command: AutostartCommand::Refresh
+        }
+    ) {
+        // Installer refresh depends only on the existing owned registration,
+        // not on whether an unrelated capture policy currently validates.
+        autostart::refresh_if_enabled(env!("CARGO_PKG_VERSION"))?;
+        return Ok(0);
+    }
     let no_color = match &cli.command {
         Command::Status(opts) => opts.output.no_color,
         Command::Watch(opts) => opts.output.no_color,
@@ -107,10 +96,6 @@ fn run() -> Result<u8> {
         .lang
         .or_else(|| policy.language.as_deref().and_then(Language::from_code))
         .unwrap_or_else(Language::detect);
-    #[cfg(not(windows))]
-    if let Some(message) = unsupported_command(&cli.command, &policy) {
-        anyhow::bail!("{message}");
-    }
     match cli.command {
         Command::Status(options) => {
             let monitor = PlatformMonitor::new(policy.clone())?;
@@ -123,7 +108,6 @@ fn run() -> Result<u8> {
             output::print_status(&snapshot, options.output.json, options.filter.risk, lang)?;
             Ok(code)
         }
-        #[cfg(windows)]
         Command::Watch(options) => {
             let monitor = PlatformMonitor::new(policy.clone())?;
             let defensive_kill = if options.no_kill {
@@ -133,33 +117,23 @@ fn run() -> Result<u8> {
             } else {
                 policy.action == DefensiveAction::Kill
             };
+            #[cfg(windows)]
+            let notify = options.notify
+                && settings.notifications_enabled
+                && !settings.notifications_paused();
+            #[cfg(unix)]
+            let notify = options.notify;
             watcher::watch(
                 &monitor,
                 &options.filter,
                 options.output.json,
                 Duration::from_millis(options.interval),
-                options.notify
-                    && settings.notifications_enabled
-                    && !settings.notifications_paused(),
+                notify,
                 options.log.as_deref(),
                 options.eventlog,
                 lang,
                 options.sound || settings.sound_enabled,
                 defensive_kill,
-                settings.history_enabled,
-            )?;
-            Ok(0)
-        }
-        #[cfg(any(target_os = "linux", target_os = "macos"))]
-        Command::Watch(options) => {
-            let monitor = PlatformMonitor::new(policy)?;
-            watcher::watch(
-                &monitor,
-                &options.filter,
-                options.output.json,
-                Duration::from_millis(options.interval),
-                options.log.as_deref(),
-                lang,
                 settings.history_enabled,
             )?;
             Ok(0)
@@ -187,7 +161,6 @@ fn run() -> Result<u8> {
                 u8::from(missing)
             })
         }
-        #[cfg(windows)]
         Command::Update => {
             updater::update()?;
             Ok(0)
@@ -206,12 +179,11 @@ fn run() -> Result<u8> {
             }
             Ok(0)
         }
-        #[cfg(windows)]
         Command::Mute(opts) => {
             let monitor = PlatformMonitor::new(policy)?;
             if opts.status {
                 let state = monitor.microphone_mute_state()?;
-                let message = lang.microphone_status(state);
+                let message = microphone_message(lang, state);
                 match state {
                     MicrophoneMuteState::Muted => println!("{}", message.red().bold()),
                     MicrophoneMuteState::Unmuted => println!("{}", message.green().bold()),
@@ -221,37 +193,44 @@ fn run() -> Result<u8> {
                 }
                 return Ok(0);
             }
-            let new_state = if opts.toggle {
-                monitor.toggle_microphone_mute()?
+            if opts.toggle {
+                monitor.toggle_microphone_mute()?;
             } else {
                 monitor.set_microphone_mute(true)?;
-                true
-            };
-            if new_state {
-                println!("{}", "✔ Microphone MUTED.".red().bold());
-            } else {
-                println!("{}", "✔ Microphone UNMUTED.".green().bold());
             }
+            println!(
+                "{}",
+                microphone_message(lang, monitor.microphone_mute_state()?)
+            );
             Ok(0)
         }
-        #[cfg(windows)]
         Command::Unmute => {
             let monitor = PlatformMonitor::new(policy)?;
             monitor.set_microphone_mute(false)?;
-            println!("{}", "✔ Microphone UNMUTED.".green().bold());
+            println!(
+                "{}",
+                microphone_message(lang, monitor.microphone_mute_state()?)
+            );
             Ok(0)
         }
-        #[cfg(windows)]
         Command::Top => {
-            let monitor = PlatformMonitor::new(policy)?;
-            tui::run_tui(monitor, lang)?;
+            tui::run_tui(policy, lang)?;
             Ok(0)
         }
-        #[cfg(windows)]
-        Command::Tray { command } => match command.unwrap_or(TrayCommand::Run) {
+        Command::Tray { command, .. } => match command.unwrap_or(TrayCommand::Run) {
             TrayCommand::Run => {
                 let monitor = PlatformMonitor::new(policy.clone())?;
+                #[cfg(windows)]
                 tray::run_tray(monitor, policy, lang, settings)?;
+                #[cfg(unix)]
+                tray::run_tray(
+                    monitor,
+                    policy,
+                    lang,
+                    settings,
+                    cli.config.is_some(),
+                    tray_eventlog,
+                )?;
                 Ok(0)
             }
             TrayCommand::Stop => {
@@ -272,7 +251,7 @@ fn run() -> Result<u8> {
                 Ok(u8::from(!running))
             }
         },
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "macos"))]
         Command::Camera { command } => {
             let state = match command {
                 CameraCommand::Status => privacy::camera_state()?,
@@ -289,15 +268,20 @@ fn run() -> Result<u8> {
                 CameraCommand::Toggle => privacy::toggle_camera()?,
             };
             println!("{}", state.as_str());
+            #[cfg(target_os = "macos")]
+            println!("{}", privacy::camera_detail()?);
             Ok(0)
         }
-        #[cfg(windows)]
         Command::Autostart { command } => {
             let status_query = matches!(&command, AutostartCommand::Status);
             match command {
                 AutostartCommand::Status => {}
                 AutostartCommand::Enable => autostart::enable()?,
                 AutostartCommand::Disable => autostart::disable()?,
+                #[cfg(unix)]
+                AutostartCommand::Refresh => {
+                    unreachable!("refresh is handled before policy loading")
+                }
             }
             let state = autostart::state()?;
             println!("{}", format!("{state:?}").to_ascii_lowercase());
@@ -307,35 +291,38 @@ fn run() -> Result<u8> {
         }
         Command::Profile { profile } => {
             if let Some(profile) = profile {
-                settings.profile = match profile {
-                    ProfileArg::Private => PrivacyProfile::Private,
-                    ProfileArg::Meeting => PrivacyProfile::Meeting,
-                    ProfileArg::Development => PrivacyProfile::Development,
-                    ProfileArg::Balanced => PrivacyProfile::Balanced,
-                };
-                settings.save()?;
+                settings = Settings::update(|current| {
+                    current.profile = match profile {
+                        ProfileArg::Private => PrivacyProfile::Private,
+                        ProfileArg::Meeting => PrivacyProfile::Meeting,
+                        ProfileArg::Development => PrivacyProfile::Development,
+                        ProfileArg::Balanced => PrivacyProfile::Balanced,
+                    };
+                })?;
             }
             println!("{}", format!("{:?}", settings.profile).to_ascii_lowercase());
             Ok(0)
         }
-        #[cfg(windows)]
         Command::Notifications { command } => {
             match command {
                 NotificationCommand::Status => {}
                 NotificationCommand::Pause { minutes } => {
                     let minutes = i64::try_from(minutes)?;
-                    settings.pause_notifications_until =
-                        Some(chrono::Utc::now() + chrono::Duration::minutes(minutes));
-                    settings.save()?;
+                    settings = Settings::update(|current| {
+                        current.pause_notifications_until =
+                            Some(chrono::Utc::now() + chrono::Duration::minutes(minutes));
+                    })?;
                 }
                 NotificationCommand::Resume => {
-                    settings.pause_notifications_until = None;
-                    settings.save()?;
+                    settings =
+                        Settings::update(|current| current.pause_notifications_until = None)?;
                 }
             }
             println!(
                 "{}",
-                if settings.notifications_paused() {
+                if !settings.notifications_enabled {
+                    "disabled"
+                } else if settings.notifications_paused() {
                     "paused"
                 } else {
                     "enabled"
@@ -343,21 +330,34 @@ fn run() -> Result<u8> {
             );
             Ok(0)
         }
-        #[cfg(windows)]
         Command::LockPolicy { command } => {
+            #[cfg(target_os = "macos")]
+            if !matches!(command, LockPolicyCommand::Disable) {
+                anyhow::bail!(
+                    "macOS has no supported public session-lock signal; automatic lock actions are unavailable"
+                );
+            }
             match command {
                 LockPolicyCommand::Status => {}
                 LockPolicyCommand::Enable { microphone, camera } => {
+                    #[cfg(target_os = "linux")]
+                    if camera {
+                        anyhow::bail!(
+                            "Linux camera blocking is unsupported; use lock-policy enable --microphone for PipeWire session sources"
+                        );
+                    }
                     let both = !microphone && !camera;
-                    settings.mute_on_lock = microphone || both;
-                    settings.block_camera_on_lock = camera || both;
-                    settings.restore_on_unlock = true;
-                    settings.save()?;
+                    settings = Settings::update(|current| {
+                        current.mute_on_lock = microphone || both;
+                        current.block_camera_on_lock = cfg!(windows) && (camera || both);
+                        current.restore_on_unlock = true;
+                    })?;
                 }
                 LockPolicyCommand::Disable => {
-                    settings.mute_on_lock = false;
-                    settings.block_camera_on_lock = false;
-                    settings.save()?;
+                    settings = Settings::update(|current| {
+                        current.mute_on_lock = false;
+                        current.block_camera_on_lock = false;
+                    })?;
                 }
             }
             println!(
@@ -395,18 +395,50 @@ fn run() -> Result<u8> {
             }
             Ok(0)
         }
-        #[cfg(not(windows))]
-        Command::Update
-        | Command::Mute(_)
-        | Command::Unmute
-        | Command::Top
-        | Command::Tray { .. }
-        | Command::Camera { .. }
-        | Command::Autostart { .. }
-        | Command::Notifications { .. }
-        | Command::LockPolicy { .. } => {
-            anyhow::bail!("this command is only supported on Windows")
-        }
+        #[cfg(target_os = "linux")]
+        Command::Camera { .. } => anyhow::bail!(
+            "Linux camera blocking is unsupported; PipeWire video observation is not a global V4L2 block"
+        ),
+    }
+}
+
+fn microphone_message(lang: Language, state: MicrophoneMuteState) -> String {
+    #[cfg(windows)]
+    return lang.microphone_status(state).to_owned();
+    #[cfg(unix)]
+    {
+        let scope = match lang {
+            Language::En => [
+                "PipeWire session sources only",
+                "writable CoreAudio inputs only",
+            ],
+            Language::Fr => [
+                "sources de session PipeWire uniquement",
+                "entrées CoreAudio modifiables uniquement",
+            ],
+            Language::De => [
+                "nur PipeWire-Sitzungsquellen",
+                "nur schreibbare CoreAudio-Eingänge",
+            ],
+            Language::Es => [
+                "solo fuentes de sesión PipeWire",
+                "solo entradas CoreAudio modificables",
+            ],
+            Language::Ja => [
+                "PipeWire セッションソースのみ",
+                "書き込み可能な CoreAudio 入力のみ",
+            ],
+            Language::Zh => ["仅 PipeWire 会话源", "仅可写 CoreAudio 输入"],
+            Language::Ru => [
+                "только источники сеанса PipeWire",
+                "только доступные для записи входы CoreAudio",
+            ],
+        };
+        format!(
+            "{} ({})",
+            lang.microphone_status(state),
+            scope[usize::from(cfg!(target_os = "macos"))]
+        )
     }
 }
 
@@ -447,45 +479,6 @@ mod tests {
                 }]
             ),
             2
-        );
-    }
-    #[cfg(not(windows))]
-    #[test]
-    fn unsupported_commands_are_rejected_before_dispatch() {
-        let policy = Policy::default();
-        for args in [
-            vec!["mcw", "tray", "status"],
-            vec!["mcw", "autostart", "enable"],
-            vec!["mcw", "camera", "block"],
-            vec!["mcw", "lock-policy", "disable"],
-            vec!["mcw", "update"],
-            vec!["mcw", "mute"],
-            vec!["mcw", "unmute"],
-            vec!["mcw", "top"],
-            vec!["mcw", "notifications", "pause", "1"],
-            vec!["mcw", "watch", "--notify"],
-            vec!["mcw", "watch", "--sound"],
-            vec!["mcw", "watch", "--eventlog"],
-            vec!["mcw", "watch", "--kill-unauthorized"],
-        ] {
-            let cli = Cli::try_parse_from(&args).expect("CLI syntax stays available");
-            assert!(
-                unsupported_command(&cli.command, &policy).is_some(),
-                "{args:?}"
-            );
-        }
-    }
-    #[cfg(not(windows))]
-    #[test]
-    fn policy_kill_is_rejected_even_without_explicit_watch_flag() {
-        let policy = Policy {
-            action: DefensiveAction::Kill,
-            ..Policy::default()
-        };
-        let watch = Cli::try_parse_from(["mcw", "watch"]).unwrap();
-        assert_eq!(
-            unsupported_command(&watch.command, &policy),
-            Some("policy action Kill is only supported on Windows")
         );
     }
 }

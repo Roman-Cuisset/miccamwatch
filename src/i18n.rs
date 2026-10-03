@@ -47,6 +47,35 @@ impl Language {
         }
         #[cfg(not(windows))]
         {
+            for variable in ["LC_ALL", "LC_MESSAGES", "LANG"] {
+                if let Ok(locale) = std::env::var(variable)
+                    && !locale.is_empty()
+                {
+                    let primary = locale.split(['_', '-', '.', '@']).next().unwrap_or("");
+                    return Self::from_code(primary).unwrap_or(Self::En);
+                }
+            }
+            #[cfg(target_os = "macos")]
+            {
+                #[derive(Deserialize)]
+                struct Reply {
+                    effect: LocaleEffect,
+                }
+                #[derive(Deserialize)]
+                struct LocaleEffect {
+                    ok: bool,
+                    state: Option<String>,
+                }
+                if let Ok(reply) = crate::platform::macos::native_request::<Reply>(
+                    "locale",
+                    &[],
+                    std::time::Duration::from_secs(5),
+                ) && reply.effect.ok
+                    && let Some(language) = reply.effect.state.as_deref().and_then(Self::from_code)
+                {
+                    return language;
+                }
+            }
             Self::En
         }
     }
@@ -399,6 +428,20 @@ impl Language {
             Self::Zh => "模块:",
             Self::Ru => "модули:",
             Self::En => "modules:",
+        }
+    }
+
+    pub fn historical_observation_note(&self) -> &'static str {
+        match self {
+            Self::Fr => "Dernière observation conservée ; ce n'est pas l'état actuel de capture.",
+            Self::De => {
+                "Letzte Beobachtung gespeichert; dies ist nicht der aktuelle Aufnahmestatus."
+            }
+            Self::Es => "Última observación conservada; no es el estado actual de captura.",
+            Self::Ja => "保存された最後の観測です。現在のキャプチャ状態ではありません。",
+            Self::Zh => "保留的上次观测，不代表当前采集状态。",
+            Self::Ru => "Сохранено последнее наблюдение; это не текущее состояние захвата.",
+            Self::En => "Retained last observation; this is not the current capture state.",
         }
     }
 

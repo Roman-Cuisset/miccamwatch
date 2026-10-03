@@ -13,6 +13,7 @@ permissions:
 
 jobs:
   windows:
+    if: github.ref != 'refs/tags/v0.14.0'
     runs-on: windows-latest
     environment: release
     env:
@@ -35,10 +36,29 @@ jobs:
         if: ${{ env.WINDOWS_CERTIFICATE_BASE64 != '' }}
         shell: pwsh
         run: |
-          [IO.File]::WriteAllBytes("certificate.pfx", [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE_BASE64))
-          signtool sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /f certificate.pfx /p $env:WINDOWS_CERTIFICATE_PASSWORD target/release/mcw.exe target/release/mcw-tray.exe
-          if ($LASTEXITCODE -ne 0) { throw 'Executable signing failed' }
-          Remove-Item certificate.pfx
+          $tool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" | Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $tool) { throw 'Windows SDK signtool is required for signing' }
+          $pfx = Join-Path $env:RUNNER_TEMP 'mcw-release-certificate.pfx'
+          $certificate = $null
+          try {
+            [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE_BASE64))
+            $password = ConvertTo-SecureString $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
+            $certificate = Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $password
+            if (-not $certificate.HasPrivateKey) { throw 'Signing certificate has no private key' }
+            foreach ($file in @('target/release/mcw.exe', 'target/release/mcw-tray.exe')) {
+              & $tool.FullName sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /sha1 $certificate.Thumbprint $file
+              if ($LASTEXITCODE -ne 0) { throw "Executable signing failed: $file" }
+              & $tool.FullName verify /pa /all /v $file
+              if ($LASTEXITCODE -ne 0) { throw "Authenticode verification failed: $file" }
+              $signature = Get-AuthenticodeSignature $file
+              if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Thumbprint -ne $certificate.Thumbprint -or -not $signature.TimeStamperCertificate) {
+                throw "Expected valid timestamped signature was not found: $file"
+              }
+            }
+          } finally {
+            Remove-Item $pfx -Force -ErrorAction SilentlyContinue
+            if ($certificate) { Remove-Item "Cert:\CurrentUser\My\$($certificate.Thumbprint)" -DeleteKey -ErrorAction SilentlyContinue }
+          }
       - name: Build per-user MSI
         shell: pwsh
         run: |
@@ -49,10 +69,32 @@ jobs:
         if: ${{ env.WINDOWS_CERTIFICATE_BASE64 != '' }}
         shell: pwsh
         run: |
-          [IO.File]::WriteAllBytes("certificate.pfx", [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE_BASE64))
-          signtool sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /f certificate.pfx /p $env:WINDOWS_CERTIFICATE_PASSWORD miccamwatch-windows-x86_64.msi
-          if ($LASTEXITCODE -ne 0) { throw 'MSI signing failed' }
-          Remove-Item certificate.pfx
+          $tool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" | Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $tool) { throw 'Windows SDK signtool is required for signing' }
+          $pfx = Join-Path $env:RUNNER_TEMP 'mcw-release-certificate.pfx'
+          $certificate = $null
+          try {
+            [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE_BASE64))
+            $password = ConvertTo-SecureString $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
+            $certificate = Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $password
+            if (-not $certificate.HasPrivateKey) { throw 'Signing certificate has no private key' }
+            & $tool.FullName sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /sha1 $certificate.Thumbprint miccamwatch-windows-x86_64.msi
+            if ($LASTEXITCODE -ne 0) { throw 'MSI signing failed' }
+            & $tool.FullName verify /pa /all /v miccamwatch-windows-x86_64.msi
+            if ($LASTEXITCODE -ne 0) { throw 'MSI Authenticode verification failed' }
+            $signature = Get-AuthenticodeSignature miccamwatch-windows-x86_64.msi
+            if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Thumbprint -ne $certificate.Thumbprint -or -not $signature.TimeStamperCertificate) {
+              throw 'Expected valid timestamped MSI signature was not found'
+            }
+          } finally {
+            Remove-Item $pfx -Force -ErrorAction SilentlyContinue
+            if ($certificate) { Remove-Item "Cert:\CurrentUser\My\$($certificate.Thumbprint)" -DeleteKey -ErrorAction SilentlyContinue }
+          }
+      - name: Report unsigned release boundary
+        if: ${{ env.WINDOWS_CERTIFICATE_BASE64 == '' }}
+        shell: pwsh
+        run: |
+          'Windows certificate is not configured: both EXEs and MSI are unsigned. No antivirus clearance is asserted.' >> $env:GITHUB_STEP_SUMMARY
       - name: Package and exercise Windows distribution
         shell: pwsh
         run: |
@@ -99,98 +141,14 @@ jobs:
             miccamwatch-sbom.spdx.json
 
   portable:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: ubuntu-22.04
-            platform: linux
-            arch: x86_64
-          - runner: macos-15
-            platform: macos
-            arch: aarch64
-          - runner: macos-15-intel
-            platform: macos
-            arch: x86_64
-    runs-on: ${{ matrix.runner }}
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
-        with:
-          components: rustfmt, clippy
-      - name: Verify architecture and release version
-        shell: bash
-        env:
-          EXPECTED_ARCH: ${{ matrix.arch }}
-        run: |
-          actual=$(uname -m)
-          case "$actual" in arm64) actual=aarch64 ;; esac
-          test "$actual" = "$EXPECTED_ARCH"
-          if [ "$RUNNER_OS" = macOS ]; then
-            version=$(sw_vers -productVersion)
-            echo "macOS runtime: $version"
-            test "${version%%.*}" -ge 15
-          fi
-          python3 -c 'import json, os, subprocess; v=json.loads(subprocess.check_output(["cargo","metadata","--no-deps","--format-version","1"]))["packages"][0]["version"]; assert os.environ["GITHUB_REF_TYPE"] != "tag" or os.environ["GITHUB_REF_NAME"] == "v" + v'
-      - run: cargo fmt --check
-      - run: cargo clippy --all-targets --locked -- -D warnings
-      - run: cargo test --all-targets --locked
-      - run: cargo build --release --locked
-      - name: Package and exercise native Unix distribution
-        shell: bash
-        env:
-          PACKAGE: miccamwatch-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz
-        run: |
-          tar -czf "$PACKAGE" -C target/release mcw -C "$GITHUB_WORKSPACE" README.md LICENSE
-          smoke=$(mktemp -d)
-          tar -xzf "$PACKAGE" -C "$smoke"
-          export MCW_RELEASE_BINARY="$smoke/mcw"
-          python3 - <<'PY'
-          import json, os, signal, subprocess, time
-          binary = os.environ['MCW_RELEASE_BINARY']
-          version = json.loads(subprocess.check_output(['cargo', 'metadata', '--no-deps', '--format-version', '1']))['packages'][0]['version']
-          assert subprocess.check_output([binary, '--version'], text=True).strip() == 'mcw ' + version
-          status = subprocess.run([binary, 'status', '--json'], capture_output=True, text=True)
-          assert status.returncode in (0, 1, 2), status.stderr
-          document = json.loads(status.stdout)
-          expected = {'coreaudio_input', 'avfoundation_video'} if os.environ['RUNNER_OS'] == 'macOS' else {'pipewire_audio', 'pipewire_video'}
-          collectors = {row['collector']: row for row in document['collectors']}
-          assert set(collectors) == expected
-          assert 'capture helper unavailable' not in str(document).lower()
-          if os.environ['RUNNER_OS'] == 'macOS':
-              assert collectors['avfoundation_video']['state'] == 'degraded'
-          doctor = subprocess.run([binary, 'doctor', '--json'], capture_output=True, text=True)
-          assert doctor.returncode in (0, 2), doctor.stderr
-          assert {row['name'] for row in json.loads(doctor.stdout)} == expected
-          devices = subprocess.run([binary, 'devices', '--json'], capture_output=True, text=True)
-          assert devices.returncode in (0, 2), devices.stderr
-          if os.environ['RUNNER_OS'] == 'macOS':
-              assert devices.returncode == 0, devices.stderr
-          if devices.returncode == 0:
-              json.loads(devices.stdout)
-          watch = subprocess.Popen([binary, 'watch', '--json', '--interval', '200'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
-          try:
-              time.sleep(8)
-              assert watch.poll() is None, 'watch exited before SIGINT'
-              os.killpg(watch.pid, signal.SIGINT)
-              out, err = watch.communicate(timeout=15)
-              assert watch.returncode == 0, err
-              for line in out.splitlines():
-                  json.loads(line)
-          finally:
-              if watch.poll() is None:
-                  os.killpg(watch.pid, signal.SIGKILL)
-                  watch.wait()
-          print('Extracted release binary verified:', binary, version)
-          PY
-          rm -rf "$smoke"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: release-${{ matrix.platform }}-${{ matrix.arch }}
-          if-no-files-found: error
-          path: miccamwatch-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz
+    if: github.ref != 'refs/tags/v0.14.0'
+    uses: ./.github/workflows/ci.yml
+    with:
+      native-only: true
+      release-packages: true
 
   publish:
+    if: github.ref != 'refs/tags/v0.14.0'
     needs: [windows, portable]
     runs-on: ubuntu-latest
     steps:
@@ -224,13 +182,15 @@ jobs:
           fail_on_unmatched_files: true
           generate_release_notes: true
           body: |
-            ## Native capture collectors and coordinated Windows updates
-            - Windows x64: portable CLI + windowless tray ZIP and per-user MSI; matching CLI/tray updates repair stale autostart binaries.
-            - Experimental Linux x64 CLI: PipeWire graph capture, authenticated Client PID plus /proc identity, conservative V4L2 readiness, status/devices/doctor/watch.
-            - Experimental macOS 15+ CLI for Apple Silicon and Intel: CoreAudio input activity and passive AVFoundation camera signal. Camera PID is always null, application unknown, enforcement Unknown; coverage remains degraded.
-            - Archives are extracted and exercised on native runners before publication. SHA256SUMS and build provenance cover all distributables; the SBOM describes dependencies.
-            - Linux binary built on Ubuntu 22.04 (glibc 2.35 baseline). Install pw-dump and use an accessible user PipeWire socket. macOS binaries require macOS 15+; no Apple Developer ID/notarization is claimed.
-            - Physical microphone/camera transitions remain unverified. Real PipeWire virtual-source START/STOP and authenticated PID were verified separately; CI is not proof of hardware capture. Unix has no tray, hardware blocking, mute, notifications or self-update.
+            ## Scoped native privacy tools and coordinated Windows updates
+            - Windows x64: CLI + windowless tray ZIP and per-user MSI; coordinated CLI/tray updates preserve originals on transaction failure. Signing remains optional in the protected release environment; when a certificate is configured, both EXEs and MSI must pass timestamped Authenticode verification. With no certificate they are unsigned. Signing/provenance is not antivirus clearance.
+            - Linux x64: PipeWire graph capture with authenticated client PID and /proc identity, conservative V4L2 readiness, session-only PipeWire source mute, real StatusNotifier tray, native desktop notifications/sound/journal delivery, managed desktop autostart, profiles/history, shared TUI, and ownership-checked user-prefix updates. Linux camera blocking is unavailable; supported session-lock actions require usable local graphical logind evidence.
+            - macOS 15+ Apple Silicon and Intel: CoreAudio input activity, writable INPUT mute only, native AppKit menu bar, notifications/sound/unified log, managed LaunchAgent autostart, profiles/history, shared TUI, and ownership-checked user-prefix updates. Camera blocking is a manually reviewed/approved Restrictions profile, not a silent camera or TCC switch. Public screen-lock state remains Unknown; no automatic macOS lock enforcement is claimed.
+            - macOS camera evidence is passive AVFoundation discovery only: client PID is null, application is unknown, enforcement is Unknown and coverage is degraded. No capture session or camera/microphone permission request is made to improve runner coverage.
+            - Linux is built on Ubuntu 22.04 (glibc 2.35 baseline; PipeWire 0.3.48 supported). Runtime needs libpipewire-0.3/libspa-0.2, pw-dump and an accessible user PipeWire socket; desktop features additionally need session D-Bus, a real StatusNotifier host/panel and notification daemon. Sound needs canberra-gtk-play. Build prerequisites are installed only on ephemeral CI runners.
+            - macOS needs macOS 15+ and a logged-in Aqua/WindowServer session for the menu bar; native notifications and screenshot evidence may require user authorization. No Apple Developer ID, notarization, permission grant or physical-device compatibility is asserted.
+            - All three Unix architectures run format/clippy/test/build and extracted-package native smoke. Linux smoke uses a real XFCE panel under Xvfb, notification daemon, session D-Bus, isolated virtual PipeWire capture, actual PTY uppercase/cancel/quit, and a real service outage with no fabricated START/STOP. macOS attempts native menu-bar lifecycle and captures native output; absent Aqua/Screen Recording prerequisites are explicit evidence, not a silently passed GUI test. Screenshots/native-proof artifacts require review and are not physical capture proof.
+            - Physical microphone/camera capture, physical mute, real lock/unlock transitions, manually installed macOS Restrictions-profile effectiveness and native notification authorization remain unverified by hosted CI. SHA256SUMS and build provenance cover distributables; the SBOM describes dependencies. Existing v0.14.0 tag/assets are immutable and excluded from publication by this workflow.
           files: |
             dist/miccamwatch-windows-x86_64.zip
             dist/miccamwatch-windows-x86_64.msi

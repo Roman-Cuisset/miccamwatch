@@ -34,9 +34,9 @@ pub enum Command {
     Update,
     /// Run self-diagnostics and report system compatibility
     Doctor(OutputOptions),
-    /// Mute or query microphone hardware capture level
+    /// Mute/query Windows capture, Linux PipeWire session sources, or writable macOS inputs
     Mute(MuteOptions),
-    /// Unmute all microphone capture devices
+    /// Restore microphone capture within the supported platform scope
     Unmute,
     /// Launch the interactive full-terminal live dashboard
     Top,
@@ -44,13 +44,17 @@ pub enum Command {
     Tray {
         #[command(subcommand)]
         command: Option<TrayCommand>,
+        /// Also deliver tray access events to the native system journal (Unix)
+        #[cfg(unix)]
+        #[arg(long, global = true)]
+        eventlog: bool,
     },
-    /// Control the current user's Windows camera privacy switch
+    /// Windows camera switch or manually approved macOS camera Restrictions profile
     Camera {
         #[command(subcommand)]
         command: CameraCommand,
     },
-    /// Manage the per-user scheduled autostart task
+    /// Manage the per-user native autostart registration
     Autostart {
         #[command(subcommand)]
         command: AutostartCommand,
@@ -65,7 +69,7 @@ pub enum Command {
         #[command(subcommand)]
         command: NotificationCommand,
     },
-    /// Configure privacy actions while the Windows session is locked
+    /// Configure supported session-lock privacy actions (macOS lock signal unavailable)
     LockPolicy {
         #[command(subcommand)]
         command: LockPolicyCommand,
@@ -105,6 +109,9 @@ pub enum AutostartCommand {
     Status,
     Enable,
     Disable,
+    #[cfg(unix)]
+    #[command(hide = true)]
+    Refresh,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -170,13 +177,13 @@ pub struct WatchOptions {
     /// Polling interval in milliseconds
     #[arg(long, default_value_t = 750, value_parser = clap::value_parser!(u64).range(100..))]
     pub interval: u64,
-    /// Send Windows desktop toast notifications on access events
+    /// Send native desktop notifications on access events
     #[arg(long)]
     pub notify: bool,
     /// Append JSONL events to a log file
     #[arg(long)]
     pub log: Option<PathBuf>,
-    /// Also write events to the Windows Application event log
+    /// Also write events to Windows Application log or the native Unix system journal
     #[arg(long)]
     pub eventlog: bool,
     /// Play a discreet chime when microphone or camera access starts

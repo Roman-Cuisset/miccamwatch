@@ -4,6 +4,6 @@ mod unix;
 mod windows;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-pub use unix::watch;
+pub use unix::{EventDispatcher, TransitionTracker, watch};
 #[cfg(windows)]
 pub use windows::watch;

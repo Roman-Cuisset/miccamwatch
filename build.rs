@@ -64,26 +64,102 @@ fn main() {
 }
 
 fn compile_macos_helper() {
-    println!("cargo:rerun-if-changed=native/macos_capture.swift");
+    let sources = [
+        "native/macos_capture.swift",
+        "native/macos_controls.swift",
+        "native/macos_process.swift",
+        "native/macos_trust.swift",
+        "native/macos_desktop.swift",
+    ];
+    for source in sources {
+        println!("cargo:rerun-if-changed={source}");
+    }
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("Cargo must set OUT_DIR"));
-    let helper = out_dir.join("mcw-macos-capture");
+    // Swift permits top-level statements in a multi-file executable only in main.swift.
+    let entrypoint = out_dir.join("main.swift");
+    fs::copy(sources[0], &entrypoint).expect("cannot copy macOS helper entrypoint");
+    let bundle = out_dir.join("MicCamWatchHelper.app");
+    let contents = bundle.join("Contents");
+    fs::create_dir_all(contents.join("MacOS")).expect("cannot create macOS helper bundle");
+    let bridge = out_dir.join("macos-helper.h");
+    fs::write(&bridge, "#include <libproc.h>\n#include <bsm/libbsm.h>\n")
+        .expect("cannot create public libproc/libbsm Swift bridge");
+    let version = env::var("CARGO_PKG_VERSION").expect("Cargo must set package version");
+    let plist = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleIdentifier</key><string>com.roman-cuisset.miccamwatch.helper</string>
+<key>CFBundleExecutable</key><string>MicCamWatchHelper</string>
+<key>CFBundleName</key><string>MicCamWatch</string>
+<key>CFBundleDisplayName</key><string>MicCamWatch</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>CFBundleVersion</key><string>{version}</string>
+<key>CFBundleShortVersionString</key><string>{version}</string>
+<key>LSMinimumSystemVersion</key><string>15.0</string>
+<key>LSUIElement</key><true/>
+<key>NSHighResolutionCapable</key><true/>
+<key>NSPrincipalClass</key><string>NSApplication</string>
+<key>NSCameraUsageDescription</key><string>MicCamWatch passively discovers cameras and reports capture by other applications. Status and watch never request camera access or create a capture session.</string>
+<key>NSMicrophoneUsageDescription</key><string>MicCamWatch passively observes CoreAudio input clients and inventories input devices. Status and watch never request microphone access or record audio.</string>
+</dict></plist>
+"#
+    );
+    fs::write(contents.join("Info.plist"), plist)
+        .expect("cannot create macOS helper application metadata");
+    let helper = contents.join("MacOS/MicCamWatchHelper");
     let target = env::var("TARGET").expect("Cargo must set TARGET");
     let arch = match target.split('-').next() {
         Some("aarch64") => "arm64",
         Some("x86_64") => "x86_64",
         _ => panic!("unsupported macOS helper architecture: {target}"),
     };
-    let output = Command::new("swiftc")
+    let mut compiler = Command::new("swiftc");
+    compiler
         .args(["-target", &format!("{arch}-apple-macosx15.0"), "-O"])
-        .arg("native/macos_capture.swift")
-        .args(["-o"])
+        .arg(&entrypoint)
+        .args(&sources[1..])
+        .arg("-import-objc-header")
+        .arg(&bridge)
+        .arg("-o")
         .arg(&helper)
-        .arg("-lproc")
+        .args(["-lproc", "-lbsm"]);
+    for framework in [
+        "AppKit",
+        "AVFoundation",
+        "CoreAudio",
+        "CoreGraphics",
+        "Foundation",
+        "Security",
+        "UserNotifications",
+    ] {
+        compiler.args(["-framework", framework]);
+    }
+    let output = compiler
         .output()
         .expect("Swift compiler required to build the embedded macOS capture helper");
     assert!(
         output.status.success(),
         "macOS capture helper did not compile: {}",
         String::from_utf8_lossy(&output.stderr)
+    );
+    // Ad-hoc signing seals this local bundle and gives notification/AppKit modes
+    // a stable code identifier. It is not Developer ID signing or notarization.
+    let signed = Command::new("codesign")
+        .args([
+            "--force",
+            "--sign",
+            "-",
+            "--identifier",
+            "com.roman-cuisset.miccamwatch.helper",
+            "--timestamp=none",
+        ])
+        .arg(&bundle)
+        .output()
+        .expect("codesign required to seal the embedded macOS helper application");
+    assert!(
+        signed.status.success(),
+        "cannot ad-hoc sign macOS helper application: {}",
+        String::from_utf8_lossy(&signed.stderr)
     );
 }

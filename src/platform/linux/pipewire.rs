@@ -22,6 +22,14 @@ pub(super) struct Graph {
     objects: Vec<Value>,
 }
 
+pub(super) struct CaptureSource {
+    pub(super) id: Option<u32>,
+    pub(super) serial: Option<u64>,
+    pub(super) name: String,
+    pub(super) virtual_source: bool,
+    pub(super) monitor: bool,
+}
+
 pub(super) struct Observation {
     pub(super) accesses: Vec<Access>,
     pub(super) audio_error: Option<String>,
@@ -48,6 +56,41 @@ impl Graph {
 
     fn links(&self) -> impl Iterator<Item = &Value> {
         self.objects.iter().filter(|object| kind(object, "Link"))
+    }
+
+    pub(super) fn core_cookie(&self) -> Option<u32> {
+        self.objects
+            .iter()
+            .find(|object| kind(object, "Core"))
+            .and_then(|object| object.get("info")?.get("cookie"))
+            .and_then(value_u32)
+    }
+
+    pub(super) fn capture_sources(&self) -> Vec<CaptureSource> {
+        self.nodes()
+            .filter(|node| {
+                matches!(
+                    property(node, "media.class"),
+                    Some("Audio/Source" | "Audio/Source/Virtual")
+                )
+            })
+            .map(|node| CaptureSource {
+                id: number(node, &["id"]).and_then(|id| u32::try_from(id).ok()),
+                serial: node
+                    .get("info")
+                    .and_then(|info| info.get("props"))
+                    .and_then(|props| props.get("object.serial"))
+                    .and_then(value_u64),
+                name: property(node, "node.description")
+                    .or_else(|| property(node, "node.nick"))
+                    .or_else(|| property(node, "node.name"))
+                    .unwrap_or("Unnamed PipeWire source")
+                    .to_owned(),
+                virtual_source: property(node, "media.class") == Some("Audio/Source/Virtual")
+                    || property(node, "node.virtual") == Some("true"),
+                monitor: is_monitor(node) || property(node, "stream.monitor") == Some("true"),
+            })
+            .collect()
     }
 
     pub(super) fn devices(&self) -> Vec<Device> {

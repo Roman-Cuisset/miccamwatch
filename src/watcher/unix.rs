@@ -3,10 +3,12 @@ use crate::{
     history,
     i18n::Language,
     model::{
-        Access, AccessEvent, Action, CollectorState, Resource, SCHEMA_VERSION, Snapshot, event_code,
+        Access, AccessEvent, Action, Activity, CollectorState, EnforcementDecision, Resource, Risk,
+        SCHEMA_VERSION, Snapshot, event_code,
     },
     output,
-    platform::PlatformMonitor,
+    platform::{self, PlatformMonitor},
+    settings::Settings,
 };
 use anyhow::{Context, Result};
 use chrono::Utc;
@@ -16,16 +18,160 @@ use std::{
     io::{BufWriter, Write},
     path::Path,
     sync::mpsc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
+#[derive(Default)]
+pub struct TransitionTracker {
+    previous: HashMap<String, Access>,
+    unseen: HashSet<Resource>,
+}
+
+impl TransitionTracker {
+    pub fn reconcile(
+        &mut self,
+        snapshot: &Snapshot,
+        emit: impl FnMut(&Access, Action) -> Result<()>,
+    ) -> Result<()> {
+        reconcile(&mut self.previous, &mut self.unseen, snapshot, emit)
+    }
+
+    pub(crate) fn observation_gap(&mut self) {
+        self.unseen.extend([Resource::Microphone, Resource::Camera]);
+    }
+}
+
+pub struct EventDispatcher {
+    lang: Language,
+    json: bool,
+    notify: bool,
+    log: Option<BufWriter<std::fs::File>>,
+    eventlog: bool,
+    sound: bool,
+    history_enabled: bool,
+    min_risk: Option<Risk>,
+    cooldown: HashMap<String, Instant>,
+}
+
+impl EventDispatcher {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        lang: Language,
+        json: bool,
+        notify: bool,
+        log_path: Option<&Path>,
+        eventlog: bool,
+        sound: bool,
+        history_enabled: bool,
+    ) -> Result<Self> {
+        let log = log_path
+            .map(|path| {
+                OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(path)
+                    .map(BufWriter::new)
+            })
+            .transpose()
+            .context("cannot open watch JSONL event log")?;
+        Ok(Self {
+            lang,
+            json,
+            notify,
+            log,
+            eventlog,
+            sound,
+            history_enabled,
+            min_risk: None,
+            cooldown: HashMap::new(),
+        })
+    }
+
+    pub(crate) fn preferences(&mut self, sound: bool, history_enabled: bool) {
+        self.sound = sound;
+        self.history_enabled = history_enabled;
+    }
+
+    pub fn dispatch(&mut self, access: &Access, action: Action) -> Result<()> {
+        let settings = Settings::load()?;
+        let event = AccessEvent {
+            schema_version: SCHEMA_VERSION,
+            event_code: event_code(action),
+            tool_version: env!("CARGO_PKG_VERSION"),
+            action,
+            observed_at: Utc::now(),
+            access: access.clone(),
+        };
+        if self.history_enabled && settings.history_enabled {
+            history::append(&event)?;
+        }
+        if let Some(writer) = &mut self.log {
+            serde_json::to_writer(&mut *writer, &event)?;
+            writer.write_all(b"\n")?;
+            writer.flush()?;
+        }
+        output::print_event(&event, self.json, self.min_risk, self.lang)?;
+        if self.eventlog {
+            if let Err(error) = platform::unix::write_system_log(&serde_json::to_string(&event)?) {
+                eprintln!("system journal delivery failed: {error:#}");
+            }
+        }
+        let alerts_enabled = settings.notifications_enabled && !settings.notifications_paused();
+        let notify = self.notify && alerts_enabled;
+        let sound = self.sound
+            && alerts_enabled
+            && matches!(action, Action::Start)
+            && access.activity == Activity::Active;
+        if (notify || sound) && self.alert_due(&access.key) {
+            if sound {
+                if let Err(error) = platform::play_chime() {
+                    eprintln!("chime failed: {error:#}");
+                }
+            }
+            if notify {
+                if let Err(error) = crate::notify::notify_access(access, action, self.lang) {
+                    eprintln!("notification failed: {error:#}");
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn alert_due(&mut self, key: &str) -> bool {
+        const COOLDOWN: Duration = Duration::from_secs(30);
+        let now = Instant::now();
+        self.cooldown
+            .retain(|_, previous| now.duration_since(*previous) < COOLDOWN);
+        if self.cooldown.contains_key(key) {
+            return false;
+        }
+        if self.cooldown.len() >= 1024 {
+            if let Some(oldest) = self
+                .cooldown
+                .iter()
+                .min_by_key(|(_, when)| **when)
+                .map(|(key, _)| key.clone())
+            {
+                self.cooldown.remove(&oldest);
+            }
+        }
+        self.cooldown.insert(key.to_owned(), now);
+        true
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn watch(
     monitor: &PlatformMonitor,
     filter: &Filter,
     json: bool,
     interval: Duration,
+    notify: bool,
     log_path: Option<&Path>,
+    eventlog: bool,
     lang: Language,
+    sound: bool,
+    defensive_kill: bool,
     history_enabled: bool,
 ) -> Result<()> {
     let (stop_tx, stop_rx) = mpsc::channel();
@@ -33,19 +179,20 @@ pub fn watch(
         let _ = stop_tx.send(());
     })
     .context("cannot install Ctrl+C handler")?;
-    let mut log = log_path
-        .map(|path| {
-            OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(path)
-                .map(BufWriter::new)
-        })
-        .transpose()
-        .context("cannot open watch JSONL event log")?;
-    let mut previous = HashMap::new();
+    let mut dispatcher = EventDispatcher::new(
+        lang,
+        json,
+        notify,
+        log_path,
+        eventlog,
+        sound,
+        history_enabled,
+    )?;
+    dispatcher.min_risk = filter.risk;
+    let mut tracker = TransitionTracker::default();
     let mut previous_health = Vec::new();
-    let mut unseen = HashSet::new();
+    let mut denial_observations = HashMap::new();
+    let mut attempted = HashSet::new();
     loop {
         let snapshot = monitor.snapshot(filter.into())?;
         let changed = previous_health != snapshot.collectors;
@@ -61,29 +208,64 @@ pub fn watch(
             // the outage. JSON watch lines with `collectors` are status documents.
             output::print_status(&snapshot, true, filter.risk, lang)?;
         }
-        reconcile(&mut previous, &mut unseen, &snapshot, |access, action| {
-            let event = AccessEvent {
-                schema_version: SCHEMA_VERSION,
-                event_code: event_code(action),
-                tool_version: env!("CARGO_PKG_VERSION"),
-                action,
-                observed_at: Utc::now(),
-                access: access.clone(),
-            };
-            if history_enabled {
-                history::append(&event)?;
-            }
-            if let Some(writer) = &mut log {
-                serde_json::to_writer(&mut *writer, &event)?;
-                writer.write_all(b"\n")?;
-                writer.flush()?;
-            }
-            output::print_event(&event, json, filter.risk, lang)?;
-            Ok(())
+        tracker.reconcile(&snapshot, |access, action| {
+            dispatcher.dispatch(access, action)
         })?;
+        if defensive_kill {
+            enforce_policy(&snapshot, &mut denial_observations, &mut attempted);
+        }
         previous_health = snapshot.collectors;
         if stop_rx.recv_timeout(interval).is_ok() {
             return Ok(());
+        }
+    }
+}
+
+fn enforce_policy(
+    snapshot: &Snapshot,
+    observations: &mut HashMap<(String, String), u8>,
+    attempted: &mut HashSet<(String, String)>,
+) {
+    let candidates: HashMap<_, _> = snapshot
+        .accesses
+        .iter()
+        .filter_map(|access| {
+            if access.activity != Activity::Active
+                || access.enforcement != EnforcementDecision::Deny
+                || access.risk == Risk::Blocked
+                || snapshot.observation_gaps.contains(&access.resource)
+            {
+                return None;
+            }
+            let pid = access.pid?;
+            let instance = access.process.as_ref()?.instance_id.as_str();
+            if instance.is_empty() {
+                return None;
+            }
+            Some(((access.key.clone(), instance.to_owned()), (pid, access)))
+        })
+        .collect();
+    observations.retain(|identity, _| candidates.contains_key(identity));
+    attempted.retain(|identity| candidates.contains_key(identity));
+    for (identity, (pid, access)) in candidates {
+        if attempted.contains(&identity) {
+            continue;
+        }
+        let count = observations.entry(identity.clone()).or_default();
+        *count = count.saturating_add(1);
+        if *count < 2 {
+            continue;
+        }
+        attempted.insert(identity.clone());
+        match platform::terminate_process_by_pid(pid, &identity.1) {
+            Ok(()) => eprintln!(
+                "TERMINATED policy-denied process {} (PID {pid}) after two observations",
+                access.application
+            ),
+            Err(error) => eprintln!(
+                "Failed to terminate policy-denied process {} (PID {pid}): {error:#}",
+                access.application
+            ),
         }
     }
 }
