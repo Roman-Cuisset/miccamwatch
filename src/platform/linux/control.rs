@@ -801,7 +801,13 @@ impl Session {
                     || !current.props_writable
                     || current.mute_readonly
                 {
-                    bail!("original bound source is unavailable or not writable");
+                    bail!(
+                        "original bound source is unavailable or not writable (identity_verified={}, removed={}, props_writable={}, mute_readonly={}); restoration intent retained",
+                        current.verified,
+                        current.removed,
+                        current.props_writable,
+                        current.mute_readonly
+                    );
                 }
                 if current.muted == Some(muted) {
                     return Ok(());

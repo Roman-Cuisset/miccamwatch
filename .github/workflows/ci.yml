@@ -285,8 +285,10 @@ jobs:
                                    if row.get("info", {}).get("props", {}).get("node.name") == name), None)
                   def virtual_capture():
                       graph = json.loads(subprocess.check_output(["pw-dump"]))
+                      clients = {str(row["id"]) for row in graph if row.get("type") == "PipeWire:Interface:Client"
+                                 and str(row.get("info", {}).get("props", {}).get("application.process.id")) == str(capture.pid)}
                       return next((row for row in graph if
-                                   str(row.get("info", {}).get("props", {}).get("application.process.id")) == str(capture.pid)
+                                   str(row.get("info", {}).get("props", {}).get("client.id")) in clients
                                    and row.get("info", {}).get("props", {}).get("media.class") == "Stream/Input/Audio"), None)
                   until(lambda: virtual_capture() is not None, "Owned virtual capture node was not exported")
                   # Without a hardware session manager both adapters need explicit
