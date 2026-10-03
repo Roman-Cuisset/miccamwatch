@@ -431,4 +431,36 @@ mod tests {
             "stale identity must leave the real child alive"
         );
     }
+
+    #[test]
+    fn retained_process_authority_terminates_only_the_observed_child() -> Result<()> {
+        use std::os::unix::process::ExitStatusExt;
+        use std::time::{Duration, Instant};
+
+        if unsafe { libc::geteuid() } == 0 {
+            eprintln!(
+                "Root processes are intentionally protected; native termination requires an ordinary user"
+            );
+            return Ok(());
+        }
+        let mut child = std::process::Command::new("/bin/sleep").arg("30").spawn()?;
+        let observed = (|| -> Result<std::process::ExitStatus> {
+            let (instance, _, _) = crate::platform::linux::verified_process_identity(child.id())?;
+            terminate_process_by_pid(child.id(), &instance)?;
+            let deadline = Instant::now() + Duration::from_secs(3);
+            loop {
+                if let Some(status) = child.try_wait()? {
+                    return Ok(status);
+                }
+                if Instant::now() >= deadline {
+                    bail!("the observed child did not terminate after native signaling");
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        })();
+        let _ = child.kill();
+        let _ = child.wait();
+        assert_eq!(observed?.signal(), Some(libc::SIGKILL));
+        Ok(())
+    }
 }

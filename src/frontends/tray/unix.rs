@@ -516,8 +516,7 @@ fn entry(action: &'static str, label: impl Into<String>, enabled: bool) -> MenuE
     }
 }
 fn make_view(
-    summary: String,
-    visual: &'static str,
+    status: (String, &'static str),
     mute: MicrophoneMuteState,
     camera_blocked: bool,
     settings: &Settings,
@@ -525,6 +524,7 @@ fn make_view(
     feedback: &Option<String>,
     lock: SessionLockState,
 ) -> View {
+    let (summary, visual) = status;
     let text = words(lang);
     let scope = if cfg!(target_os = "macos") {
         text.scope.split(" / ").next().unwrap_or(text.scope)
@@ -612,8 +612,7 @@ pub fn run_tray(
     let lifecycle = Lifecycle::acquire()?;
     let (sender, actions) = mpsc::sync_channel(32);
     let initial = make_view(
-        words(lang).degraded.to_owned(),
-        "error",
+        (words(lang).degraded.to_owned(), "error"),
         MicrophoneMuteState::Unavailable,
         false,
         &settings,
@@ -797,8 +796,7 @@ pub fn run_tray(
                 }
                 next_poll = Instant::now() + INTERVAL;
                 host.update(make_view(
-                    summary.clone(),
-                    if action_error { "error" } else { visual },
+                    (summary.clone(), if action_error { "error" } else { visual }),
                     mute,
                     camera_blocked,
                     &settings,
@@ -877,8 +875,7 @@ pub fn run_tray(
                     }
                     next_poll = Instant::now();
                     host.update(make_view(
-                        summary.clone(),
-                        if action_error { "error" } else { visual },
+                        (summary.clone(), if action_error { "error" } else { visual }),
                         mute,
                         camera_blocked,
                         &settings,
@@ -1157,7 +1154,7 @@ impl DesktopHost {
         Ok(())
     }
     fn check(&mut self) -> Result<()> {
-        while let Ok(event) = self.events.try_recv() {
+        if let Ok(event) = self.events.try_recv() {
             let event = event?;
             bail!(
                 "AppKit event stream closed or violated protocol: {}",

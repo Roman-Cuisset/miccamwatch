@@ -111,10 +111,10 @@ impl EventDispatcher {
             writer.flush()?;
         }
         output::print_event(&event, self.json, self.min_risk, self.lang)?;
-        if self.eventlog {
-            if let Err(error) = platform::unix::write_system_log(&serde_json::to_string(&event)?) {
-                eprintln!("system journal delivery failed: {error:#}");
-            }
+        if self.eventlog
+            && let Err(error) = platform::unix::write_system_log(&serde_json::to_string(&event)?)
+        {
+            eprintln!("system journal delivery failed: {error:#}");
         }
         let alerts_enabled = settings.notifications_enabled && !settings.notifications_paused();
         let notify = self.notify && alerts_enabled;
@@ -123,15 +123,11 @@ impl EventDispatcher {
             && matches!(action, Action::Start)
             && access.activity == Activity::Active;
         if (notify || sound) && self.alert_due(&access.key) {
-            if sound {
-                if let Err(error) = platform::play_chime() {
-                    eprintln!("chime failed: {error:#}");
-                }
+            if sound && let Err(error) = platform::play_chime() {
+                eprintln!("chime failed: {error:#}");
             }
-            if notify {
-                if let Err(error) = crate::notify::notify_access(access, action, self.lang) {
-                    eprintln!("notification failed: {error:#}");
-                }
+            if notify && let Err(error) = crate::notify::notify_access(access, action, self.lang) {
+                eprintln!("notification failed: {error:#}");
             }
         }
         Ok(())
@@ -145,15 +141,14 @@ impl EventDispatcher {
         if self.cooldown.contains_key(key) {
             return false;
         }
-        if self.cooldown.len() >= 1024 {
-            if let Some(oldest) = self
+        if self.cooldown.len() >= 1024
+            && let Some(oldest) = self
                 .cooldown
                 .iter()
                 .min_by_key(|(_, when)| **when)
                 .map(|(key, _)| key.clone())
-            {
-                self.cooldown.remove(&oldest);
-            }
+        {
+            self.cooldown.remove(&oldest);
         }
         self.cooldown.insert(key.to_owned(), now);
         true

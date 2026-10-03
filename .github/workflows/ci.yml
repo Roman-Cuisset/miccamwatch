@@ -106,11 +106,11 @@ jobs:
           tar -xzf "$PACKAGE" -C "$RUNNER_TEMP/native-proof/package"
           echo "MCW_RELEASE_BINARY=$RUNNER_TEMP/native-proof/package/mcw" >> "$GITHUB_ENV"
           cat > "$RUNNER_TEMP/native-smoke.py" <<'PY'
-          import errno, fcntl, json, os, pathlib, pty, re, select, signal, struct, subprocess, tempfile, termios, time
+          import errno, fcntl, json, os, pathlib, pty, re, select, shutil, signal, struct, subprocess, tempfile, termios, time
           proof = pathlib.Path(os.environ["RUNNER_TEMP"]) / "native-proof"
           binary = os.environ["MCW_RELEASE_BINARY"]
           linux = os.environ["RUNNER_OS"] == "Linux"
-          home = pathlib.Path(tempfile.mkdtemp(prefix="mcw-", dir="/tmp"))
+          home = pathlib.Path(tempfile.mkdtemp(prefix="mcw-", dir="/tmp")).resolve()
           # No desktop settings, permissions, autostart or hardware state of the runner are changed.
           os.environ.update(HOME=str(home), XDG_CONFIG_HOME=str(home / "config"), XDG_DATA_HOME=str(home / "data"),
                             XDG_STATE_HOME=str(home / "state"), XDG_RUNTIME_DIR=str(home / "run"), TERM="xterm-256color")
@@ -364,6 +364,31 @@ jobs:
                       record("desktop-after-stop", ["import", "-window", "root", str(proof / "desktop-after-stop.png")])
                   else:
                       record("desktop-after-stop", ["screencapture", "-x", str(proof / "desktop-after-stop.png")], (0, 1))
+              if linux:
+                  entry = home / "config/autostart/com.roman-cuisset.miccamwatch.desktop"
+                  try:
+                      record("autostart-enable", [binary, "autostart", "enable"])
+                      record("autostart-enabled", [binary, "autostart", "status"])
+                      launch("desktop-autostart", ["gio", "launch", str(entry)])
+                      until(lambda: subprocess.run([binary, "tray", "status"], capture_output=True).returncode == 0,
+                            "The owned desktop entry did not start the native tray")
+                      record("autostart-native-tray", [binary, "tray", "status"])
+                      record("autostart-native-stop", [binary, "tray", "stop"])
+                      until(lambda: subprocess.run([binary, "tray", "status"], capture_output=True).returncode == 1,
+                            "The desktop-launched tray did not stop")
+                  finally:
+                      subprocess.run([binary, "tray", "stop"], capture_output=True, timeout=15)
+                      record("autostart-disable", [binary, "autostart", "disable"])
+                  record("autostart-disabled", [binary, "autostart", "status"])
+                  assert not entry.exists(), "Owned desktop registration remained after disable"
+                  unmanaged = b"[Desktop Entry]\nType=Application\nName=Unmanaged fixture\nExec=/bin/true\n"
+                  entry.write_bytes(unmanaged)
+                  try:
+                      record("autostart-unmanaged-enable", [binary, "autostart", "enable"], (1, 2))
+                      record("autostart-unmanaged-disable", [binary, "autostart", "disable"], (1, 2))
+                      assert entry.read_bytes() == unmanaged, "An unmanaged desktop entry was modified"
+                  finally:
+                      entry.unlink()
               (proof / "scope.txt").write_text(
                   "Extracted native package; real CLI, PTY and native tray/control lifecycle. Linux uses real XFCE StatusNotifier "
                   "panel, notification daemon, session D-Bus and isolated PipeWire virtual source; never a mock GUI. "
@@ -374,6 +399,7 @@ jobs:
                   stop(process)
               for handle in handles:
                   handle.close()
+              shutil.rmtree(home)
           PY
       - name: Exercise native Linux desktop and extracted package
         if: runner.os == 'Linux'

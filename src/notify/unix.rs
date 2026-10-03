@@ -3,7 +3,9 @@ use crate::{
     i18n::Language,
     model::{Access, Action},
 };
-use anyhow::{Context, Result, bail};
+use anyhow::Result;
+#[cfg(target_os = "linux")]
+use anyhow::{Context, bail};
 
 /// Verifies the native notification service/permission on explicit request.
 /// Linux identifies each notification with its freedesktop application name;

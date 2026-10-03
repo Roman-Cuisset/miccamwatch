@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   windows:
-    if: github.ref != 'refs/tags/v0.14.0'
+    if: github.ref != 'refs/tags/v0.14.0' && vars.WINDOWS_RELEASE_APPROVED == 'true'
     runs-on: windows-latest
     environment: release
     env:
@@ -123,14 +123,6 @@ jobs:
             $uninstall = Start-Process msiexec.exe -ArgumentList @('/x', $msi, '/qn', '/norestart') -Wait -PassThru
             if ($uninstall.ExitCode -ne 0) { throw "MSI uninstall failed: $($uninstall.ExitCode)" }
           }
-      - name: Generate SPDX SBOM
-        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
-        with:
-          path: .
-          format: spdx-json
-          output-file: miccamwatch-sbom.spdx.json
-          upload-release-assets: false
-          upload-artifact: false
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-windows
@@ -138,7 +130,6 @@ jobs:
           path: |
             miccamwatch-windows-x86_64.zip
             miccamwatch-windows-x86_64.msi
-            miccamwatch-sbom.spdx.json
 
   portable:
     if: github.ref != 'refs/tags/v0.14.0'
@@ -148,22 +139,37 @@ jobs:
       release-packages: true
 
   publish:
-    if: github.ref != 'refs/tags/v0.14.0'
+    if: ${{ always() && github.ref != 'refs/tags/v0.14.0' && needs.portable.result == 'success' && (needs.windows.result == 'success' || needs.windows.result == 'skipped') }}
     needs: [windows, portable]
     runs-on: ubuntu-latest
+    env:
+      WINDOWS_ARTIFACTS: ${{ needs.windows.result == 'success' }}
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: release-*
           merge-multiple: true
           path: dist
+      - name: Generate SPDX SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          path: .
+          format: spdx-json
+          output-file: dist/miccamwatch-sbom.spdx.json
+          upload-release-assets: false
+          upload-artifact: false
       - name: Verify complete asset set and generate unified checksums
         working-directory: dist
         shell: bash
         run: |
-          for asset in miccamwatch-windows-x86_64.zip miccamwatch-windows-x86_64.msi miccamwatch-linux-x86_64.tar.gz miccamwatch-macos-aarch64.tar.gz miccamwatch-macos-x86_64.tar.gz miccamwatch-sbom.spdx.json; do
+          for asset in miccamwatch-linux-x86_64.tar.gz miccamwatch-macos-aarch64.tar.gz miccamwatch-macos-x86_64.tar.gz miccamwatch-sbom.spdx.json; do
             test -s "$asset"
           done
+          if [ "$WINDOWS_ARTIFACTS" = true ]; then
+            test -s miccamwatch-windows-x86_64.zip
+            test -s miccamwatch-windows-x86_64.msi
+          fi
           sha256sum miccamwatch-* > SHA256SUMS
           sha256sum --check SHA256SUMS
       - name: Attest release provenance
@@ -183,19 +189,14 @@ jobs:
           generate_release_notes: true
           body: |
             ## Scoped native privacy tools and coordinated Windows updates
-            - Windows x64: CLI + windowless tray ZIP and per-user MSI; coordinated CLI/tray updates preserve originals on transaction failure. Signing remains optional in the protected release environment; when a certificate is configured, both EXEs and MSI must pass timestamped Authenticode verification. With no certificate they are unsigned. Signing/provenance is not antivirus clearance.
+            - Windows remains supported and is validated by CI. New Windows ZIP/MSI publication is held unless the repository variable WINDOWS_RELEASE_APPROVED is explicitly set to true. This gate is independent of signing: a configured certificate signs and verifies both EXEs and MSI; absent a certificate they are unsigned. Neither signing, tests nor provenance is antivirus clearance. Quarantined executables are not restored or automatically reinstalled.
             - Linux x64: PipeWire graph capture with authenticated client PID and /proc identity, conservative V4L2 readiness, session-only PipeWire source mute, real StatusNotifier tray, native desktop notifications/sound/journal delivery, managed desktop autostart, profiles/history, shared TUI, and ownership-checked user-prefix updates. Linux camera blocking is unavailable; supported session-lock actions require usable local graphical logind evidence.
             - macOS 15+ Apple Silicon and Intel: CoreAudio input activity, writable INPUT mute only, native AppKit menu bar, notifications/sound/unified log, managed LaunchAgent autostart, profiles/history, shared TUI, and ownership-checked user-prefix updates. Camera blocking is a manually reviewed/approved Restrictions profile, not a silent camera or TCC switch. Public screen-lock state remains Unknown; no automatic macOS lock enforcement is claimed.
             - macOS camera evidence is passive AVFoundation discovery only: client PID is null, application is unknown, enforcement is Unknown and coverage is degraded. No capture session or camera/microphone permission request is made to improve runner coverage.
             - Linux is built on Ubuntu 22.04 (glibc 2.35 baseline; PipeWire 0.3.48 supported). Runtime needs libpipewire-0.3/libspa-0.2, pw-dump and an accessible user PipeWire socket; desktop features additionally need session D-Bus, a real StatusNotifier host/panel and notification daemon. Sound needs canberra-gtk-play. Build prerequisites are installed only on ephemeral CI runners.
             - macOS needs macOS 15+ and a logged-in Aqua/WindowServer session for the menu bar; native notifications and screenshot evidence may require user authorization. No Apple Developer ID, notarization, permission grant or physical-device compatibility is asserted.
             - All three Unix architectures run format/clippy/test/build and extracted-package native smoke. Linux smoke uses a real XFCE panel under Xvfb, notification daemon, session D-Bus, isolated virtual PipeWire capture, actual PTY uppercase/cancel/quit, and a real service outage with no fabricated START/STOP. macOS attempts native menu-bar lifecycle and captures native output; absent Aqua/Screen Recording prerequisites are explicit evidence, not a silently passed GUI test. Screenshots/native-proof artifacts require review and are not physical capture proof.
-            - Physical microphone/camera capture, physical mute, real lock/unlock transitions, manually installed macOS Restrictions-profile effectiveness and native notification authorization remain unverified by hosted CI. SHA256SUMS and build provenance cover distributables; the SBOM describes dependencies. Existing v0.14.0 tag/assets are immutable and excluded from publication by this workflow.
+            - Physical microphone/camera capture, physical mute, real lock/unlock transitions, manually installed macOS Restrictions-profile effectiveness and native notification authorization remain unverified by hosted CI. SHA256SUMS and build provenance cover distributables; the SBOM describes dependencies. Existing v0.14.0 tag/assets are left untouched and excluded from publication by this workflow.
           files: |
-            dist/miccamwatch-windows-x86_64.zip
-            dist/miccamwatch-windows-x86_64.msi
-            dist/miccamwatch-linux-x86_64.tar.gz
-            dist/miccamwatch-macos-aarch64.tar.gz
-            dist/miccamwatch-macos-x86_64.tar.gz
+            dist/miccamwatch-*
             dist/SHA256SUMS
-            dist/miccamwatch-sbom.spdx.json

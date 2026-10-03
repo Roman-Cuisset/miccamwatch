@@ -1103,6 +1103,7 @@ fn validate_private_file(file: &File) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::anyhow;
 
     fn identity(cookie: u32, serial: u64) -> SourceIdentity {
         SourceIdentity {

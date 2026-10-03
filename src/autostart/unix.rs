@@ -54,6 +54,12 @@ struct Store {
     _lock: File,
 }
 
+struct RegistrationSnapshot {
+    bytes: Option<Vec<u8>>,
+    record: Option<Vec<u8>>,
+    registration: Option<Registration>,
+}
+
 impl Store {
     fn open() -> Result<Self> {
         ordinary_user()?;
@@ -85,7 +91,7 @@ impl Store {
         })
     }
 
-    fn snapshot(&self) -> Result<(Option<Vec<u8>>, Option<Vec<u8>>, Option<Registration>)> {
+    fn snapshot(&self) -> Result<RegistrationSnapshot> {
         let record = self.state.read(RECORD)?;
         let receipt = record
             .as_deref()
@@ -123,7 +129,11 @@ impl Store {
             }
             None => None,
         };
-        Ok((bytes, record, registered))
+        Ok(RegistrationSnapshot {
+            bytes,
+            record,
+            registration: registered,
+        })
     }
 
     fn save_receipt(&self, entries: Vec<Registration>, expected: Option<&[u8]>) -> Result<Vec<u8>> {
@@ -140,7 +150,7 @@ impl Store {
 
 pub fn state() -> Result<AutostartState> {
     let store = Store::open()?;
-    let (_, _, registration) = store.snapshot()?;
+    let registration = store.snapshot()?.registration;
     #[cfg(target_os = "macos")]
     {
         let native = Native::open()?;
@@ -181,7 +191,7 @@ pub fn enable() -> Result<()> {
 /// executable must never resurrect a registration the user has since removed.
 pub fn refresh_if_enabled(version: &str) -> Result<()> {
     let store = Store::open()?;
-    let (_, _, registration) = store.snapshot()?;
+    let registration = store.snapshot()?.registration;
     if registration.is_none() {
         return Ok(());
     }
@@ -214,7 +224,11 @@ fn enable_in(store: &Store, version: &str) -> Result<()> {
         version: version.to_owned(),
     };
     let new_bytes = registration_bytes(&new)?;
-    let (old_bytes, old_record, old) = store.snapshot()?;
+    let RegistrationSnapshot {
+        bytes: old_bytes,
+        record: old_record,
+        registration: old,
+    } = store.snapshot()?;
     #[cfg(target_os = "macos")]
     let native = Native::open()?;
     #[cfg(target_os = "macos")]
@@ -297,7 +311,11 @@ fn enable_in(store: &Store, version: &str) -> Result<()> {
 
 pub fn disable() -> Result<()> {
     let store = Store::open()?;
-    let (bytes, record, registration) = store.snapshot()?;
+    let RegistrationSnapshot {
+        bytes,
+        record,
+        registration,
+    } = store.snapshot()?;
     #[cfg(target_os = "macos")]
     let native = Native::open()?;
     #[cfg(target_os = "macos")]

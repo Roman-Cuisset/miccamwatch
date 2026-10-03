@@ -1,6 +1,6 @@
 # Authenticode release signing
 
-MicCamWatch releases support Authenticode signing of `mcw.exe`, `mcw-tray.exe`, and the MSI. Signing is intentionally performed only in the protected GitHub `release` environment. Private keys must never be committed to this repository.
+MicCamWatch releases support Authenticode signing of `mcw.exe`, `mcw-tray.exe`, and the MSI. Signing is performed only in the GitHub `release` environment; release operators should protect that environment with appropriate approvals. Private keys must never be committed to this repository.
 
 ## GitHub release environment
 
@@ -11,7 +11,9 @@ Configure these environment secrets:
 
 The release workflow writes the certificate only for the duration of each signing step, calls the Windows SDK `signtool` with SHA-256 and DigiCert's RFC 3161 timestamp service, then deletes the temporary PFX. Both executables are signed before they are embedded in the MSI; the resulting MSI is signed separately.
 
-If the certificate secret is absent, the workflow deliberately publishes unsigned artifacts. It does not create a test certificate or claim publisher identity. SHA-256 checksums, GitHub artifact attestations, and the SPDX SBOM remain available, but they are not substitutes for Authenticode publisher verification.
+New Windows ZIP/MSI publication is held by default during the Defender investigation. The release workflow requires the repository variable `WINDOWS_RELEASE_APPROVED=true` before building and publishing Windows release assets; ordinary Windows CI still builds, tests and exercises its MSI. Linux/macOS releases can proceed independently. This is a publication hold, not removal of Windows support or authorization to reinstall quarantined bytes.
+
+Signing is a separate choice. If Windows publication is explicitly approved and the certificate secret is absent, the artifacts are unsigned; the workflow does not create a test certificate or claim publisher identity. SHA-256 checksums, GitHub artifact attestations, and the SPDX SBOM remain available, but they are not substitutes for Authenticode publisher verification or an antivirus verdict.
 
 ## Local verification
 

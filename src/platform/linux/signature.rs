@@ -237,12 +237,8 @@ fn parse_status(output: &[u8], success: bool) -> Result<SignatureInfo> {
                 unavailable =
                     Some("OpenPGP signature, supported algorithm, or verification key unavailable");
             }
-            Some("FAILURE") => {
-                // gpg-exit summarizes the process exit, including a completed
-                // BADSIG. It is not an independent missing-evidence condition.
-                if fields.next() != Some("gpg-exit") {
-                    unavailable = Some("OpenPGP verifier could not complete verification");
-                }
+            Some("FAILURE") if fields.next() != Some("gpg-exit") => {
+                unavailable = Some("OpenPGP verifier could not complete verification");
             }
             _ => {}
         }
