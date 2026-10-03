@@ -1,5 +1,4 @@
 use anyhow::Result;
-use clap::Parser;
 use colored::Colorize;
 #[cfg(any(windows, target_os = "macos"))]
 use miccamwatch::frontends::cli::CameraCommand;
@@ -45,7 +44,7 @@ fn main() -> ExitCode {
 }
 
 fn run() -> Result<u8> {
-    let cli = Cli::parse();
+    let cli = Cli::parse_localized();
     #[cfg(unix)]
     let tray_eventlog = match &cli.command {
         Command::Tray { eventlog, .. } => *eventlog,

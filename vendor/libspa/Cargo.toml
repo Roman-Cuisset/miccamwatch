@@ -1,0 +1,64 @@
+# Vendored crates.io libspa 0.8.0 package manifest; see root Cargo.toml for provenance.
+
+[package]
+edition = "2021"
+rust-version = "1.65"
+name = "libspa"
+version = "0.8.0"
+authors = ["Guillaume Desmottes <guillaume.desmottes@collabora.com>"]
+description = "Rust bindings for libspa"
+homepage = "https://pipewire.org"
+documentation = "https://pipewire.pages.freedesktop.org/pipewire-rs/libspa/"
+readme = false
+keywords = [
+    "pipewire",
+    "multimedia",
+    "audio",
+    "video",
+]
+categories = [
+    "api-bindings",
+    "multimedia",
+]
+license = "MIT"
+repository = "https://gitlab.freedesktop.org/pipewire/pipewire-rs"
+
+[package.metadata.system-deps.libspa]
+name = "libspa-0.2"
+version = "0.2"
+
+[dependencies.bitflags]
+version = "2"
+
+[dependencies.convert_case]
+version = "0.6"
+
+[dependencies.cookie-factory]
+version = "0.3.2"
+
+[dependencies.libc]
+version = "0.2"
+
+[dependencies.nix]
+version = "0.27"
+
+[dependencies.nom]
+version = "7"
+
+[dependencies.spa_sys]
+version = "0.8"
+package = "libspa-sys"
+
+[build-dependencies.cc]
+version = "1.0.66"
+
+[build-dependencies.system-deps]
+version = "6"
+
+[features]
+v0_3_33 = []
+v0_3_65 = [
+    "v0_3_33",
+    "spa_sys/v0_3_65",
+]
+v0_3_75 = ["v0_3_65"]

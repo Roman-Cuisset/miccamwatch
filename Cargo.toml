@@ -1,6 +1,6 @@
 [package]
 name = "miccamwatch"
-version = "0.14.0"
+version = "0.15.0"
 edition = "2024"
 rust-version = "1.89"
 description = "Monitor microphone and camera access from the command line"
@@ -39,7 +39,7 @@ libc = "0.2"
 [target.'cfg(target_os = "linux")'.dependencies]
 ctrlc = "3.4"
 libc = "0.2"
-pipewire = { version = "0.8", default-features = false, features = ["v0_3_45"] }
+pipewire = { version = "=0.8.0", default-features = false, features = ["v0_3_45"] }
 ksni = { version = "0.3.6", features = ["blocking"] }
 zbus = { version = "5", features = ["blocking-api"] }
 
@@ -91,3 +91,12 @@ windows = { version = "0.62", features = [
 
 [target.'cfg(windows)'.dev-dependencies]
 zip = { version = "8", default-features = false }
+
+[patch.crates-io]
+# Exact libspa 0.8.0 published source (MIT), upstream commit
+# 449bf53f5d5edc8d0be6c0c80bc19d882f712dd7; crate SHA-256:
+# 65f3a4b81b2a2d8c7f300643676202debd1b7c929dbf5c9bb89402ea11d19810.
+# Local review scope: gate the unused VideoInfoRaw wrapper/imports/impls at v0_3_65
+# (the header layout's introduction), preserving stock Ubuntu 22.04 PipeWire 0.3.48.
+# Revisit this patch against upstream when upgrading bindings; no ABI substitution.
+libspa = { path = "vendor/libspa" }

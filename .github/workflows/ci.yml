@@ -73,7 +73,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y pkg-config libpipewire-0.3-dev libspa-0.2-dev libclang-dev pipewire pipewire-bin dbus-x11 xvfb openbox xfce4-panel xfconf xfce4-notifyd libnotify-bin x11-utils xdotool imagemagick
+          sudo apt-get install -y pkg-config libpipewire-0.3-dev libspa-0.2-dev libclang-dev pipewire pipewire-bin gnupg dbus-x11 xvfb openbox xfce4-panel xfconf xfce4-notifyd libnotify-bin x11-utils xdotool imagemagick
           pkg-config --modversion libpipewire-0.3
           pw-dump --version
       - name: Verify native architecture and minimum macOS version
@@ -200,6 +200,9 @@ jobs:
           try:
               version = json.loads(subprocess.check_output(["cargo", "metadata", "--no-deps", "--format-version", "1"]))["packages"][0]["version"]
               assert record("version", [binary, "--version"]).stdout.decode().strip() == "mcw " + version
+              for language in ("en", "fr", "de", "es", "ja", "zh", "ru"):
+                  record("help-" + language, [binary, "--lang", language, "--help"])
+                  record("camera-help-" + language, [binary, "--lang", language, "help", "camera"])
               if linux:
                   record("display", ["xdpyinfo"])
                   launch("window-manager", ["openbox"])
@@ -263,6 +266,24 @@ jobs:
                   until(link_virtual, "Virtual PipeWire source/record ports were not available")
                   until(lambda: any(a.get("pid") == capture.pid and a.get("activity") == "active"
                                     for a in status("virtual-status")["accesses"]), "Native virtual capture PID not observed")
+                  def virtual_source():
+                      graph = json.loads(subprocess.check_output(["pw-dump"]))
+                      return next(row for row in graph if row.get("info", {}).get("props", {}).get("node.name") == "MCW_CI_Source")
+                  def virtual_muted():
+                      return any(parameter.get("mute") is True
+                                 for parameter in virtual_source()["info"]["params"].get("Props", []))
+                  record("virtual-mute", [binary, "mute"])
+                  until(virtual_muted, "Native mute did not change the owned virtual source")
+                  record("virtual-unmute", [binary, "unmute"])
+                  until(lambda: not virtual_muted(), "Owned restoration did not restore the virtual source")
+                  source_id = str(virtual_source()["id"])
+                  record("virtual-premute", ["pw-cli", "set-param", source_id, "Props", "{ mute=true }"])
+                  until(virtual_muted, "Fixture pre-mute did not reach the virtual source")
+                  record("virtual-premuted-mute", [binary, "mute"])
+                  record("virtual-premuted-restore", [binary, "unmute"])
+                  assert virtual_muted(), "Owned restoration incorrectly unmuted a previously muted source"
+                  record("virtual-reset", ["pw-cli", "set-param", source_id, "Props", "{ mute=false }"])
+                  until(lambda: not virtual_muted(), "Virtual source fixture cleanup did not restore its own state")
                   tui("tui-uppercase-cancel-quit", cancel=True)
                   assert capture.poll() is None, "Cancelled TUI action terminated virtual capture"
               else:
@@ -275,12 +296,17 @@ jobs:
                          "type='method_call',interface='org.freedesktop.Notifications',member='Notify'"])
                   time.sleep(.5)
               watch = launch("watch", [binary, "--lang", "en", "watch", "--json", "--interval", "200",
-                             *(["--notify"] if linux else [])])
+                             *(["--notify", "--eventlog"] if linux else [])])
               time.sleep(5)
               assert watch.poll() is None
               if linux:
                   traffic = (proof / "notification-native-traffic.log").read_text(errors="replace")
                   assert "member=Notify" in traffic, "Real mcw notification was not delivered to the native daemon"
+                  journal = record("native-journal", ["sudo", "journalctl", "--no-pager", "--output=json",
+                                   "_PID=" + str(watch.pid), "SYSLOG_IDENTIFIER=miccamwatch"])
+                  journal_events = [json.loads(line) for line in journal.stdout.splitlines()]
+                  assert any(json.loads(row["MESSAGE"]).get("event_id") == 1001 for row in journal_events), (
+                      "Native mcw START event was not accepted by the system journal", journal.stdout)
                   record("native-notification-screenshot", ["import", "-window", "root", str(proof / "notification.png")])
                   before = (proof / "watch.log").stat().st_size
                   stop(pipewire)

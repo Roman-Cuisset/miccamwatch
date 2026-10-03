@@ -4,9 +4,9 @@ import Security
 
 // Only certificate-backed native signing identities are publishers. Code
 // integrity alone, an ad-hoc signature, a bundle ID or Team ID is not enough.
-// Primary contract: Apple Security.framework SecStaticCode.h / SecCode.h /
-// CSCommon.h. "anchor trusted" uses actual system/user code-signing trust, not
-// an attacker-supplied certificate name. No Gatekeeper/notarization claim.
+// Public contract: Apple Security.framework SecStaticCode.h / SecCode.h /
+// CSCommon.h and SecCSFlags Swift imports. "anchor trusted" uses actual
+// system/user code-signing trust. No Gatekeeper/notarization claim.
 struct MacSignatureReply: Encodable {
     var available: Bool
     var verified: Bool
@@ -97,6 +97,48 @@ func nativeSignature(path: String, online: Bool) -> MacSignatureReply {
     guard creation == errSecSuccess, let code else {
         return signatureUnavailable(signatureStatusMessage(creation))
     }
+    // Require actual code-signing trust, not just a chain ending in any
+    // self-signed certificate. Apple's public requirement language consults
+    // system/user trust and honors explicit distrust closer to the leaf.
+    // The globally declared .checkTrustedAnchors option is not accepted by
+    // SecStaticCodeCheckValidity's flag mask; the requirement supplies this
+    // trust check without an invalid flag or a second, different trust policy.
+    var requirement: SecRequirement?
+    let requirementStatus = SecRequirementCreateWithString("anchor trusted" as CFString,
+                                                          SecCSFlags(rawValue: 0), &requirement)
+    guard requirementStatus == errSecSuccess, let requirement else {
+        return signatureUnavailable(signatureStatusMessage(requirementStatus))
+    }
+    var flags = SecCSFlags(rawValue:
+        kSecCSCheckAllArchitectures | kSecCSStrictValidate | kSecCSCheckNestedCode)
+    // CSCommon.h's typed CF_OPTIONS constants import as SecCSFlags members,
+    // unlike the call-specific UInt32 constants declared by SecStaticCode.h.
+    if online {
+        flags.insert(SecCSFlags(rawValue: kSecCSAllowNetworkAccess))
+        flags.insert(.enforceRevocationChecks)
+        // Force native OCSP/CRL checks regardless of preferences. Apple's
+        // policy is best-attempt, not proof of a fresh positive server response.
+    } else {
+        // Forbid validation work requiring the network, including revocation
+        // and notarization requests. Offline success is not fresh revocation
+        // evidence.
+        flags.insert(.noNetworkAccess)
+    }
+    // Validate before requesting the certificate chain: signing-information
+    // lookup can itself trigger certificate validation. This fresh code object
+    // must receive the explicit network policy before any such lookup.
+    let status = SecStaticCodeCheckValidity(code, flags, requirement)
+    guard signatureDescriptorStamp(descriptor) == before,
+          signaturePathStamp(path) == before else {
+        return signatureUnavailable("Executable changed during native verification; signing evidence unavailable")
+    }
+    guard status == errSecSuccess else {
+        if signatureIsNegative(status) {
+            return MacSignatureReply(available: true, verified: false,
+                                     error: signatureStatusMessage(status))
+        }
+        return signatureUnavailable(signatureStatusMessage(status))
+    }
     var information: CFDictionary?
     let informationStatus = SecCodeCopySigningInformation(code,
         SecCSFlags(rawValue: kSecCSSigningInformation), &information)
@@ -118,41 +160,15 @@ func nativeSignature(path: String, online: Bool) -> MacSignatureReply {
           let certificate = certificates.first else {
         return signatureUnavailable("No certificate-backed signing identity (unsigned or ad-hoc code)")
     }
-    var requirement: SecRequirement?
-    let requirementStatus = SecRequirementCreateWithString("anchor trusted" as CFString,
-                                                          SecCSFlags(rawValue: 0), &requirement)
-    guard requirementStatus == errSecSuccess, let requirement else {
-        return signatureUnavailable(signatureStatusMessage(requirementStatus))
-    }
-    var rawFlags = kSecCSCheckAllArchitectures | kSecCSStrictValidate | kSecCSCheckNestedCode
-        | kSecCSCheckTrustedAnchors
-    if online {
-        // This explicit mode permits Apple's documented certificate validation
-        // network operations. It does not download executable/media contents.
-        rawFlags |= kSecCSAllowNetworkAccess | kSecCSEnforceRevocationChecks
-    } else {
-        // This flag forbids all validation work requiring network access, and
-        // overrides revocation preferences. Cached trust is not fresh online
-        // revocation evidence and is never presented as such.
-        rawFlags |= kSecCSNoNetworkAccess
-    }
-    let status = SecStaticCodeCheckValidity(code, SecCSFlags(rawValue: rawFlags), requirement)
-    guard signatureDescriptorStamp(descriptor) == before,
-          signaturePathStamp(path) == before else {
-        return signatureUnavailable("Executable changed during native verification; signing evidence unavailable")
-    }
-    guard status == errSecSuccess else {
-        if signatureIsNegative(status) {
-            return MacSignatureReply(available: true, verified: false,
-                                     error: signatureStatusMessage(status))
-        }
-        return signatureUnavailable(signatureStatusMessage(status))
-    }
     var name: CFString?
     let nameStatus = SecCertificateCopyCommonName(certificate, &name)
     guard nameStatus == errSecSuccess, let name,
           !(name as String).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
         return signatureUnavailable("Validated signing certificate has no usable publisher identity")
+    }
+    guard signatureDescriptorStamp(descriptor) == before,
+          signaturePathStamp(path) == before else {
+        return signatureUnavailable("Executable changed while reading the validated publisher identity")
     }
     return MacSignatureReply(available: true, verified: true, signer: name as String)
 }

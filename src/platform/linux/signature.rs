@@ -2,8 +2,8 @@
 //! Publisher rules pin `openpgp:<FULL_UPPERCASE_PRIMARY_FINGERPRINT>` (40 or
 //! 64 hex digits). A valid signature authenticates that key, not its UID or a
 //! human publisher name; the explicit fingerprint rule supplies the trust pin.
-//! Offline overrides automatic retrieval/import/WKD. Online permits retrieval
-//! only through the user's configured keyservers, not a signature-supplied URL
+//! Offline overrides automatic retrieval/import/WKD. Online permits automatic
+//! retrieval using GnuPG's keyserver configuration, not a signature-supplied URL
 //! or signer UID. Keyserver operators may learn the requested key, IP and time.
 //! See GnuPG doc/DETAILS and GPG-Configuration-Options.html.
 
@@ -271,6 +271,231 @@ fn parse_status(output: &[u8], success: bool) -> Result<SignatureInfo> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    struct GpgFixture {
+        directory: tempfile::TempDir,
+    }
+
+    impl GpgFixture {
+        fn new() -> Result<Self> {
+            let fixture = Self {
+                directory: tempfile::tempdir()?,
+            };
+            for name in ["keys", "no-key"] {
+                let home = fixture.directory.path().join(name);
+                fs::create_dir(&home)?;
+                fs::set_permissions(&home, fs::Permissions::from_mode(0o700))?;
+            }
+            Ok(fixture)
+        }
+
+        fn command(&self) -> Command {
+            let home = self.directory.path().join("keys");
+            let mut command = Command::new("gpg");
+            command
+                .env("GNUPGHOME", &home)
+                .env("HOME", &home)
+                .env_remove("GPG_AGENT_INFO")
+                .env_remove("GPG_TTY")
+                .args([
+                    "--no-options",
+                    "--batch",
+                    "--no-tty",
+                    "--pinentry-mode",
+                    "loopback",
+                    "--passphrase",
+                    "",
+                    "--no-auto-key-retrieve",
+                    "--auto-key-locate",
+                    "clear",
+                ])
+                .stdin(Stdio::null());
+            command
+        }
+
+        fn run(&self, args: &[&str]) -> Result<Vec<u8>> {
+            let output = self.command().args(args).output()?;
+            assert!(
+                output.status.success(),
+                "GnuPG fixture operation failed: {}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            Ok(output.stdout)
+        }
+
+        fn verify_in_child(&self, case: &str, primary: &str) -> Result<()> {
+            let home = self.directory.path().join(if case == "missing-key" {
+                "no-key"
+            } else {
+                "keys"
+            });
+            let output = Command::new(std::env::current_exe()?)
+                .args([
+                    "--exact",
+                    "platform::linux::signature::tests::real_gnupg_detached_signature_trust_boundaries",
+                    "--test-threads=1",
+                    "--nocapture",
+                ])
+                .env("GNUPGHOME", &home)
+                .env("HOME", &home)
+                .env_remove("GPG_AGENT_INFO")
+                .env_remove("GPG_TTY")
+                .env("MCW_TEST_GNUPG_CASE", case)
+                .env("MCW_TEST_GNUPG_EXECUTABLE", self.directory.path().join("executable"))
+                .env("MCW_TEST_GNUPG_PRIMARY", primary)
+                .stdin(Stdio::null())
+                .output()?;
+            assert!(
+                output.status.success(),
+                "GnuPG verification child ({case}) failed: {}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            Ok(())
+        }
+    }
+
+    impl Drop for GpgFixture {
+        fn drop(&mut self) {
+            // Terminate only agents belonging to these disposable homes before
+            // TempDir removes their keys, trust databases and socket directories.
+            for name in ["keys", "no-key"] {
+                let home = self.directory.path().join(name);
+                let _ = Command::new("gpgconf")
+                    .env("GNUPGHOME", &home)
+                    .env("HOME", &home)
+                    .env_remove("GPG_AGENT_INFO")
+                    .args(["--homedir"])
+                    .arg(&home)
+                    .args(["--kill", "all"])
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status();
+            }
+        }
+    }
+
+    #[test]
+    fn real_gnupg_detached_signature_trust_boundaries() -> Result<()> {
+        if let Ok(case) = std::env::var("MCW_TEST_GNUPG_CASE") {
+            let executable = std::env::var("MCW_TEST_GNUPG_EXECUTABLE")?;
+            let result = verify_signature_with_policy(&executable, TrustPolicy::Offline);
+            match case.as_str() {
+                "valid" => {
+                    let signature = result?;
+                    let primary = std::env::var("MCW_TEST_GNUPG_PRIMARY")?;
+                    assert!(signature.verified);
+                    assert_eq!(signature.signer, Some(format!("openpgp:{primary}")));
+                    assert!(signature.error.is_none());
+                }
+                "changed" => {
+                    // A completed bad-signature verdict must not be mistaken
+                    // for unavailable evidence (Err) by the policy consumer.
+                    let signature = result?;
+                    assert!(!signature.verified);
+                    assert!(signature.signer.is_none());
+                    assert!(signature.error.is_some());
+                }
+                "missing-signature" | "missing-key" => assert!(result.is_err()),
+                _ => panic!("unknown isolated GnuPG test case"),
+            }
+            return Ok(());
+        }
+
+        let fixture = GpgFixture::new()?;
+        match fixture.command().arg("--version").output() {
+            Err(error) if error.kind() == ErrorKind::NotFound => {
+                eprintln!("GnuPG unavailable; skipping native OpenPGP capability regression");
+                return Ok(());
+            }
+            Err(error) => return Err(error.into()),
+            Ok(output) => assert!(output.status.success(), "GnuPG --version failed"),
+        }
+        // gpgconf is part of the fixture prerequisite so spawned agents can be
+        // stopped even when an assertion unwinds through the fixture guard.
+        let home = fixture.directory.path().join("keys");
+        assert!(
+            Command::new("gpgconf")
+                .env("GNUPGHOME", &home)
+                .env("HOME", &home)
+                .arg("--version")
+                .output()?
+                .status
+                .success(),
+            "gpgconf is required to clean up the isolated GnuPG fixture"
+        );
+
+        fixture.run(&[
+            "--quick-generate-key",
+            "Misleading Publisher <first@example.invalid>",
+            "ed25519",
+            "cert",
+            "0",
+        ])?;
+        let keys = fixture.run(&["--with-colons", "--fingerprint", "--list-keys"])?;
+        let primary = std::str::from_utf8(&keys)?
+            .lines()
+            .find_map(|line| {
+                line.strip_prefix("fpr:")
+                    .and_then(|_| line.split(':').nth(9))
+            })
+            .context("generated primary fingerprint missing")?
+            .to_owned();
+        assert_eq!(primary.len(), 40);
+        assert!(
+            primary
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'A'..=b'F').contains(&byte))
+        );
+        fixture.run(&["--quick-add-key", &primary, "ed25519", "sign", "0"])?;
+        let keys = fixture.run(&[
+            "--with-colons",
+            "--fingerprint",
+            "--fingerprint",
+            "--list-keys",
+            &primary,
+        ])?;
+        let fingerprints: Vec<_> = std::str::from_utf8(&keys)?
+            .lines()
+            .filter(|line| line.starts_with("fpr:"))
+            .filter_map(|line| line.split(':').nth(9))
+            .collect();
+        assert_eq!(fingerprints.len(), 2);
+        assert_eq!(fingerprints[0], primary);
+        assert_ne!(fingerprints[1], primary);
+        let signing_key = format!("{}!", fingerprints[1]);
+
+        let executable = fixture.directory.path().join("executable");
+        let signature = fixture.directory.path().join("executable.sig");
+        fs::write(&executable, b"original executable bytes\n")?;
+        fixture.run(&[
+            "--local-user",
+            &signing_key,
+            "--output",
+            signature.to_str().context("fixture path is not UTF-8")?,
+            "--detach-sign",
+            executable.to_str().context("fixture path is not UTF-8")?,
+        ])?;
+        fixture.verify_in_child("valid", &primary)?;
+
+        // Alter the key's human identity without altering the signed bytes or
+        // its primary key: neither publisher label becomes the returned pin.
+        let other_uid = "Different Publisher <second@example.invalid>";
+        fixture.run(&["--quick-add-uid", &primary, other_uid])?;
+        fixture.run(&["--quick-set-primary-uid", &primary, other_uid])?;
+        fixture.verify_in_child("valid", &primary)?;
+        fixture.verify_in_child("missing-key", &primary)?;
+
+        fs::write(&executable, b"changed executable bytes\n")?;
+        fixture.verify_in_child("changed", &primary)?;
+        fs::remove_file(&signature)?;
+        fixture.verify_in_child("missing-signature", &primary)?;
+        Ok(())
+    }
+
     const PRIMARY: &str = "0123456789ABCDEF0123456789ABCDEF01234567";
     const SUBKEY: &str = "FEDCBA9876543210FEDCBA9876543210FEDCBA98";
 
