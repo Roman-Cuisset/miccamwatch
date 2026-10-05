@@ -416,6 +416,11 @@ jobs:
                              "--object-path", "/StatusNotifierWatcher", "--method", "org.freedesktop.DBus.Properties.Get",
                              "org.kde.StatusNotifierWatcher", "RegisteredStatusNotifierItems"])
                       record("desktop-screenshot", ["import", "-window", "root", str(proof / "desktop.png")])
+                      # The disposable panel's one icon is visible at this verified coordinate.
+                      record("native-menu-open", ["xdotool", "mousemove", "26", "12", "click", "3"])
+                      time.sleep(.5)
+                      record("native-menu-screenshot", ["import", "-window", "root", str(proof / "menu.png")])
+                      record("native-menu-close", ["xdotool", "key", "Escape"])
                   else:
                       screenshot = record("desktop-screenshot", ["screencapture", "-x", str(proof / "desktop.png")], (0, 1))
                       if screenshot.returncode != 0:
@@ -423,6 +428,32 @@ jobs:
                               "screencapture could not capture the native display. A visible Aqua desktop and Screen Recording "
                               "authorization for the runner process are required; native stderr is preserved, no TCC changes made.\n")
                           print("::warning::macOS screenshot unavailable; native output retained; inspect Screen Recording/Aqua prerequisites")
+                      menu_source = home / "menu-input.swift"
+                      menu_input = home / "menu-input"
+                      menu_source.write_text("""
+          import CoreGraphics
+          import Foundation
+          import Darwin
+          guard CGPreflightPostEventAccess() else { exit(2) }
+          let bounds = CGDisplayBounds(CGMainDisplayID())
+          // Verified native status-item position on both disposable runner desktops.
+          let point = CGPoint(x: bounds.maxX - 231, y: bounds.minY + 12)
+          for kind in [CGEventType.leftMouseDown, CGEventType.leftMouseUp] {
+              guard let event = CGEvent(mouseEventSource: nil, mouseType: kind,
+                                        mouseCursorPosition: point, mouseButton: .left) else { exit(3) }
+              event.post(tap: .cghidEventTap)
+              Thread.sleep(forTimeInterval: 0.1)
+          }
+          """)
+                      record("native-menu-input-build", ["swiftc", str(menu_source), "-o", str(menu_input)])
+                      posted = record("native-menu-open", [str(menu_input)], (0, 2))
+                      if posted.returncode == 0:
+                          time.sleep(.5)
+                          record("native-menu-screenshot", ["screencapture", "-x", str(proof / "menu.png")], (0, 1))
+                      else:
+                          (proof / "menu-input-prerequisite.txt").write_text(
+                              "Public CGPreflightPostEventAccess refused event posting. No input or TCC permission was requested; "
+                              "the real status item and owned stop remain exercised, menu-click proof needs an authorized GUI operator.\n")
                   record("tray-stop", [binary, "tray", "stop"])
                   assert tray.wait(timeout=20) == 0, "Native helper did not exit cleanly after owned stop"
                   assert record("tray-stopped", [binary, "tray", "status"], (1,)).stdout.strip() == b"stopped"
