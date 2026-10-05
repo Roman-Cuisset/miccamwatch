@@ -79,9 +79,18 @@ private final class DesktopDelegate: NSObject, NSApplicationDelegate {
     }
     private func readFrames() {
         var frame = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
         do {
-            while let chunk = try FileHandle.standardInput.read(upToCount: 4096), !chunk.isEmpty {
-                for byte in chunk {
+            while true {
+                let count = buffer.withUnsafeMutableBytes { bytes in
+                    Darwin.read(STDIN_FILENO, bytes.baseAddress!, bytes.count)
+                }
+                if count == 0 { break }
+                if count < 0 {
+                    if errno == EINTR { continue }
+                    throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+                }
+                for byte in buffer.prefix(count) {
                     if byte == 10 {
                         let decoded = try JSONDecoder().decode(DesktopFrame.self, from: frame)
                         frame.removeAll(keepingCapacity: true)
