@@ -4,11 +4,17 @@ on:
   push:
     paths:
       - installer/install.sh
+      - installer/install-camera-helper.sh
+      - installer/com.roman-cuisset.miccamwatch.camera.policy
+      - src/updater/unix.rs
       - installer/tests/native_install.py
       - .github/workflows/unix-install.yml
   pull_request:
     paths:
       - installer/install.sh
+      - installer/install-camera-helper.sh
+      - installer/com.roman-cuisset.miccamwatch.camera.policy
+      - src/updater/unix.rs
       - installer/tests/native_install.py
       - .github/workflows/unix-install.yml
   workflow_dispatch:

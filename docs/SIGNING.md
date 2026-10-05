@@ -46,3 +46,20 @@ The published v0.14.0 Windows ZIP was independently downloaded and verified agai
 Both published executables have no PE certificate table. The accessible installed tray matched the published tray hash. The quarantined CLI's original bytes and hash were unavailable, so its provenance cannot be inferred from the surviving tray or from the public archive. Integrity and build provenance are not malware clearance.
 
 Record the detection name, affected path, version, available hash, and Protection History details. Use Microsoft's [software-developer file submission portal](https://www.microsoft.com/en-us/wdsi/filesubmission) for analysis; it requires human verification, and no submission or Microsoft verdict is implied here. Do not disable Defender, add an exclusion, restore quarantined bytes, or automatically reinstall the detected executable. A new signed release requires the real certificate secrets above; no test certificate substitutes for publisher identity.
+
+## Approved local Windows v0.15.1 replacement
+
+On 2026-10-05, the user approved replacing the local installation without publishing new Windows release assets. The paired CLI/tray were compiled with the native MSVC toolchain and locked dependencies from the immutable published source commit `7d1e3dc17a6171b521a2f53b3cfebe663425ceb0`. The running v0.14.0 tray matched its public hash and exited through its normal **Exit** menu action after the camera-operation mutex was available; no process was force-terminated and no quarantined CLI was restored.
+
+Cargo installed both executables under `%USERPROFILE%\.cargo\bin` while the existing MicCamWatch installation lock was held. Preexisting configuration/data bytes were unchanged during installation. The previously enabled per-user autostart registration retained the same command; no new autostart enable action was performed.
+
+Installed executable SHA-256:
+
+- `mcw.exe`: `7274d0e1c98f1617bfff8d1cc85319f2efae9c125b35a5ec298e9c5d87cea805`.
+- `mcw-tray.exe`: `d78ccade67c8f1d5cc97e65e15932585f422e4bdcc29b1a24236036ccf589371`.
+
+An actual fresh PowerShell resolved the installed CLI and reported `mcw 0.15.1`. Native `doctor`, schema-3 `status`, populated TUI, tray menu version/actions, cooperative tray stop/restart, and the updater's matching-pair check were exercised. `status` returned the documented activity code `1` with five healthy collectors; it was not a runtime failure. The TUI exited normally with code `0`.
+
+Defender's service, antivirus, real-time protection and behavior monitor remained enabled, with signature version `1.459.557.0`. Separate custom scans of the two installed files have paired start/completion events: CLI scan `{A52EA338-74B2-4EF0-B5B8-C43BBF532BA0}` and tray scan `{86EA13AD-D77E-49F2-BB79-A3FEE50C734A}`. No detection/remediation event was returned in that scan interval, and both hashes were unchanged after scans and actual runtime checks. No Defender preferences, exclusions or quarantine contents were changed. Exclusion visibility required administrator access and was not established.
+
+These are unsigned, locally built binaries, not a new public Windows release or a Microsoft malware verdict. Runtime autostart-registration changes and an actual downloaded Windows upgrade were not exercised in this local replacement; neither broader Defender acceptance nor elimination of the earlier detection is implied.

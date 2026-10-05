@@ -1,11 +1,12 @@
 import AVFoundation
 import CoreAudio
+import CoreMediaIO
 import Darwin
 import Foundation
 
 // A standalone, embedded helper: never requests camera or microphone permission,
-// creates capture sessions, or opens a device. The camera property is only about
-// *another* application and contains no client identity.
+// creates capture sessions, or opens a device. CoreMediaIO running-state queries
+// report device-level activity without a client identity or media frame data.
 struct AudioProcess: Encodable {
     let pid: Int32?
     let startSeconds: UInt64?
@@ -16,7 +17,7 @@ struct AudioProcess: Encodable {
 struct CameraDevice: Encodable {
     let id: String
     let name: String
-    let inUse: Bool
+    let runningSomewhere: Bool?
 }
 
 struct AudioResult: Encodable {
@@ -28,7 +29,6 @@ struct AudioResult: Encodable {
 struct VideoResult: Encodable {
     var devices: [CameraDevice] = []
     var error: String?
-    var interactive: Bool = false
 }
 struct NativeEffectReply: Encodable {
     let ok: Bool
@@ -99,18 +99,71 @@ func audioProcesses() -> AudioResult {
     return result
 }
 
-func videoDevices() -> VideoResult {
+private enum MacCaptureError: Error, CustomStringConvertible {
+    case failed(String)
+    var description: String { switch self { case .failed(let text): return text } }
+}
+
+private func cameraRunningSomewhere(_ uid: String) throws -> Bool {
+    var property = CMIOObjectPropertyAddress(
+        mSelector: CMIOObjectPropertySelector(kCMIOHardwarePropertyDeviceForUID),
+        mScope: CMIOObjectPropertyScope(kCMIOObjectPropertyScopeGlobal),
+        mElement: CMIOObjectPropertyElement(kCMIOObjectPropertyElementMain))
+    var uidString = uid as CFString
+    var device = CMIOObjectID(kCMIOObjectUnknown)
+    let translationSize = UInt32(MemoryLayout<AudioValueTranslation>.size)
+    let deviceSize = UInt32(MemoryLayout<CMIOObjectID>.size)
+    var lookupUsed: UInt32 = 0
+    var outputSize: UInt32 = 0
+    let lookup = withUnsafeMutablePointer(to: &uidString) { input in
+        withUnsafeMutablePointer(to: &device) { output in
+            var translation = AudioValueTranslation(
+                mInputData: UnsafeMutableRawPointer(input),
+                mInputDataSize: UInt32(MemoryLayout<CFString>.size),
+                mOutputData: UnsafeMutableRawPointer(output),
+                mOutputDataSize: deviceSize)
+            let status = CMIOObjectGetPropertyData(
+                CMIOObjectID(kCMIOObjectSystemObject), &property, 0, nil,
+                translationSize, &lookupUsed, &translation)
+            outputSize = translation.mOutputDataSize
+            return status
+        }
+    }
+    guard lookup == noErr, lookupUsed == translationSize, outputSize == deviceSize,
+          device != CMIOObjectID(kCMIOObjectUnknown) else {
+        throw MacCaptureError.failed(
+            "CoreMediaIO camera UID lookup failed: status=\(lookup), bytes=\(lookupUsed), deviceBytes=\(outputSize), device=\(device)")
+    }
+    property.mSelector = CMIOObjectPropertySelector(kCMIODevicePropertyDeviceIsRunningSomewhere)
+    var running: UInt32 = 0
+    var used: UInt32 = 0
+    let runningSize = UInt32(MemoryLayout<UInt32>.size)
+    let status = CMIOObjectGetPropertyData(device, &property, 0, nil,
+                                          runningSize, &used, &running)
+    guard status == noErr, used == runningSize else {
+        throw MacCaptureError.failed(
+            "CoreMediaIO camera running-state read failed: status=\(status), bytes=\(used)")
+    }
+    return running != 0
+}
+
+func videoDevices(observeActivity: Bool) -> VideoResult {
     var result = VideoResult()
-    // The Rust collector intentionally supplies /dev/null as standard input.
-    // Thus this helper never claims an interactive validation run.
-    result.interactive = isatty(STDIN_FILENO) == 1
     // AVCaptureDevice.devices(for:) is discovery only; no requestAccess(),
     // AVCaptureSession, or lockForConfiguration() is used. On some unattended
     // macOS hosts discovery can report zero devices despite installed cameras.
     let devices = AVCaptureDevice.devices(for: .video)
     for device in devices {
+        var running: Bool?
+        if observeActivity {
+            do {
+                running = try cameraRunningSomewhere(device.uniqueID)
+            } catch {
+                result.error = "\(device.localizedName): \(error)"
+            }
+        }
         result.devices.append(CameraDevice(id: device.uniqueID, name: device.localizedName,
-                                           inUse: device.isInUseByAnotherApplication))
+                                           runningSomewhere: running))
     }
     return result
 }
@@ -143,7 +196,9 @@ switch mode {
 case "audio", "video", "both", "devices":
     guard args.isEmpty else { invalidArguments() }
     if mode == "audio" || mode == "both" { output.audio = audioProcesses() }
-    if mode == "video" || mode == "both" || mode == "devices" { output.video = videoDevices() }
+    if mode == "video" || mode == "both" || mode == "devices" {
+        output.video = videoDevices(observeActivity: mode != "devices")
+    }
     if mode == "devices" { output.microphones = microphones() }
 case "locale":
     guard args.isEmpty else { invalidArguments() }

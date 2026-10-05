@@ -20,11 +20,15 @@ LOCK=
 STAGE=
 BACKUP=
 CONFIG_WORK=
+CAMERA_STAGE=
+TRANSACTION=no
 
 say() { printf '%s\n' "$*"; }
 warn() { printf 'mcw installer: %s\n' "$*" >&2; }
 die() { warn "$*"; exit 1; }
 cleanup() {
+    if [ "$TRANSACTION" = yes ]; then rollback_linux || :; fi
+    [ -z "$CAMERA_STAGE" ] || rm -rf "$CAMERA_STAGE"
     [ -z "$STAGE" ] || rm -f "$STAGE"
     [ -z "$BACKUP" ] || rm -f "$BACKUP"
     [ -z "$CONFIG_WORK" ] || rm -rf "$CONFIG_WORK"
@@ -48,7 +52,7 @@ Usage: sh install.sh [--version v0.14.0] [--prefix ABSOLUTE_PREFIX]
 --prefix            Default: $HOME/.local. Executable: PREFIX/bin/mcw.
 --add-path          Explicitly add managed blocks to this user's shell startup files.
 --no-modify-path    Never change shell startup files.
---uninstall         Remove only receipt-owned, unchanged executable/PATH blocks.
+--uninstall         Remove only receipt-owned, unchanged executable/payload/PATH blocks.
 --help              Show this help without making changes.
 
 Without a PATH flag, an interactive terminal is asked (default: no).
@@ -151,6 +155,23 @@ link_count() {
 regular_file() {
     [ ! -L "$1" ] && [ -f "$1" ] && [ "$(link_count "$1")" = 1 ]
 }
+root_camera_installation_absent() {
+    # Metadata only: neither an Allowed state nor a version match proves the
+    # privileged restoration journal is empty. Never call camera APIs here.
+    for ROOT_DIRECTORY in / /usr /usr/local /usr/local/libexec /usr/local/libexec/miccamwatch /usr/share /usr/share/polkit-1 /usr/share/polkit-1/actions /var /var/lib /var/lib/miccamwatch; do
+        [ ! -L "$ROOT_DIRECTORY" ] || die "Cannot safely inspect root camera installation through symbolic-link directory $ROOT_DIRECTORY; user installation was preserved. Have an administrator repair/remove the root installation before retrying."
+        [ -e "$ROOT_DIRECTORY" ] || continue
+        [ -d "$ROOT_DIRECTORY" ] && [ -r "$ROOT_DIRECTORY" ] && [ -x "$ROOT_DIRECTORY" ] || die "Cannot safely inspect root camera installation directory $ROOT_DIRECTORY; user installation was preserved. Have an administrator inspect/remove it before retrying."
+        ROOT_METADATA=$(stat -c '%u %a' "$ROOT_DIRECTORY") || die "Cannot inspect root camera installation directory $ROOT_DIRECTORY; refusing user lifecycle changes."
+        printf '%s\n' "$ROOT_METADATA" | awk 'NF!=2 || $1!=0 || $2 !~ /^[0-7][0-7][0-7][0-7]?$/ { bad=1 } { mode=$2; group=substr(mode,length(mode)-1,1)+0; other=substr(mode,length(mode),1)+0; if(group%4>=2 || other%4>=2) bad=1 } END { exit bad || NR!=1 }' || die "Unsafe root camera installation directory $ROOT_DIRECTORY; user installation was preserved. An administrator must repair/remove the root installation before retrying."
+    done
+    for ROOT_ASSET in /usr/local/libexec/miccamwatch/mcw-camera-helper /usr/share/polkit-1/actions/com.roman-cuisset.miccamwatch.camera.policy /var/lib/miccamwatch/camera-helper-install.json /var/lib/miccamwatch/.camera-helper-transaction /var/lib/miccamwatch/.camera-helper-*; do
+        if [ -e "$ROOT_ASSET" ] || [ -L "$ROOT_ASSET" ]; then
+            die "Root camera installation or transaction is present at $ROOT_ASSET; no user files were replaced/removed. First explicitly restore with the old matching mcw camera allow, then have an administrator run the reviewed root helper installer --uninstall. Only after root removal, retry the user update/uninstall; afterward explicitly set up the matching same-version root helper if wanted. This installer never elevates, calls camera APIs or removes the root helper."
+        fi
+    done
+}
+if [ "$OS" = Linux ]; then root_camera_installation_absent; fi
 
 if [ "$UNINSTALL" = yes ] && [ ! -e "$PREFIX" ] && [ ! -L "$PREFIX" ]; then
     say "Nothing to uninstall at $PREFIX."
@@ -163,6 +184,8 @@ valid_path "$PREFIX" || die 'Resolved prefix contains unsupported characters.'
 BIN=$PREFIX/bin
 TARGET=$BIN/mcw
 STATE=$PREFIX/.miccamwatch-install
+CAMERA=$PREFIX/share/miccamwatch/linux-camera
+CAMERA_NAMES='mcw-camera-helper install-camera-helper.sh com.roman-cuisset.miccamwatch.camera.policy'
 LOCK_PATH=$PREFIX/.miccamwatch-install.lock
 mkdir "$LOCK_PATH" 2>/dev/null || die "Another installer is running, or $LOCK_PATH exists. After confirming no installer is running, remove only that empty lock directory."
 LOCK=$LOCK_PATH
@@ -200,6 +223,106 @@ owned_binary() {
     else
         CURRENT_HASH=
     fi
+}
+camera_record() {
+    case "$1" in
+        mcw-camera-helper) CAMERA_RECORD=camera-helper.sha256 ;;
+        install-camera-helper.sh) CAMERA_RECORD=camera-installer.sha256 ;;
+        com.roman-cuisset.miccamwatch.camera.policy) CAMERA_RECORD=camera-policy.sha256 ;;
+    esac
+}
+safe_camera_directories() {
+    for DIRECTORY in "$PREFIX/share" "$PREFIX/share/miccamwatch" "$CAMERA"; do
+        [ ! -L "$DIRECTORY" ] || die "Refusing symbolic-link payload directory: $DIRECTORY."
+        [ ! -e "$DIRECTORY" ] || [ -d "$DIRECTORY" ] || die "Payload parent is not a directory: $DIRECTORY."
+    done
+}
+owned_camera() {
+    safe_camera_directories
+    for CAMERA_NAME in $CAMERA_NAMES; do
+        camera_record "$CAMERA_NAME"
+        CAMERA_TARGET=$CAMERA/$CAMERA_NAME
+        if [ -e "$CAMERA_TARGET" ] || [ -L "$CAMERA_TARGET" ]; then
+            regular_file "$CAMERA_TARGET" || die "Refusing nonregular, symlink or hardlinked payload: $CAMERA_TARGET."
+            regular_file "$STATE/$CAMERA_RECORD" || die "No ownership receipt for $CAMERA_TARGET; preserving it."
+            CAMERA_HASH=$(sha_file "$CAMERA_TARGET") || die 'Cannot checksum installed camera payload.'
+            grep -Fx "$CAMERA_HASH" "$STATE/$CAMERA_RECORD" >/dev/null || die "Camera payload changed outside the installer; preserving $CAMERA_TARGET."
+        fi
+    done
+}
+helper_version_matches() {
+    HELPER_REPORTED=$("$1" --protocol-version) || return 1
+    # Accept JSON whitespace and either key order, but no extra keys or values.
+    printf '%s\n' "$HELPER_REPORTED" | awk -v version="${VERSION#v}" '
+        { text=text $0 }
+        END {
+            quoted=0
+            for(i=1;i<=length(text);i++) {
+                c=substr(text,i,1)
+                if(c=="\"") quoted=!quoted
+                if(quoted || c !~ /[ \t\r\n]/) compact=compact c
+            }
+            expected1="{\"protocol\":1,\"version\":\"" version "\"}"
+            expected2="{\"version\":\"" version "\",\"protocol\":1}"
+            exit compact!=expected1 && compact!=expected2
+        }'
+}
+asset_unchanged() {
+    [ "$ASSET_NAME" = mcw ] || safe_camera_directories
+    if [ -f "$WORK/old-hashes/$ASSET_NAME" ]; then
+        regular_file "$ASSET_TARGET" || die "Asset changed concurrently; preserving $ASSET_TARGET."
+        BEFORE_HASH=$(sha_file "$ASSET_TARGET") || die 'Cannot recheck installed asset.'
+        [ "$BEFORE_HASH" = "$(cat "$WORK/old-hashes/$ASSET_NAME")" ] || die "Asset changed concurrently; preserving $ASSET_TARGET."
+    else
+        [ ! -e "$ASSET_TARGET" ] && [ ! -L "$ASSET_TARGET" ] || die "Unmanaged asset appeared concurrently; preserving $ASSET_TARGET."
+    fi
+}
+rollback_linux() {
+    ROLLBACK_OK=yes
+    # Only touch assets still matching this transaction, never concurrent edits.
+    while IFS= read -r ASSET_NAME; do
+        [ -f "$WORK/replaced/$ASSET_NAME" ] || continue
+        if [ "$ASSET_NAME" = mcw ]; then ASSET_TARGET=$TARGET; else ASSET_TARGET=$CAMERA/$ASSET_NAME; fi
+        SAFE_RESTORE=yes
+        if [ "$ASSET_NAME" = mcw ]; then
+            [ ! -L "$BIN" ] && [ -d "$BIN" ] || SAFE_RESTORE=no
+        else
+            for DIRECTORY in "$PREFIX/share" "$PREFIX/share/miccamwatch" "$CAMERA"; do
+                [ ! -L "$DIRECTORY" ] && { [ ! -e "$DIRECTORY" ] || [ -d "$DIRECTORY" ]; } || SAFE_RESTORE=no
+            done
+        fi
+        if [ "$SAFE_RESTORE" = no ]; then ROLLBACK_OK=no; continue; fi
+        if [ -e "$ASSET_TARGET" ] || [ -L "$ASSET_TARGET" ]; then
+            if ! regular_file "$ASSET_TARGET"; then ROLLBACK_OK=no; continue; fi
+            RESTORE_HASH=$(sha_file "$ASSET_TARGET") || { ROLLBACK_OK=no; continue; }
+            MATCHED=no
+            if [ -f "$WORK/old-hashes/$ASSET_NAME" ] && [ "$RESTORE_HASH" = "$(cat "$WORK/old-hashes/$ASSET_NAME")" ]; then MATCHED=yes; fi
+            if [ -f "$WORK/new-hashes/$ASSET_NAME" ] && [ "$RESTORE_HASH" = "$(cat "$WORK/new-hashes/$ASSET_NAME")" ]; then MATCHED=yes; fi
+            if [ "$MATCHED" = no ]; then ROLLBACK_OK=no; continue; fi
+        fi
+        if [ -f "$WORK/old-assets/$ASSET_NAME" ]; then
+            mv -f "$WORK/old-assets/$ASSET_NAME" "$ASSET_TARGET" || ROLLBACK_OK=no
+        else
+            rm -f "$ASSET_TARGET" || ROLLBACK_OK=no
+        fi
+    done < "$WORK/assets"
+    if [ -L "$STATE" ] || [ ! -d "$STATE" ]; then ROLLBACK_OK=no; fi
+    if [ "$ROLLBACK_OK" = yes ]; then
+        for RECEIPT in binary.sha256 camera-helper.sha256 camera-installer.sha256 camera-policy.sha256 version; do
+            if [ -f "$WORK/old-receipts/$RECEIPT" ]; then
+                mv -f "$WORK/old-receipts/$RECEIPT" "$STATE/$RECEIPT" || ROLLBACK_OK=no
+            else
+                rm -f "$STATE/$RECEIPT" || ROLLBACK_OK=no
+            fi
+        done
+    fi
+    TRANSACTION=no
+    if [ "$ROLLBACK_OK" = no ]; then
+        warn "Rollback could not safely finish; recovery snapshots and receipts preserved at $WORK. Do not delete them."
+        WORK=
+        return 1
+    fi
+    warn 'Failed installation rolled back; previous executable and camera payload preserved.'
 }
 refuse_running() {
     if [ "$OS" = Linux ]; then
@@ -258,13 +381,17 @@ validate_records() {
         [ -e "$ENTRY" ] || [ -L "$ENTRY" ] || continue
         ENTRY_NAME=${ENTRY##*/}
         case "$ENTRY_NAME" in
-            format|prefix|binary.sha256|version) ;;
+            format|prefix|binary.sha256|version|camera-helper.sha256|camera-installer.sha256|camera-policy.sha256) ;;
             path-*.path|path-*.block)
                 ENTRY_INDEX=${ENTRY_NAME#path-}; ENTRY_INDEX=${ENTRY_INDEX%.*}
                 case "$ENTRY_INDEX" in ''|*[!0-9]*) die 'Invalid PATH receipt filename.' ;; esac ;;
             *) die "Unknown receipt content was preserved: $ENTRY." ;;
         esac
         regular_file "$ENTRY" || die "Unsafe receipt file was preserved: $ENTRY."
+        case "$ENTRY_NAME" in
+            *.sha256)
+                awk 'length($0)!=64 || $0 ~ /[^0-9a-f]/ { bad=1 } END { exit bad || NR<1 || NR>2 }' "$ENTRY" || die "Invalid checksum receipt: $ENTRY." ;;
+        esac
     done
     for PATH_RECORD in "$STATE"/path-*.path; do
         [ -e "$PATH_RECORD" ] || [ -L "$PATH_RECORD" ] || continue
@@ -276,12 +403,44 @@ validate_records() {
     done
 }
 validate_records
+if [ "$OS" = Linux ]; then owned_camera; fi
 
 if [ "$UNINSTALL" = yes ]; then
     PARTIAL=no
     if [ -n "$CURRENT_HASH" ]; then
         refuse_running
         owned_binary
+    fi
+    if [ "$OS" = Linux ]; then
+        # Snapshot all assets and receipts before removing any of them.
+        owned_camera
+        root_camera_installation_absent
+        mkdir "$WORK/old-assets" "$WORK/old-hashes" "$WORK/new-hashes" "$WORK/old-receipts" "$WORK/replaced" || die 'Cannot stage uninstall rollback.'
+        printf '%s\n' mcw $CAMERA_NAMES > "$WORK/assets"
+        for RECEIPT in binary.sha256 camera-helper.sha256 camera-installer.sha256 camera-policy.sha256 version; do
+            if [ -f "$STATE/$RECEIPT" ]; then cp -p "$STATE/$RECEIPT" "$WORK/old-receipts/$RECEIPT" || die 'Cannot snapshot uninstall receipt.'; fi
+        done
+        while IFS= read -r ASSET_NAME; do
+            if [ "$ASSET_NAME" = mcw ]; then ASSET_TARGET=$TARGET; else ASSET_TARGET=$CAMERA/$ASSET_NAME; fi
+            if [ -e "$ASSET_TARGET" ]; then
+                cp -p "$ASSET_TARGET" "$WORK/old-assets/$ASSET_NAME" || die 'Cannot snapshot asset for uninstall.'
+                sha_file "$ASSET_TARGET" > "$WORK/old-hashes/$ASSET_NAME" || die 'Cannot checksum uninstall snapshot.'
+            fi
+        done < "$WORK/assets"
+        owned_binary
+        owned_camera
+        TRANSACTION=yes
+        while IFS= read -r ASSET_NAME; do
+            if [ "$ASSET_NAME" = mcw ]; then ASSET_TARGET=$TARGET; else ASSET_TARGET=$CAMERA/$ASSET_NAME; fi
+            asset_unchanged
+            : > "$WORK/replaced/$ASSET_NAME"
+            rm -f "$ASSET_TARGET" || die "Cannot remove $ASSET_TARGET."
+        done < "$WORK/assets"
+        rm -f "$STATE/binary.sha256" "$STATE/version" "$STATE/camera-helper.sha256" "$STATE/camera-installer.sha256" "$STATE/camera-policy.sha256" || die 'Cannot remove ownership receipts.'
+        TRANSACTION=no
+        rmdir "$CAMERA" 2>/dev/null || :
+        say 'No root camera installation was changed. Root runtime evidence and locks, preferences and user data were not removed.'
+    elif [ -n "$CURRENT_HASH" ]; then
         rm -f "$TARGET" || die "Cannot remove $TARGET."
         say "Removed installer-owned $TARGET."
     fi
@@ -324,11 +483,25 @@ EXPECTED=$(awk -v asset="$ASSET" '$2==asset || $2=="*" asset { count++; hash=$1;
 ACTUAL=$(sha_file "$WORK/package.tar.gz") || die 'Cannot checksum downloaded archive.'
 [ "$ACTUAL" = "$EXPECTED" ] || die 'Archive SHA-256 mismatch; installed executable was not changed.'
 # List every member, reject unknown/duplicate names and all nonregular entries.
-# Extract only mcw to stdout: no attacker-controlled archive path is written.
+# Stream known members only; no attacker-controlled archive path is written.
+CAMERA_REQUIRED=no
+if [ "$OS" = Linux ]; then
+    # v0.16.0 is the first release with the camera-helper installation contract.
+    if ! printf '%s\n' "${VERSION#v}" | awk -F '[.+-]' '{ exit !($1==0 && $2<16) }'; then CAMERA_REQUIRED=yes; fi
+fi
+MEMBER_COUNT=3
+[ "$CAMERA_REQUIRED" = no ] || MEMBER_COUNT=6
 tar -tzf "$WORK/package.tar.gz" > "$WORK/members" || die 'Invalid gzip/tar archive.'
-awk '$0!="mcw" && $0!="README.md" && $0!="LICENSE" { bad=1 } { seen[$0]++ } END { exit bad || NR!=3 || seen["mcw"]!=1 || seen["README.md"]!=1 || seen["LICENSE"]!=1 }' "$WORK/members" || die 'Unsafe archive: expected exactly mcw, README.md and LICENSE once each.'
+awk -v camera="$CAMERA_REQUIRED" '
+    { seen[$0]++ }
+    $0!="mcw" && $0!="README.md" && $0!="LICENSE" &&
+        !(camera=="yes" && ($0=="mcw-camera-helper" || $0=="install-camera-helper.sh" || $0=="com.roman-cuisset.miccamwatch.camera.policy")) { bad=1 }
+    END {
+        if(camera=="yes" && (seen["mcw-camera-helper"]!=1 || seen["install-camera-helper.sh"]!=1 || seen["com.roman-cuisset.miccamwatch.camera.policy"]!=1)) bad=1
+        exit bad || NR!=(camera=="yes"?6:3) || seen["mcw"]!=1 || seen["README.md"]!=1 || seen["LICENSE"]!=1
+    }' "$WORK/members" || die 'Unsafe archive: missing, duplicate or unexpected release members.'
 tar -tvzf "$WORK/package.tar.gz" > "$WORK/types" || die 'Cannot inspect archive member types.'
-awk 'substr($0,1,1)!="-" { bad=1 } END { exit bad || NR!=3 }' "$WORK/types" || die 'Unsafe archive: symlinks, hardlinks and nonregular entries are not allowed.'
+awk -v count="$MEMBER_COUNT" 'substr($0,1,1)!="-" { bad=1 } END { exit bad || NR!=count }' "$WORK/types" || die 'Unsafe archive: symlinks, hardlinks and nonregular entries are not allowed.'
 mkdir -p "$BIN" || die "Cannot create $BIN."
 STAGE=$(mktemp "$BIN/.mcw-stage.XXXXXXXX") || die 'Cannot create same-directory executable staging file.'
 tar -xOzf "$WORK/package.tar.gz" mcw > "$STAGE" || die 'Cannot stream the executable from the archive.'
@@ -337,6 +510,83 @@ chmod 755 "$STAGE" || die 'Cannot make staged executable runnable.'
 REPORTED=$("$STAGE" --version) || die 'Staged mcw --version failed; old executable preserved. On macOS check your Gatekeeper policy; this installer does not bypass it.'
 [ "$REPORTED" = "mcw ${VERSION#v}" ] || die "Executable version mismatch: expected mcw ${VERSION#v}, got $REPORTED. Old executable preserved."
 NEW_HASH=$(sha_file "$STAGE") || die 'Cannot checksum staged executable.'
+if [ "$OS" = Linux ]; then
+    owned_camera
+    if [ "$CAMERA_REQUIRED" = yes ]; then
+        mkdir -p "$CAMERA" || die 'Cannot create camera payload directory.'
+        CAMERA_STAGE=$(mktemp -d "$CAMERA/.mcw-stage.XXXXXXXX") || die 'Cannot stage camera payload.'
+        for CAMERA_NAME in $CAMERA_NAMES; do
+            tar -xOzf "$WORK/package.tar.gz" "$CAMERA_NAME" > "$CAMERA_STAGE/$CAMERA_NAME" || die "Cannot extract $CAMERA_NAME; previous installation preserved."
+            [ -s "$CAMERA_STAGE/$CAMERA_NAME" ] || die "Empty camera payload: $CAMERA_NAME."
+            case "$CAMERA_NAME" in *.policy) chmod 644 "$CAMERA_STAGE/$CAMERA_NAME" ;; *) chmod 755 "$CAMERA_STAGE/$CAMERA_NAME" ;; esac
+        done
+        helper_version_matches "$CAMERA_STAGE/mcw-camera-helper" || die 'Archived helper protocol/app version does not match mcw; previous installation preserved.'
+    fi
+    owned_binary
+    [ -z "$CURRENT_HASH" ] || refuse_running
+    owned_camera
+    root_camera_installation_absent
+    mkdir "$WORK/old-assets" "$WORK/old-hashes" "$WORK/new-hashes" "$WORK/old-receipts" "$WORK/new-receipts" "$WORK/replaced" || die 'Cannot stage rollback snapshots.'
+    printf '%s\n' mcw $CAMERA_NAMES > "$WORK/assets"
+    for RECEIPT in binary.sha256 camera-helper.sha256 camera-installer.sha256 camera-policy.sha256 version; do
+        if [ -f "$STATE/$RECEIPT" ]; then cp -p "$STATE/$RECEIPT" "$WORK/old-receipts/$RECEIPT" || die 'Cannot snapshot ownership receipt.'; fi
+    done
+    while IFS= read -r ASSET_NAME; do
+        if [ "$ASSET_NAME" = mcw ]; then
+            ASSET_TARGET=$TARGET; ASSET_STAGE=$STAGE; ASSET_RECORD=binary.sha256
+        else
+            ASSET_TARGET=$CAMERA/$ASSET_NAME; ASSET_STAGE=$CAMERA_STAGE/$ASSET_NAME
+            camera_record "$ASSET_NAME"; ASSET_RECORD=$CAMERA_RECORD
+        fi
+        : > "$WORK/new-receipts/$ASSET_RECORD"
+        if [ -e "$ASSET_TARGET" ]; then
+            cp -p "$ASSET_TARGET" "$WORK/old-assets/$ASSET_NAME" || die 'Cannot snapshot installed asset; previous installation preserved.'
+            sha_file "$ASSET_TARGET" > "$WORK/old-hashes/$ASSET_NAME" || die 'Cannot checksum rollback asset.'
+            cat "$WORK/old-hashes/$ASSET_NAME" >> "$WORK/new-receipts/$ASSET_RECORD"
+        fi
+        if [ "$ASSET_NAME" = mcw ] || [ "$CAMERA_REQUIRED" = yes ]; then
+            sha_file "$ASSET_STAGE" > "$WORK/new-hashes/$ASSET_NAME" || die 'Cannot checksum staged asset.'
+            cat "$WORK/new-hashes/$ASSET_NAME" >> "$WORK/new-receipts/$ASSET_RECORD"
+        fi
+    done < "$WORK/assets"
+    # Persist old/new ownership before any asset rename. Cleanup rolls back
+    # ordinary failures and signals, including failures during finalization.
+    TRANSACTION=yes
+    for ASSET_RECORD in binary.sha256 camera-helper.sha256 camera-installer.sha256 camera-policy.sha256; do
+        if [ -s "$WORK/new-receipts/$ASSET_RECORD" ]; then
+            mv -f "$WORK/new-receipts/$ASSET_RECORD" "$STATE/$ASSET_RECORD" || die 'Cannot commit ownership journal.'
+        fi
+    done
+    # Payload first, CLI last: an execution failure restores the whole old set.
+    for ASSET_NAME in $CAMERA_NAMES mcw; do
+        if [ "$ASSET_NAME" = mcw ]; then ASSET_TARGET=$TARGET; ASSET_STAGE=$STAGE; else ASSET_TARGET=$CAMERA/$ASSET_NAME; ASSET_STAGE=$CAMERA_STAGE/$ASSET_NAME; fi
+        asset_unchanged
+        : > "$WORK/replaced/$ASSET_NAME"
+        if [ "$ASSET_NAME" = mcw ] || [ "$CAMERA_REQUIRED" = yes ]; then
+            mv -f "$ASSET_STAGE" "$ASSET_TARGET" || die "Cannot replace $ASSET_NAME."
+        else
+            rm -f "$ASSET_TARGET" || die "Cannot remove obsolete payload $ASSET_NAME."
+        fi
+    done
+    STAGE=
+    REPORTED=$("$TARGET" --version) || die 'Final installed-version validation failed.'
+    [ "$REPORTED" = "mcw ${VERSION#v}" ] || die 'Final installed-version mismatch.'
+    if [ "$CAMERA_REQUIRED" = yes ]; then
+        helper_version_matches "$CAMERA/mcw-camera-helper" || die 'Final installed helper protocol/app version mismatch.'
+    fi
+    while IFS= read -r ASSET_NAME; do
+        if [ "$ASSET_NAME" = mcw ]; then ASSET_RECORD=binary.sha256; else camera_record "$ASSET_NAME"; ASSET_RECORD=$CAMERA_RECORD; fi
+        if [ -f "$WORK/new-hashes/$ASSET_NAME" ]; then
+            cp "$WORK/new-hashes/$ASSET_NAME" "$WORK/new-receipts/$ASSET_RECORD" || die 'Cannot finalize asset ownership.'
+            mv -f "$WORK/new-receipts/$ASSET_RECORD" "$STATE/$ASSET_RECORD" || die 'Cannot finalize asset ownership receipt.'
+        else
+            rm -f "$STATE/$ASSET_RECORD" || die 'Cannot remove obsolete payload receipt.'
+        fi
+    done < "$WORK/assets"
+    printf '%s\n' "$VERSION" > "$WORK/new-receipts/version"
+    mv -f "$WORK/new-receipts/version" "$STATE/version" || die 'Cannot finalize installed-version receipt.'
+    TRANSACTION=no
+else
 owned_binary
 [ -z "$CURRENT_HASH" ] || refuse_running
 if [ -n "$CURRENT_HASH" ]; then
@@ -372,7 +622,19 @@ printf '%s\n' "$NEW_HASH" > "$WORK/binary.sha256"
 mv -f "$WORK/binary.sha256" "$STATE/binary.sha256" || die 'Installed executable is valid, but receipt finalization failed; recovery receipt retained.'
 printf '%s\n' "$VERSION" > "$WORK/version"
 mv -f "$WORK/version" "$STATE/version" || die 'Installed executable is valid, but version receipt could not be saved.'
+fi
 say "Installed $REPORTED at $TARGET."
+if [ "$OS" = Linux ] && [ "$CAMERA_REQUIRED" = yes ]; then
+    say "Matching camera administration payload installed at $CAMERA."
+    say 'The root camera helper was NOT installed or refreshed. An administrator must explicitly install/update it before USB camera controls work:'
+    printf '  sudo sh '
+    printf "'"; printf '%s' "$CAMERA/install-camera-helper.sh" | sed "s/'/'\\\\''/g"; printf "' --archive "
+    printf "'"; printf '%s' "$PREFIX/$ASSET" | sed "s/'/'\\\\''/g"; printf "' --sha256 '%s'\n" "$EXPECTED"
+    say "First download the verified release archive to $PREFIX/$ASSET:"
+    printf '  curl --proto =https --proto-redir =https --fail --location --output '
+    printf "'"; printf '%s' "$PREFIX/$ASSET" | sed "s/'/'\\\\''/g"; printf "' '%s/%s'\n" "$BASE" "$ASSET"
+    say 'Use an independently trusted archive hash if publisher authenticity is required; SHA256SUMS alone provides integrity, not independent authentication.'
+fi
 
 # Quote literal paths, not expressions evaluated by the user's shell.
 posix_quote() { printf "'"; printf '%s' "$1" | sed "s/'/'\\\\''/g"; printf "'"; }

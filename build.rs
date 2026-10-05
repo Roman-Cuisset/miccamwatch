@@ -129,6 +129,7 @@ fn compile_macos_helper() {
         "AVFoundation",
         "CoreAudio",
         "CoreGraphics",
+        "CoreMediaIO",
         "Foundation",
         "Security",
         "UserNotifications",

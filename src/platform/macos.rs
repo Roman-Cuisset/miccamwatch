@@ -123,29 +123,8 @@ impl PlatformMonitor {
                 if scope.camera {
                     let video = observation
                         .video
-                        .context("helper omitted AVFoundation result")?;
-                    if video.error.is_some() || video.devices.is_empty() {
-                        snapshot.observation_gaps.push(Resource::Camera);
-                    }
-                    let detail = video.error.unwrap_or_else(|| {
-                        if !video.interactive || video.devices.is_empty() {
-                            "passive AVFoundation camera discovery is unverified in this session; no camera permission requested; own-app capture and client identity are not observable".to_owned()
-                        } else {
-                            "AVFoundation only reports capture by another application; own-app capture and client identity are not observable".to_owned()
-                        }
-                    });
-                    for camera in video.devices {
-                        if camera.in_use {
-                            snapshot.accesses.push(camera_access(&camera));
-                        }
-                    }
-                    // Coverage limitations alone do not invalidate device observations.
-                    // Empty discovery and API errors are recorded separately as scan gaps.
-                    snapshot.collectors.push(health(
-                        "avfoundation_video",
-                        CollectorState::Degraded,
-                        Some(detail),
-                    ));
+                        .context("helper omitted CoreMediaIO camera result")?;
+                    append_camera_observation(&mut snapshot, video);
                 }
             }
             Err(error) => {
@@ -159,7 +138,7 @@ impl PlatformMonitor {
                 }
                 if scope.camera {
                     snapshot.collectors.push(health(
-                        "avfoundation_video",
+                        "coremediaio_video",
                         CollectorState::Unavailable,
                         Some(detail),
                     ));
@@ -373,15 +352,14 @@ impl AudioProcess {
 struct VideoResult {
     devices: Vec<CameraDevice>,
     error: Option<String>,
-    interactive: bool,
 }
 
 #[derive(Deserialize)]
 struct CameraDevice {
     id: String,
     name: String,
-    #[serde(rename = "inUse")]
-    in_use: bool,
+    #[serde(rename = "runningSomewhere")]
+    running_somewhere: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -440,6 +418,37 @@ fn microphone_access(process: AudioProcess, index: usize) -> Access {
     }
 }
 
+fn append_camera_observation(snapshot: &mut Snapshot, video: VideoResult) {
+    let unknown_state = video
+        .devices
+        .iter()
+        .any(|camera| camera.running_somewhere.is_none());
+    if video.error.is_some() || video.devices.is_empty() || unknown_state {
+        snapshot.observation_gaps.push(Resource::Camera);
+    }
+    let detail = video.error.unwrap_or_else(|| {
+        if video.devices.is_empty() {
+            "AVFoundation camera discovery returned no devices; camera activity is unknown; no camera permission requested".to_owned()
+        } else if unknown_state {
+            "CoreMediaIO camera running-state unavailable; camera activity is unknown; no camera permission requested".to_owned()
+        } else {
+            "CoreMediaIO reports device running-state without client identity or proof of frame flow; no camera permission requested".to_owned()
+        }
+    });
+    for camera in video.devices {
+        if camera.running_somewhere == Some(true) {
+            snapshot.accesses.push(camera_access(&camera));
+        }
+    }
+    // Attribution/frame-flow limitations do not invalidate known running-state.
+    // Empty discovery, missing states and API errors independently suppress STOP.
+    snapshot.collectors.push(health(
+        "coremediaio_video",
+        CollectorState::Degraded,
+        Some(detail),
+    ));
+}
+
 fn camera_access(camera: &CameraDevice) -> Access {
     Access {
         key: format!("macos:camera:{}", camera.id),
@@ -460,8 +469,8 @@ fn camera_access(camera: &CameraDevice) -> Access {
         process: None,
         evidence: vec![Evidence::new(
             EvidenceKind::LiveApi,
-            "avfoundation_video",
-            "AVCaptureDevice.isInUseByAnotherApplication=true; API does not identify the client",
+            "coremediaio_video",
+            "kCMIODevicePropertyDeviceIsRunningSomewhere!=0; API does not identify the client or prove frame flow",
         )],
     }
 }
@@ -892,22 +901,89 @@ mod tests {
         assert_eq!(access.enforcement, EnforcementDecision::Deny);
     }
 
+    fn camera_snapshot(document: &str) -> Snapshot {
+        let mut snapshot = Snapshot {
+            collectors: Vec::new(),
+            accesses: Vec::new(),
+            observation_gaps: Vec::new(),
+        };
+        append_camera_observation(&mut snapshot, serde_json::from_str(document).unwrap());
+        snapshot
+    }
+
     #[test]
     fn camera_activity_never_attributes_or_enforces_unknown_client() {
-        let observation: Observation = serde_json::from_str(r#"{"video":{"devices":[{"id":"camera-1","name":"USB camera","inUse":true},{"id":"camera-2","name":"Idle camera","inUse":false}],"error":null,"interactive":false}}"#).unwrap();
-        let video = observation.video.unwrap();
-        let active: Vec<_> = video
-            .devices
-            .iter()
-            .filter(|camera| camera.in_use)
-            .map(camera_access)
-            .collect();
-        assert_eq!(active.len(), 1);
-        assert_eq!(active[0].device.as_deref(), Some("USB camera"));
-        assert_eq!(active[0].pid, None);
-        assert_eq!(active[0].application, "Unknown application");
-        assert_eq!(active[0].enforcement, EnforcementDecision::Unknown);
-        assert!(!video.interactive);
+        let snapshot = camera_snapshot(
+            r#"{"devices":[{"id":"camera-1","name":"USB camera","runningSomewhere":true},{"id":"camera-2","name":"Idle camera","runningSomewhere":false}]}"#,
+        );
+        assert_eq!(snapshot.accesses.len(), 1);
+        let active = &snapshot.accesses[0];
+        assert_eq!(active.device.as_deref(), Some("USB camera"));
+        assert_eq!(active.activity, Activity::Active);
+        assert_eq!(active.confidence, Confidence::Medium);
+        assert_eq!(active.pid, None);
+        assert_eq!(active.application, "Unknown application");
+        assert_eq!(active.enforcement, EnforcementDecision::Unknown);
+        assert!(active.executable.is_none());
+        assert!(active.signature.is_none());
+        assert!(active.process.is_none());
+        assert!(snapshot.observation_gaps.is_empty());
+        assert_eq!(snapshot.collectors[0].state, CollectorState::Degraded);
+    }
+
+    #[test]
+    fn camera_known_idle_is_complete_but_not_healthy_or_ready() {
+        let snapshot = camera_snapshot(
+            r#"{"devices":[{"id":"camera-1","name":"USB camera","runningSomewhere":false}]}"#,
+        );
+        assert!(snapshot.accesses.is_empty());
+        assert!(snapshot.observation_gaps.is_empty());
+        assert_eq!(snapshot.collectors[0].state, CollectorState::Degraded);
+    }
+
+    #[test]
+    fn camera_unknown_null_missing_empty_and_error_are_observation_gaps() {
+        for document in [
+            r#"{"devices":[{"id":"c","name":"cam","runningSomewhere":null}]}"#,
+            r#"{"devices":[{"id":"c","name":"cam"}]}"#,
+            r#"{"devices":[]}"#,
+            r#"{"devices":[{"id":"c","name":"cam","runningSomewhere":false}],"error":"CoreMediaIO lookup failed"}"#,
+        ] {
+            let snapshot = camera_snapshot(document);
+            assert!(snapshot.accesses.is_empty());
+            assert_eq!(snapshot.observation_gaps, vec![Resource::Camera]);
+            assert_eq!(snapshot.collectors[0].state, CollectorState::Degraded);
+        }
+    }
+
+    #[test]
+    fn camera_partial_error_preserves_known_activity_but_suppresses_stop() {
+        for document in [
+            r#"{"devices":[{"id":"active","name":"USB camera","runningSomewhere":true},{"id":"unknown","name":"Other camera","runningSomewhere":null}],"error":"CoreMediaIO running-state read failed"}"#,
+            r#"{"devices":[{"id":"active","name":"USB camera","runningSomewhere":true},{"id":"unknown","name":"Other camera"}]}"#,
+        ] {
+            let snapshot = camera_snapshot(document);
+            assert_eq!(snapshot.accesses.len(), 1);
+            assert_eq!(snapshot.accesses[0].key, "macos:camera:active");
+            assert_eq!(
+                snapshot.accesses[0].enforcement,
+                EnforcementDecision::Unknown
+            );
+            assert_eq!(snapshot.observation_gaps, vec![Resource::Camera]);
+            assert_eq!(snapshot.collectors[0].state, CollectorState::Degraded);
+        }
+    }
+
+    #[test]
+    fn camera_inventory_accepts_unknown_activity_without_observing_it() {
+        let observation: Observation = serde_json::from_str(
+            r#"{"video":{"devices":[{"id":"camera-1","name":"USB camera"}]},"microphones":[]}"#,
+        )
+        .unwrap();
+        assert!(validate_observation("devices", &observation).is_ok());
+        let camera = &observation.video.as_ref().unwrap().devices[0];
+        assert_eq!(camera.id, "camera-1");
+        assert_eq!(camera.running_somewhere, None);
     }
 
     #[test]
@@ -920,7 +996,7 @@ mod tests {
         );
         assert!(
             serde_json::from_str::<Observation>(
-                r#"{"video":{"devices":[{"id":"c","name":"cam"}],"interactive":true}}"#
+                r#"{"video":{"devices":[{"id":"c","name":"cam","runningSomewhere":"false"}]}}"#
             )
             .is_err()
         );

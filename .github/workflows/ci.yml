@@ -73,7 +73,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y pkg-config libpipewire-0.3-dev libspa-0.2-dev libclang-dev pipewire pipewire-bin gnupg dbus-x11 xvfb openbox xfce4-panel xfconf xfce4-notifyd libnotify-bin x11-utils xdotool imagemagick pulseaudio gnome-session-canberra libcanberra-pulse sound-theme-freedesktop
+          sudo apt-get install -y pkg-config libpipewire-0.3-dev libspa-0.2-dev libclang-dev pipewire pipewire-bin gnupg dbus-x11 xvfb openbox xfce4-panel xfconf xfce4-notifyd libnotify-bin x11-utils xdotool imagemagick pulseaudio gnome-session-canberra libcanberra-pulse sound-theme-freedesktop zsh fish strace
           pkg-config --modversion libpipewire-0.3
           pw-dump --version
       - name: Verify native architecture and minimum macOS version
@@ -94,16 +94,20 @@ jobs:
           fi
           python3 -c 'import json, os, subprocess; v=json.loads(subprocess.check_output(["cargo","metadata","--no-deps","--format-version","1"]))["packages"][0]["version"]; assert os.environ["RELEASE_PACKAGES"] != "true" or os.environ["GITHUB_REF_TYPE"] != "tag" or os.environ["GITHUB_REF_NAME"] == "v" + v'
       - run: cargo fmt --check
-      - run: cargo clippy --all-targets --locked -- -D warnings
-      - run: cargo test --all-targets --locked
-      - run: cargo build --locked
-      - run: cargo build --release --locked
+      - run: cargo clippy --all-targets --locked ${{ matrix.platform == 'linux' && '--features linux-camera-helper' || '' }} -- -D warnings
+      - run: cargo test --all-targets --locked ${{ matrix.platform == 'linux' && '--features linux-camera-helper' || '' }}
+      - run: cargo build --locked ${{ matrix.platform == 'linux' && '--features linux-camera-helper' || '' }}
+      - run: cargo build --release --locked ${{ matrix.platform == 'linux' && '--features linux-camera-helper' || '' }}
       - name: Extract package and prepare disposable native smoke
         shell: bash
         env:
           PACKAGE: miccamwatch-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz
         run: |
-          tar -czf "$PACKAGE" -C target/release mcw -C "$GITHUB_WORKSPACE" README.md LICENSE
+          if [ "$RUNNER_OS" = Linux ]; then
+            tar -czf "$PACKAGE" -C target/release mcw mcw-camera-helper -C "$GITHUB_WORKSPACE/installer" install-camera-helper.sh com.roman-cuisset.miccamwatch.camera.policy -C "$GITHUB_WORKSPACE" README.md LICENSE
+          else
+            tar -czf "$PACKAGE" -C target/release mcw -C "$GITHUB_WORKSPACE" README.md LICENSE
+          fi
           mkdir -p "$RUNNER_TEMP/native-proof/package"
           tar -xzf "$PACKAGE" -C "$RUNNER_TEMP/native-proof/package"
           echo "MCW_RELEASE_BINARY=$RUNNER_TEMP/native-proof/package/mcw" >> "$GITHUB_ENV"
@@ -223,6 +227,12 @@ jobs:
                   for command in ("camera", "autostart", "lock-policy"):
                       record(command + "-direct-help-" + language, [binary, "--lang", language, command, "--help"])
               if linux:
+                  helper = pathlib.Path(binary).with_name("mcw-camera-helper")
+                  protocol = json.loads(record("camera-helper-protocol", [str(helper), "--protocol-version"]).stdout)
+                  assert protocol == {"protocol": 1, "version": version}, protocol
+                  # Packaging pairs the helper, but does not authorize/install it or mutate devices.
+                  for asset in ("install-camera-helper.sh", "com.roman-cuisset.miccamwatch.camera.policy"):
+                      assert pathlib.Path(binary).with_name(asset).is_file(), asset
                   record("display", ["xdpyinfo"])
                   # dbus-run-session starts before Xvfb/Python set the disposable
                   # desktop environment. Update only this private bus, not systemd.
@@ -531,6 +541,63 @@ jobs:
               pathlib.Path(os.environ["RUNNER_TEMP"], "native-chime").unlink(missing_ok=True)
               shutil.rmtree(home)
           PY
+      - name: Exercise genuine Linux user payload and explicit root boundary
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          python3 -B installer/tests/native_camera.py \
+            --source-file "$GITHUB_WORKSPACE/installer/install.sh" \
+            --archive "$GITHUB_WORKSPACE/miccamwatch-linux-x86_64.tar.gz" \
+            --root-installer "$RUNNER_TEMP/native-proof/package/install-camera-helper.sh" \
+            --version v0.16.0 \
+            --proof "$RUNNER_TEMP/native-proof/linux-camera"
+      - name: Record separate read-only macOS system and MCW camera inventories
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          python3 -B - <<'PY'
+          import json, os, pathlib, platform, subprocess, tempfile
+          proof = pathlib.Path(os.environ["RUNNER_TEMP"]) / "native-proof/macos-camera"
+          proof.mkdir(parents=True, exist_ok=True)
+          binary = os.environ["MCW_RELEASE_BINARY"]
+          def record(name, args, env=None, codes=(0,)):
+              result = subprocess.run(args, env=env, capture_output=True, timeout=120)
+              (proof / (name + ".json")).write_bytes(result.stdout)
+              (proof / (name + ".stderr")).write_bytes(result.stderr)
+              (proof / (name + ".exit")).write_text(str(result.returncode) + "\n")
+              assert result.returncode in codes, (name, result.returncode, result.stderr)
+              return json.loads(result.stdout)
+          (proof / "scope.txt").write_text(
+              "Read-only system_profiler SPCameraDataType JSON and separately reported MCW devices/status JSON. "
+              "Extracted release MCW executes its actual embedded revised Swift/CoreMediaIO helper. "
+              "System camera presence and MCW discovery are independent inventories; empty or differing lists "
+              "are not a physical activity-transition test. No capture session, camera/microphone permission "
+              "request, media recording, TCC reset, configuration profile or device mutation. Hosted macOS 15 "
+              "ARM/Intel cannot prove @godsheep's MacBook Pro Apple Silicon/macOS 27/Telegram START/STOP parity.\n")
+          host = dict(os=platform.platform(), arch=platform.machine(),
+                      macos=subprocess.check_output(["sw_vers", "-productVersion"], text=True).strip(),
+                      sdk=subprocess.check_output(["xcrun", "--show-sdk-version"], text=True).strip(),
+                      mcw=subprocess.check_output([binary, "--version"], text=True).strip())
+          (proof / "host.json").write_text(json.dumps(host, indent=2) + "\n")
+          system = record("system-profiler-cameras", ["/usr/sbin/system_profiler", "SPCameraDataType", "-json"])
+          assert isinstance(system.get("SPCameraDataType"), list), system
+          with tempfile.TemporaryDirectory(prefix="mcw-macos-inventory-", dir=os.environ["RUNNER_TEMP"]) as temporary:
+              home = pathlib.Path(temporary)
+              env = dict(os.environ, HOME=str(home), XDG_CONFIG_HOME=str(home / "config"),
+                         XDG_STATE_HOME=str(home / "state"), XDG_DATA_HOME=str(home / "data"),
+                         TMPDIR=str(home) + "/")
+              status = record("mcw-status", [binary, "status", "--json"], env=env, codes=(0, 1, 2))
+              devices = record("mcw-devices", [binary, "devices", "--json"], env=env)
+              assert isinstance(devices, list), devices
+              cameras = [row for row in devices if row["resource"] == "camera"]
+              collector = next(row for row in status["collectors"] if row["collector"] == "coremediaio_video")
+              summary = dict(system_camera_count=len(system["SPCameraDataType"]), mcw_camera_count=len(cameras),
+                             system_cameras_present=bool(system["SPCameraDataType"]),
+                             mcw_cameras_present=bool(cameras), camera_collector=collector,
+                             physical_activity_transition_proven=False, macos27_friend_hardware_parity_proven=False)
+              (proof / "inventory-scope.json").write_text(json.dumps(summary, indent=2) + "\n")
+              assert collector["state"] in ("healthy", "degraded"), status
+          PY
       - name: Exercise native Linux desktop and extracted package
         if: runner.os == 'Linux'
         shell: bash
@@ -539,6 +606,16 @@ jobs:
         if: runner.os == 'macOS'
         shell: bash
         run: python3 "$RUNNER_TEMP/native-smoke.py"
+      - name: Remove temporary native smoke programs even on failure
+        if: always()
+        shell: bash
+        run: |
+          python3 -B - <<'PY'
+          import os, pathlib
+          root = pathlib.Path(os.environ["RUNNER_TEMP"])
+          for name in ("native-smoke.py", "native-chime", "native-chime.rs"):
+              (root / name).unlink(missing_ok=True)
+          PY
       - name: Upload native output and visual evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
