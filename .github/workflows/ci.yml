@@ -371,7 +371,7 @@ jobs:
                   journal = record("native-journal", ["sudo", "journalctl", "--no-pager", "--output=json",
                                    "_PID=" + str(watch.pid), "SYSLOG_IDENTIFIER=miccamwatch"])
                   journal_events = [json.loads(line) for line in journal.stdout.splitlines()]
-                  assert any(json.loads(row["MESSAGE"]).get("event_id") == 1001 for row in journal_events), (
+                  assert any(json.loads(row["MESSAGE"]).get("event_code") == 1001 for row in journal_events), (
                       "Native mcw START event was not accepted by the system journal", journal.stdout)
                   record("native-notification-screenshot", ["import", "-window", "root", str(proof / "notification.png")])
                   before = (proof / "watch.log").stat().st_size
