@@ -88,6 +88,8 @@ jobs:
           if [ "$RUNNER_OS" = macOS ]; then
             version=$(sw_vers -productVersion)
             echo "macOS runtime: $version"
+            echo "macOS SDK: $(xcrun --show-sdk-version)"
+            swiftc --version
             test "${version%%.*}" -ge 15
           fi
           python3 -c 'import json, os, subprocess; v=json.loads(subprocess.check_output(["cargo","metadata","--no-deps","--format-version","1"]))["packages"][0]["version"]; assert os.environ["RELEASE_PACKAGES"] != "true" or os.environ["GITHUB_REF_TYPE"] != "tag" or os.environ["GITHUB_REF_NAME"] == "v" + v'
