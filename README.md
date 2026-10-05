@@ -292,7 +292,7 @@ On Linux, only a **running PipeWire capture stream with an active source link an
 
 On macOS, camera usage is device-level only: an application name or PID cannot be inferred from AVFoundation's in-use boolean. Camera health stays `degraded` because own-application use and noninteractive TCC/device discovery can be missed; an empty scan is not proof of no use. CI verifies backend commands and honest health reports, **not** physical microphone/camera transitions. No camera/TCC bypass or intrusive probe is attempted. Linux enforcement requires stable pidfd authority; macOS requires retained task/audit-token authority and refuses protected or inaccessible targets. Android needs a separate application.
 
-The [0.15.0 native release dry run](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37270375386)
+The [0.15.0 native release dry run](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37294203599)
 passed Ubuntu 22.04/PipeWire 0.3.48 and macOS 15.7.9 on Apple Silicon and Intel:
 format, Clippy, tests, debug/release builds and extracted-package runtime checks.
 macOS used SDK 15.5 and Swift 6.1.2 in Swift 5 mode, deployment target 15.0.

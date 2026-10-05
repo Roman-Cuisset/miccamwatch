@@ -122,7 +122,7 @@ Sound or Telegram; their input-device attribution remains unknown.
 
 ## Native 0.15.0 verification boundaries
 
-[Release dry run 37270375386](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37270375386)
+[Release dry run 37294203599](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37294203599)
 passed Ubuntu 22.04/PipeWire 0.3.48 (55 tests), macOS 15.7.9 arm64 and Intel
 (45 tests each), native format/Clippy, debug/release builds, extracted packages,
 the SPDX bundle and provenance attestation. Apple helpers used SDK 15.5 and
