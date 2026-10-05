@@ -1,5 +1,6 @@
 import AppKit
 import CoreGraphics
+import CoreFoundation
 import Foundation
 import UserNotifications
 import os
@@ -85,7 +86,11 @@ private final class DesktopDelegate: NSObject, NSApplicationDelegate {
                     if byte == 10 {
                         let decoded = try JSONDecoder().decode(DesktopFrame.self, from: frame)
                         frame.removeAll(keepingCapacity: true)
-                        DispatchQueue.main.async { [weak self] in self?.apply(decoded) }
+                        if decoded.kind == "stop" {
+                            scheduleStop()
+                        } else {
+                            DispatchQueue.main.async { [weak self] in self?.apply(decoded) }
+                        }
                     } else {
                         guard frame.count < 65536 else { throw NSError(domain: "MicCamWatch", code: 1, userInfo: [NSLocalizedDescriptionKey: "desktop frame exceeds limit"]) }
                         frame.append(byte)
@@ -93,14 +98,18 @@ private final class DesktopDelegate: NSObject, NSApplicationDelegate {
                 }
             }
             if !frame.isEmpty { throw NSError(domain: "MicCamWatch", code: 2, userInfo: [NSLocalizedDescriptionKey: "truncated desktop frame"]) }
-            DispatchQueue.main.async { [weak self] in self?.stop() }
+            scheduleStop()
         } catch {
             desktopEmit(DesktopEvent(kind: "error", error: error.localizedDescription))
-            DispatchQueue.main.async { [weak self] in self?.stop() }
+            scheduleStop()
         }
     }
+    private func scheduleStop() {
+        // NSMenu tracking does not service the main dispatch queue.
+        CFRunLoopPerformBlock(CFRunLoopGetMain(), kCFRunLoopCommonModes) { [weak self] in self?.stop() }
+        CFRunLoopWakeUp(CFRunLoopGetMain())
+    }
     private func apply(_ frame: DesktopFrame) {
-        if frame.kind == "stop" { stop(); return }
         guard frame.kind == "state", let summary = frame.summary, let visual = frame.visual,
               ["idle", "ready", "active", "error"].contains(visual), let entries = frame.items,
               entries.count <= 16, summary.utf8.count <= 16384 else {
@@ -174,6 +183,7 @@ private final class DesktopDelegate: NSObject, NSApplicationDelegate {
         guard !stopping else { return }
         stopping = true
         pendingClick?.cancel()
+        menu.cancelTracking()
         if let item = item { NSStatusBar.system.removeStatusItem(item) }
         item = nil
         desktopEmit(DesktopEvent(kind: "stopped"))
