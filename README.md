@@ -281,6 +281,13 @@ For Linux, install stable Rust, `pkg-config`, PipeWire/SPA development headers a
 
 Linux builds a native CLI using the `pw-dump` PipeWire client and `/proc` (no administrator privileges required for the CLI). The Linux host needs an accessible user PipeWire socket (`XDG_RUNTIME_DIR`, optionally `PIPEWIRE_REMOTE`), `pw-dump`, and readable `/proc/<pid>/stat` and `/proc/<pid>/exe` for PID attribution. `mcw status --json`, `mcw devices`, `mcw doctor`, and `mcw watch --json` run on Linux and macOS. `watch --json` emits access-event JSONL and a status document containing `collectors` when health changes; Ctrl+C stops it.
 
+Linux desktop effects require a StatusNotifierItem host, a native notification
+daemon with `notify-send`, and `canberra-gtk-play` with an installed sound theme
+and a backend for the actual sound session. On Ubuntu, the
+[libcanberra-pulse backend](https://packages.ubuntu.com/jammy/libcanberra-pulse)
+uses PulseAudio or PipeWire's PulseAudio server; installing only the GTK player
+does not provide that backend. Playback acceptance is not physical audibility.
+
 On Linux, only a **running PipeWire capture stream with an active source link and a running source node** is marked `active`. A claimed application PID must match the owning Client's server-authenticated `pipewire.sec.pid`, then pass `/proc` start-time and executable validation; forwarded portal/PulseAudio clients without matching identity remain unattributed. A direct V4L2 open FD never proves frame flow; video health is `degraded` when a camera may be accessed outside PipeWire. An inaccessible or restarting PipeWire socket is `unavailable` (`status` exits 2), not an all-clear. `--include-ready` exposes unconfirmed PipeWire streams and direct `/dev/video*` handles as `ready`, never as active.
 
 On macOS, camera usage is device-level only: an application name or PID cannot be inferred from AVFoundation's in-use boolean. Camera health stays `degraded` because own-application use and noninteractive TCC/device discovery can be missed; an empty scan is not proof of no use. CI verifies backend commands and honest health reports, **not** physical microphone/camera transitions. No camera/TCC bypass or intrusive probe is attempted. Linux enforcement requires stable pidfd authority; macOS requires retained task/audit-token authority and refuses protected or inaccessible targets. Android needs a separate application.
