@@ -13,6 +13,12 @@ The release workflow writes the certificate only for the duration of each signin
 
 New Windows ZIP/MSI publication is held by default during the Defender investigation. The release workflow requires the repository variable `WINDOWS_RELEASE_APPROVED=true` before building and publishing Windows release assets; ordinary Windows CI still builds, tests and exercises its MSI. Linux/macOS releases can proceed independently. This is a publication hold, not removal of Windows support or authorization to reinstall quarantined bytes.
 
+While this hold is active, the Unix-only release is a **prerelease**, not GitHub's
+stable `latest` release. The approved `v0.15.0` channel requires explicit
+`--version v0.15.0` installation. Stable `v0.14.0` and its existing Windows assets
+remain unchanged, so legacy Windows installers/updaters querying
+`/releases/latest` are not redirected to a release without Windows packages.
+
 Signing is a separate choice. If Windows publication is explicitly approved and the certificate secret is absent, the artifacts are unsigned; the workflow does not create a test certificate or claim publisher identity. SHA-256 checksums, GitHub artifact attestations, and the SPDX SBOM remain available, but they are not substitutes for Authenticode publisher verification or an antivirus verdict.
 
 ## Local verification

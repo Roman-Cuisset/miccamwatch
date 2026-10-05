@@ -234,7 +234,10 @@ pub fn play_chime() -> Result<()> {
         use std::process::{Command, Stdio};
         use std::time::{Duration, Instant};
         let mut child = Command::new("canberra-gtk-play")
-            .args(["--id=message-new-instant", "--property=application.name=miccamwatch"])
+            .args([
+                "--id=message-new-instant",
+                "--property=application.name=miccamwatch",
+            ])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::inherit())
