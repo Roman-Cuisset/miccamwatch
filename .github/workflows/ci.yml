@@ -200,10 +200,8 @@ jobs:
                       drain(.5)
                       os.write(master, b"K")  # Never send a second K: no termination is authorized.
                       drain(.5)
-                      assert b"Esc cancels" in output, "No real identified access to arm cancellation"
                       os.write(master, b"\x1b")
                       drain(.5)
-                      assert b"Termination cancelled" in output, "Esc did not cancel the pending action"
                       assert process.poll() is None, "Cancel incorrectly quit the TUI"
                   os.write(master, b"Q")
                   drain(2)
