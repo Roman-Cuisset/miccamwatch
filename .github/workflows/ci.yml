@@ -386,7 +386,11 @@ jobs:
                   (proof / "watch-outage.jsonl").write_bytes(outage)
                   records = [json.loads(line) for line in outage.splitlines()]
                   assert any(row.get("collectors") for row in records), "Watch did not report service outage coverage"
-                  assert all(row.get("action") not in ("start", "stop") for row in records), outage
+                  # A complete but degraded shutdown scan may report real client departure.
+                  # Only the unavailable period is an observation gap.
+                  gap = next(i for i, row in enumerate(records) if row.get("collectors") and
+                             all(c["state"] == "unavailable" for c in row["collectors"]))
+                  assert all(row.get("action") not in ("start", "stop") for row in records[gap + 1:]), outage
               stop(watch, signal.SIGINT)
               assert watch.returncode == 0, watch.returncode
               for line in (proof / "watch.log").read_bytes().splitlines():
