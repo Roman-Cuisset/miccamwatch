@@ -58,6 +58,7 @@ private final class DesktopDelegate: NSObject, NSApplicationDelegate {
     private var item: NSStatusItem?
     private var menu = NSMenu()
     private var stopping = false
+    private var initialized = false
     private var pendingClick: DispatchWorkItem?
     func applicationDidFinishLaunching(_ notification: Notification) {
         desktopDiagnostic("didFinishLaunching policy=\(desktopPolicyName(NSApp.activationPolicy()))")
@@ -73,9 +74,7 @@ private final class DesktopDelegate: NSObject, NSApplicationDelegate {
         button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         button.toolTip = "MicCamWatch"
         button.image = icon("error")
-        menu.addItem(withTitle: "MicCamWatch", action: nil, keyEquivalent: "")
         desktopDiagnostic("statusItem registered visible=\(item.isVisible) buttonWindow=\(button.window != nil)")
-        desktopEmit(DesktopEvent(kind: "ready", protocol: 1))
         DispatchQueue.global(qos: .utility).async { [weak self] in self?.readFrames() }
     }
     private func readFrames() {
@@ -106,7 +105,7 @@ private final class DesktopDelegate: NSObject, NSApplicationDelegate {
     }
     private func scheduleStop() {
         // NSMenu tracking does not service the main dispatch queue.
-        CFRunLoopPerformBlock(CFRunLoopGetMain(), kCFRunLoopCommonModes) { [weak self] in self?.stop() }
+        RunLoop.main.perform(inModes: [.common]) { [weak self] in self?.stop() }
         CFRunLoopWakeUp(CFRunLoopGetMain())
     }
     private func apply(_ frame: DesktopFrame) {
@@ -130,6 +129,10 @@ private final class DesktopDelegate: NSObject, NSApplicationDelegate {
             menu.addItem(row)
         }
         menu.autoenablesItems = false
+        if !initialized {
+            initialized = true
+            desktopEmit(DesktopEvent(kind: "ready", protocol: 1))
+        }
     }
     private func icon(_ visual: String) -> NSImage {
         let image = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { rect in
@@ -157,6 +160,7 @@ private final class DesktopDelegate: NSObject, NSApplicationDelegate {
         return image
     }
     @objc private func clicked(_ sender: Any?) {
+        guard initialized, !stopping else { return }
         pendingClick?.cancel()
         pendingClick = nil
         if NSApp.currentEvent?.clickCount == 2 {

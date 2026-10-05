@@ -1100,6 +1100,9 @@ impl DesktopHost {
                             .send(action)
                             .context("tray action receiver closed")?;
                     } else {
+                        if event.kind == "ready" && event.protocol == Some(1) {
+                            readiness.store(true, Ordering::Release);
+                        }
                         if event.kind == "error" || event.kind == "stopped" {
                             readiness.store(false, Ordering::Release);
                         }
@@ -1121,6 +1124,7 @@ impl DesktopHost {
             events,
             ready,
         };
+        host.update(view)?;
         match host
             .events
             .recv_timeout(Duration::from_secs(15))
@@ -1130,11 +1134,7 @@ impl DesktopHost {
                 kind,
                 protocol: Some(1),
                 ..
-            } if kind == "ready" => {
-                host.update(view)?;
-                host.ready.store(true, Ordering::Release);
-                Ok(host)
-            }
+            } if kind == "ready" => Ok(host),
             event => bail!(
                 "AppKit status registration failed: {}",
                 event.error.unwrap_or(event.kind)

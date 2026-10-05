@@ -438,9 +438,9 @@ jobs:
           let bounds = CGDisplayBounds(CGMainDisplayID())
           // Verified native status-item position on both disposable runner desktops.
           let point = CGPoint(x: bounds.maxX - 231, y: bounds.minY + 12)
-          for kind in [CGEventType.leftMouseDown, CGEventType.leftMouseUp] {
+          for kind in [CGEventType.rightMouseDown, CGEventType.rightMouseUp] {
               guard let event = CGEvent(mouseEventSource: nil, mouseType: kind,
-                                        mouseCursorPosition: point, mouseButton: .left) else { exit(3) }
+                                        mouseCursorPosition: point, mouseButton: .right) else { exit(3) }
               event.post(tap: .cghidEventTap)
               Thread.sleep(forTimeInterval: 0.1)
           }
