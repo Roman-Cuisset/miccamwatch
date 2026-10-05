@@ -187,9 +187,12 @@ jobs:
         with:
           fail_on_unmatched_files: true
           generate_release_notes: true
+          prerelease: ${{ vars.WINDOWS_RELEASE_APPROVED != 'true' }}
+          make_latest: ${{ vars.WINDOWS_RELEASE_APPROVED == 'true' }}
           body: |
             ## Scoped native privacy tools and coordinated Windows updates
             - Windows remains supported and is validated by CI. New Windows ZIP/MSI publication is held unless the repository variable WINDOWS_RELEASE_APPROVED is explicitly set to true. This gate is independent of signing: a configured certificate signs and verifies both EXEs and MSI; absent a certificate they are unsigned. Neither signing, tests nor provenance is antivirus clearance. Quarantined executables are not restored or automatically reinstalled.
+            - While Windows publication is held, this is an explicitly selected Unix prerelease, not the latest stable release. Install with the public installer and --version v0.15.0; v0.14.0 remains the stable latest channel for existing Windows installers/updaters.
             - Linux x64: PipeWire graph capture with authenticated client PID and /proc identity, conservative V4L2 readiness, session-only PipeWire source mute, real StatusNotifier tray, native desktop notifications/sound/journal delivery, managed desktop autostart, profiles/history, shared TUI, and ownership-checked user-prefix updates. Linux camera blocking is unavailable; supported session-lock actions require usable local graphical logind evidence.
             - macOS 15+ Apple Silicon and Intel: CoreAudio input activity, writable INPUT mute only, native AppKit menu bar, notifications/sound/unified log, managed LaunchAgent autostart, profiles/history, shared TUI, and ownership-checked user-prefix updates. Camera blocking is a manually reviewed/approved Restrictions profile, not a silent camera or TCC switch. Public screen-lock state remains Unknown; no automatic macOS lock enforcement is claimed.
             - macOS camera evidence is passive AVFoundation discovery only: client PID is null, application is unknown, enforcement is Unknown and coverage is degraded. No capture session or camera/microphone permission request is made to improve runner coverage.

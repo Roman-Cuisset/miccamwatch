@@ -440,7 +440,7 @@ jobs:
                   finally:
                       subprocess.run([binary, "tray", "stop"], capture_output=True, timeout=15)
                       record("autostart-disable", [binary, "autostart", "disable"])
-                  record("autostart-disabled", [binary, "autostart", "status"])
+                  assert record("autostart-disabled", [binary, "autostart", "status"], (1,)).stdout.strip() == b"disabled"
                   assert not entry.exists(), "Owned desktop registration remained after disable"
                   unmanaged = b"[Desktop Entry]\nType=Application\nName=Unmanaged fixture\nExec=/bin/true\n"
                   entry.write_bytes(unmanaged)
@@ -475,7 +475,7 @@ jobs:
                       for directory in set(real_state):
                           if directory.exists():
                               shutil.rmtree(directory)
-                  record("autostart-disabled", [binary, "autostart", "status"])
+                  assert record("autostart-disabled", [binary, "autostart", "status"], (1,)).stdout.strip() == b"disabled"
                   record("launchagent-unloaded", ["launchctl", "print", service], (3, 113))
                   assert not entry.exists(), "Owned LaunchAgent remained after disable"
               (proof / "scope.txt").write_text(

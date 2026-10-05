@@ -551,23 +551,32 @@ impl Session {
                     .add_listener_local()
                     .info(move |info| {
                         let mut state = info_state.borrow_mut();
-                        if let Some(props) = info.props() {
-                            state.verified = props
-                                .get("object.serial")
-                                .and_then(|value| value.parse::<u64>().ok())
-                                == Some(serial)
-                                && matches!(
-                                    props.get("media.class"),
-                                    Some("Audio/Source" | "Audio/Source/Virtual")
-                                );
+                        // Node info events are deltas. A parameter update may carry
+                        // an empty Props dictionary; only PROPS changes replace
+                        // the identity evidence established by the initial event.
+                        if info.change_mask().contains(pw::node::NodeChangeMask::PROPS) {
+                            state.verified = info.props().is_some_and(|props| {
+                                props
+                                    .get("object.serial")
+                                    .and_then(|value| value.parse::<u64>().ok())
+                                    == Some(serial)
+                                    && matches!(
+                                        props.get("media.class"),
+                                        Some("Audio/Source" | "Audio/Source/Virtual")
+                                    )
+                            });
                         }
-                        if let Some(props) = info
-                            .params()
-                            .iter()
-                            .find(|param| param.id() == ParamType::Props)
+                        if info
+                            .change_mask()
+                            .contains(pw::node::NodeChangeMask::PARAMS)
                         {
-                            state.props_writable =
-                                props.flags().contains(ParamInfoFlags::READWRITE);
+                            state.props_writable = info
+                                .params()
+                                .iter()
+                                .find(|param| param.id() == ParamType::Props)
+                                .is_some_and(|props| {
+                                    props.flags().contains(ParamInfoFlags::READWRITE)
+                                });
                         }
                     })
                     .param(move |_seq, id, _index, _next, pod| {
