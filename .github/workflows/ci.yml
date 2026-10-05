@@ -196,6 +196,8 @@ jobs:
                   os.write(master, b"R")
                   drain(2)
                   if cancel:
+                      os.write(master, b"\x1b[B")  # Select the actual owned capture row.
+                      drain(.5)
                       os.write(master, b"K")  # Never send a second K: no termination is authorized.
                       drain(.5)
                       assert b"Esc cancels" in output, "No real identified access to arm cancellation"
@@ -218,6 +220,8 @@ jobs:
               for language in ("en", "fr", "de", "es", "ja", "zh", "ru"):
                   record("help-" + language, [binary, "--lang", language, "--help"])
                   record("camera-help-" + language, [binary, "--lang", language, "help", "camera"])
+                  for command in ("camera", "autostart", "lock-policy"):
+                      record(command + "-direct-help-" + language, [binary, "--lang", language, command, "--help"])
               if linux:
                   record("display", ["xdpyinfo"])
                   # dbus-run-session starts before Xvfb/Python set the disposable

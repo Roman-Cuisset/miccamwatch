@@ -413,6 +413,31 @@ def smoke(script, root, shells, version, binary):
     print("PASS public already-on-PATH: no redundant shell configuration")
 
 
+def cross_version_upgrade(script, root, shells, previous, version, binary):
+    require(previous != version, "cross-version proof requires two distinct public releases")
+    for shell, shell_path in shells.items():
+        sandbox = Sandbox(root, f"public-upgrade-{shell}", shell, shell_path)
+        sandbox.invoke(script, "--add-path", version=previous)
+        sandbox.version(previous)
+        before = sandbox.binary.stat().st_ino, digest(sandbox.binary.read_bytes())
+        configured = {path: path.read_bytes() for path in sandbox.configs}
+        saved = sandbox.saved_user_data()
+        sandbox.invoke(script, "--add-path", version=version)
+        require(sandbox.binary.stat().st_ino != before[0], "cross-version upgrade did not replace the managed inode")
+        require(digest(sandbox.binary.read_bytes()) != before[1], "cross-version upgrade retained the older executable")
+        require(sandbox.binary.read_bytes() == binary, "upgrade differs from the verified new public executable")
+        require({path: path.read_bytes() for path in sandbox.configs} == configured, "upgrade changed or duplicated managed PATH")
+        for path, content in saved.items():
+            require(path.read_bytes() == content, f"upgrade changed user configuration/history: {path}")
+        sandbox.version(version)
+        sandbox.version(version, login=True)
+        sandbox.invoke(script, "--uninstall", "--no-modify-path", version=version)
+        sandbox.removed_path_configs()
+        for path, content in saved.items():
+            require(path.read_bytes() == content, f"post-upgrade uninstall changed user data: {path}")
+        print(f"PASS public {shell}: {previous} -> {version}, new shells and retained PATH/preferences/history")
+
+
 def fixture_curl(arguments):
     """Controlled transport for failure fixtures; unexpected URLs fail closed."""
     plan = json.loads(Path(os.environ["MCW_TEST_CURL_PLAN"]).read_text())
@@ -667,10 +692,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--source-url", required=True, help="public raw.githubusercontent.com commit-pinned installer URL")
     parser.add_argument("--version", default="v0.14.0", help="real public release to install (default: v0.14.0)")
+    parser.add_argument("--upgrade-from", help="older real public release for cross-version upgrade proof")
     parser.add_argument("--mode", choices=("all", "smoke", "fixtures"), default="all")
     args = parser.parse_args()
     require(SOURCE_PATTERN.fullmatch(args.source_url), "source URL must pin a public 40-hex commit, not main/a local file")
     require(re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", args.version), "expected release must be a concrete version")
+    if args.upgrade_from:
+        require(re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", args.upgrade_from), "upgrade source must be a concrete public version")
     require(os.geteuid() != 0, "run native installation verification as a normal user, not root")
     require(platform.system() in ("Linux", "Darwin"), "run verification on a supported native Unix host")
     shells = {shell: shutil.which(shell) for shell in ("bash", "zsh", "fish")}
@@ -685,10 +713,13 @@ def main():
         asset, binary = released_binary(curl, root, args.version)
         if args.mode in ("all", "smoke"):
             smoke(script, root, shells, args.version, binary)
+            if args.upgrade_from:
+                cross_version_upgrade(script, root, shells, args.upgrade_from, args.version, binary)
         if args.mode in ("all", "fixtures"):
             fixtures(script, root, shells, args.version, asset, binary)
     print(f"PASS native installation verification: {platform.system()} {platform.machine()}, {args.version}")
-    print("Evidence covers managed same-release atomic replacement and failed upgrades, not an unavailable older native release.")
+    print("Evidence includes real cross-version upgrade." if args.upgrade_from else
+          "Evidence covers managed same-release atomic replacement and failed upgrades, not cross-version upgrade.")
     return 0
 
 

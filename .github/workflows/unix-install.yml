@@ -12,6 +12,16 @@ on:
       - installer/tests/native_install.py
       - .github/workflows/unix-install.yml
   workflow_dispatch:
+    inputs:
+      version:
+        description: Public release to install
+        default: v0.14.0
+        required: true
+        type: string
+      upgrade-from:
+        description: Older public release for cross-version proof
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -30,6 +40,8 @@ jobs:
       # public head commit, including the head repository for forked PRs.
       SOURCE_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
       SOURCE_REF: ${{ github.event.pull_request.head.sha || github.sha }}
+      RELEASE_VERSION: ${{ inputs.version || 'v0.14.0' }}
+      UPGRADE_FROM: ${{ inputs.upgrade-from || '' }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -42,6 +54,8 @@ jobs:
           set -eu
           if [ "$RUNNER_OS" = Linux ]; then
             missing=""
+            sudo apt-get update
+            sudo apt-get install --no-install-recommends -y pipewire pipewire-bin
             for shell in bash zsh fish; do
               if ! command -v "$shell" >/dev/null 2>&1; then
                 missing="$missing $shell"
@@ -64,7 +78,7 @@ jobs:
             command -v "$shell"
           done
           python3 --version
-      - name: Verify public commit-pinned installer and released v0.14.0
+      - name: Verify public commit-pinned installer and selected release
         shell: bash
         run: |
           set -eu
@@ -72,4 +86,5 @@ jobs:
           printf 'Public source: %s\n' "$source_url"
           python3 installer/tests/native_install.py \
             --source-url "$source_url" \
-            --version v0.14.0
+            --version "$RELEASE_VERSION" \
+            --upgrade-from "$UPGRADE_FROM"
