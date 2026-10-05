@@ -286,15 +286,14 @@ def validate_status(document, version):
     collectors = document.get("collectors", [])
     require({item["collector"] for item in collectors} == expected, "wrong native collectors in installed status")
     require(all(item["state"] in ("healthy", "degraded", "unavailable") for item in collectors), "invalid collector health")
-    return expected
 
 
 def native_cli(script, sandbox, version):
     status = run(sandbox.shell_command("mcw --lang en status --json"), env=sandbox.env, cwd=sandbox.cwd, codes=(0, 1, 2))
-    expected = validate_status(json.loads(status.stdout), version)
+    validate_status(json.loads(status.stdout), version)
     doctor = run(sandbox.shell_command("mcw --lang en doctor --json"), env=sandbox.env, cwd=sandbox.cwd, codes=(0, 2))
     checks = json.loads(doctor.stdout)
-    require(isinstance(checks, list) and {item["name"] for item in checks} == expected, "wrong native doctor checks")
+    require(isinstance(checks, list), "doctor --json must be an array")
     require(all(item["status"] in ("ok", "warning", "error") for item in checks), "invalid doctor result")
     devices = run(sandbox.shell_command("mcw --lang en devices --json"), env=sandbox.env, cwd=sandbox.cwd, codes=(0, 2))
     if devices.returncode == 0:

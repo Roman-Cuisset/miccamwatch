@@ -120,9 +120,9 @@ CoreAudio [`AudioHardwareProcess.devices`](https://developer.apple.com/documenta
 describes output devices. It is not evidence identifying the microphone used by
 Sound or Telegram; their input-device attribution remains unknown.
 
-## Native 0.15.0 verification boundaries
+## Native 0.15.1 verification boundaries
 
-[Release dry run 37294203599](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37294203599)
+[Release dry run 37299191864](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37299191864)
 passed Ubuntu 22.04/PipeWire 0.3.48 (55 tests), macOS 15.7.9 arm64 and Intel
 (45 tests each), native format/Clippy, debug/release builds, extracted packages,
 the SPDX bundle and provenance attestation. Apple helpers used SDK 15.5 and
@@ -140,7 +140,7 @@ Both macOS architectures registered visible AppKit status items in real Aqua
 sessions, removed them on owned stop, accepted native NSSound playback and
 bootstrapped/disabled the actual owned LaunchAgent in its login environment.
 This does not establish notification permission or physical capture controls.
-Windows [CI 37267498847](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37267498847)
+Windows [CI 37299189617](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37299189617)
 passed 99 tests, dependency audit and the native per-user MSI install/uninstall
 smoke. Source validation does not lift the Windows publication hold.
 
