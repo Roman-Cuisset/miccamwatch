@@ -149,6 +149,13 @@ False→True→False mute, preservation of a pre-muted source, selected-row K/Es
 cancellation, and human STOPPED explicitly labeled retained last observation.
 No physical source or camera permission was added to that host.
 
+The AppKit protocol acknowledges readiness only after applying the first complete
+menu state. Its stdin reader uses POSIX `read`, which accepts currently available
+pipe bytes instead of waiting for a full 4096-byte Foundation read. Shutdown is
+scheduled in common main-run-loop modes, wakes that loop and cancels menu tracking
+before removing the status item. Native popup-open/owned-stop smoke exercises
+this lifecycle, including the formerly blocked small bootstrap/stop frames.
+
 Not exercised: the reported MacBook M1 Pro/macOS 27, physical Linux/macOS
 capture transitions and input mute, approved camera-profile effectiveness,
 real lock/unlock actions, macOS notification authorization or physical speakers.
