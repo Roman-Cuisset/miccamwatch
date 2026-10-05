@@ -119,3 +119,39 @@ a suspended PipeWire node must not be advertised as that operation.
 CoreAudio [`AudioHardwareProcess.devices`](https://developer.apple.com/documentation/coreaudio/audiohardwareprocess)
 describes output devices. It is not evidence identifying the microphone used by
 Sound or Telegram; their input-device attribution remains unknown.
+
+## Native 0.15.0 verification boundaries
+
+[Release dry run 37270375386](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37270375386)
+passed Ubuntu 22.04/PipeWire 0.3.48 (55 tests), macOS 15.7.9 arm64 and Intel
+(45 tests each), native format/Clippy, debug/release builds, extracted packages,
+the SPDX bundle and provenance attestation. Apple helpers used SDK 15.5 and
+Swift 6.1.2 in Swift 5 mode with deployment target 15.0.
+
+Linux proof includes an authenticated virtual capture PID, independent mute
+readback and owned restoration, preservation of an already-muted source, actual
+PTY cancellation, a visible XFCE StatusNotifierItem and notification, real
+schema-3 START delivery to journald, and no fabricated START/STOP during a real
+PipeWire outage. The owned desktop entry starts and stops the actual tray.
+The native sound API accepted playback through a private PulseAudio null sink;
+that is not physical audibility. Screenshots were visually reviewed.
+
+Both macOS architectures registered visible AppKit status items in real Aqua
+sessions, removed them on owned stop, accepted native NSSound playback and
+bootstrapped/disabled the actual owned LaunchAgent in its login environment.
+This does not establish notification permission or physical capture controls.
+Windows [CI 37267498847](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37267498847)
+passed 99 tests, dependency audit and the native per-user MSI install/uninstall
+smoke. Source validation does not lift the Windows publication hold.
+
+The real `serveur-asus` PipeWire 1.0.5 session also passed virtual capture,
+False→True→False mute, preservation of a pre-muted source, selected-row K/Esc/Q
+cancellation, and human STOPPED explicitly labeled retained last observation.
+No physical source or camera permission was added to that host.
+
+Not exercised: the reported MacBook M1 Pro/macOS 27, physical Linux/macOS
+capture transitions and input mute, approved camera-profile effectiveness,
+real lock/unlock actions, macOS notification authorization or physical speakers.
+There is no configured Mac SSH target or self-hosted runner providing that
+hardware/session. These are explicit evidence limits, not full hardware parity.
+

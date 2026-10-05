@@ -292,7 +292,24 @@ On Linux, only a **running PipeWire capture stream with an active source link an
 
 On macOS, camera usage is device-level only: an application name or PID cannot be inferred from AVFoundation's in-use boolean. Camera health stays `degraded` because own-application use and noninteractive TCC/device discovery can be missed; an empty scan is not proof of no use. CI verifies backend commands and honest health reports, **not** physical microphone/camera transitions. No camera/TCC bypass or intrusive probe is attempted. Linux enforcement requires stable pidfd authority; macOS requires retained task/audit-token authority and refuses protected or inaccessible targets. Android needs a separate application.
 
-Native CI passed on Windows, Ubuntu and macOS arm64 (macOS 26.6.2, deployment target 15.0): format, Clippy, tests, builds and CLI smoke; Windows also passed dependency audit and MSI smoke. See [verified run](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/36677827660). On `serveur-asus` (PipeWire 1.0.5), a temporary virtual `Audio/Source` plus `pw-record` proved idle → active → stopped, authenticated recorder PID and `watch` START/STOP. This was real PipeWire flow, **not a physical microphone test**. The camera inventory listed `/dev/video0` and `/dev/video1`, but opening `/dev/video0` was denied to the SSH user; physical Linux/macOS capture transitions remain unverified. See [Architecture](docs/ARCHITECTURE.md).
+The [0.15.0 native release dry run](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37270375386)
+passed Ubuntu 22.04/PipeWire 0.3.48 and macOS 15.7.9 on Apple Silicon and Intel:
+format, Clippy, tests, debug/release builds and extracted-package runtime checks.
+macOS used SDK 15.5 and Swift 6.1.2 in Swift 5 mode, deployment target 15.0.
+The smoke exercised real desktop icons, owned start/stop and autostart,
+seven-language help, Linux native notifications/journal delivery and session mute,
+and native chime acceptance. Windows [CI](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37267498847)
+passed 99 tests, dependency audit and per-user MSI smoke; its publication remains held.
+
+On `serveur-asus` (PipeWire 1.0.5), a disposable virtual `Audio/Source` and
+authenticated `pw-cat` PID proved active capture, mute/unmute readback,
+preservation of an already-muted source, TUI K/Esc/Q cancellation and human
+START/STOPPED with retained-last-observation labeling. This was real session
+flow, **not physical microphone or global access-blocking proof**. The SSH user
+has no physical microphone source and cannot open `/dev/video0`; permissions
+were not changed. MacBook M1 Pro/macOS 27, physical Linux/macOS capture and
+mute/profile effects, real lock transitions, macOS notification authorization
+and speaker audibility remain unverified. See [Architecture](docs/ARCHITECTURE.md).
 
 ## Privacy
 

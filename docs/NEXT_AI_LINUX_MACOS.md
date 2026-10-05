@@ -34,3 +34,42 @@ Les backends Linux/macOS de la PR #1 sont intégrés à `main`. [La répétition
 - Modifications ciblées du backend et du watcher macOS, tests comportementaux pertinents ; Windows et Linux sans régression. Exécuter formatage, Clippy, tests, build et scénarios CLI sur chaque OS accessible ; distinguer compilation croisée, CI réelle et essai matériel.
 - Mettre à jour README et `docs/ARCHITECTURE.md` avec une matrice par OS **et par ressource** : `Active`, `Ready`, PID, santé, permissions, notifications, tray et limites de version. Ne pas présenter le support macOS ou Linux matériel comme validé sans les observations correspondantes.
 - Rapport final : commandes et résultats observés, SDK et version macOS, modèle des appareils, transitions réellement constatées, refus TCC, couverture CI, limites et prérequis restants. Ne pas publier de binaire macOS sur la seule base d'un build. Android reste hors périmètre ; `mcw update` reste désactivé sur Unix, où les archives natives s'installent manuellement après vérification de `SHA256SUMS`.
+
+## Preuves et décisions de portée retenues pour 0.15.0
+
+- Portées explicitement approuvées : Linux mute/restauration des sources de
+  session PipeWire, sans déni global ALSA/V4L2 ; macOS mute INPUT uniquement
+  lorsqu'il est inscriptible et profil caméra possédé approuvé manuellement.
+  Aucune promesse de blocage universel du micro macOS. Observation du
+  verrouillage macOS par API publiques seulement : Unknown, enable refusé.
+- Canal de publication approuvé : `v0.15.0` Unix en prerelease, jamais stable
+  latest sans Windows. Installer avec `--version v0.15.0` ; `v0.14.0`, ses
+  artefacts Windows et les consommateurs `/releases/latest` restent préservés.
+  Publication/installation Windows nouvelle retenue ; aucun contournement
+  Defender, rétablissement de quarantaine, certificat fictif ou verdict AV.
+- [Dry run natif 37270375386](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37270375386)
+  réussi : Ubuntu 22.04/PipeWire 0.3.48, macOS 15.7.9 ARM/Intel, SDK 15.5,
+  Swift 6.1.2 en mode Swift 5, cible 15.0 ; format/Clippy/tests/builds,
+  CLI extraite, sept langues et aides directes, TUI, vrais tray/menu bar,
+  autostart possédé, son accepté par API, bundle SPDX et provenance.
+  Linux : notification visible et START schema-3 livré à journald ; panne
+  PipeWire réelle sans faux START/STOP. macOS : vrai NSSound et LaunchAgent.
+- [CI Windows 37267498847](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37267498847) :
+  99 tests, audit et MSI natif per-user install/uninstall réussis en runner.
+  Sur le poste Windows, capture C270 temporaire observée hors ktalk :
+  121 frames jetées, Camera Active, PID inconnu conservé, START/STOP ;
+  aucune conservation média. Mise à jour du PE CLI mappé : deux renames
+  récupérables avec bref trou de pathname, tray remplacé atomiquement.
+- `serveur-asus` réel, PipeWire 1.0.5 : PID Client authentifié, source virtuelle
+  active, mute False→True→False confirmé indépendamment, source prémutée
+  préservée, sélection TUI puis K/Esc/Q sans terminaison, STOPPED humain
+  explicitement « dernière observation ». Fixtures et processus possédés retirés.
+- Limites non revendiquées : MacBook M1 Pro/macOS 27 sans accès distant ni
+  runner configuré ; capture physique Linux/macOS, effet matériel du mute
+  INPUT/profil caméra, transitions lock/unlock, autorisation notification
+  macOS et audibilité des haut-parleurs. Les runners sans matériel ne
+  prouvent pas ces scénarios. L'attribution INPUT Sound/Telegram reste
+  inconnue : les devices OUTPUT CoreAudio ne la prouvent pas.
+- Les modifications utilisateur du TUI et de ce handoff sont préservées ;
+  `WATCHDOG.yml` n'est pas inclus dans les commits de cette livraison.
+
