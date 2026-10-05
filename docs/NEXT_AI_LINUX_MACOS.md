@@ -72,4 +72,12 @@ Les backends Linux/macOS de la PR #1 sont intégrés à `main`. [La répétition
   inconnue : les devices OUTPUT CoreAudio ne la prouvent pas.
 - Les modifications utilisateur du TUI et de ce handoff sont préservées ;
   `WATCHDOG.yml` n'est pas inclus dans les commits de cette livraison.
+### Canal final approuvé : v0.15.1
+
+Le tag nouveau `v0.15.0` reste immuable et non publié. Son smoke associait
+incorrectement un scan complet dégradé de shutdown à une période indisponible.
+Le test distingue maintenant cette frontière, conformément aux invariants
+ci-dessus ; aucun changement de production n'est masqué. L'utilisateur a choisi
+la nouvelle prerelease Unix `v0.15.1` (`--version v0.15.1`) plutôt que déplacer
+le tag. Stable/latest `v0.14.0` et les anciens artefacts restent inchangés.
 

@@ -30,7 +30,7 @@ Installer staging and locks live under the install prefix or configuration
 directory; a live macOS watcher's extracted helper in `TMPDIR` is not an
 installer download leak.
 
-The public `v0.14.0` Unix archives contain the monitoring CLI. The `0.15.0`
+The public `v0.14.0` Unix archives contain the monitoring CLI. The `0.15.1`
 source adds native desktop frontends and scoped controls; installing it never
 implicitly enables autostart, changes devices, or approves a macOS profile.
 
@@ -83,7 +83,7 @@ CLI, TUI, and tray may format, filter, and initiate explicit user controls. They
 ## Functional parity baseline and native targets
 
 The public `v0.14.0` Unix packages are monitoring-only. This table describes
-the `0.15.0` implementation and its runtime prerequisites, not hardware proof.
+the `0.15.1` implementation and its runtime prerequisites, not hardware proof.
 
 | Family | Windows baseline | Linux target / prerequisite | macOS target / prerequisite |
 | --- | --- | --- | --- |

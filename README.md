@@ -1,6 +1,6 @@
 # miccamwatch
 
-`mcw` monitors microphone and camera access using platform-specific evidence. Windows uses native capture and privacy APIs; Linux and macOS 15+ provide native monitoring, desktop frontends and scoped controls with narrower evidence. It supports high-contrast terminal colors, seven display languages, policy-driven trust validation, JSONL history and native event notifications. Detailed evidence remains in English for stable machine-readable diagnostics. Stable `v0.14.0` Unix packages are monitoring-only; the expanded native implementation is distributed through the explicitly selected Unix `v0.15.0` prerelease.
+`mcw` monitors microphone and camera access using platform-specific evidence. Windows uses native capture and privacy APIs; Linux and macOS 15+ provide native monitoring, desktop frontends and scoped controls with narrower evidence. It supports high-contrast terminal colors, seven display languages, policy-driven trust validation, JSONL history and native event notifications. Detailed evidence remains in English for stable machine-readable diagnostics. Stable `v0.14.0` Unix packages are monitoring-only; the expanded native implementation is distributed through the explicitly selected Unix `v0.15.1` prerelease.
 
 ## Current capabilities
 
@@ -105,7 +105,7 @@ Status JSON is an object with an explicit schema version:
 ```json
 {
   "schema_version": 3,
-  "tool_version": "0.15.0",
+  "tool_version": "0.15.1",
   "collectors": [],
   "accesses": []
 }
@@ -151,7 +151,7 @@ v0.14.0 adds Linux PipeWire/V4L2 observation, macOS CoreAudio/AVFoundation obser
 
 ### Unix installer (macOS and Linux)
 
-By default the installer selects the latest **stable** release into `$HOME/.local/bin`, without sudo. Select `--version v0.15.0` for the Unix prerelease with native desktop/scoped-control features. Windows publication remains held; `v0.14.0` stays stable latest so existing Windows installer/updater selection keeps working. The installer chooses the native macOS Apple Silicon/Intel or Linux x64 package, resolves a concrete release, and verifies the exact archive entry in that release's `SHA256SUMS`. Supported systems are macOS 15+ and Linux x64 with glibc 2.35+. Unsupported architectures are rejected, never substituted.
+By default the installer selects the latest **stable** release into `$HOME/.local/bin`, without sudo. Select `--version v0.15.1` for the Unix prerelease with native desktop/scoped-control features. Windows publication remains held; `v0.14.0` stays stable latest so existing Windows installer/updater selection keeps working. The installer chooses the native macOS Apple Silicon/Intel or Linux x64 package, resolves a concrete release, and verifies the exact archive entry in that release's `SHA256SUMS`. Supported systems are macOS 15+ and Linux x64 with glibc 2.35+. Unsupported architectures are rejected, never substituted.
 
 Download and inspect the installer before running it:
 
@@ -160,7 +160,7 @@ curl --proto '=https' --tlsv1.2 -fsSL \
   https://raw.githubusercontent.com/Roman-Cuisset/miccamwatch/main/installer/install.sh \
   -o mcw-install.sh
 less mcw-install.sh
-sh mcw-install.sh --version v0.15.0 --add-path
+sh mcw-install.sh --version v0.15.1 --add-path
 ```
 
 Or explicitly select the Unix prerelease, with an interactive PATH proposal when a terminal is available:
@@ -168,18 +168,18 @@ Or explicitly select the Unix prerelease, with an interactive PATH proposal when
 ```sh
 curl --proto '=https' --tlsv1.2 -fsSL \
   https://raw.githubusercontent.com/Roman-Cuisset/miccamwatch/main/installer/install.sh \
-  | sh -s -- --version v0.15.0
+  | sh -s -- --version v0.15.1
 ```
 
 Use `--add-path` for explicitly requested automatic PATH integration, or `--no-modify-path` to leave shell configuration untouched. Without either flag, a missing PATH entry is proposed through `/dev/tty`; a noninteractive installation does not wait for input or silently edit the shell configuration. Bash, zsh (including `ZDOTDIR`), and fish are supported. Open a new terminal after accepting PATH integration: an installer subprocess cannot change its parent's environment. You can then run `mcw --version`, `mcw doctor --json`, and `mcw watch --json` from any directory.
 
-`--prefix "$HOME/Applications/MicCamWatch"` installs into that prefix's `bin` directory. Repeat the installer with `--version v0.15.0` to upgrade an older managed Unix installation. Stop its active watcher/tray first. Failed downloads, integrity checks, or executable validation preserve an existing working installation. The `main` installer URL follows source updates; use a reviewed commit permalink to pin the script. Archives and checksums share a release channel and are not an independent publisher signature.
+`--prefix "$HOME/Applications/MicCamWatch"` installs into that prefix's `bin` directory. Repeat the installer with `--version v0.15.1` to upgrade an older managed Unix installation. Stop its active watcher/tray first. Failed downloads, integrity checks, or executable validation preserve an existing working installation. The `main` installer URL follows source updates; use a reviewed commit permalink to pin the script. Archives and checksums share a release channel and are not an independent publisher signature.
 
 Root execution is refused. The installer does not overwrite an unmanaged executable, a symlink/hardlinked target, or an installer-owned executable modified independently; select a different prefix or move the old installation yourself. It refuses to replace or remove the installed executable while that target is running, without stopping any process. Ownership receipts live in `PREFIX/.miccamwatch-install`; retain them for safe upgrades and uninstall.
 
 To uninstall an installer-managed installation, run `sh mcw-install.sh --uninstall`, supplying the same `--prefix` if you used a custom prefix. Uninstallation removes only installer-owned executable/state and managed PATH entries; it does not delete policy, settings, or activity history. An executable or PATH block changed independently must not be removed as though it were still installer-owned.
 
-`v0.15.0` installs `mcw` with its shared TUI, native desktop mode and platform-scoped controls; `v0.14.0` remains monitoring-only. Installation never enables autostart, changes devices, approves a profile or grants capture permissions. Gatekeeper, SIP, TCC and quarantine protections are not bypassed. Apple Developer ID signing/notarization remains unavailable. `mcw update` on a managed Unix `0.15.0` installation follows the stable channel and refuses downgrades; select a prerelease explicitly through the installer.
+`v0.15.1` installs `mcw` with its shared TUI, native desktop mode and platform-scoped controls; `v0.14.0` remains monitoring-only. Installation never enables autostart, changes devices, approves a profile or grants capture permissions. Gatekeeper, SIP, TCC and quarantine protections are not bypassed. Apple Developer ID signing/notarization remains unavailable. `mcw update` on a managed Unix `0.15.1` installation follows the stable channel and refuses downgrades; select a prerelease explicitly through the installer.
 
 ## Policy configuration
 
