@@ -128,6 +128,19 @@ passed Ubuntu 22.04/PipeWire 0.3.48 (55 tests), macOS 15.7.9 arm64 and Intel
 the SPDX bundle and provenance attestation. Apple helpers used SDK 15.5 and
 Swift 6.1.2 in Swift 5 mode with deployment target 15.0.
 
+[Tag publication 37299861471](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37299861471)
+passed all three Unix package smoke runs and published only the three archives,
+SPDX SBOM and checksum manifest as prerelease `v0.15.1`. Stable/latest remains
+`v0.14.0`; the immutable, unshipped `v0.15.0` tag has no release/assets.
+[Public installer run 37301377449](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37301377449)
+passed real HTTPS installation and `v0.14.0` → `v0.15.1` upgrade with bash/zsh/fish
+on all three native hosts, preserving PATH, preferences/history and failed/running
+installations. Public archive/SBOM digests and exact source/tag/workflow attestations
+were independently verified; `SHA256SUMS` is not separately attested.
+The real SSH host also passed bash interactive/login resolution, owned upgrade and
+uninstall, and managed `mcw update` without downgrading to stable `v0.14.0`, using a
+private temporary prefix. Its system shell startup banner was left untouched.
+
 Linux proof includes an authenticated virtual capture PID, independent mute
 readback and owned restoration, preservation of an already-muted source, actual
 PTY cancellation, a visible XFCE StatusNotifierItem and notification, real

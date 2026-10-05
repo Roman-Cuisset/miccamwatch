@@ -181,6 +181,10 @@ To uninstall an installer-managed installation, run `sh mcw-install.sh --uninsta
 
 `v0.15.1` installs `mcw` with its shared TUI, native desktop mode and platform-scoped controls; `v0.14.0` remains monitoring-only. Installation never enables autostart, changes devices, approves a profile or grants capture permissions. Gatekeeper, SIP, TCC and quarantine protections are not bypassed. Apple Developer ID signing/notarization remains unavailable. `mcw update` on a managed Unix `0.15.1` installation follows the stable channel and refuses downgrades; select a prerelease explicitly through the installer.
 
+The [published v0.15.1 prerelease](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.15.1) passed [public installation and v0.14.0 → v0.15.1 migration](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37301377449) on Linux x64, macOS Apple Silicon and Intel, with bash/zsh/fish: fresh shells, consent, idempotent PATH, running-executable refusal, failed-upgrade preservation and owned uninstall retaining preferences/history. The unshipped `v0.15.0` tag remains immutable and has no release/assets.
+
+All three archives and the SPDX SBOM were independently checked against public API digests and `SHA256SUMS`; their GitHub attestations verified the release workflow, exact source commit and `refs/tags/v0.15.1`. The checksum manifest is not separately attested. On the real Linux SSH host, managed `mcw update` retained `0.15.1` rather than downgrade to stable `0.14.0`. The native updater refuses a prefix whose owned ancestor directories are writable by another user; it does not silently change those permissions.
+
 ## Policy configuration
 
 Create a TOML policy file to control trust evaluation:

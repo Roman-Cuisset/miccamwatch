@@ -81,3 +81,28 @@ ci-dessus ; aucun changement de production n'est masqué. L'utilisateur a choisi
 la nouvelle prerelease Unix `v0.15.1` (`--version v0.15.1`) plutôt que déplacer
 le tag. Stable/latest `v0.14.0` et les anciens artefacts restent inchangés.
 
+### Publication et vérification finales de v0.15.1
+
+- Prerelease Unix publiée :
+  https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.15.1
+  via le run natif vert `37299861471`. Trois archives Unix, SPDX et SHA256SUMS ;
+  aucun nouveau ZIP/MSI Windows. API `latest` reste `v0.14.0` ; tag `v0.15.0`
+  inchangé, sans release/artefacts.
+- Migration publique réelle `v0.14.0` → `v0.15.1` verte sur Linux x64,
+  macOS ARM et Intel, avec bash/zsh/fish :
+  https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37301377449
+  PATH interactif/login et consentement, refus d'exécutable actif, échecs sans
+  corruption, préférences/historique et désinstallation possédée exercés.
+- Trois archives et SPDX vérifiés par SHA256SUMS/digests API et attestations
+  du workflow release, commit exact et ref `refs/tags/v0.15.1`. Le manifeste
+  SHA256SUMS n'est pas lui-même attesté.
+- SSH réel : upgrade bash, nouveaux shells et désinstallation dans un préfixe
+  temporaire privé ; `mcw update` garde `0.15.1`, ne rétrograde pas vers stable
+  `0.14.0`. Bannière système bash laissée intacte ; aucun paquet zsh/fish ajouté.
+- CI Windows du commit publié verte : 99 tests, audit et MSI per-user natif,
+  https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37299189617
+  sans publication/installation nouvelle sur le poste utilisateur ni verdict AV.
+- Le smoke ne fige plus les diagnostics doctor sur la liste des collecteurs ;
+  ses vrais contrôles JSON et lifecycle restent exercés. Les limites matérielles
+  macOS 27/INPUT/caméra/profil/TCC/verrouillage/audio restent celles ci-dessus.
+
