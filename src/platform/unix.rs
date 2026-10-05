@@ -237,7 +237,7 @@ pub fn play_chime() -> Result<()> {
             .args(["--id=message-new-instant", "--application-name=miccamwatch"])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stderr(Stdio::inherit())
             .spawn()
             .context("desktop sound requires canberra-gtk-play and a graphical sound session")?;
         let deadline = Instant::now() + Duration::from_secs(3);

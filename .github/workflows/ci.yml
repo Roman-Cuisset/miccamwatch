@@ -343,6 +343,7 @@ jobs:
                          "--load=module-native-protocol-unix socket=" + str(pulse_socket),
                          "--load=module-null-sink sink_name=MCW_CI_Sound"])
                   until(pulse_socket.exists, "Owned virtual sound server did not start")
+                  record("native-pulse-info", ["pactl", "info"])
                   record("native-chime", [str(pathlib.Path(os.environ["RUNNER_TEMP"]) / "native-chime")])
               else:
                   tui("tui-uppercase-quit")
