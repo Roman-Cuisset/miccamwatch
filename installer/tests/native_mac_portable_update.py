@@ -77,10 +77,23 @@ def kill_group(pid):
         pass
 
 
+def get_xattr(path, name):
+    # macOS Python does not expose the Linux os.*xattr APIs.
+    result = subprocess.run(["/usr/bin/xattr", "-px", name, str(path)],
+                            check=True, capture_output=True, text=True)
+    return bytes.fromhex("".join(result.stdout.split()))
+
+
+def set_xattr(path, name, value):
+    subprocess.run(["/usr/bin/xattr", "-wx", name, value.hex(), str(path)],
+                   check=True, capture_output=True)
+
+
 def identity(path):
     info = path.lstat()
-    attributes = {name: os.getxattr(path, name, follow_symlinks=False).hex()
-                  for name in os.listxattr(path, follow_symlinks=False)}
+    names = subprocess.run(["/usr/bin/xattr", str(path)], check=True,
+                           capture_output=True, text=True).stdout.splitlines()
+    attributes = {name: get_xattr(path, name).hex() for name in names}
     return dict(sha256=sha(path), inode=info.st_ino, device=info.st_dev,
                 uid=info.st_uid, gid=info.st_gid, mode=stat.S_IMODE(info.st_mode),
                 nlink=info.st_nlink, xattrs=attributes)
@@ -120,7 +133,7 @@ class Portable(fixtures.Sandbox):
         self.binary.chmod(mode)
         # A non-enforcing quarantine value tests exact xattr retention without
         # authorizing a Gatekeeper UI prompt or changing host security settings.
-        os.setxattr(self.binary, "com.apple.quarantine", QUARANTINE)
+        set_xattr(self.binary, "com.apple.quarantine", QUARANTINE)
         self.preferences = self.home / "existing user preferences.json"
         self.preferences.write_bytes(b'{"language":"fr","notification_sound":false}\n')
         self.unrelated = self.binary.parent / "unrelated user file"
@@ -238,7 +251,7 @@ def fixture_mv(arguments):
         if plan["mode"] == "replacement":
             os.replace(plan["replacement"], plan["target"])
         elif plan["mode"] == "quarantine":
-            os.setxattr(plan["target"], "com.apple.quarantine", b"0000;fixture-user-change;MCW;")
+            set_xattr(plan["target"], "com.apple.quarantine", b"0000;fixture-user-change;MCW;")
         os.kill(os.getppid(), signal.SIGTERM)
     return result.returncode
 
@@ -331,7 +344,7 @@ def scenarios(args, root, proof, curl, cargo):
                 require(identity(interrupted.binary) == expected_replacement,
                         "rollback changed the identical-byte user replacement")
             else:
-                require(os.getxattr(interrupted.binary, "com.apple.quarantine") ==
+                require(get_xattr(interrupted.binary, "com.apple.quarantine") ==
                         b"0000;fixture-user-change;MCW;", "rollback removed a changed quarantine attribute")
             (proof / ("retained-backup-" + mode + ".json")).write_text(json.dumps({
                 "path": str(backups[0]), "sha256": sha(backups[0]),
