@@ -72,6 +72,7 @@ Les backends Linux/macOS de la PR #1 sont intégrés à `main`. [La répétition
   inconnue : les devices OUTPUT CoreAudio ne la prouvent pas.
 - Les modifications utilisateur du TUI et de ce handoff sont préservées ;
   `WATCHDOG.yml` n'est pas inclus dans les commits de cette livraison.
+
 ### Canal final approuvé : v0.15.1
 
 Le tag nouveau `v0.15.0` reste immuable et non publié. Son smoke associait
@@ -105,4 +106,124 @@ le tag. Stable/latest `v0.14.0` et les anciens artefacts restent inchangés.
 - Le smoke ne fige plus les diagnostics doctor sur la liste des collecteurs ;
   ses vrais contrôles JSON et lifecycle restent exercés. Les limites matérielles
   macOS 27/INPUT/caméra/profil/TCC/verrouillage/audio restent celles ci-dessus.
+
+## État final avant nouvelles fonctions — source 0.16.0
+
+Ce bloc décrit l'état courant et supplante les limites historiques du footer
+ci-dessus. L'implémentation accessible est terminée et exercée ; les seuls
+scénarios non certifiés sont les effets physiques/sessions explicités plus bas.
+Ne pas les convertir en succès parce qu'un runner n'a pas le matériel.
+Les notes et travaux utilisateur précédant ce footer restent préservés.
+
+### Source, vérifications et canaux
+
+- Branche : `work/native-parity-20261003`. Code vérifié :
+  `8be1f1b78a907fbeaa47c60e3995369974212588`.
+- [Dry run natif 37429480145](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37429480145)
+  vert sur Linux x64, macOS Apple Silicon et Intel : format, Clippy strict,
+  tests, builds debug/release, véritables CLI/PTY/tray/menu bar, lifecycle,
+  bundle SPDX/SHA256SUMS et attestations. Linux : 74 tests bibliothèque + 1 CLI,
+  contrôle micro virtuel, vrais menu/notification inspectés visuellement,
+  restauration après SIGTERM/SIGKILL et frontières root/utilisateur vérifiées.
+- [CI complète 37429482692](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37429482692)
+  verte sur ce même code, y compris Windows : tests, audit Rust, build release
+  et installation/désinstallation MSI per-user natifs.
+- [Migration publique 37422717465](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37422717465)
+  verte : `v0.14.0` → `v0.15.1`, bash/zsh/fish, Linux x64 et deux architectures
+  macOS, consentement/PATH, erreurs sans corruption et désinstallation possédée.
+- Publication inchangée : `v0.15.1` prerelease Unix, `v0.14.0` latest stable ;
+  `v0.15.0` immuable et non publié. Aucun tag/release `v0.16.0` créé, aucune
+  ouverture du gate de publication Windows. Les preuves `0.16.0` sont des
+  candidats de branche, pas une release publique approuvée.
+- Windows local reste la paire réelle CLI/tray `0.15.1`, issue de la source
+  publiée `7d1e3dc17a6171b521a2f53b3cfebe663425ceb0` : CLI/TUI/tray/update
+  exercés, autostart possédé préservé, scans Defender réels terminés aux chemins
+  installés avec protections actives. Pas de signature/certificat inventé,
+  exclusion, restauration de quarantaine ni verdict AV universel.
+  Voir [SIGNING.md](SIGNING.md) pour les digests et limites exactes.
+
+### Caméra USB Linux : validation matérielle terminée
+
+- `serveur-asus`, UID 1000, noyau `7.0.0-28-generic`, PipeWire `1.0.5` :
+  webcam USB `13d3:5a11`, configuration unique, interfaces `1-6:1.0`/`1-6:1.1`
+  initialement `uvcvideo`.
+- Archive de source `e4886c345c656c430c589893fceec95cf2838d6e` réellement
+  vérifiée par SHA-256 et provenance GitHub, puis re-vérifiée après transfert :
+  `2fb1dbabeb5f297317c3fc99c32164b2cc3485646573a3f40b58d07541e4b86a`.
+- Installation root explicitement revue, aucune action caméra implicite.
+  Annulation Polkit : tous les bindings et nœuds vidéo inchangés.
+- CLI non-root, véritable agent Polkit utilisateur enregistré et mots de passe
+  administrateur frais : block révoque une capture FFmpeg déjà active
+  (`VIDIOC_DQBUF: No such device`), supprime les deux nœuds vidéo et refuse
+  une nouvelle capture même en root. Bluetooth, Ethernet et hubs inchangés.
+- Allow avec nouvelle approbation Polkit restaure exactement les deux drivers
+  originaux et les nœuds ; cinq images YUYV 640x480 capturées à nouveau vers
+  `null`. Aucun média conservé. Un cycle sudo séparé vérifie aussi block répété
+  sans adoption d'un état extérieur.
+- L'agent interne de `pkexec` échoue sur cet hôte avec `No session for cookie`,
+  également hors MCW ; redémarrer le daemon n'a pas corrigé ce défaut.
+  L'agent standard `pkttyagent` non privilégié enregistré pour le PID CLI
+  fonctionne. Aucune règle d'autorisation, PAM, permission ou compte assoupli.
+  Un agent fonctionnel est un prérequis, pas un contournement de Polkit.
+- Après allow : journal vide, retrait root possédé réussi, helper/policy/receipt
+  et cache/journal vides retirés, inode du verrou permanent préservé.
+  Candidats privés, configuration isolée et agent temporaire retirés.
+  Aucun helper expérimental laissé installé ; bindings physiques restaurés.
+
+### Mute PipeWire : défaut systemd corrigé et vérifié
+
+- Le socket activé par systemd expose le PID du gestionnaire utilisateur
+  (`1021`), pas l'exécutable PipeWire. L'ancien code échouait sur son
+  `/proc/1021/exe` inaccessible.
+- `procfs::verify_peer_instance` vérifie UID et génération PID/starttime sans
+  exiger cet exécutable ; boot/socket/core cookie/node serial restent épinglés.
+  L'identité complète des processus de capture n'est pas relâchée.
+  Régression permanente avec vrai processus non-dumpable et refus du mauvais UID.
+- Archive corrigée `8be1f1b`, SHA-256
+  `df7c4700ad34d1c141dbdf806c044f15972de511f80460d48b9b82a55383d966`,
+  provenance et transfert vérifiés. Sur le socket réel : doctor passe de
+  l'erreur à exit 0, source virtuelle silencieuse False→True→False confirmée
+  indépendamment par `pw-dump`, original prémuté maintenu après restore.
+  Zéro état original retenu et zéro restauration en attente ; source retirée.
+  Cela ne prouve pas un mute physique, ni un déni global ALSA.
+
+### Correction macOS et crédit public
+
+**Thank you [@repentandliveholy](https://github.com/repentandliveholy) for the
+real-device diagnosis, public CoreMediaIO fix and local validation.**
+
+- Telegram/macOS 27 : AVFoundation restait false, CoreMediaIO 0→1→0 et
+  FaceTime HD Camera START/STOP dans le build corrigé de l'ami : preuve rapportée
+  par l'ami, pas un scénario rejoué par le mainteneur.
+- Source `0.16.0` : inventaire AVFoundation passif, activité CoreMediaIO publique,
+  état nullable/unknown conservé, aucune fausse inactivité ni faux STOP ;
+  PID/client inconnus, confiance medium, couverture dégradée, aucune frame lue
+  et aucune attribution/enforcement par application inventée.
+- Builds et surfaces macOS natifs exercés ; preuve observée macOS `15.7.9`,
+  SDK `15.5`, ARM/Intel. Inventaires système et MCW séparés : zéro caméra sur
+  runners ; ce n'est pas une réfutation du défaut matériel de l'ami.
+  [PR #2](https://github.com/Roman-Cuisset/miccamwatch/pull/2) conserve le crédit
+  anglais correct. Les fichiers bruts `debug_macos/*` ne sont pas publiés.
+
+### Portées finales et seules preuves restant inaccessibles
+
+| Contrôle | Linux | macOS |
+| --- | --- | --- |
+| Micro | Mute/restauration des sources de la session PipeWire ; pas de déni ALSA/autres sessions. | INPUT uniquement lorsqu'il est inscriptible ; pas de blocage universel. |
+| Caméra | USB/UVC conforme, autorisation explicite, restauration possédée ; cycle physique vérifié ci-dessus. | Profil Restrictions possédé à approuver/retirer manuellement ; effet matériel non exercé ici. |
+| Verrouillage | Session graphique logind locale nécessaire ; aucun block caméra automatique au lock. | État public Unknown, activation lock-policy refusée ; aucun mécanisme privé ajouté. |
+| Attribution | PID PipeWire authentifié avec identité complète quand observable ; V4L2 direct reste limité. | Activité caméra par device, client/PID unknown ; identité INPUT non garantie pour Sound/Telegram. |
+
+- Linux : aucun microphone physique exporté ; seule session seat0 observée =
+  greeter lightdm, pas une session graphique utilisateur testable. Mute physique,
+  vrais lock/unlock et audibilité ne sont pas certifiables depuis cet accès SSH.
+- MacBook M1 Pro/macOS 27 : pas d'accès Mac SSH ni runner auto-hébergé fourni.
+  INPUT physique, caméra/profil approuvé, autorisation notifications/TCC et
+  audibilité restent non exercés. Actions natif couvre le logiciel, pas ce matériel.
+- Aucun développement accessible ni scaffold n'est laissé à terminer.
+  Les nouvelles fonctions peuvent partir de cette base testée, dans ces portées ;
+  ne pas transformer les limites ci-dessus en promesse de parité universelle.
+- Travaux utilisateur TUI/handoff et `WATCHDOG.yml` préservés. `secrets.env`
+  exclu par `/secrets.env` dans `.gitignore`, non suivi ; identifiants jamais
+  affichés, mis en argument de commande ou committés.
 

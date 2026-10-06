@@ -6,7 +6,11 @@
 
 **Thank you [@repentandliveholy](https://github.com/repentandliveholy)** for the real-device diagnosis, public CoreMediaIO fix and local validation that made this correction possible. On a MacBook Pro with Apple Silicon and macOS 27, @repentandliveholy reported that Telegram circle recording left the previous AVFoundation activity property false, while CoreMediaIO correctly transitioned **0 → 1 → 0**; their locally patched build reported **FaceTime HD Camera START/STOP**. This is friend-reported hardware evidence, not a run performed by the maintainers or hosted CI.
 
-The `0.16.0` source integrates that correction; published `v0.15.1` remains unchanged. AVFoundation still discovers cameras; public CoreMediaIO reports device running-state with **unknown client/PID**, medium confidence and degraded coverage. It does not prove frame flow or permit per-application enforcement. Read errors stay unknown, never silently inactive. The revised helper passed native macOS 15.7.9 Apple Silicon/Intel builds, regressions and extracted CLI/TUI/menu-bar smoke in [run 37357602556](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37357602556). Both system and MCW inventories reported zero cameras on those runners; they cannot establish macOS 27 hardware parity. The overall run failed on Linux, whose integration is validated separately.
+The `0.16.0` source integrates that correction; published `v0.15.1` remains unchanged. AVFoundation still discovers cameras; public CoreMediaIO reports device running-state with **unknown client/PID**, medium confidence and degraded coverage. It does not prove frame flow or permit per-application enforcement. Read errors stay unknown, never silently inactive.
+
+The revised helper passed native macOS 15.7.9 Apple Silicon/Intel builds, regressions and extracted CLI/TUI/menu-bar smoke in the [successful three-platform dry run 37425122074](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37425122074). Both system and MCW inventories reported zero cameras on the macOS runners; they cannot establish macOS 27 hardware parity. Linux privileged installation/recovery and ordinary-user lifecycle checks also passed. On the authorized Linux hardware host, real Polkit-approved CLI block/allow revoked an ongoing UVC capture, denied new capture even to root, and restored the original bindings and capture. See [verification boundaries](docs/ARCHITECTURE.md#native-0160-software-verification-boundaries) for exact sources, agent prerequisites and remaining physical limits.
+
+The [latest native dry run 37429480145](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37429480145) also passed the PipeWire socket-activation correction in source `8be1f1b`: session mute now verifies the socket creator's UID/process generation without requiring its executable, while capture-process identity checks remain strict. On the real systemd-activated host, `doctor` returned 0 and independent PipeWire readback verified mute/restoration and preservation of an already-muted original.
 
 ## Current capabilities
 
@@ -192,7 +196,8 @@ The [published v0.15.1 prerelease](https://github.com/Roman-Cuisset/miccamwatch/
 All three archives and the SPDX SBOM were independently checked against public API digests and `SHA256SUMS`; their GitHub attestations verified the release workflow, exact source commit and `refs/tags/v0.15.1`. The checksum manifest is not separately attested. On the real Linux SSH host, managed `mcw update` retained `0.15.1` rather than downgrade to stable `0.14.0`. The native updater refuses a prefix whose owned ancestor directories are writable by another user; it does not silently change those permissions.
 
 The `0.16.0` source adds optional Linux USB camera controls; this is not a claim
-that a `v0.16.0` release has already been published or physically verified.
+that a `v0.16.0` release has already been published. Physical Linux USB
+block/restore was separately verified within the documented support envelope.
 Linux packages built from this source include a matching `mcw-camera-helper`,
 reviewable administrator installer and Polkit policy. The ordinary installer
 places these payloads in `PREFIX/share/miccamwatch/linux-camera` and maintains
@@ -292,6 +297,14 @@ Administrator setup additionally needs `/usr/bin/python3`. The CLI, TUI `[b]`/`[
 tray menu initiate only explicit actions; startup, status and polling never prompt
 for privilege. Missing/untrusted/version-mismatched helpers are errors with setup
 instructions, not successful blocks.
+
+On the authorized SSH host, `pkexec`'s internal text agent failed with
+`No session for cookie`, including a native invocation outside MCW; restarting
+Polkit did not fix that failure. A standard **unprivileged `pkttyagent` registered
+for the CLI process** successfully requested fresh administrator passwords for
+block and restore. No authorization rule, PAM file, account or permission was
+changed to obtain success. Headless/SSH use needs a functioning registered
+agent; the presence of `pkexec` alone does not prove that authorization works.
 
 Download the matching Linux archive and `SHA256SUMS` from the selected release,
 verify the archive digest, and review `install-camera-helper.sh` and

@@ -250,13 +250,114 @@ START/STOP. The production `0.16.0` source integrates this correction without
 modifying published `v0.15.1` or publishing their raw logs.
 
 Not exercised by maintainers or hosted CI: that macOS 27 hardware/session,
-physical Linux/macOS capture transitions and input mute, approved camera-profile
+physical Linux input mute and macOS capture/mute transitions, approved camera-profile
 effectiveness, real lock/unlock actions, macOS notification authorization or
 physical speakers. There is no configured Mac SSH target or self-hosted runner
 providing that hardware/session. The revised helper passed native macOS 15.7.9
 arm64/Intel builds, regressions and real CLI/TUI/menu-bar smoke with SDK 15.5
-in [run 37357602556](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37357602556).
+in the [successful three-platform dry run 37425122074](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37425122074).
 Separate system and MCW inventories both reported zero cameras; these runs do
-not establish physical/macOS 27 parity. The overall run failed on Linux, whose
-native integration is validated separately.
+not establish physical/macOS 27 parity.
+
+## Native 0.16.0 software verification boundaries
+
+The latest successful [dry run 37429480145](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37429480145) used source
+`8be1f1b78a907fbeaa47c60e3995369974212588`; it generated and attested a
+candidate Unix bundle, **not a public release**. Ubuntu 22.04 passed Clippy
+with warnings denied, 74 library tests plus one CLI test, debug/release builds,
+and real extracted CLI/PTY/desktop lifecycle. The Linux StatusNotifier menu
+and capture notification were visually inspected. PipeWire capture/mute
+evidence uses an isolated virtual source, not a physical microphone.
+
+The genuine six-member archive also passed ordinary-user payload install,
+update, rollback and removal checks, explicit administrator bootstrap,
+same-version refresh and owned uninstall. Real strace SIGTERM/SIGKILL
+interrupted archive copying, preparation, transaction publication and
+completion; recovery/orphan removal retained the permanent lock inode.
+Root-presence checks refused user install/update/uninstall before release
+transport and preserved existing assets. Wrong archive digests were refused
+before any archive executable ran. Invalid protocol/version/action/caller
+requests preserved journal/cache/device state.
+
+Administrator read-only status used explicit sudo and the real runner UID,
+**not an interactive Polkit authentication dialogue**. No supported USB
+camera was present: the helper returned a real unavailable error, never a
+fake Allowed state. No block/allow/toggle or physical camera mutation ran
+on hosted runners. The separate physical Linux checks below establish
+detach/revocation, restoration/capture and cancelled Polkit approval on one
+supported webcam. No non-USB control, hotplug reblock or camera-on-lock is claimed.
+
+The [public installer run 37422717465](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37422717465)
+passed real `v0.14.0` to `v0.15.1` upgrades on Linux x64 and macOS ARM/Intel
+with bash/zsh/fish. Linux hosted system directories were observed as root-owned
+but mode 0777; only disposable hosted VM prerequisites secure the fixed
+ancestry. Production installer safety checks were not weakened.
+
+### Authorized Linux physical verification
+
+The same exact `e4886c3` Linux archive was SHA-256 checked locally and after
+SSH transfer; GitHub provenance verified the release workflow, full source
+digest, branch ref and hosted runner. Its archive digest was
+`2fb1dbabeb5f297317c3fc99c32164b2cc3485646573a3f40b58d07541e4b86a`.
+The host used kernel `7.0.0-28-generic`, PipeWire `1.0.5` and ordinary UID 1000.
+USB `13d3:5a11` had one configuration and two UVC interfaces,
+`1-6:1.0` (control) and `1-6:1.1` (streaming), both originally `uvcvideo`.
+
+The reviewed root installer installed only its authenticated fixed payload.
+Cancelling real Polkit approval left every USB binding and video node unchanged.
+An ordinary-user `mcw camera block` with fresh Polkit administrator approval
+then detached those two interfaces only. Ongoing FFmpeg V4L2 capture terminated
+with `VIDIOC_DQBUF: No such device`, not a timeout. Both video nodes disappeared;
+a new capture attempted as root failed with `No such file or directory`.
+Unprivileged `mcw camera status` read back `blocked` without authorization.
+USB hubs, Bluetooth and Ethernet bindings were unchanged.
+
+Fresh Polkit approval for ordinary-user `mcw camera allow` restored the exact
+original interface drivers and video nodes; FFmpeg captured five YUYV 640x480
+frames to the null output again. No images were saved. A separate explicit-sudo
+cycle also verified repeated block ownership. The original-state journal was
+empty after allow. Reviewed root uninstall then removed only unchanged owned
+helper/policy/receipt and validated empty journal/cache, preserving the permanent
+operation-lock inode and all restored device bindings.
+
+The host's internal `pkexec` text agent failed with `No session for cookie`,
+including a native read-only invocation outside MCW. Restarting the daemon did
+not fix it. Successful CLI actions used a standard unprivileged `pkttyagent`
+registered for the CLI PID and the genuine policy/password challenge; no
+authorization rule, PAM file, account or permission was changed. This is proof
+with a functioning registered agent, not proof that this host's internal agent
+or every graphical authentication dialogue works.
+
+No physical microphone was exported in this host's MCW inventory. Real
+lock/unlock and speaker audibility were not established from SSH; the active
+seat was a display-manager greeter, not a logged-in graphical test user.
+
+### Socket-activated PipeWire mute verification
+
+The same hardware host exposed its connected socket's `SO_PEERCRED` PID as
+the systemd user manager, not the PipeWire daemon. The previous
+session-control probe failed resolving `/proc/1021/exe`, even though graph
+access and the peer UID were valid. Source `8be1f1b` verifies this socket
+creator's UID and PID/starttime twice without requiring an executable.
+Boot identity, socket device/inode, native core cookie and node serial still
+pin restoration ownership. Full executable/process verification for capture
+attribution and enforcement remains unchanged; no `/proc` permissions or
+systemd/PipeWire configuration was relaxed.
+
+The corrected Linux archive digest was
+`df7c4700ad34d1c141dbdf806c044f15972de511f80460d48b9b82a55383d966`;
+all bundle digests matched, Linux provenance verified its full source/ref,
+and the transferred archive matched again. Extracted CLI `doctor` changed
+from an error to exit 0 with working source-mute controls. An owned silent
+virtual source independently read back **false → true → false** through
+`pw-dump`. Starting with that source already muted, `mcw mute`/`mcw unmute`
+correctly left it muted. Final capabilities retained zero original states
+and zero pending restorations. The virtual source and private candidates
+were removed; existing user configuration and physical inputs were untouched.
+This verifies PipeWire signal mute, not physical microphone denial/audibility.
+
+A permanent regression uses a real non-dumpable child process and requires
+peer-generation verification to succeed while rejecting the wrong UID.
+Linux passed 75 total library/CLI tests and the real desktop/PTY smoke;
+Apple Silicon and Intel also passed their native regression/build/smoke jobs.
 
