@@ -329,12 +329,15 @@ def scenarios(args, root, proof, curl, cargo):
         installer(proof, "sigterm-" + mode, args.source_file, interrupted, env, args.version, codes=(143,))
         require(marker.is_file(), "SIGTERM scenario did not reach a real atomic replacement")
         backups = list(interrupted.binary.parent.glob(".mcw-backup.*"))
+        after = identity(interrupted.binary)
+        (proof / ("sigterm-" + mode + "-identity.json")).write_text(
+            json.dumps(dict(before=before, after=after), indent=2) + "\n")
         if mode == "rollback":
             require(interrupted.binary.read_bytes() == old_binary and not backups,
                     "interrupted update did not restore the old genuine executable")
-            after = identity(interrupted.binary)
             for key in ("uid", "gid", "mode", "nlink", "xattrs"):
-                require(after[key] == before[key], f"rollback changed old target {key}")
+                require(after[key] == before[key],
+                        f"rollback changed old target {key}: {before[key]!r} -> {after[key]!r}")
             record(proof, "rollback-usable-version", [interrupted.binary, "--version"], env=env)
         else:
             require(interrupted.binary.read_bytes() == binary and len(backups) == 1,
