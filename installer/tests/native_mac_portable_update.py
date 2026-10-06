@@ -125,7 +125,7 @@ def candidate(path, version, root, env):
 
 
 class Portable(fixtures.Sandbox):
-    def __init__(self, root, name, binary, mode=0o751):
+    def __init__(self, root, name, binary, mode=0o751, quarantine=QUARANTINE):
         super().__init__(root, name, "bash", "/bin/bash")
         self.binary = self.home / "standalone space 'quote\" $literal; [brackets]" / "mcw"
         self.binary.parent.mkdir()
@@ -133,7 +133,8 @@ class Portable(fixtures.Sandbox):
         self.binary.chmod(mode)
         # A non-enforcing quarantine value tests exact xattr retention without
         # authorizing a Gatekeeper UI prompt or changing host security settings.
-        set_xattr(self.binary, "com.apple.quarantine", QUARANTINE)
+        if quarantine is not None:
+            set_xattr(self.binary, "com.apple.quarantine", quarantine)
         self.preferences = self.home / "existing user preferences.json"
         self.preferences.write_bytes(b'{"language":"fr","notification_sound":false}\n')
         self.unrelated = self.binary.parent / "unrelated user file"
@@ -293,6 +294,12 @@ def scenarios(args, root, proof, curl, cargo):
     updater(proof, "bootstrapped-production-update-noop", bootstrap, env)
     require(identity(bootstrap.binary) == after, "no-op replaced the candidate")
     bootstrap.preserved()
+
+    unmarked = Portable(root, "standalone without quarantine", old_binary, quarantine=None)
+    env, _ = transport(unmarked, args.version, asset, args.archive, sums)
+    before = identity(unmarked.binary)
+    installer(proof, "bootstrap-without-quarantine", args.source_file, unmarked, env, args.version)
+    unmarked.installed(binary, before)
 
     corrected = older_corrected_source(workspace, root, proof, cargo)
     upgrade = Portable(root, "corrected client upgrade", corrected)
