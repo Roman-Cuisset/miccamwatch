@@ -224,6 +224,6 @@ real-device diagnosis, public CoreMediaIO fix and local validation.**
   Les nouvelles fonctions peuvent partir de cette base testée, dans ces portées ;
   ne pas transformer les limites ci-dessus en promesse de parité universelle.
 - Travaux utilisateur TUI/handoff et `WATCHDOG.yml` préservés. `secrets.env`
-  exclu par `/secrets.env` dans `.gitignore`, non suivi ; identifiants jamais
-  affichés, mis en argument de commande ou committés.
+  exclu par `/secrets.env` dans `.gitignore`, non suivi ; mot de passe jamais
+  affiché, mis en argument de commande ou committé.
 
