@@ -229,3 +229,43 @@ real-device diagnosis, public CoreMediaIO fix and local validation.**
   exclu par `/secrets.env` dans `.gitignore`, non suivi ; mot de passe jamais
   affiché, mis en argument de commande ou committé.
 
+## Publication stable latest v0.16.0 — 2026-10-06
+
+- Autorisation utilisateur ultérieure : fusionner dans `main` et publier
+  `v0.16.0` stable/latest, Windows compris. PR #2 fusionnée :
+  `0e7cc9c97d6cb926ad61ab2b26a25ae85096638a`.
+- Tag immuable `v0.16.0`, source `9515fb664ac0c75601ebf6b8321b6954666faec9`.
+  [CI main 37435307905](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37435307905)
+  verte sur Windows/Linux/macOS ARM/Intel avant création du tag.
+- [Release 37437092551](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37437092551)
+  verte ; [release publique](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.16.0)
+  publiée à `2026-10-06T08:42:55Z`. API latest : ID `404493096`,
+  `draft=false`, `prerelease=false`, sept assets complets.
+- ZIP/MSI Windows, trois archives Unix, SPDX, SHA256SUMS téléchargés et vérifiés
+  contre les digests API ; six payloads/SBOM également contre le manifeste et
+  les attestations GitHub, workflow release/source/ref/runner hébergé exacts.
+  Le manifeste n'est pas séparément attesté.
+- Migrations publiques par l'installateur courant, bash/zsh/fish et trois
+  architectures : depuis [v0.14.0](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37438076601)
+  et [v0.15.1](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37438076504),
+  toutes vertes. Default du workflow natif désormais `v0.16.0`.
+- Sur Linux SSH réel, installation sans `--version` résout bien latest 0.16.0.
+  **Limite de migration :** `mcw update` Linux 0.15.1 embarque l'ancien
+  installateur à trois fichiers et refuse le nouveau paquet à six fichiers.
+  Refus exercé : CLI 0.15.1 préservée. Relancer l'installateur public courant
+  avec le même préfixe migre réellement vers 0.16.0 ; le nouvel updater
+  confirme ensuite up-to-date. Ne pas prétendre que l'ancien updater migre seul.
+- Windows : véritable updater 0.15.1 → 0.16.0 dans un préfixe portable privé,
+  deux EXE identiques au ZIP public ; second appel up-to-date, valeurs HKCU
+  autostart inchangées. Pendant la vérification, la paire réellement installée
+  a été observée en 0.16.0, avec les deux hashes du ZIP public. L'origine de
+  cette mise à jour concurrente n'est pas observée ; ne pas l'attribuer au smoke
+  privé. Le nettoyage n'a restauré/remplacé aucun fichier installé utilisateur.
+  ZIP/tray et MSI install/remove natifs également exercés dans Actions.
+- Aucun certificat configuré : les deux EXE et le MSI sont `NotSigned`.
+  Defender actif, signature `1.459.568.0`, scan privé exact 1000/1001 terminé,
+  zéro événement 1116/1117 dans l'intervalle observé ; pas un verdict Microsoft
+  ni une garantie AV universelle. Aucun contournement de protection.
+- Anciennes releases/tags immuables ; aucun secret, debug brut ou travail local
+  utilisateur publié. Les limites matérielles précédentes restent inchangées.
+

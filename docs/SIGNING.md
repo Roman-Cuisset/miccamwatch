@@ -11,13 +11,9 @@ Configure these environment secrets:
 
 The release workflow writes the certificate only for the duration of each signing step, calls the Windows SDK `signtool` with SHA-256 and DigiCert's RFC 3161 timestamp service, then deletes the temporary PFX. Both executables are signed before they are embedded in the MSI; the resulting MSI is signed separately.
 
-New Windows ZIP/MSI publication is held by default during the Defender investigation. The release workflow requires the repository variable `WINDOWS_RELEASE_APPROVED=true` before building and publishing Windows release assets; ordinary Windows CI still builds, tests and exercises its MSI. Linux/macOS releases can proceed independently. This is a publication hold, not removal of Windows support or authorization to reinstall quarantined bytes.
+Windows ZIP/MSI publication requires explicit `WINDOWS_RELEASE_APPROVED=true`; ordinary Windows CI builds, tests and exercises its MSI independently. The owner approved the complete coordinated `v0.16.0` release on 2026-10-06 and enabled this gate. Windows, Linux and both macOS architectures are now published together as stable `latest`.
 
-While this hold is active, the Unix-only release is a **prerelease**, not GitHub's
-stable `latest` release. The approved `v0.15.1` channel requires explicit
-`--version v0.15.1` installation. Stable `v0.14.0` and its existing Windows assets
-remain unchanged, so legacy Windows installers/updaters querying
-`/releases/latest` are not redirected to a release without Windows packages.
+If the gate is held again, Unix-only releases remain **prereleases**, never stable `latest` without Windows packages. The historical `v0.15.1` Unix prerelease still requires explicit `--version v0.15.1`; its assets, old `v0.14.0` assets and the unshipped `v0.15.0` tag remain immutable. Publication approval never authorizes protection bypass or restoration of quarantined bytes.
 
 Signing is a separate choice. If Windows publication is explicitly approved and the certificate secret is absent, the artifacts are unsigned; the workflow does not create a test certificate or claim publisher identity. SHA-256 checksums, GitHub artifact attestations, and the SPDX SBOM remain available, but they are not substitutes for Authenticode publisher verification or an antivirus verdict.
 
@@ -63,3 +59,36 @@ An actual fresh PowerShell resolved the installed CLI and reported `mcw 0.15.1`.
 Defender's service, antivirus, real-time protection and behavior monitor remained enabled, with signature version `1.459.557.0`. Separate custom scans of the two installed files have paired start/completion events: CLI scan `{A52EA338-74B2-4EF0-B5B8-C43BBF532BA0}` and tray scan `{86EA13AD-D77E-49F2-BB79-A3FEE50C734A}`. No detection/remediation event was returned in that scan interval, and both hashes were unchanged after scans and actual runtime checks. No Defender preferences, exclusions or quarantine contents were changed. Exclusion visibility required administrator access and was not established.
 
 These are unsigned, locally built binaries, not a new public Windows release or a Microsoft malware verdict. Runtime autostart-registration changes and an actual downloaded Windows upgrade were not exercised in this local replacement; neither broader Defender acceptance nor elimination of the earlier detection is implied.
+
+## Published stable Windows v0.16.0 verification
+
+The [release run 37437092551](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37437092551)
+built and exercised the ZIP CLI/tray and native per-user MSI installation/removal
+from `9515fb664ac0c75601ebf6b8321b6954666faec9`, tag `v0.16.0`.
+No certificate was configured; local `Get-AuthenticodeSignature` independently
+reported `NotSigned` and no signer for both downloaded EXEs and the MSI.
+
+- Public ZIP SHA-256: `2a2c6205261c6d678ba46c8e8a126e4b926208a602af5c7403f3ebeda32e3c24`.
+- Public MSI SHA-256: `48dbadcaabab6664faa2ab289d5884dc102aea3e68bf83708185cd5d73117f7c`.
+- CLI SHA-256: `9539f1d823526a0fc4d4522db4f09505fec4dbb699615475f2fe3d3e03ad3c3a`.
+- Tray SHA-256: `3cfc152aa9423653b5b07e57361267843e62dc5a685ac1f11cacce48de465428`.
+
+Both release packages matched public API digests, exact `SHA256SUMS` entries
+and GitHub attestations constrained to the release workflow, source commit,
+tag ref and hosted runner. A real `0.15.1` portable pair, copied to a private
+prefix, ran `mcw update` against public stable latest: both replacements matched
+the downloaded ZIP exactly and reported `0.16.0`; a second call was up-to-date.
+Existing HKCU startup values were unchanged. Separately, the user's installed
+pair was observed to have changed during verification: CLI `--version` reported
+`0.16.0` and both installed hashes matched the public pair above. The origin of
+that concurrent update was not observed; it is not attributed to the private
+smoke. No user-installed files were restored/replaced by cleanup.
+The old mapped CLI's backup was retained with the documented access-denied
+cleanup warning until that updater exited; only private smoke files were removed.
+
+Defender AM/AV, real-time protection and behavior monitoring were active,
+signature `1.459.568.0`. An actual custom scan of the public payload/smoke
+directory completed with matching events 1000/1001, scan ID
+`C8DEF81B-4EC1-4193-B0D1-EFE18EE36DFD`; no 1116/1117 detection/remediation events
+occurred from publication to this check. This is local observed evidence,
+not Authenticode identity, a Microsoft submission/verdict or universal clearance.

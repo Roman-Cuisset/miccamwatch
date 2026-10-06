@@ -361,3 +361,44 @@ peer-generation verification to succeed while rejecting the wrong UID.
 Linux passed 75 total library/CLI tests and the real desktop/PTY smoke;
 Apple Silicon and Intel also passed their native regression/build/smoke jobs.
 
+## Stable v0.16.0 publication and public consumers
+
+PR #2 was merged into `main` as `0e7cc9c97d6cb926ad61ab2b26a25ae85096638a`.
+The owner subsequently authorized complete stable publication, including
+Windows; `WINDOWS_RELEASE_APPROVED=true` is approval, not a signing certificate.
+Tag `v0.16.0` fixes source `9515fb664ac0c75601ebf6b8321b6954666faec9`.
+[Main CI 37435307905](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37435307905)
+passed all four native jobs before tagging.
+[Release 37437092551](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37437092551)
+then built/exercised Windows ZIP/MSI and three Unix packages, generated SPDX,
+checksums and attestations, and published stable latest on 2026-10-06.
+
+Public `/releases/latest` returned `v0.16.0`, release ID `404493096`,
+`draft=false`, `prerelease=false`, and all seven expected assets. Downloads
+matched API digests; six payload/SBOM entries matched `SHA256SUMS` and
+attestations constrained to the exact source, `refs/tags/v0.16.0`, release
+workflow and hosted runner. The manifest itself is not separately attested.
+Old assets/tags were not replaced.
+
+Public current-installer migrations from
+[v0.14.0](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37438076601)
+and [v0.15.1](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37438076504)
+passed on Linux x64 and macOS ARM/Intel with bash/zsh/fish.
+The real Linux SSH host also installed unpinned stable latest without root,
+device mutation, PATH edits or changes to existing user configuration.
+
+**Legacy Linux updater boundary:** v0.15.1 embeds its three-member installer
+and rejects the new six-member Linux archive before replacing its installation;
+the actual failed call retained CLI 0.15.1. Re-running the current public
+installer at that same managed prefix migrated to 0.16.0 with matching user
+camera payload. The new CLI's `mcw update` then reported up-to-date.
+Immutable older clients cannot acquire the new embedded parser automatically.
+
+A real Windows 0.15.1 pair in a private portable prefix updated from public
+latest to the exact downloaded 0.16.0 CLI/tray bytes; the second call was
+up-to-date and existing HKCU startup values were preserved. Native hosted
+ZIP tray and MSI install/remove smoke passed. Both EXEs and MSI independently
+reported `NotSigned`; local Defender completed its exact custom scan with
+active protections and no detection/remediation events in the observed window.
+See [signing evidence](SIGNING.md); this is not universal antivirus clearance.
+

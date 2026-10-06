@@ -43,7 +43,7 @@ usage() {
     cat <<'HELP'
 Install MicCamWatch for the current user (no sudo).
 
-Usage: sh install.sh [--version v0.14.0] [--prefix ABSOLUTE_PREFIX]
+Usage: sh install.sh [--version v0.16.0] [--prefix ABSOLUTE_PREFIX]
                      [--add-path | --no-modify-path]
        sh install.sh --uninstall [--prefix ABSOLUTE_PREFIX]
        sh install.sh --help
