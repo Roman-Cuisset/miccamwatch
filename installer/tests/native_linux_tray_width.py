@@ -142,6 +142,10 @@ def main():
                     'stdbuf', '-oL', 'dbus-monitor',
                     "type='method_call',interface='org.freedesktop.Notifications',member='Notify'"
                 ])
+                menu_monitor = launch(case + '-menu-transport', [
+                    'stdbuf', '-oL', 'dbus-monitor',
+                    "type='method_call',interface='com.canonical.dbusmenu',member='AboutToShow'"
+                ])
                 fixture = launch(case + '-fixture', [
                     'cargo', 'test', '--lib', '--locked',
                     'frontends::tray::linux_width_tests::native_linux_tray_width',
@@ -158,9 +162,21 @@ def main():
                 for row in view['items']:
                     require((row.get('detail') or row['label']).replace('\r', '\n') in diagnostic,
                             'full original menu row not retained in details')
-                run(['xdotool', 'mousemove', '26', '12', 'click', '3'])
+                def open_fixture_menu():
+                    run(['xdotool', 'mousemove', '26', '12', 'click', '3'])
+                    time.sleep(.1)
+                    popup = native_window('_MENU')
+                    # ksni registration precedes GTK host/widget creation. An
+                    # early click opens the panel's own context menu instead.
+                    # Accept only a real host request to the fixture's DBusMenu.
+                    traffic = (proof / (case + '-menu-transport.stdout')).read_text()
+                    if popup and 'member=AboutToShow' in traffic:
+                        return popup
+                    run(['xdotool', 'key', 'Escape'])
+                    return None
                 window, geometry, info, properties = until(
-                    lambda: native_window('_MENU'), 'actual XFCE GTK popup did not appear')
+                    open_fixture_menu, 'actual fixture DBusMenu popup did not appear')
+                stop(menu_monitor)
                 screenshot(case_proof, 'native-popup')
                 (case_proof / 'popup.xwininfo').write_text(info)
                 (case_proof / 'popup.xprop').write_text(properties)
