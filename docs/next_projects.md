@@ -1,7 +1,7 @@
-# Roadmap technique post-v0.16.0
+# Roadmap technique post-v0.16.1
 
 Dernière mise à jour : **2026-10-06**. Responsable : lead architecture/développement.
-Base publiée : [v0.16.0 stable/latest](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.16.0), source `9515fb664ac0c75601ebf6b8321b6954666faec9` ; documentation de publication sur `main` : `d0c833455b2820ea1691eb817002ddb3d40ccbc4`.
+Base publiée : [v0.16.1 stable/latest](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.16.1), source `7b134e3500860bd185ddc3955107b8082d414e78` ; [CI main](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37487806861) verte avant création du tag.
 
 Ce document planifie les prochains travaux ; sa création ne clôture aucune phase produit et ne justifie pas de nouvelle release binaire. Les fonctionnalités proposées ci-dessous ne sont pas annoncées comme disponibles. Les complexités sont des estimations de conception, pas des délais ni des mesures.
 
@@ -35,7 +35,7 @@ Les identifiants sont stables. À chaque livraison, remplacer l'état par **En c
 | P1-AUR | AUR : à faire | Moyenne | Dépendances PipeWire et frontière root |
 | P1-WG | Winget : à faire | Moyenne | Identité MSI et upgrades contrôlés |
 | P1-ARM | Linux ARM64 : à faire | Élevée | ABI/sysroot, installation et tests natifs |
-| P1-UPGRADE | Partiel : correction macOS standalone en validation 0.16.1 ; consolidation restante à faire | Moyenne | Contrats receipt, PATH, root et package manager |
+| P1-UPGRADE | Partiel : correction macOS standalone livrée en 0.16.1 ; consolidation restante à faire | Moyenne | Contrats receipt, PATH, root et package manager |
 | P2-HOOKS | Retenu, à faire | Élevée | Transitions actives cohérentes, effets bornés |
 | P2-NET | Reformulé en métadonnées locales, à faire | Élevée | PID authentifié ; macOS conditionnel |
 | P2-LOCK | Reformulé en protection coordonnée, à faire | Élevée | P1-RESTORE et arbitrage des intentions |
@@ -121,7 +121,7 @@ Les identifiants sont stables. À chaque livraison, remplacer l'état par **En c
 
 ### P1-UPGRADE — Consolider installation et chemins de mise à niveau
 
-**Fonction :** garder un seul contrat curl/PATH et une matrice de migration explicite entre archives gérées, installations de package manager, ZIP/Cargo et MSI. Vérifier 0.16.0 vers la prochaine release, plus les origines encore documentées.
+**Fonction :** garder un seul contrat curl/PATH et une matrice de migration explicite entre archives gérées, installations de package manager, ZIP/Cargo et MSI. La migration publique 0.16.0 → 0.16.1 est validée ; conserver cette origine et celles encore documentées pour les prochains lots.
 
 **Modules Rust :** `src/updater.rs`, `src/updater/unix.rs`, `src/updater/download.rs`, `src/updater/transaction.rs`, `src/autostart.rs`, `src/autostart/unix.rs`, `src/settings.rs` ; `installer/install.sh`, bootstrap root et tests natifs.
 
@@ -271,4 +271,4 @@ Windows : `RegisterHotKey` seul n'offre pas un protocole PTT key-up complet ; va
 | --- | --- | --- | --- | --- |
 | 2026-10-06 | Baseline v0.16.0 | Publiée, hors nouvelles phases | [CI main](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37439356665), [release native](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37437092551), [migration 0.14.0](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37438076601), [migration 0.15.1](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37438076504) | Limites matérielles/OS dans Architecture ; aucune affirmation RAM <15 Mo |
 | 2026-10-06 | Roadmap | Plan technique établi, aucune phase produit clôturée | Modules et contrats relus dans la base 0.16.0 ; propositions arbitrées ci-dessus | Démarrer par P1-RAM/P1-RESTORE ; packaging puis autres lots selon dépendances |
-| 2026-10-06 | Patch 0.16.1 updater/tray/top | Validé nativement, publication en préparation | [CI complète Windows/Linux/macOS ARM/Intel](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37485179246) : menus Win32 560/562 px à 125 % de DPI, XFCE 399/398 px Latin/CJK, AppKit 240 pt sur 7 langues et diagnostics longs ; copie complète des détails Windows/macOS. TUI : 7 langues, souris/clavier et redimensionnements. Bootstrap macOS 0.16.0 et vrai self-update corrigé, présence/absence de quarantaine, SIGTERM/rollback exact, changements concurrents préservés | Publier stable/latest complet et valider les migrations publiques. Consolidation P1-UPGRADE et autres phases restent ouvertes |
+| 2026-10-06 | Patch 0.16.1 updater/tray/top | [Livré stable/latest](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.16.1) | [CI complète](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37487806861), [release native](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37493346742), [migration publique 0.16.0](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37495128116) : Windows/Linux/macOS ARM/Intel ; menus Win32 560/562 px à 125 % de DPI, XFCE 399/398 px Latin/CJK, AppKit 240 pt sur 7 langues et diagnostics longs, détails complets. TUI : 7 langues, souris/clavier et redimensionnements. Bootstrap macOS public et updater corrigé, présence/absence de quarantaine, SIGTERM/rollback exact, changements concurrents préservés. Sept assets publics, hashes et six attestations vérifiés ; vrai updater Windows 0.16.0 → 0.16.1 puis no-op | Consolidation P1-UPGRADE et autres phases restent ouvertes ; pas de mesure RAM <15 Mo, de signature ni de nouvelle preuve matérielle |

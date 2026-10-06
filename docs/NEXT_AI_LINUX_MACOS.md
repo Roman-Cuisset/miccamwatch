@@ -269,3 +269,37 @@ real-device diagnosis, public CoreMediaIO fix and local validation.**
 - Anciennes releases/tags immuables ; aucun secret, debug brut ou travail local
   utilisateur publié. Les limites matérielles précédentes restent inchangées.
 
+## Patch stable/latest v0.16.1 — 2026-10-06
+
+Ce bloc supplante l'état de publication v0.16.0 ci-dessus, pas ses preuves
+historiques ni les limites matérielles.
+
+- [Release publique v0.16.1](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.16.1),
+  tag immuable sur `7b134e3500860bd185ddc3955107b8082d414e78`.
+  [CI main](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37487806861)
+  et [publication native](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37493346742)
+  vertes sur Windows/Linux/macOS ARM/Intel.
+- API latest/tag : stable, non draft, sept assets complets. Assets téléchargés,
+  digests API et six entrées du manifeste vérifiés ; six attestations GitHub
+  authentifiées avec workflow release, source/ref exacts et runners hébergés.
+- [Migration publique v0.16.0](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37495128116)
+  verte : Linux x64, macOS ARM/Intel, bash/zsh/fish, bootstrap macOS standalone
+  et updater corrigé contre les vrais assets HTTPS. L'ancien binaire macOS
+  extrait doit passer une fois par l'installateur public `--update-portable` ;
+  il ne peut pas acquérir la correction avec son updater embarqué refusant.
+  Commandes et limites de propriété/layout dans le README.
+- Remplacement macOS en place hors `bin` : permissions/quarantaine conservées,
+  cible en cours d'exécution refusée, aucune création de receipt/PATH/autostart,
+  hash/identité vérifiés. Rollback SIGTERM exact et modifications concurrentes
+  préservées, avec backup conservé quand son retour serait destructif.
+- Menus natifs compacts sur les trois OS avec détails complets séparés :
+  Win32 560/562 px à 125 % de DPI, XFCE 399/398 px Latin/CJK, AppKit 240 pt.
+  Boutons `top` adaptatifs : sept langues, clavier/souris, fenêtres réduites
+  et contrôles indisponibles exercés sur chaque OS.
+- Windows : updater public réel 0.16.0 → 0.16.1 dans un préfixe privé ;
+  les deux EXE égalent le ZIP public, deuxième appel up-to-date.
+  EXE/MSI téléchargés `NotSigned`, aucun nouveau verdict/scan Defender revendiqué.
+- Default du workflow d'installation publique désormais v0.16.1.
+  Roadmap actualisée ; P1-UPGRADE demeure partiel, aucune autre phase clôturée.
+  Pas de mesure RAM <15 Mo, Linux ARM64, Homebrew/AUR/Winget ou contrôle nouveau.
+

@@ -92,3 +92,27 @@ directory completed with matching events 1000/1001, scan ID
 `C8DEF81B-4EC1-4193-B0D1-EFE18EE36DFD`; no 1116/1117 detection/remediation events
 occurred from publication to this check. This is local observed evidence,
 not Authenticode identity, a Microsoft submission/verdict or universal clearance.
+
+## Published stable Windows v0.16.1 verification
+
+The [release run 37493346742](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37493346742)
+built and exercised the extracted ZIP CLI/tray and native per-user MSI
+installation/removal from `7b134e3500860bd185ddc3955107b8082d414e78`,
+immutable tag `v0.16.1`. Windows publication remained explicitly approved.
+The complete seven-asset release is stable/latest.
+
+- Public ZIP SHA-256: `276f0719b595e30b171ab1010e418de7bc4defcfc05e87b7e048a11406981e70`.
+- Public MSI SHA-256: `0d9aad13942538c00f5735e8366bc0dd215b817feb964644b062bf404f0aba71`.
+
+All seven downloaded assets matched API digests; the six payload/SBOM files
+also matched the manifest and authenticated GitHub attestations constrained
+to the release workflow, exact source commit, tag ref and hosted runners.
+A genuine public v0.16.0 portable pair in a private prefix ran `mcw update`
+against stable latest: both replaced EXEs matched the v0.16.1 public ZIP.
+A second call was up-to-date and preserved both hashes.
+
+`Get-AuthenticodeSignature` on these downloaded EXEs and MSI reported
+`NotSigned`, with no signer. No new Defender scan or Microsoft verdict is
+claimed for v0.16.1; the historical v0.16.0 observations above are not
+transferable clearance. No protection bypass was used.
+
