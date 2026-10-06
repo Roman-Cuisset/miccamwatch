@@ -35,9 +35,9 @@ func png(_ view: NSView, _ path: URL) {
 // A visual fixture only. All regression assertions below target the actual
 // production NSMenu, its measured intrinsic size, and its native alert action.
 final class MenuTextFixture: NSView {
-    let menu: NSMenu
+    let presentedMenu: NSMenu
     init(_ menu: NSMenu) {
-        self.menu = menu
+        self.presentedMenu = menu
         super.init(frame: NSRect(x: 0, y: 0, width: menu.size.width, height: CGFloat(menu.items.count * 24 + 12)))
     }
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -45,14 +45,14 @@ final class MenuTextFixture: NSView {
     override func draw(_ dirtyRect: NSRect) {
         NSColor.controlBackgroundColor.setFill()
         bounds.fill()
-        for (index, row) in menu.items.enumerated() {
+        for (index, row) in presentedMenu.items.enumerated() {
             let point = NSPoint(x: 20, y: CGFloat(index * 24 + 6))
             if row.isSeparatorItem {
                 NSColor.separatorColor.setFill()
                 NSRect(x: 12, y: point.y + 8, width: bounds.width - 24, height: 1).fill()
             } else {
                 (row.title as NSString).draw(at: point, withAttributes: [
-                    .font: menu.font!,
+                    .font: presentedMenu.font!,
                     .foregroundColor: row.isEnabled ? NSColor.controlTextColor : NSColor.disabledControlTextColor
                 ])
             }

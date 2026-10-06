@@ -297,7 +297,7 @@ private final class DesktopDelegate: NSObject, NSApplicationDelegate {
         trackingMenu = content.menu
         defer { trackingMenu = nil }
         withExtendedLifetime(content) {
-            content.menu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.height), in: button)
+            _ = content.menu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.height), in: button)
         }
     }
     private func stop() {

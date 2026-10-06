@@ -615,6 +615,7 @@ if [ -n "$PORTABLE_TARGET" ]; then
     PORTABLE_MODE=$(stat -f '%Lp' "$TARGET" | awk '{ print substr($0,length($0)-2) }')
     chmod "$PORTABLE_MODE" "$STAGE" || die 'Cannot preserve portable executable permissions.'
     PORTABLE_ATTRIBUTES=$(xattr "$TARGET") || die 'Cannot inspect portable executable quarantine.'
+    PORTABLE_ORIGINAL_QUARANTINE=$(portable_quarantine "$TARGET") || die 'Cannot pin original portable quarantine.'
     if printf '%s\n' "$PORTABLE_ATTRIBUTES" | grep -x 'com.apple.quarantine' >/dev/null; then
         PORTABLE_QUARANTINE=$(xattr -px com.apple.quarantine "$TARGET") || die 'Cannot read portable executable quarantine.'
         xattr -wx com.apple.quarantine "$PORTABLE_QUARANTINE" "$STAGE" || die 'Cannot preserve portable executable quarantine.'
@@ -630,9 +631,16 @@ if [ -n "$PORTABLE_TARGET" ]; then
     refuse_running
     BACKUP=$(mktemp "$BIN/.mcw-backup.XXXXXXXX") || die 'Cannot stage portable rollback executable.'
     cp -p "$TARGET" "$BACKUP" || die 'Cannot snapshot portable executable.'
+    # macOS copyfile rewrites quarantine flags/text even with cp -p. Preserve
+    # the source attribute exactly in the private recovery copy, not its rewrite.
+    if [ "$PORTABLE_ORIGINAL_QUARANTINE" != absent ]; then
+        xattr -wx com.apple.quarantine "$PORTABLE_QUARANTINE" "$BACKUP" || die 'Cannot preserve recovery executable quarantine.'
+    fi
+    [ "$(portable_quarantine "$BACKUP")" = "$PORTABLE_ORIGINAL_QUARANTINE" ] || die 'Recovery executable quarantine differs from the original.'
     [ "$(sha_file "$BACKUP")" = "$PORTABLE_HASH" ] || die 'Portable executable changed during snapshot; it was preserved.'
     owned_binary
     refuse_running
+    [ "$(portable_quarantine "$TARGET")" = "$PORTABLE_ORIGINAL_QUARANTINE" ] || die 'Portable quarantine changed during snapshot; target preserved.'
     PORTABLE_TRANSACTION=yes
     mv -f "$STAGE" "$TARGET" || die 'Atomic portable replacement failed.'
     STAGE=
