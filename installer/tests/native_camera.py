@@ -259,7 +259,7 @@ def main():
         root_phase(args)
         return
     require(os.getuid() == os.geteuid() != 0, 'start privilege smoke as the ordinary runner user')
-    require(args.version == 'v0.16.0', 'feature smoke currently requires explicitly reviewed v0.16.0')
+    require(args.version in ('v0.16.0', 'v0.16.1'), 'feature smoke requires an explicitly reviewed v0.16.0 or v0.16.1')
     args.proof.mkdir(parents=True, exist_ok=True)
     (args.proof / 'scope.txt').write_text(
         'Genuine six-member Linux archive; real ordinary-user install/update/remove/security/rollback fixtures; '

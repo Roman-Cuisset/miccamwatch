@@ -169,6 +169,7 @@ final class DesktopMenu: NSObject {
 private final class DesktopDelegate: NSObject, NSApplicationDelegate {
     private var item: NSStatusItem?
     private var menuContent: DesktopMenu?
+    private weak var trackingMenu: NSMenu?
     private var stopping = false
     private var initialized = false
     private var pendingClick: DispatchWorkItem?
@@ -290,9 +291,11 @@ private final class DesktopDelegate: NSObject, NSApplicationDelegate {
         }
     }
     private func showMenu() {
-        guard !stopping, let button = item?.button, let content = menuContent else { return }
+        guard !stopping, trackingMenu == nil, let button = item?.button, let content = menuContent else { return }
         // A state frame can replace menuContent during native menu tracking.
         // NSMenuItem targets are weak; retain this snapshot until selection ends.
+        trackingMenu = content.menu
+        defer { trackingMenu = nil }
         withExtendedLifetime(content) {
             content.menu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.height), in: button)
         }
@@ -301,7 +304,7 @@ private final class DesktopDelegate: NSObject, NSApplicationDelegate {
         guard !stopping else { return }
         stopping = true
         pendingClick?.cancel()
-        menu.cancelTracking()
+        trackingMenu?.cancelTracking()
         if let item = item { NSStatusBar.system.removeStatusItem(item) }
         item = nil
         desktopEmit(DesktopEvent(kind: "stopped"))
