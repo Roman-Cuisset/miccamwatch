@@ -253,7 +253,10 @@ Not exercised by maintainers or hosted CI: that macOS 27 hardware/session,
 physical Linux/macOS capture transitions and input mute, approved camera-profile
 effectiveness, real lock/unlock actions, macOS notification authorization or
 physical speakers. There is no configured Mac SSH target or self-hosted runner
-providing that hardware/session. Native macOS 15 arm64/Intel builds and smoke
-for the changed helper are required separately; they cannot establish hardware
-parity. These are explicit evidence limits, not full hardware parity.
+providing that hardware/session. The revised helper passed native macOS 15.7.9
+arm64/Intel builds, regressions and real CLI/TUI/menu-bar smoke with SDK 15.5
+in [run 37357602556](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37357602556).
+Separate system and MCW inventories both reported zero cameras; these runs do
+not establish physical/macOS 27 parity. The overall run failed on Linux, whose
+native integration is validated separately.
 
