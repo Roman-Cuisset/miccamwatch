@@ -62,9 +62,15 @@ impl Write for HashWriter {
     }
 }
 fn entries_digest(entries: &[Entry]) -> Result<String> {
+    use std::fmt::Write as _;
     let mut writer = HashWriter(Sha256::new());
     serde_json::to_writer(&mut writer, entries)?;
-    Ok(format!("{:x}", writer.0.finalize()))
+    let digest = writer.0.finalize();
+    let mut hexadecimal = String::with_capacity(64);
+    for byte in digest.as_slice() {
+        write!(hexadecimal, "{byte:02x}")?;
+    }
+    Ok(hexadecimal)
 }
 
 fn decode_journal(bytes: &[u8]) -> Result<Journal> {

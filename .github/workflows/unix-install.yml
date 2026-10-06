@@ -62,6 +62,15 @@ jobs:
             missing=""
             sudo apt-get update
             sudo apt-get install --no-install-recommends -y pipewire pipewire-bin
+            # Normalize only the disposable hosted image's shared-directory
+            # ownership; do not bypass production root-helper ancestry checks.
+            test "$GITHUB_ACTIONS" = true
+            test "$RUNNER_ENVIRONMENT" = github-hosted
+            test -d /usr/share && test ! -L /usr/share
+            stat -c '/usr/share before installer prerequisites: uid=%u gid=%g mode=%a' /usr/share
+            sudo chown root:root /usr/share
+            sudo chmod go-w /usr/share
+            stat -c '/usr/share after installer prerequisites: uid=%u gid=%g mode=%a' /usr/share
             for shell in bash zsh fish; do
               if ! command -v "$shell" >/dev/null 2>&1; then
                 missing="$missing $shell"

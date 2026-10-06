@@ -74,6 +74,16 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y pkg-config libpipewire-0.3-dev libspa-0.2-dev libclang-dev pipewire pipewire-bin gnupg dbus-x11 xvfb openbox xfce4-panel xfconf xfce4-notifyd libnotify-bin x11-utils xdotool imagemagick pulseaudio gnome-session-canberra libcanberra-pulse sound-theme-freedesktop zsh fish strace
+          # The hosted image's shared-directory ownership is not a secure
+          # administrator-helper prerequisite. Repair only this disposable VM;
+          # production installers retain their fail-closed ancestry checks.
+          test "$GITHUB_ACTIONS" = true
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test -d /usr/share && test ! -L /usr/share
+          stat -c '/usr/share before root-helper prerequisites: uid=%u gid=%g mode=%a' /usr/share
+          sudo chown root:root /usr/share
+          sudo chmod go-w /usr/share
+          stat -c '/usr/share after root-helper prerequisites: uid=%u gid=%g mode=%a' /usr/share
           pkg-config --modversion libpipewire-0.3
           pw-dump --version
       - name: Verify native architecture and minimum macOS version
