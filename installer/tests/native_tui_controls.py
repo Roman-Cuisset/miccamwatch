@@ -156,6 +156,14 @@ class NativeTerminal:
                 text = self.decoder.decode(chunk)
             self.stream.feed(text)
 
+    @property
+    def display(self):
+        # pyte's convenience renderer indexes empty wide-character continuation
+        # cells and can crash after ConPTY resize. The authoritative cell grid
+        # already represents those continuations as empty strings.
+        return ["".join(self.screen.buffer[y][x].data for x in range(self.screen.columns))
+                for y in range(self.screen.lines)]
+
     def locate(self, key):
         marker = "[" + key + "]"
         # display strings omit wide-character continuation cells; native mouse
@@ -164,7 +172,7 @@ class NativeTerminal:
             for x in range(self.screen.columns - 2):
                 if "".join(self.screen.buffer[y][x + offset].data for offset in range(3)) == marker:
                     return x, y
-        raise AssertionError(f"No visible {marker} button: {self.screen.display}")
+        raise AssertionError(f"No visible {marker} button: {self.display}")
 
     def click(self, x, y):
         if self.windows:
@@ -182,7 +190,7 @@ class NativeTerminal:
             self.send(f"\x1b[<0;{x + 1};{y + 1}M\x1b[<0;{x + 1};{y + 1}m")
 
     def frame(self, path):
-        path.with_suffix(".txt").write_text("\n".join(self.screen.display) + "\n", encoding="utf-8")
+        path.with_suffix(".txt").write_text("\n".join(self.display) + "\n", encoding="utf-8")
         cells = [[dict(text=cell.data, fg=cell.fg, bg=cell.bg, bold=cell.bold)
                   for x in range(self.screen.columns)
                   for cell in [self.screen.buffer[y][x]]]
@@ -222,10 +230,10 @@ def exercise(binary, proof, language):
         if os.name != "nt" and os.uname().sysname == "Linux":
             for key in "ba":
                 x, y = terminal.locate(key)
-                before = terminal.screen.display[-4:-1]
+                before = terminal.display[-4:-1]
                 terminal.click(x, y)
                 terminal.drain(.2)
-                assert terminal.screen.display[-4:-1] == before, "Disabled mouse button changed feedback"
+                assert terminal.display[-4:-1] == before, "Disabled mouse button changed feedback"
                 terminal.send(key.upper())
                 terminal.drain(.3)
                 assert terminal.alive(), "Unavailable Linux camera control exited top"

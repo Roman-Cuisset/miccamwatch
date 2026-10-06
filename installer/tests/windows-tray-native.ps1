@@ -18,6 +18,7 @@ public static class McwNativeProof {
     [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr hwnd, uint msg, IntPtr wparam, IntPtr lparam);
     [DllImport("user32.dll")] public static extern IntPtr OpenInputDesktop(uint flags, bool inherit, uint access);
     [DllImport("user32.dll")] public static extern bool CloseDesktop(IntPtr desktop);
+    [DllImport("user32.dll", SetLastError=true)] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
 }
 '@
 if (-not [Environment]::UserInteractive) { throw 'Native proof requires an interactive, unlocked Windows desktop.' }
@@ -70,6 +71,10 @@ function Capture-NativeWindow([IntPtr]$window, [string]$name) {
     return @{ left=$rect.Left; top=$rect.Top; right=$rect.Right; bottom=$rect.Bottom; width=$width; height=$height }
 }
 try {
+    # GetWindowRect must return physical pixels, matching CopyFromScreen.
+    # A DPI-unaware PowerShell host otherwise crops wallpaper at scaled offsets.
+    $previousDpi = [McwNativeProof]::SetThreadDpiAwarenessContext([IntPtr](-4))
+    if ($previousDpi -eq [IntPtr]::Zero) { throw 'Cannot establish per-monitor-aware native measurement coordinates.' }
     $process = Start-Process cargo -ArgumentList @('test', '--locked', '--features', 'windows-tray', 'frontends::tray::tests::native_windows_tray_visual_smoke', '--', '--ignored', '--exact', '--nocapture', '--test-threads=1') -PassThru -NoNewWindow -RedirectStandardOutput (Join-Path $directory 'cargo-stdout.log') -RedirectStandardError (Join-Path $directory 'cargo-stderr.log')
     # Cache the native process handle while it is alive. Windows PowerShell
     # otherwise can report a null ExitCode for a completed Start-Process.
@@ -130,4 +135,7 @@ try {
         Stop-Process -Id $fixturePid
     }
     if ($process -and -not $process.HasExited) { Stop-Process -Id $process.Id }
+    if ($previousDpi -and $previousDpi -ne [IntPtr]::Zero) {
+        [void][McwNativeProof]::SetThreadDpiAwarenessContext($previousDpi)
+    }
 }
