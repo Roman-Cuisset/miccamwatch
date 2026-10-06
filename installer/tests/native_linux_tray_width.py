@@ -144,7 +144,7 @@ def main():
                 ])
                 menu_monitor = launch(case + '-menu-transport', [
                     'stdbuf', '-oL', 'dbus-monitor',
-                    "type='method_call',interface='com.canonical.dbusmenu',member='AboutToShow'"
+                    "type='method_call',interface='com.canonical.dbusmenu'"
                 ])
                 fixture = launch(case + '-fixture', [
                     'cargo', 'test', '--lib', '--locked',
@@ -162,6 +162,9 @@ def main():
                 for row in view['items']:
                     require((row.get('detail') or row['label']).replace('\r', '\n') in diagnostic,
                             'full original menu row not retained in details')
+                # The DBus service registers before the GTK tray button is
+                # mapped. Let the isolated host finish its initial paint.
+                time.sleep(.5)
                 def open_fixture_menu():
                     run(['xdotool', 'mousemove', '26', '12', 'click', '3'])
                     time.sleep(.1)
@@ -170,7 +173,7 @@ def main():
                     # early click opens the panel's own context menu instead.
                     # Accept only a real host request to the fixture's DBusMenu.
                     traffic = (proof / (case + '-menu-transport.stdout')).read_text()
-                    if popup and 'member=AboutToShow' in traffic:
+                    if popup and 'member=GetLayout' in traffic:
                         return popup
                     run(['xdotool', 'key', 'Escape'])
                     return None
