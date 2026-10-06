@@ -32,6 +32,9 @@ lock, validates the same-volume staged CLI/package and refuses another running
 target. Original rwx permissions and quarantine are retained before staged
 execution; no Gatekeeper or TCC bypass is performed. No receipt or PATH change
 is made. A removed/disabled autostart registration stays absent/disabled.
+The private recovery copy also preserves the original quarantine bytes exactly:
+macOS `cp -p` rewrites this attribute, so the installer reinstates and checks
+the original value on that copy and refuses a concurrent source-attribute change.
 Failure rollback restores only an unchanged owned new target; a concurrent
 change or quarantined/missing file is preserved with the old backup for manual
 inspection. SIGKILL cannot run cleanup: a verified old/new executable and
