@@ -1,6 +1,6 @@
 # miccamwatch
 
-`mcw` monitors microphone and camera access using platform-specific evidence. Windows uses native capture and privacy APIs; Linux and macOS 15+ provide native monitoring, desktop frontends and scoped controls with narrower evidence. It supports high-contrast terminal colors, seven display languages, policy-driven trust validation, JSONL history and native event notifications. Detailed evidence remains in English for stable machine-readable diagnostics. Stable `v0.14.0` Unix packages are monitoring-only; the expanded native implementation is distributed through the explicitly selected Unix `v0.15.1` prerelease.
+`mcw` monitors microphone and camera access using platform-specific evidence. Windows uses native capture and privacy APIs; Linux and macOS 15+ provide native monitoring, desktop frontends and scoped controls with narrower evidence. It supports high-contrast terminal colors, seven display languages, policy-driven trust validation, JSONL history and native event notifications. Detailed evidence remains in English for stable machine-readable diagnostics. The coordinated `v0.16.0` distribution includes Windows ZIP/MSI, Linux x64 and macOS Apple Silicon/Intel packages; old `v0.14.0` monitoring-only Unix assets and the `v0.15.1` prerelease remain unchanged.
 
 ## Thank you @repentandliveholy — macOS camera fix
 
@@ -115,7 +115,7 @@ Status JSON is an object with an explicit schema version:
 ```json
 {
   "schema_version": 3,
-  "tool_version": "0.15.1",
+  "tool_version": "0.16.0",
   "collectors": [],
   "accesses": []
 }
@@ -146,22 +146,22 @@ For MSI installations, upgrade with the latest MSI from [GitHub Releases](https:
 
 The Windows updater downloads one exact release ZIP and checks its SHA-256 against both the selected GitHub API asset digest and its exact named `SHA256SUMS` entry, then validates both staged executable versions before shutdown. These share a release channel and are not an independent publisher signature. Signing is conditional on a real release certificate. If Defender quarantines `mcw.exe`, a `PATH` change is not a remedy: preserve Protection History details and follow [signing, provenance and safe incident handling](docs/SIGNING.md). No exclusion, disabled protection or quarantine restoration is recommended.
 
-### v0.14.0 native CLI packages
+### v0.16.0 coordinated native packages
 
 | Platform | Release asset | Requirements |
 | --- | --- | --- |
 | Windows x64 | `miccamwatch-windows-x86_64.zip` or `.msi` | Windows 10/11; ZIP includes matching CLI and tray |
-| Linux x64 (experimental) | `miccamwatch-linux-x86_64.tar.gz` | glibc 2.35+; `pw-dump` and accessible user PipeWire socket |
-| macOS Apple Silicon (experimental) | `miccamwatch-macos-aarch64.tar.gz` | macOS 15+ |
-| macOS Intel (experimental) | `miccamwatch-macos-x86_64.tar.gz` | macOS 15+ |
+| Linux x64 | `miccamwatch-linux-x86_64.tar.gz` | glibc 2.35+; PipeWire/SPA libraries, `pw-dump`, accessible user PipeWire socket |
+| macOS Apple Silicon | `miccamwatch-macos-aarch64.tar.gz` | macOS 15+; Aqua session for menu bar |
+| macOS Intel | `miccamwatch-macos-x86_64.tar.gz` | macOS 15+; Aqua session for menu bar |
 
-Download the matching archive and `SHA256SUMS` from the release. On Linux use `sha256sum --check --ignore-missing SHA256SUMS`; on macOS compare `shasum -a 256 <archive>` with the named checksum. Extract the archive and run `./mcw --version`, `./mcw doctor --json`, then `./mcw watch --json`. The macOS helper is embedded; no Swift compiler is needed at runtime. Apple Developer ID signing/notarization is not provided; Gatekeeper may require explicit approval under your organization's policy. Do not bypass managed security controls. Unix self-update is unavailable: replace the extracted binary with a verified newer archive.
+Download the matching archive and `SHA256SUMS` from the release. On Linux use `sha256sum --check --ignore-missing SHA256SUMS`; on macOS compare `shasum -a 256 <archive>` with the named checksum. Prefer the managed Unix installer below for safe updates and owned removal. For direct extraction, run `./mcw --version`, `./mcw doctor --json`, then `./mcw watch --json`; replacing an unmanaged archive remains manual. The macOS helper is embedded; no Swift compiler is needed at runtime. Apple Developer ID signing/notarization is not provided; Gatekeeper may require explicit approval under your organization's policy. Do not bypass managed security controls.
 
-v0.14.0 adds Linux PipeWire/V4L2 observation, macOS CoreAudio/AVFoundation observation, a shared Unix watcher, multi-OS CI and matched Windows CLI/tray updates. Native-runner smoke is required before publishing each package; physical microphone/camera capture remains unverified. Linux/macOS packages are experimental, not a promise of hardware blocking or complete camera coverage.
+`v0.16.0` includes the CoreMediaIO camera correction, systemd-activated PipeWire mute fix and optional explicitly approved Linux USB camera controls. Supported UVC block/restore was physically verified on one authorized Linux host; remaining physical/session limits are documented separately. A stable distribution does not imply universal hardware blocking or complete camera attribution. Windows signing requires a real configured certificate; without one ZIP/MSI executables are unsigned, and neither checksums nor provenance is antivirus clearance.
 
 ### Unix installer (macOS and Linux)
 
-By default the installer selects the latest **stable** release into `$HOME/.local/bin`, without sudo. Select `--version v0.15.1` for the Unix prerelease with native desktop/scoped-control features. Windows publication remains held; `v0.14.0` stays stable latest so existing Windows installer/updater selection keeps working. The installer chooses the native macOS Apple Silicon/Intel or Linux x64 package, resolves a concrete release, and verifies the exact archive entry in that release's `SHA256SUMS`. Supported systems are macOS 15+ and Linux x64 with glibc 2.35+. Unsupported architectures are rejected, never substituted.
+By default the installer selects the latest **stable** release into `$HOME/.local/bin`, without sudo. Use `--version v0.16.0` to pin the coordinated release, or omit `--version` to follow stable latest. The installer chooses the native macOS Apple Silicon/Intel or Linux x64 package, resolves a concrete release, and verifies the exact archive entry in that release's `SHA256SUMS`. Supported systems are macOS 15+ and Linux x64 with glibc 2.35+. Unsupported architectures are rejected, never substituted.
 
 Download and inspect the installer before running it:
 
@@ -170,33 +170,32 @@ curl --proto '=https' --tlsv1.2 -fsSL \
   https://raw.githubusercontent.com/Roman-Cuisset/miccamwatch/main/installer/install.sh \
   -o mcw-install.sh
 less mcw-install.sh
-sh mcw-install.sh --version v0.15.1 --add-path
+sh mcw-install.sh --version v0.16.0 --add-path
 ```
 
-Or explicitly select the Unix prerelease, with an interactive PATH proposal when a terminal is available:
+Or follow stable latest, with an interactive PATH proposal when a terminal is available:
 
 ```sh
 curl --proto '=https' --tlsv1.2 -fsSL \
   https://raw.githubusercontent.com/Roman-Cuisset/miccamwatch/main/installer/install.sh \
-  | sh -s -- --version v0.15.1
+  | sh
 ```
 
 Use `--add-path` for explicitly requested automatic PATH integration, or `--no-modify-path` to leave shell configuration untouched. Without either flag, a missing PATH entry is proposed through `/dev/tty`; a noninteractive installation does not wait for input or silently edit the shell configuration. Bash, zsh (including `ZDOTDIR`), and fish are supported. Open a new terminal after accepting PATH integration: an installer subprocess cannot change its parent's environment. You can then run `mcw --version`, `mcw doctor --json`, and `mcw watch --json` from any directory.
 
-`--prefix "$HOME/Applications/MicCamWatch"` installs into that prefix's `bin` directory. Repeat the installer with `--version v0.15.1` to upgrade an older managed Unix installation. Stop its active watcher/tray first. Failed downloads, integrity checks, or executable validation preserve an existing working installation. The `main` installer URL follows source updates; use a reviewed commit permalink to pin the script. Archives and checksums share a release channel and are not an independent publisher signature.
+`--prefix "$HOME/Applications/MicCamWatch"` installs into that prefix's `bin` directory. Repeat the installer with `--version v0.16.0` to upgrade an older managed Unix installation, or omit the version to follow stable latest. Stop its active watcher/tray first. Failed downloads, integrity checks, or executable validation preserve an existing working installation. The `main` installer URL follows source updates; use a reviewed commit permalink to pin the script. Archives and checksums share a release channel and are not an independent publisher signature.
 
 Root execution is refused. The installer does not overwrite an unmanaged executable, a symlink/hardlinked target, or an installer-owned executable modified independently; select a different prefix or move the old installation yourself. It refuses to replace or remove the installed executable while that target is running, without stopping any process. Ownership receipts live in `PREFIX/.miccamwatch-install`; retain them for safe upgrades and uninstall.
 
 To uninstall an installer-managed installation, run `sh mcw-install.sh --uninstall`, supplying the same `--prefix` if you used a custom prefix. Uninstallation removes only installer-owned executable/state and managed PATH entries; it does not delete policy, settings, or activity history. An executable or PATH block changed independently must not be removed as though it were still installer-owned.
 
-`v0.15.1` installs `mcw` with its shared TUI, native desktop mode and platform-scoped controls; `v0.14.0` remains monitoring-only. Installation never enables autostart, changes devices, approves a profile or grants capture permissions. Gatekeeper, SIP, TCC and quarantine protections are not bypassed. Apple Developer ID signing/notarization remains unavailable. `mcw update` on a managed Unix `0.15.1` installation follows the stable channel and refuses downgrades; select a prerelease explicitly through the installer.
+`v0.16.0` installs `mcw` with its shared TUI, native desktop mode and platform-scoped controls; old `v0.14.0` Unix assets remain monitoring-only. Installation never enables autostart, changes devices, approves a profile or grants capture permissions. Gatekeeper, SIP, TCC and quarantine protections are not bypassed. Apple Developer ID signing/notarization remains unavailable. `mcw update` on a managed Unix installation follows the stable channel and refuses downgrades; select a prerelease explicitly through the installer. An installed Linux root camera helper must be restored/removed in the order documented below before any user upgrade.
 
 The [published v0.15.1 prerelease](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.15.1) passed [public installation and v0.14.0 → v0.15.1 migration](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37301377449) on Linux x64, macOS Apple Silicon and Intel, with bash/zsh/fish: fresh shells, consent, idempotent PATH, running-executable refusal, failed-upgrade preservation and owned uninstall retaining preferences/history. The unshipped `v0.15.0` tag remains immutable and has no release/assets.
 
 All three archives and the SPDX SBOM were independently checked against public API digests and `SHA256SUMS`; their GitHub attestations verified the release workflow, exact source commit and `refs/tags/v0.15.1`. The checksum manifest is not separately attested. On the real Linux SSH host, managed `mcw update` retained `0.15.1` rather than downgrade to stable `0.14.0`. The native updater refuses a prefix whose owned ancestor directories are writable by another user; it does not silently change those permissions.
 
-The `0.16.0` source adds optional Linux USB camera controls; this is not a claim
-that a `v0.16.0` release has already been published. Physical Linux USB
+The `0.16.0` Linux package adds optional USB camera controls. Physical USB
 block/restore was separately verified within the documented support envelope.
 Linux packages built from this source include a matching `mcw-camera-helper`,
 reviewable administrator installer and Polkit policy. The ordinary installer

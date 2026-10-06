@@ -131,10 +131,12 @@ Les notes et travaux utilisateur précédant ce footer restent préservés.
 - [Migration publique 37422717465](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37422717465)
   verte : `v0.14.0` → `v0.15.1`, bash/zsh/fish, Linux x64 et deux architectures
   macOS, consentement/PATH, erreurs sans corruption et désinstallation possédée.
-- Publication inchangée : `v0.15.1` prerelease Unix, `v0.14.0` latest stable ;
-  `v0.15.0` immuable et non publié. Aucun tag/release `v0.16.0` créé, aucune
-  ouverture du gate de publication Windows. Les preuves `0.16.0` sont des
-  candidats de branche, pas une release publique approuvée.
+- Canal maintenant approuvé par l'utilisateur : `v0.16.0` stable **latest** sur
+  `main`, avec ZIP/MSI Windows et trois archives Unix. `v0.14.0`, `v0.15.1` et
+  le tag `v0.15.0` restent immuables ; aucune ancienne release n'est remplacée.
+  `WINDOWS_RELEASE_APPROVED=true` autorise cette publication complète, pas un
+  certificat de signature ni un verdict antivirus. La preuve publique de
+  publication/migration est consignée séparément après génération des artefacts.
 - Windows local reste la paire réelle CLI/tray `0.15.1`, issue de la source
   publiée `7d1e3dc17a6171b521a2f53b3cfebe663425ceb0` : CLI/TUI/tray/update
   exercés, autostart possédé préservé, scans Defender réels terminés aux chemins
