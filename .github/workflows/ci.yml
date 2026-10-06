@@ -605,18 +605,6 @@ jobs:
             --root-installer "$RUNNER_TEMP/native-proof/package/install-camera-helper.sh" \
             --version "$version" \
             --proof "$RUNNER_TEMP/native-proof/linux-camera"
-      - name: Exercise genuine macOS portable bootstrap and self-update
-        if: runner.os == 'macOS'
-        shell: bash
-        env:
-          PACKAGE: miccamwatch-macos-${{ matrix.arch }}.tar.gz
-        run: |
-          version=$(python3 -c 'import json, subprocess; print("v" + json.loads(subprocess.check_output(["cargo", "metadata", "--no-deps", "--format-version", "1"]))["packages"][0]["version"])')
-          python3 -B installer/tests/native_mac_portable_update.py \
-            --source-file "$GITHUB_WORKSPACE/installer/install.sh" \
-            --archive "$GITHUB_WORKSPACE/$PACKAGE" \
-            --version "$version" \
-            --proof "$RUNNER_TEMP/native-proof/macos-portable-update"
       - name: Record separate read-only macOS system and MCW camera inventories
         if: runner.os == 'macOS'
         shell: bash
@@ -680,6 +668,18 @@ jobs:
         if: runner.os == 'macOS'
         shell: bash
         run: python3 installer/tests/native_macos_menu.py --proof "$RUNNER_TEMP/native-proof/menu-width" --isolated-clipboard
+      - name: Exercise genuine macOS portable bootstrap and self-update
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          PACKAGE: miccamwatch-macos-${{ matrix.arch }}.tar.gz
+        run: |
+          version=$(python3 -c 'import json, subprocess; print("v" + json.loads(subprocess.check_output(["cargo", "metadata", "--no-deps", "--format-version", "1"]))["packages"][0]["version"])')
+          python3 -B installer/tests/native_mac_portable_update.py \
+            --source-file "$GITHUB_WORKSPACE/installer/install.sh" \
+            --archive "$GITHUB_WORKSPACE/$PACKAGE" \
+            --version "$version" \
+            --proof "$RUNNER_TEMP/native-proof/macos-portable-update"
       - name: Remove temporary native smoke programs even on failure
         if: always()
         shell: bash
