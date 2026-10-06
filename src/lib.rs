@@ -22,6 +22,9 @@ pub mod privacy;
 #[cfg(target_os = "macos")]
 #[path = "privacy/macos.rs"]
 pub mod privacy;
+#[cfg(target_os = "linux")]
+#[path = "privacy/linux.rs"]
+pub mod privacy;
 pub mod settings;
 #[cfg(windows)]
 pub mod updater;

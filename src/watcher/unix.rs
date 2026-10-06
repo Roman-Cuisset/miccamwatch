@@ -274,11 +274,11 @@ fn reconcile(
     for collector in &snapshot.collectors {
         let resource = match collector.collector {
             "pipewire_audio" | "coreaudio_input" => Resource::Microphone,
-            "pipewire_video" | "avfoundation_video" => Resource::Camera,
+            "pipewire_video" | "coremediaio_video" => Resource::Camera,
             _ => continue,
         };
         // Limited coverage is not a scan gap unless the collector explicitly
-        // reports one; permanent AVFoundation limitations still permit STOP.
+        // reports one; CoreMediaIO's unknown-client limitation still permits STOP.
         if collector.state == CollectorState::Unavailable
             || snapshot.observation_gaps.contains(&resource)
         {
@@ -402,17 +402,17 @@ mod tests {
         camera.key = "camera-1".into();
         for snap in [
             named_snapshot(
-                "avfoundation_video",
+                "coremediaio_video",
                 CollectorState::Degraded,
                 vec![camera.clone()],
             ),
-            named_snapshot("avfoundation_video", CollectorState::Degraded, vec![]),
+            named_snapshot("coremediaio_video", CollectorState::Degraded, vec![]),
             named_snapshot(
-                "avfoundation_video",
+                "coremediaio_video",
                 CollectorState::Degraded,
                 vec![camera.clone()],
             ),
-            named_snapshot("avfoundation_video", CollectorState::Degraded, vec![]),
+            named_snapshot("coremediaio_video", CollectorState::Degraded, vec![]),
         ] {
             reconcile(&mut previous, &mut unseen, &snap, |_, action| {
                 actions.push(action);
@@ -479,7 +479,7 @@ mod tests {
 
     #[test]
     fn camera_discovery_gap_retains_access_and_rebaselines() {
-        assert_degraded_gap_rebaselines(Resource::Camera, "avfoundation_video");
+        assert_degraded_gap_rebaselines(Resource::Camera, "coremediaio_video");
     }
 
     #[test]

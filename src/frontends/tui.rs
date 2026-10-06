@@ -1,4 +1,4 @@
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(windows, target_os = "linux", target_os = "macos"))]
 use crate::privacy::{self, CameraPrivacyState};
 use crate::{
     config::Policy,
@@ -9,12 +9,6 @@ use crate::{
     },
     platform::PlatformMonitor,
 };
-#[cfg(target_os = "linux")]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum CameraPrivacyState {
-    Allowed,
-    Blocked,
-}
 use anyhow::{Context, Result};
 use chrono::Local;
 use crossterm::{
@@ -97,22 +91,6 @@ fn microphone_scope(lang: Language) -> &'static str {
     }
 }
 
-#[cfg(target_os = "linux")]
-fn camera_unavailable(lang: Language) -> &'static str {
-    text(
-        lang,
-        [
-            "Camera control unavailable on Linux",
-            "Contrôle caméra indisponible sous Linux",
-            "Kamerasteuerung unter Linux nicht verfügbar",
-            "Control de cámara no disponible en Linux",
-            "Linux のカメラ制御は利用できません",
-            "Linux 摄像头控制不可用",
-            "Управление камерой в Linux недоступно",
-        ],
-    )
-}
-
 fn microphone_label(lang: Language, state: MicrophoneMuteState) -> String {
     #[cfg(windows)]
     return lang.microphone_status(state).to_owned();
@@ -158,7 +136,40 @@ fn camera_label(lang: Language, state: CameraPrivacyState) -> &'static str {
             ],
         },
     );
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    return text(
+        lang,
+        match state {
+            CameraPrivacyState::Blocked => [
+                "Supported USB cameras blocked",
+                "Caméras USB compatibles bloquées",
+                "Unterstützte USB-Kameras gesperrt",
+                "Cámaras USB compatibles bloqueadas",
+                "対応 USB カメラをブロック中",
+                "支持的 USB 摄像头已禁用",
+                "Поддерживаемые USB-камеры заблокированы",
+            ],
+            CameraPrivacyState::Allowed => [
+                "No owned USB camera blocks",
+                "Aucun blocage USB possédé",
+                "Keine eigenen USB-Kamerasperren",
+                "Sin bloqueos USB propios",
+                "自分の USB カメラブロックなし",
+                "无自有 USB 摄像头禁用",
+                "Своих блокировок USB-камер нет",
+            ],
+            CameraPrivacyState::SystemManaged => [
+                "USB ownership partial/stale — inspect camera status",
+                "État USB partiel/périmé — voir camera status",
+                "USB-Besitz teilweise/veraltet — camera status prüfen",
+                "Estado USB parcial/obsoleto — consulte camera status",
+                "USB 所有状態が一部・古い — camera status を確認",
+                "USB 状态部分或过期 — 查看 camera status",
+                "USB владение неполное/устарело — см. camera status",
+            ],
+        },
+    );
+    #[cfg(windows)]
     match state {
         CameraPrivacyState::Blocked => text(
             lang,
@@ -184,7 +195,6 @@ fn camera_label(lang: Language, state: CameraPrivacyState) -> &'static str {
                 "Разрешена",
             ],
         ),
-        #[cfg(windows)]
         CameraPrivacyState::SystemManaged => text(
             lang,
             [
@@ -240,16 +250,10 @@ impl ActionWorker {
             while let Ok(command) = requests.recv() {
                 let response = match command {
                     WorkerCommand::Camera(desired) => {
-                        #[cfg(any(windows, target_os = "macos"))]
                         let result = desired.map_or_else(privacy::camera_state, |desired| {
                             privacy::set_camera_state(desired)?;
                             privacy::camera_state()
                         });
-                        #[cfg(target_os = "linux")]
-                        let result = {
-                            let _ = desired;
-                            Err(anyhow::anyhow!("Linux camera control is unavailable"))
-                        };
                         WorkerResponse::Camera(result)
                     }
                     WorkerCommand::Mute => WorkerResponse::Mute((|| {
@@ -436,11 +440,6 @@ fn handle_action(
     refresh: &Sender<()>,
 ) -> Result<bool> {
     let lang = state.lang;
-    #[cfg(target_os = "linux")]
-    if matches!(action, Action::BlockCamera | Action::RestoreCamera) {
-        state.message(camera_unavailable(lang).to_owned(), Color::Yellow);
-        return Ok(false);
-    }
     if action != Action::Kill {
         state.pending_kill = None;
     }
@@ -479,7 +478,6 @@ fn handle_action(
                 Color::Red,
             ),
         }
-        #[cfg(any(windows, target_os = "macos"))]
         if state.action_pending.is_none() && !state.camera_pending {
             match worker.send(WorkerCommand::Camera(None)) {
                 Ok(()) => state.camera_pending = true,
@@ -521,7 +519,10 @@ fn handle_action(
             } else {
                 CameraPrivacyState::Allowed
             };
-            if state.camera_state == Some(desired) && state.camera_error.is_none() {
+            if !cfg!(target_os = "linux")
+                && state.camera_state == Some(desired)
+                && state.camera_error.is_none()
+            {
                 state.message(camera_label(lang, desired).to_owned(), Color::Yellow);
                 return Ok(false);
             }
@@ -679,7 +680,6 @@ fn tui_loop(
     lang: Language,
 ) -> Result<()> {
     let worker = ActionWorker::new(policy.clone());
-    #[cfg(any(windows, target_os = "macos"))]
     worker.send(WorkerCommand::Camera(None))?;
     let (refresh, observations) = observe(policy);
     let mut state = TuiState {
@@ -708,17 +708,8 @@ fn tui_loop(
         ),
         pending_kill: None,
         camera_state: None,
-        camera_error: {
-            #[cfg(target_os = "linux")]
-            {
-                Some(camera_unavailable(lang).to_owned())
-            }
-            #[cfg(not(target_os = "linux"))]
-            {
-                None
-            }
-        },
-        camera_pending: !cfg!(target_os = "linux"),
+        camera_error: None,
+        camera_pending: true,
         action_pending: None,
         controls_error: None,
         buttons: Vec::new(),
@@ -1341,6 +1332,11 @@ fn draw_ui(f: &mut Frame, state: &mut TuiState, accesses: &[Access]) {
                 "Профиль камеры: только ручное одобрение/удаление",
             ],
         ),
+        Style::default().fg(Color::Yellow),
+    )));
+    #[cfg(target_os = "linux")]
+    stat_lines.push(Line::from(Span::styled(
+        privacy::camera_capability(),
         Style::default().fg(Color::Yellow),
     )));
 

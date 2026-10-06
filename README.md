@@ -2,6 +2,16 @@
 
 `mcw` monitors microphone and camera access using platform-specific evidence. Windows uses native capture and privacy APIs; Linux and macOS 15+ provide native monitoring, desktop frontends and scoped controls with narrower evidence. It supports high-contrast terminal colors, seven display languages, policy-driven trust validation, JSONL history and native event notifications. Detailed evidence remains in English for stable machine-readable diagnostics. Stable `v0.14.0` Unix packages are monitoring-only; the expanded native implementation is distributed through the explicitly selected Unix `v0.15.1` prerelease.
 
+## Thank you @repentandliveholy — macOS camera fix
+
+**Thank you [@repentandliveholy](https://github.com/repentandliveholy)** for the real-device diagnosis, public CoreMediaIO fix and local validation that made this correction possible. On a MacBook Pro with Apple Silicon and macOS 27, @repentandliveholy reported that Telegram circle recording left the previous AVFoundation activity property false, while CoreMediaIO correctly transitioned **0 → 1 → 0**; their locally patched build reported **FaceTime HD Camera START/STOP**. This is friend-reported hardware evidence, not a run performed by the maintainers or hosted CI.
+
+The `0.16.0` source integrates that correction; published `v0.15.1` remains unchanged. AVFoundation still discovers cameras; public CoreMediaIO reports device running-state with **unknown client/PID**, medium confidence and degraded coverage. It does not prove frame flow or permit per-application enforcement. Read errors stay unknown, never silently inactive.
+
+The revised helper passed native macOS 15.7.9 Apple Silicon/Intel builds, regressions and extracted CLI/TUI/menu-bar smoke in the [successful three-platform dry run 37425122074](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37425122074). Both system and MCW inventories reported zero cameras on the macOS runners; they cannot establish macOS 27 hardware parity. Linux privileged installation/recovery and ordinary-user lifecycle checks also passed. On the authorized Linux hardware host, real Polkit-approved CLI block/allow revoked an ongoing UVC capture, denied new capture even to root, and restored the original bindings and capture. See [verification boundaries](docs/ARCHITECTURE.md#native-0160-software-verification-boundaries) for exact sources, agent prerequisites and remaining physical limits.
+
+The [latest native dry run 37429480145](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37429480145) also passed the PipeWire socket-activation correction in source `8be1f1b`: session mute now verifies the socket creator's UID/process generation without requiring its executable, while capture-process identity checks remain strict. On the real systemd-activated host, `doctor` returned 0 and independent PipeWire readback verified mute/restoration and preservation of an already-muted original.
+
 ## Current capabilities
 
 - Enumerates active microphone sessions through Windows Core Audio/WASAPI with real-time session callbacks.
@@ -21,15 +31,15 @@
 - High-contrast terminal color coding for instant status recognition (green, yellow, orange, red).
 - Seven display/help languages with native locale detection: English (`en`), French (`fr`), German (`de`), Spanish (`es`), Japanese (`ja`), Simplified Chinese (`zh`), Russian (`ru`).
 - Microphone mute/query/owned restoration (`mcw mute` / `mcw unmute` / `mcw mute --toggle`): Windows capture endpoints, Linux PipeWire session sources, or writable macOS CoreAudio inputs. This is not a universal hardware kill-switch or a guarantee against bypassing those scopes.
-- Interactive full-terminal live dashboard (`mcw top`) with keyboard and left-click controls. Shortcuts accept either case; `[b]` blocks connected Windows cameras and `[a]` restores cameras previously blocked by MicCamWatch. The controls wrap on narrow terminals. `[k]` requires a second confirmation for the same live process identity; Esc cancels without quitting. Camera approval runs off the UI thread; pending operations prevent an unsafe quit and failures remain visible.
+- Interactive full-terminal live dashboard (`mcw top`) with keyboard and left-click controls. Shortcuts accept either case; `[b]` blocks supported connected Windows/USB Linux cameras and `[a]` restores cameras previously blocked by MicCamWatch; macOS retains manual profile approval/removal. Linux USB controls require separate administrator setup and explicit Polkit authorization. The controls wrap on narrow terminals. `[k]` requires a second confirmation for the same live process identity; Esc cancels without quitting. Camera approval runs off the UI thread; pending operations prevent an unsafe quit and failures remain visible.
 - Native desktop mode (`mcw tray`): Windows Notification Area, Linux StatusNotifierItem on a supporting desktop, or macOS AppKit menu bar.
-- Privacy commands expose the actual platform scope: Windows device blocking, Linux session-source mute, and writable macOS input mute plus an explicitly approved owned camera profile. Unsupported controls are disabled or refused, never reported as successful.
+- Privacy commands expose the actual platform scope: Windows device blocking, Linux session-source mute and explicitly authorized USB `uvcvideo` controls, and writable macOS input mute plus an explicitly approved owned camera profile. Unsupported controls are disabled or refused, never reported as successful.
 - Persistent settings and rotating JSONL history use application-data directories on Windows and XDG/HOME directories on Unix. Query exact paths with `mcw config settings-path` and `mcw history path`.
 - Single-instance per-user desktop service with native lifecycle IPC (`mcw tray status` / `mcw tray stop`).
 - Opt-in termination of explicitly policy-denied active capture processes after two consecutive observations (`--kill-unauthorized`, disabled by default).
 - Three-state session lock detection on Windows/Linux; unknown lock state never triggers enforcement. Public macOS lock state stays unknown and enabling lock policy is refused.
 - Discreet native audio chime upon confirmed capture initiation (`--sound`).
-- Monitoring runs without administrator privileges. Windows camera device changes request administrator approval; macOS camera profile installation/removal requires manual approval in System Settings.
+- Monitoring runs without administrator privileges. Windows camera device changes request administrator approval; Linux USB camera changes use a separately installed root-owned helper with explicit Polkit authorization; macOS camera profile installation/removal requires manual approval in System Settings.
 
 ## Commands
 
@@ -94,7 +104,7 @@ The three assessment dimensions are intentionally independent:
 | `risk` | `expected`, `unexplained`, `suspicious`, `blocked` | Security interpretation of all collected evidence. `blocked` means Windows permission is denied; it does not claim that frames bypassed Windows. |
 | `confidence` | `high`, `medium`, `low` | Strength of the activity claim, not a probability or threat score. |
 
-On Windows, microphone attribution uses an active WASAPI capture session and has high confidence. An open Capability Access Manager interval provides medium-confidence camera activity; loaded camera modules provide low-confidence readiness only. Linux requires running PipeWire nodes and an active capture link for `active`. On macOS 15+, CoreAudio process `isRunningInput` signals microphone `active` only for a process exposed by `AudioHardwareSystem.processes`; AVFoundation `AVCaptureDevice.isInUseByAnotherApplication` signals camera `active` without a PID. Neither signal proves audio samples or camera frame flow.
+On Windows, microphone attribution uses an active WASAPI capture session and has high confidence. An open Capability Access Manager interval provides medium-confidence camera activity; loaded camera modules provide low-confidence readiness only. Linux requires running PipeWire nodes and an active capture link for `active`. On macOS 15+, CoreAudio process `isRunningInput` signals microphone `active` only for a process exposed by `AudioHardwareSystem.processes`; AVFoundation discovers cameras and public CoreMediaIO [`kCMIODevicePropertyDeviceIsRunningSomewhere`](https://developer.apple.com/documentation/coremediaio/kcmiodevicepropertydeviceisrunningsomewhere) supplies medium-confidence, device-level camera `active` when its `UInt32` value is nonzero, without a client PID. Neither signal proves audio samples or camera frame flow. Inventory (`mcw devices`) does not query camera activity or request capture permissions. Empty discovery, missing states and API errors create observation gaps that suppress invented STOP events; known active/idle states still permit real START/STOP while camera coverage remains degraded.
 
 `mcw` deliberately has no heuristic `unauthorized` result. Enforcement is separate from risk: only an explicit publisher/path policy mismatch produces `enforcement = "deny"`. Automatic termination additionally requires confirmed `active` capture, a PID, two consecutive observations, and a non-protected process. An unattributed macOS camera observation has unknown enforcement and cannot trigger termination.
 
@@ -185,6 +195,22 @@ The [published v0.15.1 prerelease](https://github.com/Roman-Cuisset/miccamwatch/
 
 All three archives and the SPDX SBOM were independently checked against public API digests and `SHA256SUMS`; their GitHub attestations verified the release workflow, exact source commit and `refs/tags/v0.15.1`. The checksum manifest is not separately attested. On the real Linux SSH host, managed `mcw update` retained `0.15.1` rather than downgrade to stable `0.14.0`. The native updater refuses a prefix whose owned ancestor directories are writable by another user; it does not silently change those permissions.
 
+The `0.16.0` source adds optional Linux USB camera controls; this is not a claim
+that a `v0.16.0` release has already been published. Physical Linux USB
+block/restore was separately verified within the documented support envelope.
+Linux packages built from this source include a matching `mcw-camera-helper`,
+reviewable administrator installer and Polkit policy. The ordinary installer
+places these payloads in `PREFIX/share/miccamwatch/linux-camera` and maintains
+their same-version ownership receipts alongside `mcw`. A managed update refreshes
+the user payload transactionally, **not** the root helper. User uninstall removes
+only unchanged owned user payloads, never privileged files or restoration state.
+User upgrade/reinstall/uninstall is refused while any root helper installation
+is present, including untrusted or malformed remnants. An `allowed` camera state
+does not prove ownership evidence is empty or exclude a concurrent camera action.
+Explicitly restore and remove the privileged installation first; the installer
+never does that for you.
+For root setup/update/removal, see [Linux USB camera administrator setup](#linux-usb-camera-administrator-setup).
+
 ## Policy configuration
 
 Create a TOML policy file to control trust evaluation:
@@ -239,8 +265,111 @@ are not overwritten or removed.
 
 Linux microphone controls mute PipeWire session sources through native Props,
 retain original values, and restore only MCW-owned changes in the same live
-server/node identity. They do not deny direct ALSA access. Global Linux camera
-blocking is unsupported: direct V4L2 access can bypass PipeWire.
+server/node identity. They do not deny direct ALSA access. Linux camera controls
+use a separate explicitly authorized helper to detach supported USB video-class
+interfaces from `uvcvideo` through `USBDEVFS_IOCTL(DISCONNECT)`, and restore owned
+bindings through `USBDEVFS_IOCTL(CONNECT)`. Each operation uses a pinned
+`/dev/bus/usb` device-generation file descriptor, without claiming any interfaces;
+driver and generation state are independently read back. Sysfs is read-only
+inventory/status, not a path-name mutation target.
+This affects direct V4L2 as well as PipeWire for those interfaces, not non-USB
+cameras or every possible capture path. No global driver unload, device-node
+permission change, or USB audio/storage control is performed.
+New blocks require an original arrangement whose video-class siblings are all
+bound to `uvcvideo`; mixed bound/unbound arrangements are externally managed
+and refused before recording intent or changing drivers. Initially all-unbound
+cameras are left untouched.
+The supported descriptor envelope is deliberately conservative: exactly one USB
+configuration, with every alternate of a selected interface number retaining
+video class `0x0e` and the same control/streaming subclass. Multi-configuration,
+role-changing, damaged/ambiguous descriptors and current-configuration mismatches
+are unsupported, not handled by a broader fallback. Single-configuration
+composite devices can retain separate audio/storage interfaces untouched.
+
+### Linux USB camera administrator setup
+
+Optional camera control needs Linux USBFS generation metadata
+(`USBDEVFS_CONNINFO_EX`, kernel 5.9+; the documented baseline is Linux 5.15+),
+Polkit (`/usr/bin/pkexec`), a usable authorization agent for interactive actions,
+and a matching root-installed helper. Missing kernel support is an honest
+unsupported result, not a fallback to generation-unsafe sysfs writes.
+Administrator setup additionally needs `/usr/bin/python3`. The CLI, TUI `[b]`/`[a]`, and native
+tray menu initiate only explicit actions; startup, status and polling never prompt
+for privilege. Missing/untrusted/version-mismatched helpers are errors with setup
+instructions, not successful blocks.
+
+On the authorized SSH host, `pkexec`'s internal text agent failed with
+`No session for cookie`, including a native invocation outside MCW; restarting
+Polkit did not fix that failure. A standard **unprivileged `pkttyagent` registered
+for the CLI process** successfully requested fresh administrator passwords for
+block and restore. No authorization rule, PAM file, account or permission was
+changed to obtain success. Headless/SSH use needs a functioning registered
+agent; the presence of `pkexec` alone does not prove that authorization works.
+
+Download the matching Linux archive and `SHA256SUMS` from the selected release,
+verify the archive digest, and review `install-camera-helper.sh` and
+`com.roman-cuisset.miccamwatch.camera.policy`. Checksums and an archive from the
+same release protect integrity, not independent publisher authenticity; an
+administrator must establish trust in the release and reviewed installer.
+Do not elevate `mcw`, the user-side helper, a curl pipeline or an arbitrary
+shell command through Polkit. Run the separate reviewed installer explicitly:
+
+```sh
+# Replace these arguments with absolute paths and the reviewed archive digest.
+sudo /bin/sh /absolute/path/install-camera-helper.sh \
+  --archive /absolute/path/miccamwatch-linux-x86_64.tar.gz \
+  --sha256 '<reviewed 64-character archive SHA-256>'
+mcw camera status
+mcw camera block    # Explicit administrator authorization; supported current USB cameras only.
+mcw camera allow    # Restore only exact identities recorded by MCW.
+```
+
+The administrator installer makes a private root-owned copy, verifies its
+checksum before extraction/execution, checks protocol and CLI/helper version
+pairing, and installs the fixed root-owned
+`/usr/local/libexec/miccamwatch/mcw-camera-helper` plus the fixed Polkit policy.
+It does not start anything, request camera permission, or change devices.
+The root journal lives under `/var/lib/miccamwatch`, with private ownership
+records and an integrity-checked readable status cache; cache data never
+authorizes mutation.
+
+Use this ordered upgrade procedure:
+
+1. Run `mcw camera allow` with the **old matching CLI/helper** to restore changes
+   and retire eligible vanished-generation records.
+2. Run the reviewed administrator installer with `--uninstall`. It refuses
+   removal while restoration records remain or evidence is malformed.
+3. Update/reinstall the ordinary managed user installation. It refuses while
+   any root helper installation is still present, even if status says `allowed`.
+4. Explicitly repeat administrator setup with the verified new same-version
+   archive.
+
+For removal, perform steps 1 and 2 before ordinary user uninstall. These steps
+never implicitly elevate or mutate a device; restoration is a separate explicit
+authorized action. Modified/unmanaged files and nonempty/malformed restoration
+evidence are preserved, not forcibly removed. Successful explicit root removal
+transactionally deletes only integrity-verified empty journal/cache files, so
+stale version-bound empty status cannot obstruct the new user CLI. The permanent
+operation-lock inode is retained. Root-helper setup/removal and camera mutations share the
+root operation lock, and a mapped helper revalidates its fixed executable after
+acquiring that lock so it cannot act after root uninstall. Concurrent
+administrator reinstallation during the ordinary user lifecycle is outside this
+ordered procedure and must not be performed.
+
+Blocking journals each original exact USB identity before kernel changes.
+Reboot, replacement, unplug/replug, partial changes or authorization denial can
+produce an honest incomplete/stale state; MCW must not bind a different camera
+as though it were the recorded device. Explicit `camera allow` may retire records
+from a prior boot or a demonstrably vanished/replaced parent USB device generation,
+without touching replacements. Changed interface inodes alone do not authorize
+retirement. Inspect `mcw camera status` and its detail; never delete the journal
+as a recovery shortcut. Newly plugged cameras
+are not automatically blocked. Non-USB cameras and automatic Linux
+camera-on-lock are unsupported: explicitly block before locking, rather than
+expect an authorization dialog to work on a locked desktop. Physical capture
+denial/restoration remains unverified until independently exercised on hardware.
+
+### macOS desktop camera restrictions
 
 macOS microphone controls operate only on writable CoreAudio input-mute
 properties. Missing/read-only properties are unavailable, not muted.
@@ -272,15 +401,15 @@ cargo build --release --locked --features windows-tray
 
 Windows executables are created at `target/release/mcw.exe` and `target/release/mcw-tray.exe`. Without `windows-tray`, only the CLI is built.
 
-For Linux, install stable Rust, `pkg-config`, PipeWire/SPA development headers and libclang, then run `cargo build --release --locked`. Runtime monitoring needs the user PipeWire service and `pw-dump`; detached signature rules need GnuPG. Ubuntu 22.04's stock PipeWire 0.3.48 headers are supported. On macOS 15+, install Xcode Command Line Tools with a macOS 15 SDK and Swift compiler, then run the same Cargo command. Cargo embeds a private ad-hoc-signed native helper application in `mcw`; no development script is needed at runtime. Ad-hoc signing establishes helper integrity/identity, not Developer ID trust or notarization.
+For Linux, install stable Rust, `pkg-config`, PipeWire/SPA development headers and libclang, then run `cargo build --release --locked --features linux-camera-helper` to build both `mcw` and the optional camera helper. Without that feature only the CLI is built; separately reviewed administrator setup is still required for camera mutation. Runtime monitoring needs the user PipeWire service and `pw-dump`; detached signature rules need GnuPG. Ubuntu 22.04's stock PipeWire 0.3.48 headers are supported. On macOS 15+, install Xcode Command Line Tools with a macOS 15 SDK and Swift compiler, then run `cargo build --release --locked`. Cargo embeds a private ad-hoc-signed native helper application in `mcw`; no development script is needed at runtime. Ad-hoc signing establishes helper integrity/identity, not Developer ID trust or notarization.
 
 ## Platform scope
 
 | OS / environment | Microphone `active` / PID | Camera `active` / PID | Camera `ready` | Hardware blocking and desktop controls |
 | --- | --- | --- | --- | --- |
 | Windows 10/11 | WASAPI session / validated process | Capture activity evidence / validated process where available | Loaded capture pipeline, unconfirmed | Administrator-approved camera device controls, mute, tray and notifications |
-| Linux desktop with PipeWire | Running source, stream and active capture link / authenticated Client PID validated with `/proc` | Running video source, stream and active capture link / validated authenticated PID | Idle stream or direct V4L2 open FD, low confidence | Session-source mute; no global camera block; native TUI, notifications and StatusNotifierItem host required |
-| macOS 15+ | CoreAudio input activity / validated PID when libproc identity is readable | AVFoundation other-application use / **unknown PID** | Not inferred from camera availability | Writable input mute, manually approved owned camera profile, native TUI and AppKit menu bar |
+| Linux desktop with PipeWire | Running source, stream and active capture link / authenticated Client PID validated with `/proc` | Running video source, stream and active capture link / validated authenticated PID | Idle stream or direct V4L2 open FD, low confidence | Session-source mute; explicitly authorized USB `uvcvideo` controls (separate root setup); non-USB cameras unsupported; native TUI, notifications and StatusNotifierItem host required |
+| macOS 15+ | CoreAudio input activity / validated PID when libproc identity is readable | CoreMediaIO device running-state / **unknown PID** | Not inferred from camera availability | Writable input mute, manually approved owned camera profile, native TUI and AppKit menu bar |
 | WSL or virtual/headless runners | No guaranteed access to physical capture hardware or user session | No guaranteed camera signal | Inventory is not access proof | No hardware behavior claim |
 
 Linux builds a native CLI using the `pw-dump` PipeWire client and `/proc` (no administrator privileges required for the CLI). The Linux host needs an accessible user PipeWire socket (`XDG_RUNTIME_DIR`, optionally `PIPEWIRE_REMOTE`), `pw-dump`, and readable `/proc/<pid>/stat` and `/proc/<pid>/exe` for PID attribution. `mcw status --json`, `mcw devices`, `mcw doctor`, and `mcw watch --json` run on Linux and macOS. `watch --json` emits access-event JSONL and a status document containing `collectors` when health changes; Ctrl+C stops it.
@@ -294,7 +423,7 @@ does not provide that backend. Playback acceptance is not physical audibility.
 
 On Linux, only a **running PipeWire capture stream with an active source link and a running source node** is marked `active`. A claimed application PID must match the owning Client's server-authenticated `pipewire.sec.pid`, then pass `/proc` start-time and executable validation; forwarded portal/PulseAudio clients without matching identity remain unattributed. A direct V4L2 open FD never proves frame flow; video health is `degraded` when a camera may be accessed outside PipeWire. An inaccessible or restarting PipeWire socket is `unavailable` (`status` exits 2), not an all-clear. `--include-ready` exposes unconfirmed PipeWire streams and direct `/dev/video*` handles as `ready`, never as active.
 
-On macOS, camera usage is device-level only: an application name or PID cannot be inferred from AVFoundation's in-use boolean. Camera health stays `degraded` because own-application use and noninteractive TCC/device discovery can be missed; an empty scan is not proof of no use. CI verifies backend commands and honest health reports, **not** physical microphone/camera transitions. No camera/TCC bypass or intrusive probe is attempted. Linux enforcement requires stable pidfd authority; macOS requires retained task/audit-token authority and refuses protected or inaccessible targets. Android needs a separate application.
+On macOS, camera activity uses CoreMediaIO device running-state, not AVFoundation's unreliable in-use boolean. The client/PID remains unknown, and running-state does not prove frame flow. Camera health stays `degraded`; failed or empty discovery and unknown/error activity queries create observation gaps, never invented idle or STOP events. CI verifies backend commands and honest health reports, **not** physical microphone/camera transitions. No camera/TCC bypass or intrusive probe is attempted. Linux enforcement requires stable pidfd authority; macOS requires retained task/audit-token authority and refuses protected or inaccessible targets. Android needs a separate application.
 
 The [0.15.1 native release dry run](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37299191864)
 passed Ubuntu 22.04/PipeWire 0.3.48 and macOS 15.7.9 on Apple Silicon and Intel:

@@ -1,10 +1,10 @@
 use anyhow::Result;
 use colored::Colorize;
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(windows, target_os = "linux", target_os = "macos"))]
 use miccamwatch::frontends::cli::CameraCommand;
 #[cfg(not(windows))]
 use miccamwatch::model::DiagnosticStatus;
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(windows, target_os = "linux", target_os = "macos"))]
 use miccamwatch::privacy;
 #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
 use miccamwatch::watcher;
@@ -342,7 +342,7 @@ fn run() -> Result<u8> {
                     #[cfg(target_os = "linux")]
                     if camera {
                         anyhow::bail!(
-                            "Linux camera blocking is unsupported; use lock-policy enable --microphone for PipeWire session sources"
+                            "Automatic Linux camera-on-lock is unavailable: USB controls require explicit administrator/Polkit authorization before locking; use camera block manually or lock-policy enable --microphone"
                         );
                     }
                     let both = !microphone && !camera;
@@ -395,9 +395,30 @@ fn run() -> Result<u8> {
             Ok(0)
         }
         #[cfg(target_os = "linux")]
-        Command::Camera { .. } => anyhow::bail!(
-            "Linux camera blocking is unsupported; PipeWire video observation is not a global V4L2 block"
-        ),
+        Command::Camera { command } => {
+            let state = match command {
+                CameraCommand::Status => privacy::camera_state()?,
+                CameraCommand::Allow => {
+                    privacy::set_camera_state(privacy::CameraPrivacyState::Allowed)?;
+                    privacy::camera_state()?
+                }
+                CameraCommand::Block => {
+                    privacy::set_camera_state(privacy::CameraPrivacyState::Blocked)?;
+                    privacy::camera_state()?
+                }
+                CameraCommand::Toggle => privacy::toggle_camera_state()?,
+            };
+            println!(
+                "{}",
+                match state {
+                    privacy::CameraPrivacyState::Allowed => "allowed",
+                    privacy::CameraPrivacyState::Blocked => "blocked",
+                    privacy::CameraPrivacyState::SystemManaged => "system_managed",
+                }
+            );
+            println!("{}", privacy::camera_detail()?);
+            Ok(0)
+        }
     }
 }
 

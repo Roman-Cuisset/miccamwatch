@@ -26,6 +26,7 @@ import select
 import shlex
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tarfile
@@ -75,6 +76,13 @@ def download(curl, url, destination):
     ], timeout=200)
 
 
+CAMERA_NAMES = (
+    "mcw-camera-helper",
+    "install-camera-helper.sh",
+    "com.roman-cuisset.miccamwatch.camera.policy",
+)
+
+
 def released_binary(curl, root, version):
     os_name = platform.system()
     arch = platform.machine().lower()
@@ -102,11 +110,41 @@ def released_binary(curl, root, version):
         members = [member for member in release.getmembers() if member.name.removeprefix("./") == "mcw"]
         require(len(members) == 1 and members[0].isfile(), "release lacks one regular mcw executable")
         binary = release.extractfile(members[0]).read()
+        camera = {}
+        if os_name == "Linux" and tuple(map(int, version[1:].split("."))) >= (0, 16, 0):
+            for name in CAMERA_NAMES:
+                matches = [member for member in release.getmembers() if member.name == name]
+                require(len(matches) == 1 and matches[0].isfile(), f"release lacks regular camera payload: {name}")
+                camera[name] = release.extractfile(matches[0]).read()
     executable = root / "verified-release-mcw"
     executable.write_bytes(binary)
     executable.chmod(0o755)
     require(run([executable, "--version"]).stdout.strip() == f"mcw {version[1:]}", "release version mismatch")
-    return asset, binary
+    return asset, binary, camera
+
+
+def local_camera_archive(path, root, version):
+    require(platform.system() == "Linux", "--camera-archive requires native Linux")
+    require(tuple(map(int, version[1:].split("."))) >= (0, 16, 0),
+            "--camera-archive requires explicit --version v0.16.0 or newer")
+    required = {"mcw", "README.md", "LICENSE", *CAMERA_NAMES}
+    with tarfile.open(path, "r:gz") as archive:
+        members = archive.getmembers()
+        require(len(members) == len(required) and {member.name for member in members} == required
+                and all(member.isfile() for member in members), "local archive violates the Linux release contract")
+        binary = archive.extractfile("mcw").read()
+        camera = {name: archive.extractfile(name).read() for name in CAMERA_NAMES}
+    executable = root / "verified-local-mcw"
+    executable.write_bytes(binary)
+    executable.chmod(0o755)
+    require(run([executable, "--version"]).stdout.strip() == f"mcw {version[1:]}",
+            "local CLI does not match the explicitly requested feature version")
+    helper = root / "verified-local-camera-helper"
+    helper.write_bytes(camera["mcw-camera-helper"])
+    helper.chmod(0o755)
+    require(json.loads(run([helper, "--protocol-version"]).stdout)
+            == {"protocol": 1, "version": version[1:]}, "local helper does not match the CLI/protocol")
+    return "miccamwatch-linux-x86_64.tar.gz", binary, camera
 
 
 class Sandbox:
@@ -282,7 +320,12 @@ def validate_status(document, version):
     require(document.get("tool_version") == version[1:], "status reports a different installed release")
     require(isinstance(document.get("schema_version"), int), "status lacks a versioned JSON schema")
     require(isinstance(document.get("accesses"), list), "status accesses are not a list")
-    expected = {"pipewire_audio", "pipewire_video"} if platform.system() == "Linux" else {"coreaudio_input", "avfoundation_video"}
+    if platform.system() == "Linux":
+        expected = {"pipewire_audio", "pipewire_video"}
+    else:
+        # Public-release smoke also intentionally exercises older real releases.
+        video = "coremediaio_video" if tuple(map(int, version[1:].split("."))) >= (0, 16, 0) else "avfoundation_video"
+        expected = {"coreaudio_input", video}
     collectors = document.get("collectors", [])
     require({item["collector"] for item in collectors} == expected, "wrong native collectors in installed status")
     require(all(item["state"] in ("healthy", "degraded", "unavailable") for item in collectors), "invalid collector health")
@@ -470,14 +513,17 @@ def fixture_curl(arguments):
     return 0
 
 
-def archive_bytes(binary, extra=None, replacement=None):
+def archive_bytes(binary, extra=None, replacement=None, camera=None):
     output = io.BytesIO()
     # macOS TMPDIR paths can exceed USTAR's 100-byte linkname field.
     with tarfile.open(fileobj=output, mode="w:gz", format=tarfile.PAX_FORMAT) as archive:
-        for name, content, mode in (("mcw", binary, 0o755), ("README.md", b"fixture readme\n", 0o644), ("LICENSE", b"fixture license\n", 0o644)):
+        entries = [("mcw", binary, 0o755), ("README.md", b"fixture readme\n", 0o644), ("LICENSE", b"fixture license\n", 0o644)]
+        entries.extend((name, content, 0o644 if name.endswith(".policy") else 0o755)
+                       for name, content in (camera or {}).items())
+        for name, content, mode in entries:
             member = tarfile.TarInfo(name)
             member.mode = mode
-            if name == "mcw" and replacement is not None:
+            if replacement is not None and name == replacement.name:
                 member = replacement
                 content = b""
             member.size = len(content) if member.isfile() else 0
@@ -507,8 +553,8 @@ def fixture_environment(sandbox, responses):
     return env, log
 
 
-def fixtures(script, root, shells, version, asset, binary):
-    good_archive = archive_bytes(binary)
+def fixtures(script, root, shells, version, asset, binary, camera):
+    good_archive = archive_bytes(binary, camera=camera)
     scenarios = {
         "checksum-tamper": (good_archive, "0" * 64, asset, version),
         "checksum-wrong-asset": (good_archive, None, asset + ".decoy", version),
@@ -517,12 +563,33 @@ def fixtures(script, root, shells, version, asset, binary):
         "truncated-archive": (good_archive[:100], None, asset, version),
         "version-mismatch": (good_archive, None, asset, "v0.14.999"),
     }
+    if camera:
+        for missing in CAMERA_NAMES:
+            incomplete = {name: content for name, content in camera.items() if name != missing}
+            scenarios["missing-" + missing] = (archive_bytes(binary, camera=incomplete), None, asset, version)
+        for name, response in (
+            ("helper-version-mismatch", {"protocol": 1, "version": "0.15.1"}),
+            ("helper-protocol-mismatch", {"protocol": 2, "version": version[1:]}),
+        ):
+            incompatible = dict(camera)
+            incompatible["mcw-camera-helper"] = (
+                "#!/bin/sh\nprintf '%s\\n' " + shlex.quote(json.dumps(response)) + "\n"
+            ).encode()
+            scenarios[name] = (archive_bytes(binary, camera=incompatible), None, asset, version)
+        for payload_name in CAMERA_NAMES:
+            duplicate = tarfile.TarInfo(payload_name)
+            scenarios["duplicate-" + payload_name] = (archive_bytes(binary, extra=duplicate, camera=camera), None, asset, version)
+        for name, kind in (("symlink-helper", tarfile.SYMTYPE), ("hardlink-helper", tarfile.LNKTYPE)):
+            member = tarfile.TarInfo("mcw-camera-helper")
+            member.type = kind
+            member.linkname = str(root / "escaped-link-sentinel")
+            scenarios[name] = (archive_bytes(binary, replacement=member, camera=camera), None, asset, version)
     for name, member_name in (("parent-traversal", "../escaped-sentinel"),
                               ("absolute-path", str(root / "escaped-absolute-sentinel")),
                               ("unexpected-member", "nested/unexpected-file"),
                               ("duplicate-executable", "mcw")):
         member = tarfile.TarInfo(member_name)
-        scenarios[name] = (archive_bytes(binary, extra=member), None, asset, version)
+        scenarios[name] = (archive_bytes(binary, extra=member, camera=camera), None, asset, version)
     for name, kind in (("symlink-executable", tarfile.SYMTYPE),
                        ("hardlink-executable", tarfile.LNKTYPE),
                        ("directory-executable", tarfile.DIRTYPE),
@@ -530,7 +597,7 @@ def fixtures(script, root, shells, version, asset, binary):
         member = tarfile.TarInfo("mcw")
         member.type = kind
         member.linkname = str(root / "escaped-link-sentinel") if kind in (tarfile.SYMTYPE, tarfile.LNKTYPE) else ""
-        scenarios[name] = (archive_bytes(binary, replacement=member), None, asset, version)
+        scenarios[name] = (archive_bytes(binary, replacement=member, camera=camera), None, asset, version)
 
     # A successful fixture with real mcw bytes is the positive control: failed
     # cases cannot pass merely because the wrapper/installer integration is broken.
@@ -581,6 +648,8 @@ def fixtures(script, root, shells, version, asset, binary):
         receipt = sandbox.prefix / ".miccamwatch-install"
         prior_receipt = {path.relative_to(receipt): path.read_bytes() for path in receipt.rglob("*") if path.is_file()}
         prior_paths = {path.relative_to(sandbox.prefix) for path in sandbox.prefix.rglob("*")}
+        camera_dir = sandbox.prefix / "share/miccamwatch/linux-camera"
+        prior_camera = {name: (camera_dir / name).read_bytes() for name in camera}
         prior_configs = {path: path.read_bytes() for path in sandbox.configs}
         bad_archive = sandbox.root / "candidate.tar.gz"
         bad_archive.write_bytes(payload)
@@ -601,6 +670,8 @@ def fixtures(script, root, shells, version, asset, binary):
                 f"failed {name} replaced the working executable")
         require({path.relative_to(receipt): path.read_bytes() for path in receipt.rglob("*") if path.is_file()} == prior_receipt,
                 f"failed {name} changed the ownership receipt")
+        require({name: (camera_dir / name).read_bytes() for name in camera} == prior_camera,
+                f"failed {name} changed installed camera payload")
         require({path.relative_to(sandbox.prefix) for path in sandbox.prefix.rglob("*")} == prior_paths,
                 f"failed {name} leaked staging files or changed installed paths")
         require({path: path.read_bytes() for path in sandbox.configs} == prior_configs, f"failed {name} changed user PATH")
@@ -683,18 +754,229 @@ def fixtures(script, root, shells, version, asset, binary):
     modified_path.removed_path_configs()
     require(not receipt.exists(), "successful uninstall retry retained installer ownership state")
     print("PASS modified PATH: preserve customization/receipt, then safely complete after explicit repair")
+    if camera:
+        camera_fixtures(script, root, shells, version, asset, binary, camera)
+
+
+def camera_fixtures(script, root, shells, version, asset, binary, camera):
+    """Invoke the real installer with genuine release binaries and controlled failures."""
+    def transport(sandbox, payload):
+        archive = sandbox.root / "camera-candidate.tar.gz"
+        archive.write_bytes(archive_bytes(binary, camera=payload))
+        sums = sandbox.root / "camera-SHA256SUMS"
+        sums.write_text(f"{digest(archive.read_bytes())}  {asset}\n")
+        return fixture_environment(sandbox, {
+            f"{RELEASE_ROOT}/{version}/{asset}": str(archive),
+            f"{RELEASE_ROOT}/{version}/SHA256SUMS": str(sums),
+        })[0]
+
+    def snapshots(sandbox):
+        return {path.relative_to(sandbox.prefix): path.read_bytes()
+                for path in sandbox.prefix.rglob("*") if path.is_file() and not path.is_symlink()}
+
+    def usable(sandbox):
+        require(run([sandbox.binary, "--version"], env=sandbox.env).stdout.strip() == f"mcw {version[1:]}",
+                "transaction lost the usable CLI")
+        helper = sandbox.prefix / "share/miccamwatch/linux-camera/mcw-camera-helper"
+        require(json.loads(run([helper, "--protocol-version"], env=sandbox.env).stdout)
+                == {"protocol": 1, "version": version[1:]}, "transaction lost the matching usable helper")
+
+    for name in CAMERA_NAMES:
+        for mutation in ("modified", "symlink", "hardlink"):
+            sandbox = Sandbox(root, f"camera-{name}-{mutation}", "bash", shells["bash"])
+            env = transport(sandbox, camera)
+            sandbox.invoke(script, "--no-modify-path", env=env, version=version)
+            target = sandbox.prefix / "share/miccamwatch/linux-camera" / name
+            original = target.read_bytes()
+            external = sandbox.root / "external-user-asset"
+            if mutation == "modified":
+                target.write_bytes(original + b"\nuser change\n")
+            elif mutation == "symlink":
+                external.write_bytes(original)
+                target.unlink()
+                target.symlink_to(external)
+            else:
+                os.link(target, external)
+            before = snapshots(sandbox)
+            for flags in (("--no-modify-path",), ("--uninstall", "--no-modify-path")):
+                refused = sandbox.invoke(script, *flags, env=env, version=version, codes=None)
+                require(refused.returncode != 0, f"installer accepted {mutation} camera asset {name}")
+                require(snapshots(sandbox) == before, "refusal changed CLI, payload or receipts")
+                require(target.is_symlink() == (mutation == "symlink"), "refusal changed link ownership")
+            if mutation == "modified":
+                target.write_bytes(original)
+            elif mutation == "symlink":
+                target.unlink()
+                target.write_bytes(original)
+                target.chmod(0o644 if name.endswith(".policy") else 0o755)
+            else:
+                external.unlink()
+            sandbox.invoke(script, "--uninstall", "--no-modify-path", env=env, version=version)
+            require(not sandbox.binary.exists() and not target.exists(), "repaired uninstall retained owned assets")
+
+    unmanaged = Sandbox(root, "camera-unmanaged-payload", "bash", shells["bash"])
+    target = unmanaged.prefix / "share/miccamwatch/linux-camera/install-camera-helper.sh"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"user-owned administration script\n")
+    refused = unmanaged.invoke(script, "--no-modify-path", env=transport(unmanaged, camera),
+                               version=version, codes=None)
+    require(refused.returncode != 0 and not unmanaged.binary.exists()
+            and target.read_bytes() == b"user-owned administration script\n",
+            "initial installation overwrote unmanaged payload or committed a CLI")
+
+    missing = Sandbox(root, "camera-missing-installed-payload", "bash", shells["bash"])
+    env = transport(missing, camera)
+    installed = missing.invoke(script, "--no-modify-path", env=env, version=version)
+    require("NOT installed or refreshed" in installed.stdout and "--archive" in installed.stdout
+            and "--sha256" in installed.stdout, "installer concealed the explicit root refresh boundary")
+    payload_dir = missing.prefix / "share/miccamwatch/linux-camera"
+    (payload_dir / "mcw-camera-helper").unlink()
+    missing.invoke(script, "--no-modify-path", env=env, version=version)
+    require({name: (payload_dir / name).read_bytes() for name in CAMERA_NAMES} == camera,
+            "same-version reinstall did not repair missing payload")
+    usable(missing)
+    missing.invoke(script, "--uninstall", "--no-modify-path", env=env, version=version)
+    require(not payload_dir.exists() and not missing.binary.exists(), "transactional uninstall retained payload")
+
+    rollback = Sandbox(root, "camera-transaction-rollback", "bash", shells["bash"])
+    env = transport(rollback, camera)
+    rollback.invoke(script, "--no-modify-path", env=env, version=version)
+    before = snapshots(rollback)
+    candidate = dict(camera)
+    candidate["install-camera-helper.sh"] += b"\n# candidate transaction marker\n"
+    candidate["com.roman-cuisset.miccamwatch.camera.policy"] += b"\n<!-- candidate transaction marker -->\n"
+    env = transport(rollback, candidate)
+    wrapper_dir = Path(env["PATH"].split(os.pathsep)[0])
+    marker = rollback.root / "injected-mv-failure"
+    real_mv = shutil.which("mv", path=rollback.env["PATH"])
+    wrapper = wrapper_dir / "mv"
+    # Fail the CLI commit exactly once, after payload commits. Rollback then uses
+    # the real mv, proving old payload/receipts survive an actual commit error.
+    wrapper.write_text(
+        "#!/bin/sh\nlast=\nfor arg do last=$arg; done\n"
+        "if [ \"$last\" = " + shlex.quote(str(rollback.binary)) + " ] && [ ! -e " + shlex.quote(str(marker)) + " ]; then\n"
+        "  : > " + shlex.quote(str(marker)) + "\n  exit 1\nfi\nexec " + shlex.quote(real_mv) + ' "$@"\n'
+    )
+    wrapper.chmod(0o755)
+    failed = rollback.invoke(script, "--no-modify-path", env=env, version=version, codes=None)
+    require(failed.returncode != 0 and marker.exists(), "fixture did not exercise the CLI commit failure")
+    require(snapshots(rollback) == before, "failed update did not restore the complete old installation")
+    usable(rollback)
+    remove_target = rollback.prefix / "share/miccamwatch/linux-camera/install-camera-helper.sh"
+    remove_marker = rollback.root / "injected-rm-failure"
+    real_rm = shutil.which("rm", path=rollback.env["PATH"])
+    remove_wrapper = wrapper_dir / "rm"
+    # Fail after CLI/helper removal. The transaction must restore both, not leave
+    # a payload-only or CLI-only partial uninstallation.
+    remove_wrapper.write_text(
+        "#!/bin/sh\nlast=\nfor arg do last=$arg; done\n"
+        "if [ \"$last\" = " + shlex.quote(str(remove_target)) + " ] && [ ! -e " + shlex.quote(str(remove_marker)) + " ]; then\n"
+        "  : > " + shlex.quote(str(remove_marker)) + "\n  exit 1\nfi\nexec " + shlex.quote(real_rm) + ' "$@"\n'
+    )
+    remove_wrapper.chmod(0o755)
+    failed = rollback.invoke(script, "--uninstall", "--no-modify-path", env=env, version=version, codes=None)
+    require(failed.returncode != 0 and remove_marker.exists(), "fixture did not exercise partial uninstall failure")
+    require(snapshots(rollback) == before, "failed uninstall did not restore the complete old installation")
+    usable(rollback)
+    rollback.invoke(script, "--uninstall", "--no-modify-path", env=env, version=version)
+    print("PASS Linux camera fixtures: paired versions, ownership, repair, same-version transaction and complete rollback")
+
+
+def root_presence_fixture(script, root, shells, prefix, version):
+    """Use an explicitly prepared installation; never create/change root assets."""
+    require(platform.system() == "Linux" and prefix.is_absolute() and not prefix.is_symlink(),
+            "--root-presence-prefix requires an absolute prepared Linux user prefix")
+    require((prefix / "bin/mcw").is_file() and (prefix / ".miccamwatch-install").is_dir(),
+            "prepare the managed user installation before explicitly setting up the root helper")
+    markers = (
+        Path("/usr/local/libexec/miccamwatch/mcw-camera-helper"),
+        Path("/usr/share/polkit-1/actions/com.roman-cuisset.miccamwatch.camera.policy"),
+        Path("/var/lib/miccamwatch/camera-helper-install.json"),
+        Path("/var/lib/miccamwatch/.camera-helper-transaction"),
+    )
+    present_or_uncertain = False
+    for path in markers:
+        try:
+            path.lstat()
+            present_or_uncertain = True
+        except FileNotFoundError:
+            pass
+        except OSError:
+            present_or_uncertain = True
+    for path in ("/", "/usr", "/usr/local", "/usr/local/libexec", "/usr/local/libexec/miccamwatch",
+                 "/usr/share", "/usr/share/polkit-1", "/usr/share/polkit-1/actions",
+                 "/var", "/var/lib", "/var/lib/miccamwatch"):
+        try:
+            metadata = os.lstat(path)
+            present_or_uncertain |= (not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != 0
+                                     or metadata.st_mode & 0o022 != 0
+                                     or not os.access(path, os.R_OK | os.X_OK))
+        except FileNotFoundError:
+            pass
+        except OSError:
+            present_or_uncertain = True
+    try:
+        present_or_uncertain |= any(path.name.startswith(".camera-helper-")
+                                    for path in Path("/var/lib/miccamwatch").iterdir())
+    except FileNotFoundError:
+        pass
+    except OSError:
+        present_or_uncertain = True
+    require(present_or_uncertain, "root-presence fixture requires real installation/remnant or uncertain root metadata")
+
+    def snapshots():
+        result = {}
+        for path in prefix.rglob("*"):
+            metadata = path.lstat()
+            content = (os.readlink(path) if path.is_symlink() else
+                       path.read_bytes() if path.is_file() else None)
+            result[path.relative_to(prefix)] = (metadata.st_mode, metadata.st_nlink, content)
+        return result
+
+    sandbox = Sandbox(root, "root-installation-presence-refusal", "bash", shells["bash"])
+    sandbox.prefix = prefix
+    sandbox.binary = prefix / "bin/mcw"
+    env, requests = fixture_environment(sandbox, {})
+    before = snapshots()
+    for requested_version in dict.fromkeys((version, "v0.14.0")):
+        for flags in (("--no-modify-path",), ("--uninstall", "--no-modify-path")):
+            refused = sandbox.invoke(script, *flags, env=env, version=requested_version, codes=None)
+            require(refused.returncode != 0 and "root camera installation" in refused.stderr.lower(),
+                    "root installation/uncertainty did not cause explicit lifecycle refusal")
+            require("--uninstall" in refused.stderr and "administrator" in refused.stderr,
+                    "root lifecycle refusal concealed the explicit administrator removal boundary")
+            require(snapshots() == before, "root-presence refusal changed the existing user installation")
+            require(not requests.exists(), "root-presence refusal contacted the release server")
+    updater = root / "verified-local-mcw"
+    refused = run([updater, "update"], env=env, cwd=sandbox.cwd, codes=None)
+    require(refused.returncode != 0 and "root camera" in refused.stderr.lower()
+            and "--uninstall" in refused.stderr,
+            "genuine updater failed to refuse root presence before installation inspection/network")
+    require(snapshots() == before and not requests.exists(), "updater refusal changed user files or contacted transport")
+    print("PASS root presence: real install/update/uninstall refusal, legacy-version requests and preserved user assets; no root mutation")
 
 
 def main():
     if len(sys.argv) > 1 and sys.argv[1] == "--fixture-curl":
         return fixture_curl(sys.argv[2:])
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--source-url", required=True, help="public raw.githubusercontent.com commit-pinned installer URL")
+    sources = parser.add_mutually_exclusive_group(required=True)
+    sources.add_argument("--source-url", help="public raw.githubusercontent.com commit-pinned installer URL")
+    sources.add_argument("--source-file", type=Path,
+                         help="absolute reviewed local installer; only with --camera-archive controlled fixtures")
     parser.add_argument("--version", default="v0.14.0", help="real public release to install (default: v0.14.0)")
+    parser.add_argument("--camera-archive", type=Path,
+                        help="genuine local Linux feature archive; use --version v0.16.0+ for prepublication fixtures")
+    parser.add_argument("--root-presence-prefix", type=Path,
+                        help="prepared managed prefix with real root installation/uncertainty; refusal-only fixtures, no root mutation")
     parser.add_argument("--upgrade-from", help="older real public release for cross-version upgrade proof")
     parser.add_argument("--mode", choices=("all", "smoke", "fixtures"), default="all")
     args = parser.parse_args()
-    require(SOURCE_PATTERN.fullmatch(args.source_url), "source URL must pin a public 40-hex commit, not main/a local file")
+    if args.source_url:
+        require(SOURCE_PATTERN.fullmatch(args.source_url), "source URL must pin a public 40-hex commit, not main/a local file")
+    else:
+        require(args.source_file.is_absolute() and args.camera_archive is not None,
+                "--source-file must be absolute and is restricted to --camera-archive fixtures")
     require(re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", args.version), "expected release must be a concrete version")
     if args.upgrade_from:
         require(re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", args.upgrade_from), "upgrade source must be a concrete public version")
@@ -704,21 +986,44 @@ def main():
     require(all(shells.values()), f"install the runner's missing shells first: {shells}")
     curl = shutil.which("curl")
     require(curl is not None, "curl is required for public HTTPS verification")
+    if args.camera_archive:
+        require(args.camera_archive.is_absolute(), "--camera-archive must be an absolute path")
+        require(args.mode != "smoke" and not args.upgrade_from,
+                "--camera-archive runs controlled fixtures only; public smoke/cross-version proof needs published releases")
+    if args.root_presence_prefix:
+        require(args.camera_archive is not None and args.mode != "smoke" and not args.upgrade_from,
+                "--root-presence-prefix requires --camera-archive controlled fixtures")
     with tempfile.TemporaryDirectory(prefix="mcw native installation ") as temporary:
         root = Path(temporary)
         script = root / "public-install.sh"
-        print(f"Public source: {args.source_url}")
-        download(curl, args.source_url, script)
-        asset, binary = released_binary(curl, root, args.version)
-        if args.mode in ("all", "smoke"):
-            smoke(script, root, shells, args.version, binary)
-            if args.upgrade_from:
-                cross_version_upgrade(script, root, shells, args.upgrade_from, args.version, binary)
-        if args.mode in ("all", "fixtures"):
-            fixtures(script, root, shells, args.version, asset, binary)
-    print(f"PASS native installation verification: {platform.system()} {platform.machine()}, {args.version}")
-    print("Evidence includes real cross-version upgrade." if args.upgrade_from else
-          "Evidence covers managed same-release atomic replacement and failed upgrades, not cross-version upgrade.")
+        if args.source_file:
+            print(f"Local reviewed installer (not public-source authenticity proof): {args.source_file}")
+            script.write_bytes(args.source_file.read_bytes())
+        else:
+            print(f"Public source: {args.source_url}")
+            download(curl, args.source_url, script)
+        if args.camera_archive:
+            asset, binary, camera = local_camera_archive(args.camera_archive, root, args.version)
+            if args.root_presence_prefix:
+                root_presence_fixture(script, root, shells, args.root_presence_prefix, args.version)
+            else:
+                fixtures(script, root, shells, args.version, asset, binary, camera)
+        else:
+            asset, binary, camera = released_binary(curl, root, args.version)
+            if args.mode in ("all", "smoke"):
+                smoke(script, root, shells, args.version, binary)
+                if args.upgrade_from:
+                    cross_version_upgrade(script, root, shells, args.upgrade_from, args.version, binary)
+            if args.mode in ("all", "fixtures"):
+                fixtures(script, root, shells, args.version, asset, binary, camera)
+    source = ("local reviewed installer / genuine camera archive" if args.source_file else
+              "local genuine camera archive" if args.camera_archive else "public release")
+    print(f"PASS native installation verification: {platform.system()} {platform.machine()}, {args.version} ({source})")
+    if args.root_presence_prefix:
+        print("Evidence covers root-installation/uncertainty refusal only; no successful lifecycle or camera-action proof.")
+    else:
+        print("Evidence includes real cross-version upgrade." if args.upgrade_from else
+              "Evidence covers managed same-release atomic replacement and failed upgrades, not cross-version upgrade.")
     return 0
 
 

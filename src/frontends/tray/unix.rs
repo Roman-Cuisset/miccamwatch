@@ -338,7 +338,8 @@ struct Words {
     scope: &'static str,
     camera: &'static str,
     restore: &'static str,
-    camera_unavailable: &'static str,
+    linux_camera: &'static str,
+    linux_restore: &'static str,
     pause: &'static str,
     resume: &'static str,
     profile: &'static str,
@@ -361,7 +362,8 @@ fn words(lang: Language) -> Words {
             scope: "writable inputs / PipeWire session only",
             camera: "Approve camera restriction profile",
             restore: "Remove camera restriction profile",
-            camera_unavailable: "Camera control unavailable (Linux)",
+            linux_camera: "Block supported USB cameras (administrator approval)",
+            linux_restore: "Restore owned USB camera blocks (administrator approval)",
             pause: "Pause alerts (30 min)",
             resume: "Resume alerts",
             profile: "Profile",
@@ -382,7 +384,8 @@ fn words(lang: Language) -> Words {
             scope: "entrées modifiables / session PipeWire uniquement",
             camera: "Approuver le profil de restriction caméra",
             restore: "Retirer le profil de restriction caméra",
-            camera_unavailable: "Contrôle caméra indisponible (Linux)",
+            linux_camera: "Bloquer les caméras USB compatibles (autorisation administrateur)",
+            linux_restore: "Restaurer les caméras USB bloquées par MCW (autorisation administrateur)",
             pause: "Suspendre les alertes (30 min)",
             resume: "Reprendre les alertes",
             profile: "Profil",
@@ -403,7 +406,8 @@ fn words(lang: Language) -> Words {
             scope: "nur schreibbare Eingänge / PipeWire-Sitzung",
             camera: "Kamerasperrprofil genehmigen",
             restore: "Kamerasperrprofil entfernen",
-            camera_unavailable: "Kamerasteuerung nicht verfügbar (Linux)",
+            linux_camera: "Unterstützte USB-Kameras sperren (Administratorfreigabe)",
+            linux_restore: "Eigene USB-Kamerasperren aufheben (Administratorfreigabe)",
             pause: "Hinweise pausieren (30 Min.)",
             resume: "Hinweise fortsetzen",
             profile: "Profil",
@@ -424,7 +428,8 @@ fn words(lang: Language) -> Words {
             scope: "solo entradas modificables / sesión PipeWire",
             camera: "Aprobar perfil de restricción de cámara",
             restore: "Eliminar perfil de restricción de cámara",
-            camera_unavailable: "Control de cámara no disponible (Linux)",
+            linux_camera: "Bloquear cámaras USB compatibles (aprobación de administrador)",
+            linux_restore: "Restaurar bloqueos USB propios (aprobación de administrador)",
             pause: "Pausar alertas (30 min)",
             resume: "Reanudar alertas",
             profile: "Perfil",
@@ -445,7 +450,8 @@ fn words(lang: Language) -> Words {
             scope: "書き込み可能な入力 / PipeWire セッションのみ",
             camera: "カメラ制限プロファイルを承認",
             restore: "カメラ制限プロファイルを削除",
-            camera_unavailable: "カメラ制御は利用できません (Linux)",
+            linux_camera: "対応 USB カメラをブロック (管理者承認)",
+            linux_restore: "自分の USB カメラブロックを復元 (管理者承認)",
             pause: "通知を一時停止 (30 分)",
             resume: "通知を再開",
             profile: "プロファイル",
@@ -466,7 +472,8 @@ fn words(lang: Language) -> Words {
             scope: "仅可写输入 / PipeWire 会话",
             camera: "批准摄像头限制描述文件",
             restore: "移除摄像头限制描述文件",
-            camera_unavailable: "摄像头控制不可用 (Linux)",
+            linux_camera: "禁用支持的 USB 摄像头（管理员授权）",
+            linux_restore: "恢复自有 USB 摄像头禁用（管理员授权）",
             pause: "暂停提醒 (30 分钟)",
             resume: "恢复提醒",
             profile: "配置",
@@ -487,7 +494,8 @@ fn words(lang: Language) -> Words {
             scope: "только доступные для записи входы / сеанс PipeWire",
             camera: "Одобрить профиль ограничения камеры",
             restore: "Удалить профиль ограничения камеры",
-            camera_unavailable: "Управление камерой недоступно (Linux)",
+            linux_camera: "Блокировать поддерживаемые USB-камеры (разрешение администратора)",
+            linux_restore: "Восстановить свои блокировки USB-камер (разрешение администратора)",
             pause: "Приостановить уведомления (30 мин)",
             resume: "Возобновить уведомления",
             profile: "Профиль",
@@ -518,13 +526,14 @@ fn entry(action: &'static str, label: impl Into<String>, enabled: bool) -> MenuE
 fn make_view(
     status: (String, &'static str),
     mute: MicrophoneMuteState,
-    camera_blocked: bool,
+    camera: (bool, Option<&str>),
     settings: &Settings,
     lang: Language,
     feedback: &Option<String>,
     lock: SessionLockState,
 ) -> View {
     let (summary, visual) = status;
+    let (camera_blocked, camera_error) = camera;
     let text = words(lang);
     let scope = if cfg!(target_os = "macos") {
         text.scope.split(" / ").next().unwrap_or(text.scope)
@@ -553,16 +562,27 @@ fn make_view(
         items.push(entry("header", text.lock_unknown, false));
     }
     items.push(entry("mic", mic, mute != MicrophoneMuteState::Unavailable));
+    #[cfg(target_os = "linux")]
+    {
+        items.push(entry("header", crate::privacy::camera_capability(), false));
+        if let Some(error) = camera_error {
+            items.push(entry("header", error, false));
+        }
+    }
     items.push(entry(
         "camera",
         if cfg!(target_os = "linux") {
-            text.camera_unavailable
+            if camera_blocked {
+                text.linux_restore
+            } else {
+                text.linux_camera
+            }
         } else if camera_blocked {
             text.restore
         } else {
             text.camera
         },
-        cfg!(target_os = "macos"),
+        camera_error.is_none(),
     ));
     items.push(entry(
         "pause",
@@ -614,7 +634,14 @@ pub fn run_tray(
     let initial = make_view(
         (words(lang).degraded.to_owned(), "error"),
         MicrophoneMuteState::Unavailable,
-        false,
+        (
+            false,
+            if cfg!(target_os = "linux") {
+                Some(words(lang).degraded)
+            } else {
+                None
+            },
+        ),
         &settings,
         lang,
         &None,
@@ -644,12 +671,13 @@ pub fn run_tray(
     let mut visual = "error";
     let mut next_poll = Instant::now();
     let mut mute = MicrophoneMuteState::Unavailable;
-    #[cfg(target_os = "macos")]
     let mut camera_blocked = false;
     #[cfg(target_os = "macos")]
     let mut camera_pending_target = None;
     #[cfg(target_os = "linux")]
-    let camera_blocked = false;
+    let mut camera_error: Option<String> = None;
+    #[cfg(target_os = "macos")]
+    let camera_error: Option<String> = None;
     let mut lock = SessionLockState::Unknown;
     let outcome = (|| -> Result<()> {
         loop {
@@ -779,6 +807,17 @@ pub fn run_tray(
                 mute = monitor
                     .microphone_mute_state()
                     .unwrap_or(MicrophoneMuteState::Unavailable);
+                #[cfg(target_os = "linux")]
+                match crate::privacy::camera_state() {
+                    Ok(state) => {
+                        // Mixed/stale ownership still offers explicit restoration.
+                        camera_blocked = state != crate::privacy::CameraPrivacyState::Allowed;
+                        camera_error = None;
+                    }
+                    Err(error) => {
+                        camera_error = Some(format!("{error:#}"));
+                    }
+                }
                 #[cfg(target_os = "macos")]
                 match crate::privacy::camera_state() {
                     Ok(state) => {
@@ -798,7 +837,7 @@ pub fn run_tray(
                 host.update(make_view(
                     (summary.clone(), if action_error { "error" } else { visual }),
                     mute,
-                    camera_blocked,
+                    (camera_blocked, camera_error.as_deref()),
                     &settings,
                     lang,
                     &feedback,
@@ -829,7 +868,11 @@ pub fn run_tray(
                                     camera_pending_target = None;
                                 }
                                 #[cfg(target_os = "linux")]
-                                bail!("{}", words(lang).camera_unavailable);
+                                {
+                                    camera_blocked = crate::privacy::toggle_camera_state()?
+                                        != crate::privacy::CameraPrivacyState::Allowed;
+                                    camera_error = None;
+                                }
                             }
                             Command::Pause => {
                                 settings = Settings::update(|current| {
@@ -877,7 +920,7 @@ pub fn run_tray(
                     host.update(make_view(
                         (summary.clone(), if action_error { "error" } else { visual }),
                         mute,
-                        camera_blocked,
+                        (camera_blocked, camera_error.as_deref()),
                         &settings,
                         lang,
                         &feedback,

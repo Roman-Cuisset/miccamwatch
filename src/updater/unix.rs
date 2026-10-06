@@ -15,6 +15,15 @@ const INSTALLER: &str = include_str!("../../installer/install.sh");
 const LATEST: &str = "https://github.com/Roman-Cuisset/miccamwatch/releases/latest";
 const TAG_BASE: &str = "https://github.com/Roman-Cuisset/miccamwatch/releases/tag/";
 static STAGING_ID: AtomicU64 = AtomicU64::new(0);
+#[cfg(target_os = "linux")]
+const CAMERA_PAYLOAD: [(&str, &str); 3] = [
+    ("mcw-camera-helper", "camera-helper.sha256"),
+    ("install-camera-helper.sh", "camera-installer.sha256"),
+    (
+        "com.roman-cuisset.miccamwatch.camera.policy",
+        "camera-policy.sha256",
+    ),
+];
 
 // All variable data travels as positional argv. The script never evaluates a
 // receipt, interpolates a filename into shell code, or excludes a running PID.
@@ -48,6 +57,8 @@ printf 'mcw updated to %s.\n' "${tag#v}"
 
 pub fn update() -> Result<()> {
     ordinary_user()?;
+    #[cfg(target_os = "linux")]
+    root_camera_installation_absent()?;
     let installation = Installation::inspect()?;
     let tag = latest_tag()?;
     let latest = Version::parse(
@@ -90,6 +101,83 @@ pub fn update() -> Result<()> {
     // Successful exec never returns and the shell's trap owns cleanup. On an
     // exec error Rust retains ownership of the private staging directory.
     Err(error).context("cannot hand off the update to /bin/sh; installation was not changed")
+}
+
+#[cfg(target_os = "linux")]
+fn root_camera_installation_absent() -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
+
+    const GUIDANCE: &str = "User installation was preserved. First explicitly restore with the old matching mcw camera allow, then have an administrator run the reviewed root helper installer --uninstall. After root removal, retry the user update; afterward explicitly set up the matching same-version root helper if wanted. mcw update never elevates, calls camera APIs or removes the root helper.";
+    // Metadata and directory names only: do not read privileged evidence or call
+    // camera status. Allowed state cannot prove an empty restoration journal.
+    for directory in [
+        c"/",
+        c"/usr",
+        c"/usr/local",
+        c"/usr/local/libexec",
+        c"/usr/local/libexec/miccamwatch",
+        c"/usr/share",
+        c"/usr/share/polkit-1",
+        c"/usr/share/polkit-1/actions",
+        c"/var",
+        c"/var/lib",
+        c"/var/lib/miccamwatch",
+    ] {
+        let path = Path::new(directory.to_str().expect("static ASCII directory"));
+        let metadata = match std::fs::symlink_metadata(path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => bail!(
+                "Cannot inspect root camera directory {}: {error}. {GUIDANCE}",
+                path.display()
+            ),
+        };
+        if !metadata.is_dir()
+            || metadata.uid() != 0
+            || metadata.mode() & 0o022 != 0
+            || unsafe { libc::access(directory.as_ptr(), libc::R_OK | libc::X_OK) } != 0
+        {
+            bail!(
+                "Root camera directory {} is unsafe or inaccessible. {GUIDANCE}",
+                path.display()
+            );
+        }
+    }
+    for path in [
+        "/usr/local/libexec/miccamwatch/mcw-camera-helper",
+        "/usr/share/polkit-1/actions/com.roman-cuisset.miccamwatch.camera.policy",
+        "/var/lib/miccamwatch/camera-helper-install.json",
+        "/var/lib/miccamwatch/.camera-helper-transaction",
+    ] {
+        match std::fs::symlink_metadata(path) {
+            Ok(_) => {
+                bail!("Root camera installation or transaction is present at {path}. {GUIDANCE}")
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                bail!("Cannot inspect root camera installation at {path}: {error}. {GUIDANCE}")
+            }
+        }
+    }
+    match std::fs::read_dir("/var/lib/miccamwatch") {
+        Ok(entries) => {
+            for entry in entries {
+                let entry = entry.with_context(|| {
+                    format!("Cannot inspect root camera transaction remnants. {GUIDANCE}")
+                })?;
+                if entry
+                    .file_name()
+                    .as_encoded_bytes()
+                    .starts_with(b".camera-helper-")
+                {
+                    bail!("Root camera transaction remnant is present. {GUIDANCE}");
+                }
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => bail!("Cannot inspect root camera transaction remnants: {error}. {GUIDANCE}"),
+    }
+    Ok(())
 }
 
 struct Installation {
@@ -162,8 +250,64 @@ impl Installation {
                 "installed executable does not match the running updater; installed files were preserved"
             );
         }
+        #[cfg(target_os = "linux")]
+        inspect_camera_payload(&prefix, &receipt)?;
         Ok(Self { prefix })
     }
+}
+
+#[cfg(target_os = "linux")]
+fn inspect_camera_payload(prefix: &Path, receipt: &Directory) -> Result<()> {
+    let required = Version::parse(env!("CARGO_PKG_VERSION"))?.core >= [0, 16, 0];
+    if !required {
+        let mut recorded = false;
+        for (_, name) in CAMERA_PAYLOAD {
+            if receipt.read(name)?.is_some() {
+                recorded = true;
+                break;
+            }
+        }
+        if !recorded {
+            return Ok(());
+        }
+    }
+    let path = prefix.join("share/miccamwatch/linux-camera");
+    let payload = Directory::open(&path, false)
+        .context("camera payload is missing or unsafe; repair with the public installer")?;
+    for (name, record) in CAMERA_PAYLOAD {
+        let hashes = receipt
+            .read(record)?
+            .with_context(|| format!("camera payload ownership receipt is missing: {record}"))?;
+        let hashes = checksum_receipt(&hashes)?;
+        let file = payload
+            .file(OsStr::new(name))?
+            .with_context(|| format!("installed camera payload is missing: {name}"))?;
+        let digest = sha256(file)?;
+        if !hashes.iter().any(|hash| *hash == digest) {
+            bail!(
+                "camera payload {name} was changed outside the public installer; it was preserved"
+            );
+        }
+    }
+    let output = Command::new(path.join("mcw-camera-helper"))
+        .arg("--protocol-version")
+        .output()
+        .context("cannot verify installed camera helper protocol/app version")?;
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct HelperVersion {
+        protocol: u64,
+        version: String,
+    }
+    let reported: HelperVersion = serde_json::from_slice(&output.stdout)
+        .context("invalid installed camera helper protocol response")?;
+    if !output.status.success()
+        || reported.protocol != 1
+        || reported.version != env!("CARGO_PKG_VERSION")
+    {
+        bail!("installed camera helper does not match mcw; repair with the public installer");
+    }
+    Ok(())
 }
 
 fn validate_receipt_files(receipt: &Directory) -> Result<()> {
@@ -188,6 +332,10 @@ fn validate_receipt_files(receipt: &Directory) -> Result<()> {
 // snapshots are accepted by the installer because a crash may precede .path.
 fn receipt_name(name: &str) -> Result<Option<&str>> {
     if matches!(name, "format" | "prefix" | "version" | "binary.sha256") {
+        return Ok(None);
+    }
+    #[cfg(target_os = "linux")]
+    if CAMERA_PAYLOAD.iter().any(|(_, record)| *record == name) {
         return Ok(None);
     }
     let rest = name
@@ -428,6 +576,10 @@ mod tests {
     fn installer_receipts_do_not_authorize_unknown_or_ambiguous_files() -> Result<()> {
         assert_eq!(receipt_name("path-12.path")?, Some("12"));
         assert_eq!(receipt_name("path-12.block")?, None);
+        #[cfg(target_os = "linux")]
+        for (_, record) in CAMERA_PAYLOAD {
+            assert_eq!(receipt_name(record)?, None);
+        }
         for invalid in [
             "extra",
             "path-.path",
@@ -435,6 +587,9 @@ mod tests {
             "path-1.other",
             "path-1.path.backup",
             "path-1x.path",
+            "camera-extra.sha256",
+            "camera-helper.sha256.backup",
+            "camera-helper.path",
         ] {
             assert!(receipt_name(invalid).is_err(), "{invalid}");
         }

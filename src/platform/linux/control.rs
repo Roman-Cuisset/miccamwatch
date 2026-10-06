@@ -1,6 +1,6 @@
 use super::{
     pipewire::{CaptureSource, Graph},
-    procfs::{BootTime, ProcessIdentity},
+    procfs::{BootTime, verify_peer_instance},
 };
 use crate::model::MicrophoneMuteState;
 use anyhow::{Context as _, Result, bail};
@@ -966,10 +966,8 @@ fn server_identity(cookie: u32) -> Result<(ServerIdentity, UnixStream)> {
             std::io::Error::last_os_error()
         );
     }
-    let peer = ProcessIdentity::verify(credentials.pid as u32, &BootTime::read()?)?;
-    if peer.uid != credentials.uid {
-        bail!("PipeWire socket peer process changed during identity verification");
-    }
+    let peer_instance =
+        verify_peer_instance(credentials.pid as u32, credentials.uid, &BootTime::read()?)?;
     let after = fs::symlink_metadata(&endpoint)?;
     if before.dev() != after.dev() || before.ino() != after.ino() {
         bail!("PipeWire socket changed during identity verification");
@@ -986,7 +984,7 @@ fn server_identity(cookie: u32) -> Result<(ServerIdentity, UnixStream)> {
             endpoint,
             socket_device: before.dev(),
             socket_inode: before.ino(),
-            peer_instance: peer.instance_id,
+            peer_instance,
             core_cookie: cookie,
         },
         socket,

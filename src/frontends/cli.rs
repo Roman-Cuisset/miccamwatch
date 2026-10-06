@@ -86,7 +86,7 @@ pub enum Command {
         #[arg(long, global = true)]
         eventlog: bool,
     },
-    /// Windows camera switch or manually approved macOS camera Restrictions profile
+    /// Windows camera switch, authorized Linux USB controls, or approved macOS profile
     Camera {
         #[command(subcommand)]
         command: CameraCommand,
@@ -414,13 +414,13 @@ fn platform_help(lang: Language) -> &'static str {
     return help_text(
         lang,
         [
-            "Scope: PipeWire session-source mute and owned restoration only, not global ALSA/V4L2 denial. Camera controls unavailable. Tray needs a real StatusNotifier host; lock actions need a local graphical logind session.",
-            "Portée : mute/restauration des seules sources de session PipeWire modifiées par MCW, pas de blocage global ALSA/V4L2. Contrôle caméra indisponible. Tray : hôte StatusNotifier réel ; verrouillage : session graphique logind locale.",
-            "Umfang: nur PipeWire-Sitzungsquellen und eigene Wiederherstellung, keine globale ALSA/V4L2-Sperre. Kamerasteuerung nicht verfügbar. Tray benötigt StatusNotifier-Host; Sperraktionen eine lokale grafische logind-Sitzung.",
-            "Alcance: fuentes de sesión PipeWire y restauración de cambios propios, no bloqueo global ALSA/V4L2. Control de cámara no disponible. Bandeja: host StatusNotifier real; bloqueo: sesión gráfica local logind.",
-            "範囲: PipeWire セッション入力のミュートと自分の変更の復元のみ。ALSA/V4L2 全体の禁止ではありません。カメラ制御は未対応。トレイには StatusNotifier ホスト、ロック操作にはローカルの logind GUI セッションが必要です。",
-            "范围：仅 PipeWire 会话输入静音及自有更改恢复，不是全局 ALSA/V4L2 禁用。不支持摄像头控制。托盘需要真实 StatusNotifier 主机；锁定操作需要本地图形 logind 会话。",
-            "Область: только источники сеанса PipeWire и восстановление собственных изменений, не глобальный запрет ALSA/V4L2. Управление камерой недоступно. Tray требует настоящий StatusNotifier; действия блокировки — локальный графический сеанс logind.",
+            "Scope: PipeWire session-source mute and owned restoration, not global ALSA denial. USB uvcvideo cameras need a matching root-installed helper and explicit Polkit authorization; non-USB cameras and camera-on-lock are unsupported. Status never prompts. Tray needs a real StatusNotifier host; microphone lock actions need a local graphical logind session.",
+            "Portée : mute/restauration des sources de session PipeWire, pas de blocage global ALSA. Caméras USB uvcvideo : helper correspondant installé par root et autorisation Polkit explicite ; non-USB et caméra au verrouillage non pris en charge. Le statut ne demande jamais d'autorisation. Tray : hôte StatusNotifier réel ; verrouillage micro : session graphique logind locale.",
+            "Umfang: PipeWire-Sitzungsquellen und eigene Wiederherstellung, keine globale ALSA-Sperre. USB-uvcvideo-Kameras benötigen einen passenden root-installierten Helper und ausdrückliche Polkit-Freigabe; Nicht-USB und Kamera-beim-Sperren nicht unterstützt. Status fragt nie nach Freigabe. Tray benötigt StatusNotifier; Mikrofon-Sperraktionen eine lokale grafische logind-Sitzung.",
+            "Alcance: fuentes de sesión PipeWire y restauración propia, no bloqueo global ALSA. Cámaras USB uvcvideo: helper coincidente instalado por root y autorización Polkit explícita; no USB y cámara al bloquear no admitidos. El estado nunca solicita autorización. Bandeja: StatusNotifier real; bloqueo de micrófono: sesión gráfica local logind.",
+            "範囲: PipeWire セッション入力のミュートと自分の変更の復元。ALSA 全体の禁止ではありません。USB uvcvideo カメラには同一バージョンの root インストール済みヘルパーと明示的な Polkit 承認が必要です。非 USB とロック時カメラ制御は未対応。状態確認は承認を要求しません。トレイには StatusNotifier、マイクのロック操作にはローカル logind GUI セッションが必要です。",
+            "范围：PipeWire 会话输入静音及自有更改恢复，不是全局 ALSA 禁用。USB uvcvideo 摄像头需要 root 安装的同版本助手和明确的 Polkit 授权；不支持非 USB 或锁屏时摄像头控制。状态查询绝不请求授权。托盘需要真实 StatusNotifier 主机；锁屏麦克风操作需要本地图形 logind 会话。",
+            "Область: источники сеанса PipeWire и восстановление своих изменений, не глобальный запрет ALSA. USB uvcvideo требует помощник той же версии, установленный root, и явное разрешение Polkit; не-USB и камера при блокировке не поддерживаются. Статус не запрашивает разрешение. Tray требует StatusNotifier; микрофон при блокировке — локальный графический сеанс logind.",
         ],
     );
     #[cfg(target_os = "macos")]

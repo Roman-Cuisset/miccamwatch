@@ -1,6 +1,6 @@
 [package]
 name = "miccamwatch"
-version = "0.15.1"
+version = "0.16.0"
 edition = "2024"
 rust-version = "1.89"
 description = "Monitor microphone and camera access from the command line"
@@ -17,9 +17,15 @@ name = "mcw-tray"
 path = "src/bin/mcw-tray.rs"
 required-features = ["windows-tray"]
 
+[[bin]]
+name = "mcw-camera-helper"
+path = "src/bin/mcw-camera-helper.rs"
+required-features = ["linux-camera-helper"]
+
 [features]
 default = []
 windows-tray = []
+linux-camera-helper = []
 
 [dependencies]
 anyhow = "1.0"
@@ -42,6 +48,7 @@ libc = "0.2"
 [target.'cfg(target_os = "linux")'.dependencies]
 ctrlc = "3.4"
 libc = "0.2"
+sha2 = "0.11"
 pipewire = { version = "=0.8.0", default-features = false, features = ["v0_3_45"] }
 ksni = { version = "0.3.6", features = ["blocking"] }
 zbus = { version = "5", features = ["blocking-api"] }

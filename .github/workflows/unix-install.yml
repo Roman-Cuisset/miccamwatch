@@ -4,11 +4,17 @@ on:
   push:
     paths:
       - installer/install.sh
+      - installer/install-camera-helper.sh
+      - installer/com.roman-cuisset.miccamwatch.camera.policy
+      - src/updater/unix.rs
       - installer/tests/native_install.py
       - .github/workflows/unix-install.yml
   pull_request:
     paths:
       - installer/install.sh
+      - installer/install-camera-helper.sh
+      - installer/com.roman-cuisset.miccamwatch.camera.policy
+      - src/updater/unix.rs
       - installer/tests/native_install.py
       - .github/workflows/unix-install.yml
   workflow_dispatch:
@@ -56,6 +62,20 @@ jobs:
             missing=""
             sudo apt-get update
             sudo apt-get install --no-install-recommends -y pipewire pipewire-bin
+            # Secure fixed system ancestry only on this disposable hosted VM;
+            # do not bypass production root-helper ancestry checks.
+            test "$GITHUB_ACTIONS" = true
+            test "$RUNNER_ENVIRONMENT" = github-hosted
+            for directory in / /usr /usr/local /usr/local/libexec /usr/share /usr/share/polkit-1 /usr/share/polkit-1/actions /var /var/lib; do
+              test ! -L "$directory"
+              if [ -e "$directory" ]; then
+                test -d "$directory"
+                stat -c '%n before installer prerequisites: uid=%u gid=%g mode=%a' "$directory"
+                sudo chown root:root "$directory"
+                sudo chmod go-w "$directory"
+                stat -c '%n after installer prerequisites: uid=%u gid=%g mode=%a' "$directory"
+              fi
+            done
             for shell in bash zsh fish; do
               if ! command -v "$shell" >/dev/null 2>&1; then
                 missing="$missing $shell"
