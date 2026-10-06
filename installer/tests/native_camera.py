@@ -200,9 +200,10 @@ def root_phase(args):
                           ('publication', publication), ('completed', state_syncs[-2])):
         old = snapshot()
         trace_path = args.work / ('kill-' + name + '.strace')
+        # subprocess reports direct SIGKILL as -9; a shell may encode it as 137.
         record(proof, 'kill-' + name,
                ['strace', '-e', 'trace=fsync', '-yy', '-o', trace_path,
-                '-e', f'inject=fsync:signal=SIGKILL:when={ordinal}', *setup], codes=(137,), env=clean_env)
+                '-e', f'inject=fsync:signal=SIGKILL:when={ordinal}', *setup], codes=(-9, 137), env=clean_env)
         trace_text = trace_path.read_text()
         require('killed by SIGKILL' in trace_text, 'uncatchable installer interruption was not exercised')
         (proof / ('kill-' + name + '-trace.txt')).write_text(trace_text)
