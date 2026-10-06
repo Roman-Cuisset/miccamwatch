@@ -399,8 +399,9 @@ universal microphone deny or private lock-state fallback.
 
 Mute and profile ownership records survive uninstall so restoration remains
 possible. Restore owned changes explicitly before uninstall if desired.
-`mcw update` requires a public-installer receipt on Unix; stop an active
-installed watcher/tray first. Native notifications, sound and menu-bar/tray
+`mcw update` requires a public-installer receipt for managed Unix `bin/mcw`
+layouts; macOS v0.16.1 also supports safe standalone replacement outside `bin`.
+Stop an active installed watcher/tray first. Native notifications, sound and menu-bar/tray
 registration need the corresponding graphical session and services.
 
 Human STOP output labels its retained access details as the **last observation**,

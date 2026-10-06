@@ -8,7 +8,7 @@ MicCamWatch has a shared Rust library, CLI, TUI and desktop lifecycle. Windows u
 - `collector`: platform-neutral `CaptureScope`, `CaptureCollector`, and capability contracts.
 - `platform`: Windows uses WASAPI, Media Foundation, ConsentStore, process inspection and Authenticode. Linux uses `pw-dump` against the real PipeWire graph, `/proc` process identity and `/dev/video*` inventory/read-only FD probes. macOS uses CoreAudio `AudioHardwareSystem.processes`, AVFoundation device discovery and CoreMediaIO `kCMIODevicePropertyDeviceIsRunningSomewhere`.
 - `config`, `settings`, `history`: policy, persistent preferences, rotating event storage (Windows application data; XDG paths on Unix).
-- `watcher`, `notify`, `updater`: native event dispatch and effects; Unix updates require an owned public-installer receipt and preserve explicit autostart intent.
+- `watcher`, `notify`, `updater`: native event dispatch and effects; managed Unix updates require an owned public-installer receipt, macOS also supports verified standalone replacement outside `bin`, and both preserve explicit autostart intent.
 - `frontends/cli`, `frontends/tui`: shared controls and collector contracts. `frontends/tray`: Win32 Notification Area, Linux StatusNotifierItem, or macOS AppKit status item. The separate Windows tray executable requires the `windows-tray` Cargo feature; Unix desktop mode is part of `mcw`.
 - `privacy/linux`, `mcw-camera-helper`: optional explicit USB `uvcvideo` driver detach/reconnect through generation-bound USBFS ioctls, authenticated on-demand Polkit root actions, root-owned identity journal, and no-prompt status. The helper binary requires `linux-camera-helper`; it is not included in default Windows/macOS builds.
 
