@@ -108,3 +108,42 @@ jobs:
             --source-url "$source_url" \
             --version "$RELEASE_VERSION" \
             --upgrade-from "$UPGRADE_FROM"
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        if: runner.os == 'macOS'
+      - name: Verify public macOS standalone bootstrap and updater
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          python3 -B - <<'PY'
+          import hashlib, os, pathlib, subprocess, tempfile
+          version = os.environ["RELEASE_VERSION"]
+          if tuple(map(int, version.removeprefix("v").split("."))) <= (0, 16, 0):
+              print("Standalone bootstrap proof requires public v0.16.1 or newer; older public releases are immutable.")
+              raise SystemExit(0)
+          proof = pathlib.Path(os.environ["RUNNER_TEMP"]) / "native-proof/public-standalone"
+          proof.mkdir(parents=True, exist_ok=True)
+          arch = "aarch64" if os.uname().machine == "arm64" else "x86_64"
+          asset = f"miccamwatch-macos-{arch}.tar.gz"
+          curl = ["/usr/bin/curl", "--proto", "=https", "--proto-redir", "=https", "--tlsv1.2", "-fsSL"]
+          with tempfile.TemporaryDirectory(prefix="mcw-public-download-") as temporary:
+              root = pathlib.Path(temporary)
+              archive, sums, script = root / asset, root / "SHA256SUMS", root / "install.sh"
+              release = f"https://github.com/Roman-Cuisset/miccamwatch/releases/download/{version}"
+              source = f"https://raw.githubusercontent.com/{os.environ['SOURCE_REPOSITORY']}/{os.environ['SOURCE_REF']}/installer/install.sh"
+              for url, path in [(f"{release}/{asset}", archive), (f"{release}/SHA256SUMS", sums), (source, script)]:
+                  subprocess.run([*curl, url, "-o", str(path)], check=True)
+              entries = [line.split() for line in sums.read_text().splitlines() if line.split() and line.split()[-1] == asset]
+              assert len(entries) == 1 and len(entries[0]) == 2
+              digest = hashlib.file_digest(archive.open("rb"), "sha256").hexdigest()
+              assert digest == entries[0][0], "public archive manifest mismatch"
+              subprocess.run(["python3", "-B", "installer/tests/native_mac_portable_update.py",
+                              "--source-file", str(script), "--archive", str(archive), "--version", version,
+                              "--public-release", "--proof", str(proof)], check=True)
+          PY
+      - name: Upload public standalone migration evidence
+        if: always() && runner.os == 'macOS'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: public-standalone-${{ matrix.os }}
+          if-no-files-found: ignore
+          path: ${{ runner.temp }}/native-proof

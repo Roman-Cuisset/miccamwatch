@@ -28,11 +28,13 @@ use windows::{
     Win32::{
         Foundation::{
             CloseHandle, ERROR_ALREADY_EXISTS, GetLastError, HANDLE, HWND, LPARAM, LRESULT, POINT,
-            WPARAM,
+            RECT, SIZE, WPARAM,
         },
         Graphics::Gdi::{
-            BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CreateBitmap, CreateDIBSection, DIB_RGB_COLORS,
-            DeleteObject,
+            BI_RGB, BITMAPINFO, BITMAPINFOHEADER, COLOR_WINDOW, CreateBitmap, CreateDIBSection,
+            CreateFontIndirectW, DIB_RGB_COLORS, DeleteObject, GetDC, GetMonitorInfoW,
+            GetSysColorBrush, GetTextExtentPoint32W, HFONT, MONITOR_DEFAULTTONEAREST, MONITORINFO,
+            MonitorFromWindow, ReleaseDC, SelectObject,
         },
         System::Threading::{CreateMutexW, GetCurrentProcessId},
         UI::{
@@ -43,14 +45,18 @@ use windows::{
             WindowsAndMessaging::{
                 AppendMenuW, CREATESTRUCTW, CreateIconIndirect, CreatePopupMenu, CreateWindowExW,
                 DefWindowProcW, DestroyIcon, DestroyMenu, DestroyWindow, DispatchMessageW,
-                FindWindowW, GWLP_USERDATA, GetCursorPos, GetMessageW, GetSystemMetrics,
-                GetWindowLongPtrW, HICON, ICONINFO, KillTimer, MF_DISABLED, MF_GRAYED,
-                MF_SEPARATOR, MF_STRING, MSG, PostMessageW, PostQuitMessage, RegisterClassW,
-                SM_CXSMICON, SetForegroundWindow, SetTimer, SetWindowLongPtrW, TPM_BOTTOMALIGN,
-                TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage,
-                WINDOW_EX_STYLE, WM_APP, WM_CLOSE, WM_COMMAND, WM_DESTROY, WM_LBUTTONDBLCLK,
-                WM_LBUTTONUP, WM_NCCREATE, WM_NULL, WM_RBUTTONUP, WM_TIMER, WNDCLASSW,
-                WS_OVERLAPPED,
+                ES_AUTOVSCROLL, ES_MULTILINE, ES_READONLY, FindWindowW, GWLP_USERDATA,
+                GetClientRect, GetCursorPos, GetDlgItem, GetMessageW, GetSystemMetrics,
+                GetWindowLongPtrW, HICON, HMENU, ICONINFO, KillTimer, MF_DISABLED, MF_GRAYED,
+                MF_SEPARATOR, MF_STRING, MSG, MoveWindow, NONCLIENTMETRICSW, PostMessageW,
+                PostQuitMessage, RegisterClassW, SM_CXSMICON, SPI_GETNONCLIENTMETRICS, SW_SHOW,
+                SendMessageW, SetForegroundWindow, SetTimer, SetWindowLongPtrW, SetWindowTextW,
+                ShowWindow, TPM_BOTTOMALIGN, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON,
+                TrackPopupMenu, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CLOSE,
+                WM_COMMAND, WM_COPY, WM_DESTROY, WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_NCCREATE,
+                WM_NULL, WM_RBUTTONUP, WM_SETFONT, WM_SIZE, WM_TIMER, WNDCLASSW, WS_CHILD,
+                WS_EX_CLIENTEDGE, WS_OVERLAPPED, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE,
+                WS_VSCROLL,
             },
         },
     },
@@ -60,6 +66,14 @@ use windows::{
 #[link(name = "user32")]
 unsafe extern "system" {
     fn SetProcessDpiAwarenessContext(context: isize) -> i32;
+    fn GetDpiForWindow(hwnd: HWND) -> u32;
+    fn SystemParametersInfoForDpi(
+        action: u32,
+        size: u32,
+        data: *mut NONCLIENTMETRICSW,
+        flags: u32,
+        dpi: u32,
+    ) -> i32;
 }
 
 /// `DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2`.
@@ -90,6 +104,12 @@ const CMD_EXIT: usize = 103;
 const CMD_TOGGLE_NOTIFICATIONS: usize = 104;
 const CMD_TOGGLE_AUTOSTART: usize = 105;
 const CMD_CYCLE_PROFILE: usize = 106;
+const CMD_DETAILS: usize = 107;
+const DETAILS_EDIT: i32 = 201;
+const DETAILS_COPY: usize = 202;
+// Standard EDIT messages (no common-controls dependency).
+const EM_SETSEL: u32 = 0x00b1;
+const EM_SETLIMITTEXT: u32 = 0x00c5;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TrayVisual {
@@ -533,6 +553,13 @@ unsafe extern "system" fn tray_wnd_proc(
                 CMD_TOGGLE_NOTIFICATIONS => toggle_notifications(hwnd),
                 CMD_TOGGLE_AUTOSTART => toggle_autostart(hwnd),
                 CMD_CYCLE_PROFILE => cycle_profile(hwnd),
+                CMD_DETAILS => {
+                    if let Some(state) = state(hwnd)
+                        && let Err(error) = show_diagnostic_window(hwnd, &state.summary)
+                    {
+                        notify_async("MicCamWatch details", &format!("{error:#}"));
+                    }
+                }
                 CMD_EXIT if request_safe_close(hwnd) == UPDATE_BUSY => {
                     notify_async(
                         "MicCamWatch",
@@ -1242,20 +1269,318 @@ fn cycle_profile(hwnd: HWND) {
     }
 }
 
-fn show_context_menu(hwnd: HWND) {
-    let Some(state) = state(hwnd) else { return };
+fn monitor_work_area(hwnd: HWND) -> RECT {
+    let mut info = MONITORINFO {
+        cbSize: size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
     unsafe {
-        let Ok(menu) = CreatePopupMenu() else { return };
+        let _ = GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &mut info);
+    }
+    info.rcWork
+}
+
+fn native_menu_font(hwnd: HWND) -> Option<HFONT> {
+    let mut metrics = NONCLIENTMETRICSW {
+        cbSize: size_of::<NONCLIENTMETRICSW>() as u32,
+        ..Default::default()
+    };
+    unsafe {
+        if SystemParametersInfoForDpi(
+            SPI_GETNONCLIENTMETRICS.0,
+            metrics.cbSize,
+            &mut metrics,
+            0,
+            GetDpiForWindow(hwnd).max(96),
+        ) == 0
+        {
+            return None;
+        }
+        let font = CreateFontIndirectW(&metrics.lfMenuFont);
+        (!font.is_invalid()).then_some(font)
+    }
+}
+
+fn menu_summary_width(hwnd: HWND) -> i32 {
+    let dpi = unsafe { GetDpiForWindow(hwnd) }.max(96) as i32;
+    let work = monitor_work_area(hwnd);
+    // Reserve native checkmark, submenu and border gutters separately from text.
+    (360 * dpi / 96)
+        .min((work.right - work.left) / 2 - 80 * dpi / 96)
+        .max(1)
+}
+
+fn menu_plain_text(summary: &str) -> (String, bool) {
+    let mut chars = summary.chars();
+    let text = chars.by_ref().take(256).map(|c| {
+        if c.is_control() || c.is_whitespace()
+            || matches!(c, '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+        {
+            ' '
+        } else {
+            c
+        }
+    }).collect();
+    (text, chars.next().is_some())
+}
+
+fn compact_menu_summary(hwnd: HWND, summary: &str) -> String {
+    let (plain, already_truncated) = menu_plain_text(summary);
+    let Some(font) = native_menu_font(hwnd) else {
+        return "Status details…".into();
+    };
+    let mut wide: Vec<u16> = plain.encode_utf16().collect();
+    let limit = menu_summary_width(hwnd);
+    let compact = unsafe {
+        let dc = GetDC(Some(hwnd));
+        if dc.is_invalid() {
+            let _ = DeleteObject(font.into());
+            return "Status details…".into();
+        }
+        let previous = SelectObject(dc, font.into());
+        let measure = |text: &[u16]| {
+            let mut size = SIZE::default();
+            GetTextExtentPoint32W(dc, text, &mut size)
+                .as_bool()
+                .then_some(size.cx)
+        };
+        let result = if !already_truncated && measure(&wide).is_some_and(|width| width <= limit) {
+            plain
+        } else {
+            wide.push('…' as u16);
+            let mut boundaries = vec![0];
+            let mut units = 0;
+            for c in plain.chars() {
+                units += c.len_utf16();
+                boundaries.push(units);
+            }
+            let mut low = 0;
+            let mut high = boundaries.len() - 1;
+            while low < high {
+                let middle = (low + high).div_ceil(2);
+                let end = boundaries[middle];
+                let saved = wide[end];
+                wide[end] = '…' as u16;
+                let fits = measure(&wide[..=end]).is_some_and(|width| width <= limit);
+                wide[end] = saved;
+                if fits {
+                    low = middle;
+                } else {
+                    high = middle - 1;
+                }
+            }
+            format!("{}…", String::from_utf16_lossy(&wide[..boundaries[low]]))
+        };
+        let _ = SelectObject(dc, previous);
+        let _ = ReleaseDC(Some(hwnd), dc);
+        let _ = DeleteObject(font.into());
+        result
+    };
+    // AppendMenu interprets ampersands as mnemonics; double them only after measuring.
+    compact.replace('&', "&&")
+}
+
+fn diagnostic_document(summary: &str) -> String {
+    // Windows EDIT expects CRLF. NUL cannot be represented by its text API, so
+    // expose it explicitly rather than silently discarding everything after it.
+    let mut document = String::with_capacity(summary.len());
+    let mut chars = summary.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\0' => document.push_str("\\0"),
+            '\r' => {
+                if chars.peek() == Some(&'\n') {
+                    chars.next();
+                }
+                document.push_str("\r\n");
+            }
+            '\n' => document.push_str("\r\n"),
+            c => document.push(c),
+        }
+    }
+    document
+}
+
+fn show_diagnostic_window(owner: HWND, summary: &str) -> Result<HWND> {
+    let class = format_wide("MicCamWatchDetailsClass");
+    let title = format_wide("MicCamWatch — status details");
+    unsafe {
+        let _ = RegisterClassW(&WNDCLASSW {
+            hbrBackground: GetSysColorBrush(COLOR_WINDOW),
+            lpfnWndProc: Some(details_wnd_proc),
+            lpszClassName: PCWSTR(class.as_ptr()),
+            ..Default::default()
+        });
+        let work = monitor_work_area(owner);
+        let dpi = GetDpiForWindow(owner).max(96) as i32;
+        let width = (640 * dpi / 96).min(work.right - work.left);
+        let height = (420 * dpi / 96).min(work.bottom - work.top);
+        let hwnd = CreateWindowExW(
+            WINDOW_EX_STYLE(0),
+            PCWSTR(class.as_ptr()),
+            PCWSTR(title.as_ptr()),
+            WS_OVERLAPPEDWINDOW,
+            work.left + (work.right - work.left - width) / 2,
+            work.top + (work.bottom - work.top - height) / 2,
+            width,
+            height,
+            Some(owner),
+            None,
+            None,
+            None,
+        )
+        .context("create status details window")?;
+        let result = (|| -> Result<()> {
+            let font = native_menu_font(owner).context("load native status font")?;
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, font.0 as isize);
+            let edit_class = format_wide("EDIT");
+            let edit = CreateWindowExW(
+                WS_EX_CLIENTEDGE,
+                PCWSTR(edit_class.as_ptr()),
+                PCWSTR::null(),
+                WS_CHILD
+                    | WS_VISIBLE
+                    | WS_VSCROLL
+                    | WS_TABSTOP
+                    | WINDOW_STYLE((ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL) as u32),
+                0,
+                0,
+                0,
+                0,
+                Some(hwnd),
+                Some(HMENU(DETAILS_EDIT as *mut _)),
+                None,
+                None,
+            )?;
+            SendMessageW(edit, EM_SETLIMITTEXT, Some(WPARAM(0x7fff_fffe)), None);
+            let document = format_wide(&diagnostic_document(summary));
+            SetWindowTextW(edit, PCWSTR(document.as_ptr()))?;
+            SendMessageW(
+                edit,
+                WM_SETFONT,
+                Some(WPARAM(font.0 as usize)),
+                Some(LPARAM(1)),
+            );
+            let button_class = format_wide("BUTTON");
+            let copy_text = format_wide("Copy all");
+            let copy = CreateWindowExW(
+                WINDOW_EX_STYLE(0),
+                PCWSTR(button_class.as_ptr()),
+                PCWSTR(copy_text.as_ptr()),
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+                0,
+                0,
+                0,
+                0,
+                Some(hwnd),
+                Some(HMENU(DETAILS_COPY as *mut _)),
+                None,
+                None,
+            )?;
+            SendMessageW(
+                copy,
+                WM_SETFONT,
+                Some(WPARAM(font.0 as usize)),
+                Some(LPARAM(1)),
+            );
+            layout_details(hwnd);
+            let _ = ShowWindow(hwnd, SW_SHOW);
+            let _ = SetForegroundWindow(hwnd);
+            Ok(())
+        })();
+        if let Err(error) = result {
+            let _ = DestroyWindow(hwnd);
+            return Err(error).context("create status details controls");
+        }
+        Ok(hwnd)
+    }
+}
+
+fn layout_details(hwnd: HWND) {
+    unsafe {
+        let mut rect = RECT::default();
+        let _ = GetClientRect(hwnd, &mut rect);
+        let unit = GetDpiForWindow(hwnd).max(96) as i32;
+        let margin = 12 * unit / 96;
+        let button_height = 30 * unit / 96;
+        if let Ok(edit) = GetDlgItem(Some(hwnd), DETAILS_EDIT) {
+            let _ = MoveWindow(
+                edit,
+                margin,
+                margin,
+                (rect.right - 2 * margin).max(1),
+                (rect.bottom - 3 * margin - button_height).max(1),
+                true,
+            );
+        }
+        if let Ok(copy) = GetDlgItem(Some(hwnd), DETAILS_COPY as i32) {
+            let _ = MoveWindow(
+                copy,
+                margin,
+                (rect.bottom - margin - button_height).max(0),
+                110 * unit / 96,
+                button_height,
+                true,
+            );
+        }
+    }
+}
+
+unsafe extern "system" fn details_wnd_proc(
+    hwnd: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    match message {
+        WM_SIZE => {
+            layout_details(hwnd);
+            LRESULT(0)
+        }
+        WM_COMMAND if wparam.0 & 0xffff == DETAILS_COPY => {
+            if let Ok(edit) = unsafe { GetDlgItem(Some(hwnd), DETAILS_EDIT) } {
+                unsafe {
+                    SendMessageW(edit, EM_SETSEL, Some(WPARAM(0)), Some(LPARAM(-1)));
+                    SendMessageW(edit, WM_COPY, None, None);
+                }
+            }
+            LRESULT(0)
+        }
+        // This modeless owned window must never quit/block the tray event loop:
+        // pending camera results and updater shutdown safety continue unchanged.
+        windows::Win32::UI::WindowsAndMessaging::WM_NCDESTROY => {
+            let font = HFONT(unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *mut _);
+            if !font.is_invalid() {
+                let _ = unsafe { DeleteObject(font.into()) };
+            }
+            unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
+        }
+        _ => unsafe { DefWindowProcW(hwnd, message, wparam, lparam) },
+    }
+}
+
+fn build_context_menu(
+    hwnd: HWND,
+    summary: &str,
+    mute_state: MicrophoneMuteState,
+    camera_state: CameraPrivacyState,
+    settings: &Settings,
+    autostart_state: crate::autostart::AutostartState,
+) -> Result<HMENU> {
+    unsafe {
+        let menu = CreatePopupMenu()?;
         append_disabled(menu, &format!("miccamwatch v{}", env!("CARGO_PKG_VERSION")));
-        append_disabled(menu, &state.summary);
+        append_disabled(menu, &compact_menu_summary(hwnd, summary));
+        let details = format_wide("Status details…");
+        let _ = AppendMenuW(menu, MF_STRING, CMD_DETAILS, PCWSTR(details.as_ptr()));
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-        let mute_text = match state.mute_state {
+        let mute_text = match mute_state {
             MicrophoneMuteState::Muted => "Unmute microphone",
             MicrophoneMuteState::Unmuted | MicrophoneMuteState::Mixed => "Mute microphone",
             MicrophoneMuteState::Unavailable => "Microphone unavailable",
         };
         let mute_wide = format_wide(mute_text);
-        let mute_flags = if state.mute_state == MicrophoneMuteState::Unavailable {
+        let mute_flags = if mute_state == MicrophoneMuteState::Unavailable {
             MF_STRING | MF_DISABLED | MF_GRAYED
         } else {
             MF_STRING
@@ -1266,7 +1591,7 @@ fn show_context_menu(hwnd: HWND) {
             CMD_TOGGLE_MUTE,
             PCWSTR(mute_wide.as_ptr()),
         );
-        let camera_text = format_wide(match state.camera_state {
+        let camera_text = format_wide(match camera_state {
             CameraPrivacyState::Allowed => "Block camera",
             CameraPrivacyState::Blocked => "Allow camera",
             CameraPrivacyState::SystemManaged => "Allow camera (blocked camera unplugged)",
@@ -1277,7 +1602,7 @@ fn show_context_menu(hwnd: HWND) {
             CMD_TOGGLE_CAMERA,
             PCWSTR(camera_text.as_ptr()),
         );
-        let notifications = format_wide(if state.settings.notifications_paused() {
+        let notifications = format_wide(if settings.notifications_paused() {
             "Resume notifications"
         } else {
             "Pause notifications for 1 hour"
@@ -1288,9 +1613,9 @@ fn show_context_menu(hwnd: HWND) {
             CMD_TOGGLE_NOTIFICATIONS,
             PCWSTR(notifications.as_ptr()),
         );
-        let profile = format_wide(&format!("Profile: {:?} (change)", state.settings.profile));
+        let profile = format_wide(&format!("Profile: {:?} (change)", settings.profile));
         let _ = AppendMenuW(menu, MF_STRING, CMD_CYCLE_PROFILE, PCWSTR(profile.as_ptr()));
-        let autostart = format_wide(match state.autostart_state {
+        let autostart = format_wide(match autostart_state {
             crate::autostart::AutostartState::Enabled => "Disable autostart",
             crate::autostart::AutostartState::Disabled => "Enable autostart",
         });
@@ -1303,8 +1628,29 @@ fn show_context_menu(hwnd: HWND) {
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
         let exit = format_wide("Exit");
         let _ = AppendMenuW(menu, MF_STRING, CMD_EXIT, PCWSTR(exit.as_ptr()));
-        let mut point = POINT::default();
+        Ok(menu)
+    }
+}
+
+fn show_context_menu(hwnd: HWND) {
+    let Some(state) = state(hwnd) else { return };
+    let mut point = POINT::default();
+    unsafe {
         let _ = GetCursorPos(&mut point);
+        // Align the hidden owner with the popup monitor before reading its DPI/font.
+        let _ = MoveWindow(hwnd, point.x, point.y, 0, 0, false);
+    }
+    let Ok(menu) = build_context_menu(
+        hwnd,
+        &state.summary,
+        state.mute_state,
+        state.camera_state,
+        &state.settings,
+        state.autostart_state,
+    ) else {
+        return;
+    };
+    unsafe {
         let _ = SetForegroundWindow(hwnd);
         let command = TrackPopupMenu(
             menu,
@@ -1469,6 +1815,246 @@ fn line_distance(x: f32, y: f32, x1: f32, y1: f32, x2: f32, y2: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    unsafe extern "system" fn native_test_wnd_proc(
+        hwnd: HWND,
+        message: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
+        unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
+    }
+
+    fn native_test_owner() -> HWND {
+        enable_dpi_awareness();
+        let class = format_wide("MicCamWatchNativeProofClass");
+        let title = format_wide("MicCamWatch native menu proof");
+        unsafe {
+            let _ = RegisterClassW(&WNDCLASSW {
+                lpfnWndProc: Some(native_test_wnd_proc),
+                lpszClassName: PCWSTR(class.as_ptr()),
+                ..Default::default()
+            });
+            CreateWindowExW(
+                WINDOW_EX_STYLE(0),
+                PCWSTR(class.as_ptr()),
+                PCWSTR(title.as_ptr()),
+                WS_OVERLAPPED,
+                0,
+                0,
+                0,
+                0,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap()
+        }
+    }
+
+    fn assert_native_menu(menu: HMENU, owner: HWND, mute: MicrophoneMuteState) {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            GetMenuItemID, GetMenuState, GetMenuStringW, MF_BYPOSITION,
+        };
+        unsafe {
+            let mut label = [0u16; 1024];
+            let len = GetMenuStringW(menu, 1, Some(&mut label), MF_BYPOSITION);
+            assert!(len > 0);
+            let label = String::from_utf16(&label[..len as usize]).unwrap();
+            assert!(!label.chars().any(char::is_control));
+            let displayed: Vec<u16> = label.replace("&&", "&").encode_utf16().collect();
+            let font = native_menu_font(owner).expect("native menu font required for this proof");
+            let dc = GetDC(Some(owner));
+            assert!(!dc.is_invalid());
+            let previous = SelectObject(dc, font.into());
+            let mut size = SIZE::default();
+            assert!(GetTextExtentPoint32W(dc, &displayed, &mut size).as_bool());
+            assert!(
+                size.cx <= menu_summary_width(owner),
+                "{} > {}",
+                size.cx,
+                menu_summary_width(owner)
+            );
+            let _ = SelectObject(dc, previous);
+            let _ = ReleaseDC(Some(owner), dc);
+            let _ = DeleteObject(font.into());
+            for (position, command) in [
+                (2, CMD_DETAILS),
+                (4, CMD_TOGGLE_MUTE),
+                (5, CMD_TOGGLE_CAMERA),
+                (6, CMD_TOGGLE_NOTIFICATIONS),
+                (7, CMD_CYCLE_PROFILE),
+                (8, CMD_TOGGLE_AUTOSTART),
+                (10, CMD_EXIT),
+            ] {
+                assert_eq!(GetMenuItemID(menu, position), command as u32);
+            }
+            let flags = GetMenuState(
+                menu,
+                CMD_TOGGLE_MUTE as u32,
+                windows::Win32::UI::WindowsAndMessaging::MF_BYCOMMAND,
+            );
+            assert_eq!(
+                flags & (MF_DISABLED.0 | MF_GRAYED.0) != 0,
+                mute == MicrophoneMuteState::Unavailable
+            );
+        }
+    }
+
+    #[test]
+    fn native_menu_consumer_bounds_unicode_and_preserves_actions() {
+        let owner = native_test_owner();
+        for mute in [
+            MicrophoneMuteState::Muted,
+            MicrophoneMuteState::Unmuted,
+            MicrophoneMuteState::Mixed,
+            MicrophoneMuteState::Unavailable,
+        ] {
+            for summary in [
+                format!("miccamwatch: collection failed: {}", "W".repeat(16 * 1024)),
+                format!(
+                    "miccamwatch: degraded: {}",
+                    "界🛡️\t&Exit\n\r\u{202e}\0".repeat(1000)
+                ),
+            ] {
+                let menu = build_context_menu(
+                    owner,
+                    &summary,
+                    mute,
+                    CameraPrivacyState::SystemManaged,
+                    &Settings::default(),
+                    crate::autostart::AutostartState::Disabled,
+                )
+                .unwrap();
+                assert_native_menu(menu, owner, mute);
+                let _ = unsafe { DestroyMenu(menu) };
+                // The bounded consumer must not mutate the original diagnostic.
+                assert!(summary.len() > 16 * 1024);
+            }
+        }
+        let _ = unsafe { DestroyWindow(owner) };
+    }
+
+    #[test]
+    #[ignore = "requires interactive Windows desktop; run installer/tests/windows-tray-native.ps1"]
+    fn native_windows_tray_visual_smoke() {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            ES_AUTOHSCROLL, GWL_STYLE, GetWindowTextLengthW, GetWindowTextW, IsWindow, PM_REMOVE,
+            PeekMessageW,
+        };
+        let directory = std::path::PathBuf::from(
+            std::env::var_os("MCW_WINDOWS_NATIVE_PROOF_DIR").expect("proof output directory"),
+        );
+        std::fs::create_dir_all(&directory).unwrap();
+        let owner = native_test_owner();
+        for (name, summary) in [
+            (
+                "long-error",
+                format!("miccamwatch: collection failed: {}", "W".repeat(16 * 1024)),
+            ),
+            (
+                "unicode-controls",
+                format!(
+                    "miccamwatch: degraded: {}",
+                    "界🛡️\t&Exit\n\r\u{202e}\0".repeat(1000)
+                ),
+            ),
+        ] {
+            let menu = build_context_menu(
+                owner,
+                &summary,
+                MicrophoneMuteState::Muted,
+                CameraPrivacyState::SystemManaged,
+                &Settings::default(),
+                crate::autostart::AutostartState::Disabled,
+            )
+            .unwrap();
+            assert_native_menu(menu, owner, MicrophoneMuteState::Muted);
+            let work = monitor_work_area(owner);
+            std::fs::write(
+                directory.join(format!("{name}-menu.json")),
+                serde_json::to_vec(&serde_json::json!({
+                    "owner": owner.0 as usize, "menu": menu.0 as usize,
+                    "text_width_limit": menu_summary_width(owner),
+                    "work_width": work.right - work.left,
+                    "work_height": work.bottom - work.top,
+                    "dpi": unsafe { GetDpiForWindow(owner) },
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+            unsafe {
+                let _ = SetForegroundWindow(owner);
+                let command = TrackPopupMenu(
+                    menu,
+                    TPM_RIGHTBUTTON | TPM_BOTTOMALIGN | TPM_RETURNCMD | TPM_NONOTIFY,
+                    work.right - 30,
+                    work.bottom - 30,
+                    None,
+                    owner,
+                    None,
+                );
+                assert_eq!(
+                    command.0, 0,
+                    "proof driver cancels without invoking privacy actions"
+                );
+                let _ = DestroyMenu(menu);
+            }
+            let document = diagnostic_document(&summary);
+            std::fs::write(directory.join(format!("{name}-diagnostic.txt")), &document).unwrap();
+            let details = show_diagnostic_window(owner, &summary).unwrap();
+            unsafe {
+                let edit = GetDlgItem(Some(details), DETAILS_EDIT).unwrap();
+                let style = GetWindowLongPtrW(edit, GWL_STYLE) as u32;
+                assert_eq!(
+                    style & ES_AUTOHSCROLL as u32,
+                    0,
+                    "diagnostic must word-wrap"
+                );
+                assert_ne!(
+                    style & ES_READONLY as u32,
+                    0,
+                    "diagnostic must be copyable, not editable"
+                );
+                let mut text = vec![0u16; GetWindowTextLengthW(edit) as usize + 1];
+                let length = GetWindowTextW(edit, &mut text);
+                assert_eq!(
+                    String::from_utf16(&text[..length as usize]).unwrap(),
+                    document
+                );
+                std::fs::write(
+                    directory.join(format!("{name}-details.json")),
+                    serde_json::to_vec(&serde_json::json!({
+                        "window": details.0 as usize, "edit": edit.0 as usize,
+                        "document_utf16_units": document.encode_utf16().count(),
+                    }))
+                    .unwrap(),
+                )
+                .unwrap();
+                let deadline = Instant::now() + Duration::from_secs(90);
+                while IsWindow(Some(details)).as_bool() {
+                    assert!(
+                        Instant::now() < deadline,
+                        "native proof driver did not close details"
+                    );
+                    let mut message = MSG::default();
+                    if PeekMessageW(&mut message, None, 0, 0, PM_REMOVE).as_bool() {
+                        let _ = TranslateMessage(&message);
+                        DispatchMessageW(&message);
+                    } else {
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                }
+            }
+        }
+        let _ = unsafe { DestroyWindow(owner) };
+        std::fs::write(
+            directory.join("complete"),
+            "native HMENU geometry and full EDIT content checked",
+        )
+        .unwrap();
+    }
 
     #[test]
     fn safe_close_refuses_every_pending_camera_operation() {

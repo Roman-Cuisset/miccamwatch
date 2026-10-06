@@ -35,7 +35,7 @@ Les identifiants sont stables. À chaque livraison, remplacer l'état par **En c
 | P1-AUR | AUR : à faire | Moyenne | Dépendances PipeWire et frontière root |
 | P1-WG | Winget : à faire | Moyenne | Identité MSI et upgrades contrôlés |
 | P1-ARM | Linux ARM64 : à faire | Élevée | ABI/sysroot, installation et tests natifs |
-| P1-UPGRADE | Consolidation : à faire | Moyenne | Contrats receipt, PATH, root et package manager |
+| P1-UPGRADE | Partiel : correction macOS standalone en validation 0.16.1 ; consolidation restante à faire | Moyenne | Contrats receipt, PATH, root et package manager |
 | P2-HOOKS | Retenu, à faire | Élevée | Transitions actives cohérentes, effets bornés |
 | P2-NET | Reformulé en métadonnées locales, à faire | Élevée | PID authentifié ; macOS conditionnel |
 | P2-LOCK | Reformulé en protection coordonnée, à faire | Élevée | P1-RESTORE et arbitrage des intentions |
@@ -126,6 +126,8 @@ Les identifiants sont stables. À chaque livraison, remplacer l'état par **En c
 **Modules Rust :** `src/updater.rs`, `src/updater/unix.rs`, `src/updater/download.rs`, `src/updater/transaction.rs`, `src/autostart.rs`, `src/autostart/unix.rs`, `src/settings.rs` ; `installer/install.sh`, bootstrap root et tests natifs.
 
 **Contraintes :** résoudre latest une fois, vérifier le paquet exact avant exécution, ownership et remplacement sur le même volume, interruption/rollback et erreurs de quarantaine visibles. PATH bash/zsh/fish idempotent avec consentement, jamais de `sudo` curl. Préserver préférences, historique et autostart opt-in ; ne pas mélanger receipts curl et propriété Homebrew/AUR/MSI. Maintenir l'ordre Linux : restore avec ancien helper, uninstall root explicite, upgrade utilisateur, nouveau bootstrap explicite. Un état caméra Allowed ne remplace pas un journal vide.
+
+**Lot correctif 0.16.1 :** mise à jour en place d'un `mcw` macOS extrait hors `bin`, avec bootstrap explicite de l'ancien client, hash/identité/propriétaire verrouillés et quarantaine conservée. Les layouts `bin` sans receipt ne sont pas assimilés à des archives portables. Ce lot ne livre pas Homebrew/AUR ni Linux ARM64 et ne clôture pas la consolidation. Il inclut aussi des menus tray bornés et diagnostics complets séparés sur les trois OS, plus les boutons adaptatifs de `top` ; aucune nouvelle capacité de contrôle n'est annoncée.
 
 **Validation :** download public réel, origine 0.15.1 via installateur courant, 0.16.0 vers nouveau paquet, origine Windows portable/MSI, cible en cours d'exécution, chemins avec espaces, erreurs réseau/digest/permissions et interruption. Pas de shim ni de mutation des assets/tags anciens.
 
@@ -269,3 +271,4 @@ Windows : `RegisterHotKey` seul n'offre pas un protocole PTT key-up complet ; va
 | --- | --- | --- | --- | --- |
 | 2026-10-06 | Baseline v0.16.0 | Publiée, hors nouvelles phases | [CI main](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37439356665), [release native](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37437092551), [migration 0.14.0](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37438076601), [migration 0.15.1](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37438076504) | Limites matérielles/OS dans Architecture ; aucune affirmation RAM <15 Mo |
 | 2026-10-06 | Roadmap | Plan technique établi, aucune phase produit clôturée | Modules et contrats relus dans la base 0.16.0 ; propositions arbitrées ci-dessus | Démarrer par P1-RAM/P1-RESTORE ; packaging puis autres lots selon dépendances |
+| 2026-10-06 | Patch 0.16.1 updater/tray/top | Implémentation en validation native avant publication | Scénarios macOS ARM/Intel : bootstrap réel 0.16.0, updater corrigé ancien vers nouveau paquet, ownership/hash/processus ; menus AppKit/Win32/XFCE et TUI adaptatif | Publier seulement après preuves natives ; consolidation P1-UPGRADE et autres phases restent ouvertes |

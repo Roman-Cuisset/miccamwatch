@@ -63,6 +63,8 @@ impl Command {
 struct MenuEntry {
     action: &'static str,
     label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detail: Option<String>,
     enabled: bool,
 }
 #[derive(Clone, Serialize)]
@@ -71,6 +73,7 @@ struct View {
     summary: String,
     visual: &'static str,
     items: Vec<MenuEntry>,
+    details_label: &'static str,
 }
 
 fn uid() -> u32 {
@@ -349,6 +352,8 @@ struct Words {
     exit: &'static str,
     done: &'static str,
     lock_unknown: &'static str,
+    lock_status: &'static str,
+    details: &'static str,
 }
 fn words(lang: Language) -> Words {
     match lang {
@@ -373,6 +378,8 @@ fn words(lang: Language) -> Words {
             exit: "Exit",
             done: "Applied",
             lock_unknown: "Session lock unknown; automatic controls unavailable",
+            lock_status: "Session lock unknown",
+            details: "Details…",
         },
         Language::Fr => Words {
             idle: "Aucune capture observée",
@@ -395,6 +402,8 @@ fn words(lang: Language) -> Words {
             exit: "Quitter",
             done: "Appliqué",
             lock_unknown: "Verrouillage inconnu ; contrôles automatiques indisponibles",
+            lock_status: "Verrouillage inconnu",
+            details: "Détails…",
         },
         Language::De => Words {
             idle: "Keine Erfassung beobachtet",
@@ -417,6 +426,8 @@ fn words(lang: Language) -> Words {
             exit: "Beenden",
             done: "Angewendet",
             lock_unknown: "Sitzungssperre unbekannt; automatische Steuerung nicht verfügbar",
+            lock_status: "Sitzungssperre unbekannt",
+            details: "Details…",
         },
         Language::Es => Words {
             idle: "No se observa captura",
@@ -439,6 +450,8 @@ fn words(lang: Language) -> Words {
             exit: "Salir",
             done: "Aplicado",
             lock_unknown: "Bloqueo de sesión desconocido; controles automáticos no disponibles",
+            lock_status: "Bloqueo de sesión desconocido",
+            details: "Detalles…",
         },
         Language::Ja => Words {
             idle: "キャプチャは観測されていません",
@@ -461,6 +474,8 @@ fn words(lang: Language) -> Words {
             exit: "終了",
             done: "適用済み",
             lock_unknown: "セッションロック不明・自動制御は利用できません",
+            lock_status: "セッションロック不明",
+            details: "詳細…",
         },
         Language::Zh => Words {
             idle: "未观察到采集",
@@ -483,6 +498,8 @@ fn words(lang: Language) -> Words {
             exit: "退出",
             done: "已应用",
             lock_unknown: "会话锁定状态未知；自动控制不可用",
+            lock_status: "会话锁定状态未知",
+            details: "详细信息…",
         },
         Language::Ru => Words {
             idle: "Захват не наблюдается",
@@ -505,6 +522,8 @@ fn words(lang: Language) -> Words {
             exit: "Выход",
             done: "Применено",
             lock_unknown: "Блокировка сеанса неизвестна; автоматическое управление недоступно",
+            lock_status: "Блокировка сеанса неизвестна",
+            details: "Подробности…",
         },
     }
 }
@@ -517,10 +536,42 @@ fn profile_index(profile: PrivacyProfile) -> usize {
     }
 }
 fn entry(action: &'static str, label: impl Into<String>, enabled: bool) -> MenuEntry {
+    let label = label.into();
     MenuEntry {
         action,
-        label: label.into(),
+        detail: None,
+        label,
         enabled,
+    }
+}
+// Keep full diagnostics separate from compact visible statuses on both hosts.
+fn compact_entry(
+    action: &'static str,
+    label: impl Into<String>,
+    enabled: bool,
+    text: &Words,
+) -> MenuEntry {
+    let label = label.into();
+    let short = if label == text.lock_unknown {
+        Some(text.lock_status)
+    } else {
+        [text.failed, text.degraded, text.done]
+            .into_iter()
+            .find(|status| {
+                label != *status
+                    && label
+                        .strip_prefix(*status)
+                        .is_some_and(|detail| detail.starts_with(": "))
+            })
+    };
+    match short {
+        Some(short) => MenuEntry {
+            action,
+            label: short.to_owned(),
+            detail: Some(label),
+            enabled,
+        },
+        None => entry(action, label, enabled),
     }
 }
 fn make_view(
@@ -553,13 +604,13 @@ fn make_view(
             format!("MicCamWatch {}", env!("CARGO_PKG_VERSION")),
             false,
         ),
-        entry("status", &summary, true),
+        compact_entry("status", &summary, true, &text),
     ];
     if let Some(feedback) = feedback {
-        items.push(entry("header", feedback, false));
+        items.push(compact_entry("header", feedback, false, &text));
     }
     if lock == SessionLockState::Unknown {
-        items.push(entry("header", text.lock_unknown, false));
+        items.push(compact_entry("header", text.lock_unknown, false, &text));
     }
     items.push(entry("mic", mic, mute != MicrophoneMuteState::Unavailable));
     #[cfg(target_os = "linux")]
@@ -603,7 +654,7 @@ fn make_view(
         true,
     ));
     let autostart = crate::autostart::state();
-    items.push(entry(
+    items.push(compact_entry(
         "autostart",
         match &autostart {
             Ok(crate::autostart::AutostartState::Enabled) => text.autostart_on.to_owned(),
@@ -611,12 +662,14 @@ fn make_view(
             Err(error) => format!("{}: {error:#}", text.failed),
         },
         autostart.is_ok(),
+        &text,
     ));
     items.push(entry("exit", text.exit, true));
     View {
         kind: "state",
         summary,
         visual,
+        details_label: text.details,
         items,
     }
 }
@@ -854,7 +907,24 @@ pub fn run_tray(
                     let result: Result<()> = (|| {
                         match command {
                             Command::Status => {
-                                crate::notify::notify_message("MicCamWatch", &summary)?
+                                #[cfg(target_os = "macos")]
+                                crate::notify::notify_message("MicCamWatch", &summary)?;
+                                #[cfg(target_os = "linux")]
+                                crate::notify::notify_message(
+                                    "MicCamWatch",
+                                    &diagnostic_document(&make_view(
+                                        (
+                                            summary.clone(),
+                                            if action_error { "error" } else { visual },
+                                        ),
+                                        mute,
+                                        (camera_blocked, camera_error.as_deref()),
+                                        &settings,
+                                        lang,
+                                        &feedback,
+                                        lock,
+                                    )),
+                                )?;
                             }
                             Command::Mic => {
                                 monitor.toggle_microphone_mute()?;
@@ -960,6 +1030,62 @@ pub fn run_tray(
 }
 
 #[cfg(target_os = "linux")]
+fn diagnostic_document(view: &View) -> String {
+    let capacity = view.summary.len()
+        + view
+            .items
+            .iter()
+            .filter_map(|entry| {
+                let original = entry.detail.as_deref().unwrap_or(&entry.label);
+                (original != view.summary).then_some(original.len() + 2)
+            })
+            .sum::<usize>();
+    let mut document = String::with_capacity(capacity);
+    document.push_str(&view.summary);
+    for entry in &view.items {
+        let original = entry.detail.as_deref().unwrap_or(&entry.label);
+        if original != view.summary {
+            document.push_str("\n\n");
+            document.push_str(original);
+        }
+    }
+    document
+}
+
+// DBusMenu hosts choose their own fonts and geometry. Bound display cells, not
+// alleged pixels; native proof measures the actual XFCE GTK popup separately.
+#[cfg(target_os = "linux")]
+fn linux_menu_label(label: &str) -> String {
+    const CELLS: usize = 48;
+    const SCALARS: usize = 96;
+    let mut result = String::with_capacity((label.len() + CELLS).min(SCALARS * 4 + CELLS));
+    let mut cells = 0;
+    for (count, (index, character)) in label.char_indices().enumerate() {
+        let visible = if character.is_whitespace() || character.is_control() {
+            ' '
+        } else {
+            character
+        };
+        let width = if visible == ' ' {
+            1
+        } else {
+            ratatui::text::Span::raw(&label[index..index + character.len_utf8()]).width()
+        };
+        if count == SCALARS || cells + width > CELLS - 1 {
+            result.push('…');
+            break;
+        }
+        cells += width;
+        // DBusMenu uses underscores as mnemonics; double literal underscores.
+        if visible == '_' {
+            result.push('_');
+        }
+        result.push(visible);
+    }
+    result
+}
+
+#[cfg(target_os = "linux")]
 struct LinuxTray {
     view: View,
     actions: SyncSender<Command>,
@@ -971,7 +1097,7 @@ impl ksni::Tray for LinuxTray {
         "miccamwatch".into()
     }
     fn title(&self) -> String {
-        self.view.summary.clone()
+        "MicCamWatch".into()
     }
     fn icon_pixmap(&self) -> Vec<ksni::Icon> {
         let color: [u8; 3] = match self.view.visual {
@@ -1022,13 +1148,14 @@ impl ksni::Tray for LinuxTray {
         }
     }
     fn menu(&self) -> Vec<ksni::MenuItem<Self>> {
-        self.view
+        let mut menu: Vec<ksni::MenuItem<Self>> = self
+            .view
             .items
             .iter()
             .map(|entry| {
                 let command = Command::from_name(entry.action);
                 ksni::menu::StandardItem {
-                    label: entry.label.clone(),
+                    label: linux_menu_label(&entry.label),
                     enabled: entry.enabled,
                     activate: Box::new(move |this: &mut Self| {
                         if let Some(command) = command {
@@ -1039,7 +1166,19 @@ impl ksni::Tray for LinuxTray {
                 }
                 .into()
             })
-            .collect()
+            .collect();
+        menu.insert(
+            menu.len().saturating_sub(1),
+            ksni::menu::StandardItem {
+                label: linux_menu_label(self.view.details_label),
+                activate: Box::new(|this: &mut Self| {
+                    let _ = this.actions.try_send(Command::Status);
+                }),
+                ..Default::default()
+            }
+            .into(),
+        );
+        menu
     }
     fn activate(&mut self, _: i32, _: i32) {
         let _ = self.actions.try_send(Command::Status);
@@ -1246,3 +1385,47 @@ impl Drop for DesktopHost {
         let _ = self.child.wait();
     }
 }
+
+#[cfg(test)]
+mod menu_tests {
+    use super::*;
+
+    #[test]
+    fn compact_status_frames_retain_localized_diagnostics_and_actions() {
+        for lang in [
+            Language::En,
+            Language::Fr,
+            Language::De,
+            Language::Es,
+            Language::Ja,
+            Language::Zh,
+            Language::Ru,
+        ] {
+            let text = words(lang);
+            for status in [text.failed, text.degraded] {
+                let diagnostic =
+                    format!("{status}: {}", "camera restriction unknown; ".repeat(500));
+                let row = compact_entry("status", &diagnostic, true, &text);
+                let frame = serde_json::to_value(&row).unwrap();
+                assert_eq!(frame["label"], status);
+                assert_eq!(frame["detail"], diagnostic);
+                assert_eq!(frame["action"], "status");
+                assert_eq!(frame["enabled"], true);
+            }
+            let lock = compact_entry("header", text.lock_unknown, false, &text);
+            assert_eq!(lock.label, text.lock_status);
+            assert_eq!(lock.detail.as_deref(), Some(text.lock_unknown));
+            assert!(!lock.enabled);
+            let control = compact_entry("camera", text.camera, false, &text);
+            assert_eq!(control.label, text.camera);
+            assert!(control.detail.is_none());
+            assert_eq!(control.action, "camera");
+            assert!(!control.enabled);
+            assert!(!text.details.is_empty());
+        }
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "linux_width_tests.rs"]
+mod linux_width_tests;

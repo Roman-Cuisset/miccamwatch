@@ -187,9 +187,45 @@ pub fn enable() -> Result<()> {
     enable_in(&store, env!("CARGO_PKG_VERSION"))
 }
 
+#[cfg(target_os = "macos")]
+fn registration_present() -> Result<bool> {
+    let path = absolute_home()?.join("Library/LaunchAgents");
+    let target = match Directory::open(&path, false) {
+        Ok(directory) => directory,
+        Err(error)
+            if error
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound) =>
+        {
+            return Ok(false);
+        }
+        Err(error) => return Err(error),
+    };
+    if target
+        .file(OsStr::new(&format!("{LABEL}.plist")))?
+        .is_none()
+    {
+        return Ok(false);
+    }
+    // An unmanaged registration must not cause refresh to create ownership
+    // state. Store::snapshot remains authoritative for receipt validation.
+    let state = Directory::open(&crate::settings::config_dir()?.join("autostart"), false)
+        .context("autostart registration has no safe ownership state; it was preserved")?;
+    state
+        .file(OsStr::new(RECORD))?
+        .context("autostart registration is unmanaged; it was preserved")?;
+    Ok(true)
+}
+
 /// Recheck the opt-in under the same lock used by enable/disable. Updating an
 /// executable must never resurrect a registration the user has since removed.
 pub fn refresh_if_enabled(version: &str) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    ordinary_user()?;
+    #[cfg(target_os = "macos")]
+    if !registration_present()? {
+        return Ok(());
+    }
     let store = Store::open()?;
     let registration = store.snapshot()?.registration;
     if registration.is_none() {

@@ -21,8 +21,22 @@ to a concrete release tag, and verifies its named SHA-256 manifest entry before
 extracting the CLI and, from Linux `0.16.0`, its same-version optional camera
 helper, reviewed administrator installer and policy payload. Installation is
 per-user, without `sudo`; files are staged on the destination filesystem and
-validated before transactional replacement. Running, unmanaged, externally
-modified, symlinked or hardlinked owned artifacts are not overwritten.
+validated before transactional replacement. Normal prefix installation never
+overwrites unmanaged, running, externally modified, symlinked or hardlinked artifacts.
+
+From macOS `0.16.1`, an explicitly selected standalone `mcw` outside `bin` can
+be updated in place without claiming installer ownership. Rust inspection pins
+its safe owned parent/file identity and SHA-256 before positional-argument exec
+handoff. The embedded installer rechecks the expected digest under its install
+lock, validates the same-volume staged CLI/package and refuses another running
+target. Original rwx permissions and quarantine are retained before staged
+execution; no Gatekeeper or TCC bypass is performed. No receipt or PATH change
+is made. A removed/disabled autostart registration stays absent/disabled.
+Failure rollback restores only an unchanged owned new target; a concurrent
+change or quarantined/missing file is preserved with the old backup for manual
+inspection. SIGKILL cannot run cleanup: a verified old/new executable and
+possibly a stale lock/backup require inspection. `bin/mcw` never falls back to
+this mode on receipt errors; Linux still requires the managed layout.
 
 The install receipt and exact managed PATH blocks belong to the installer, not
 to capture collection or application preferences. Explicit `--add-path` or

@@ -8,16 +8,23 @@ import Darwin
 
 // Desktop protocol v1: UTF-8 newline-delimited JSON, maximum frame 65536 bytes.
 // Rust -> Swift: {"kind":"state","summary":String,"visual":"idle"|"ready"|"active"|"error",
-// "items":[{"action":String,"label":String,"enabled":Bool}]} or {"kind":"stop"}.
+// "details_label":String,"items":[{"action":String,"label":String,"detail":String?,"enabled":Bool}]}
+// or {"kind":"stop"}. Labels are compact; optional detail retains the original.
 // Swift -> Rust: {"kind":"ready","protocol":1}, {"kind":"action","action":String},
 // {"kind":"error","error":String}, {"kind":"stopped"}. Actions: status, mic,
 // camera, pause, profile, autostart, exit. This helper never collects capture data.
-private struct DesktopItem: Decodable { let action: String; let label: String; let enabled: Bool }
-private struct DesktopFrame: Decodable {
+struct DesktopItem: Decodable {
+    let action: String
+    let detail: String?
+    let label: String
+    let enabled: Bool
+}
+struct DesktopFrame: Decodable {
     let kind: String
     let summary: String?
     let visual: String?
     let items: [DesktopItem]?
+    let details_label: String?
 }
 private struct DesktopEvent: Encodable {
     var kind: String
@@ -54,9 +61,114 @@ private func desktopPolicyName(_ policy: NSApplication.ActivationPolicy) -> Stri
 private func desktopDiagnostic(_ context: String) {
     try? FileHandle.standardError.write(contentsOf: Data("MicCamWatch AppKit: \(context)\n".utf8))
 }
+// Standard AppKit menu chrome needs about 60 points in addition to the text.
+// Measure the actual menu font, not bytes or character counts (localized labels
+// and wide graphemes differ substantially). Never split a composed character.
+final class DesktopMenu: NSObject {
+    let menu = NSMenu()
+    let diagnostic: String
+    private let detailsLabel: String
+    private let textWidth: CGFloat
+
+    init(summary: String, entries: [DesktopItem], detailsLabel: String) {
+        self.detailsLabel = detailsLabel
+        textWidth = min(340, max(80, (NSScreen.main?.visibleFrame.width ?? 400) - 60))
+        var paragraphs = [summary]
+        for entry in entries {
+            let full = entry.detail ?? entry.label
+            if !paragraphs.contains(full) { paragraphs.append(full) }
+        }
+        diagnostic = paragraphs.joined(separator: "\n\n")
+        super.init()
+        menu.font = NSFont.menuFont(ofSize: 0)
+        menu.autoenablesItems = false
+        for entry in entries {
+            let row = NSMenuItem(title: boundedTitle(entry.label), action: #selector(selected(_:)), keyEquivalent: "")
+            row.target = self
+            row.representedObject = entry.action
+            row.isEnabled = entry.enabled
+            menu.addItem(row)
+        }
+        menu.addItem(.separator())
+        let details = NSMenuItem(title: boundedTitle(detailsLabel), action: #selector(showDetails(_:)), keyEquivalent: "")
+        details.target = self
+        menu.addItem(details)
+    }
+
+    private func boundedTitle(_ original: String) -> String {
+        var title = original
+        if original.contains(where: { $0.isNewline || $0 == "\t" }) {
+            title = ""
+            title.reserveCapacity(original.utf8.count)
+            for character in original {
+                if character.isNewline || character == "\t" {
+                    title.append(" ")
+                } else {
+                    title.append(character)
+                }
+            }
+        }
+        let font = menu.font ?? NSFont.menuFont(ofSize: 0)
+        func fits(_ value: String) -> Bool {
+            (value as NSString).size(withAttributes: [.font: font]).width <= textWidth
+        }
+        if fits(title) { return title }
+        let source = title as NSString
+        var low = 0, high = source.length
+        var result = "…"
+        while low <= high {
+            let middle = low + (high - low) / 2
+            let range = source.rangeOfComposedCharacterSequences(for: NSRange(location: 0, length: middle))
+            let candidate = source.substring(with: range) + "…"
+            if fits(candidate) {
+                result = candidate
+                low = middle + 1
+            } else {
+                high = middle - 1
+            }
+        }
+        return result
+    }
+
+    func detailsAlert() -> NSAlert {
+        let alert = NSAlert()
+        alert.messageText = "MicCamWatch — \(detailsLabel)"
+        // The document is selectable/copyable, scrollable, and wraps even a
+        // single unbroken 16 KB diagnostic. It never sets a menu's intrinsic width.
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 440, height: 260))
+        scroll.hasVerticalScroller = true
+        scroll.hasHorizontalScroller = false
+        scroll.borderType = .bezelBorder
+        let view = NSTextView(frame: scroll.contentView.bounds)
+        view.isEditable = false
+        view.isSelectable = true
+        view.isRichText = false
+        view.font = NSFont.systemFont(ofSize: NSFont.systemFontSize)
+        view.isVerticallyResizable = true
+        view.isHorizontallyResizable = false
+        view.autoresizingMask = [.width]
+        view.textContainer?.widthTracksTextView = true
+        view.textContainer?.lineBreakMode = .byCharWrapping
+        view.textContainer?.containerSize = NSSize(width: scroll.contentSize.width, height: .greatestFiniteMagnitude)
+        view.string = diagnostic
+        scroll.documentView = view
+        alert.accessoryView = scroll
+        return alert
+    }
+
+    @objc private func showDetails(_ sender: NSMenuItem) {
+        NSApp.activate(ignoringOtherApps: true)
+        detailsAlert().runModal()
+    }
+    @objc private func selected(_ sender: NSMenuItem) {
+        if let action = sender.representedObject as? String {
+            desktopEmit(DesktopEvent(kind: "action", action: action))
+        }
+    }
+}
 private final class DesktopDelegate: NSObject, NSApplicationDelegate {
     private var item: NSStatusItem?
-    private var menu = NSMenu()
+    private var menuContent: DesktopMenu?
     private var stopping = false
     private var initialized = false
     private var pendingClick: DispatchWorkItem?
@@ -120,24 +232,18 @@ private final class DesktopDelegate: NSObject, NSApplicationDelegate {
     private func apply(_ frame: DesktopFrame) {
         guard frame.kind == "state", let summary = frame.summary, let visual = frame.visual,
               ["idle", "ready", "active", "error"].contains(visual), let entries = frame.items,
+              let detailsLabel = frame.details_label, detailsLabel.utf8.count <= 128,
               entries.count <= 16, summary.utf8.count <= 16384 else {
             desktopEmit(DesktopEvent(kind: "error", error: "invalid desktop state frame")); stop(); return
         }
         let allowed = ["status", "mic", "camera", "pause", "profile", "autostart", "exit", "header"]
-        guard entries.allSatisfy({ allowed.contains($0.action) && $0.label.utf8.count <= 16384 }) else {
+        guard entries.allSatisfy({ allowed.contains($0.action) && $0.label.utf8.count <= 16384 && ($0.detail?.utf8.count ?? 0) <= 16384 }) else {
             desktopEmit(DesktopEvent(kind: "error", error: "invalid desktop menu item")); stop(); return
         }
         item?.button?.toolTip = summary
         item?.button?.image = icon(visual)
-        menu.removeAllItems()
-        for entry in entries {
-            let row = NSMenuItem(title: entry.label, action: #selector(selected(_:)), keyEquivalent: "")
-            row.target = self
-            row.representedObject = entry.action
-            row.isEnabled = entry.enabled
-            menu.addItem(row)
-        }
-        menu.autoenablesItems = false
+        let content = DesktopMenu(summary: summary, entries: entries, detailsLabel: detailsLabel)
+        menuContent = content
         if !initialized {
             initialized = true
             desktopEmit(DesktopEvent(kind: "ready", protocol: 1))
@@ -184,12 +290,11 @@ private final class DesktopDelegate: NSObject, NSApplicationDelegate {
         }
     }
     private func showMenu() {
-        guard !stopping, let button = item?.button else { return }
-        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.height), in: button)
-    }
-    @objc private func selected(_ sender: NSMenuItem) {
-        if let action = sender.representedObject as? String {
-            desktopEmit(DesktopEvent(kind: "action", action: action))
+        guard !stopping, let button = item?.button, let content = menuContent else { return }
+        // A state frame can replace menuContent during native menu tracking.
+        // NSMenuItem targets are weak; retain this snapshot until selection ends.
+        withExtendedLifetime(content) {
+            content.menu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.height), in: button)
         }
     }
     private func stop() {

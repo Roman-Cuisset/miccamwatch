@@ -370,6 +370,7 @@ pub fn run_tui(policy: Policy, lang: Language) -> Result<()> {
 struct TuiState {
     lang: Language,
     selected_access: usize,
+    kill_available: bool,
     table_state: TableState,
     events_log: Vec<(String, String, Color)>,
     status_msg: Option<(String, Instant, Color)>,
@@ -510,6 +511,25 @@ fn handle_action(
     }
     if action == Action::Mute && state.mute_state == MicrophoneMuteState::Unavailable {
         state.message(microphone_label(lang, state.mute_state), Color::Yellow);
+        return Ok(false);
+    }
+    if action_disabled(state, action) {
+        state.message(
+            text(
+                lang,
+                [
+                    "This control is unavailable.",
+                    "Cette commande est indisponible.",
+                    "Diese Steuerung ist nicht verfügbar.",
+                    "Este control no está disponible.",
+                    "この操作は利用できません。",
+                    "此操作不可用。",
+                    "Это управление недоступно.",
+                ],
+            )
+            .to_owned(),
+            Color::Yellow,
+        );
         return Ok(false);
     }
     let command = match action {
@@ -685,6 +705,7 @@ fn tui_loop(
     let mut state = TuiState {
         lang,
         selected_access: 0,
+        kill_available: false,
         table_state: TableState::default(),
         events_log: Vec::new(),
         status_msg: None,
@@ -1031,11 +1052,7 @@ fn tui_loop(
                     }
                 }
                 Event::Mouse(mouse) if mouse.kind == MouseEventKind::Down(MouseButton::Left) => {
-                    state
-                        .buttons
-                        .iter()
-                        .find(|(rect, _)| contains(*rect, mouse.column, mouse.row))
-                        .map(|(_, action)| *action)
+                    mouse_action(&state, mouse.column, mouse.row)
                 }
                 _ => None,
             };
@@ -1051,8 +1068,24 @@ fn tui_loop(
 }
 
 fn draw_ui(f: &mut Frame, state: &mut TuiState, accesses: &[Access]) {
-    let footer_height = control_rows(f.area().width, state.lang) + 5;
-    let body_height = f.area().height.saturating_sub(footer_height);
+    state.kill_available = accesses.get(state.selected_access).is_some_and(|access| {
+        access
+            .pid
+            .is_some_and(|pid| pid != 0 && pid != 4 && pid != std::process::id())
+            && access
+                .process
+                .as_ref()
+                .is_some_and(|process| !process.instance_id.is_empty())
+    });
+    let area = f.area();
+    let desired_footer = control_rows(area.width, state.lang, true) + 6;
+    let footer_height = if desired_footer + 12 <= area.height {
+        desired_footer
+    } else {
+        (control_rows(area.width, state.lang, false) + 6)
+            .min(area.height.saturating_sub(5).max(area.height.min(2)))
+    };
+    let body_height = area.height.saturating_sub(footer_height);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -1756,6 +1789,32 @@ const ACTIONS: [Action; 6] = [
 ];
 
 fn button_label(action: Action, lang: Language) -> &'static str {
+    #[cfg(target_os = "linux")]
+    if matches!(action, Action::BlockCamera | Action::RestoreCamera) {
+        return text(
+            lang,
+            match action {
+                Action::BlockCamera => [
+                    "[b] Camera control unavailable",
+                    "[b] Commande caméra indisponible",
+                    "[b] Kamerasteuerung nicht verfügbar",
+                    "[b] Control de cámara no disponible",
+                    "[b] カメラ操作は利用不可",
+                    "[b] 摄像头控制不可用",
+                    "[b] Управление камерой недоступно",
+                ],
+                _ => [
+                    "[a] Camera control unavailable",
+                    "[a] Commande caméra indisponible",
+                    "[a] Kamerasteuerung nicht verfügbar",
+                    "[a] Control de cámara no disponible",
+                    "[a] カメラ操作は利用不可",
+                    "[a] 摄像头控制不可用",
+                    "[a] Управление камерой недоступно",
+                ],
+            },
+        );
+    }
     #[cfg(target_os = "macos")]
     match action {
         Action::BlockCamera => {
@@ -1867,41 +1926,156 @@ fn button_label(action: Action, lang: Language) -> &'static str {
 fn control_columns(width: u16, lang: Language) -> u16 {
     let max_width = ACTIONS
         .iter()
-        .map(|action| Span::raw(button_label(*action, lang)).width())
+        .map(|action| Span::raw(button_label(*action, lang)).width() + 4)
         .max()
         .unwrap_or(0);
-    if usize::from(width / 2) >= max_width + 2 {
+    if usize::from(width.saturating_sub(1) / 2) >= max_width {
         2
     } else {
         1
     }
 }
 
-fn control_rows(width: u16, lang: Language) -> u16 {
-    6 / control_columns(width, lang)
+// Borrow whole Unicode characters, breaking at spaces when possible. The same
+// lines determine button height and rendering, so translated labels never get
+// a shorter hitbox than their visible content.
+fn button_lines(label: &str, width: u16) -> impl Iterator<Item = &str> {
+    let mut remaining = label;
+    std::iter::from_fn(move || {
+        if remaining.is_empty() || width == 0 {
+            return None;
+        }
+        let mut cells = 0;
+        let mut end = 0;
+        let mut space = None;
+        for (index, character) in remaining.char_indices() {
+            let next = index + character.len_utf8();
+            let char_width = Span::raw(&remaining[index..next]).width();
+            if cells + char_width > usize::from(width) {
+                break;
+            }
+            cells += char_width;
+            end = next;
+            if character == ' ' {
+                space = Some(index);
+            }
+        }
+        if end < remaining.len()
+            && let Some(space) = space.filter(|space| *space > 0)
+        {
+            end = space;
+        }
+        if end == 0 {
+            // This path is used only for the key-only emergency layout.
+            return None;
+        }
+        let line = &remaining[..end];
+        remaining = remaining[end..].trim_start();
+        Some(line)
+    })
+}
+
+fn button_height(action: Action, lang: Language, width: u16, bordered: bool) -> u16 {
+    if width < 8 {
+        return 1;
+    }
+    let lines = button_lines(button_label(action, lang), width.saturating_sub(4)).count();
+    lines as u16 + if bordered { 2 } else { 0 }
+}
+
+fn control_rows(width: u16, lang: Language, bordered: bool) -> u16 {
+    let columns = control_columns(width, lang);
+    let cell_width = width.saturating_sub(columns - 1) / columns;
+    ACTIONS
+        .chunks(usize::from(columns))
+        .map(|row| {
+            row.iter()
+                .map(|action| button_height(*action, lang, cell_width, bordered))
+                .max()
+                .unwrap_or(0)
+        })
+        .sum::<u16>()
+        + 6 / columns
+        - 1
 }
 
 fn button_rects(area: Rect, lang: Language) -> impl Iterator<Item = (Rect, Action)> {
     let columns = control_columns(area.width, lang);
-    ACTIONS
+    let cell_width = area.width.saturating_sub(columns - 1) / columns;
+    let bordered = control_rows(area.width, lang, true) <= area.height && cell_width >= 8;
+    let gap = u16::from(control_rows(area.width, lang, bordered) <= area.height);
+    let fits_all = control_rows(area.width, lang, bordered).saturating_sub(6 / columns - 1)
+        + gap * (6 / columns - 1)
+        <= area.height;
+    let actions = if fits_all {
+        ACTIONS
+    } else {
+        // Keep exit and read-only refresh reachable even when the terminal is
+        // too short for every control. Other actions retain their keyboard keys.
+        [
+            Action::Quit,
+            Action::Refresh,
+            Action::Mute,
+            Action::Kill,
+            Action::BlockCamera,
+            Action::RestoreCamera,
+        ]
+    };
+    let essential_height = [Action::Quit, Action::Refresh]
+        .iter()
+        .map(|action| button_height(*action, lang, cell_width, bordered))
+        .sum::<u16>();
+    let cell_width = if !fits_all && columns == 1 && essential_height > area.height {
+        cell_width.min(3)
+    } else {
+        cell_width
+    };
+    let mut y = area.y;
+    let mut row_height = 0;
+    actions
         .into_iter()
         .enumerate()
         .filter_map(move |(index, action)| {
-            let row = index as u16 / columns;
-            if row >= area.height {
+            let column = index as u16 % columns;
+            if column == 0 {
+                if index != 0 {
+                    y = y.saturating_add(row_height + gap);
+                }
+                row_height = actions[index..(index + usize::from(columns)).min(6)]
+                    .iter()
+                    .map(|action| button_height(*action, lang, cell_width, bordered))
+                    .max()
+                    .unwrap_or(0);
+            }
+            let width = cell_width.min(if cell_width < 8 {
+                3
+            } else {
+                (Span::raw(button_label(action, lang)).width() + 4) as u16
+            });
+            let height = button_height(action, lang, width, bordered);
+            if width == 0 || y.saturating_add(height) > area.bottom() {
                 return None;
             }
-            let column = index as u16 % columns;
-            let width = area.width / columns;
             Some((
-                Rect::new(area.x + column * width, area.y + row, width, 1),
+                Rect::new(area.x + column * (cell_width + 1), y, width, height),
                 action,
             ))
         })
 }
 
+fn mouse_action(state: &TuiState, x: u16, y: u16) -> Option<Action> {
+    state
+        .buttons
+        .iter()
+        .find(|(rect, action)| contains(*rect, x, y) && !action_disabled(state, *action))
+        .map(|(_, action)| *action)
+}
+
 fn action_disabled(state: &TuiState, action: Action) -> bool {
     if cfg!(target_os = "linux") && matches!(action, Action::BlockCamera | Action::RestoreCamera) {
+        return true;
+    }
+    if action == Action::Kill && !state.kill_available {
         return true;
     }
     if action == Action::Refresh {
@@ -1929,35 +2103,98 @@ fn action_disabled(state: &TuiState, action: Action) -> bool {
 }
 
 fn draw_controls(f: &mut Frame, state: &mut TuiState, area: Rect) {
-    let rows = control_rows(area.width, state.lang).min(area.height);
-    state.buttons.clear();
-    state.buttons.extend(button_rects(
-        Rect::new(area.x, area.y, area.width, rows),
-        state.lang,
-    ));
-    for (rect, action) in &state.buttons {
-        let disabled = action_disabled(state, *action);
-        let color = match action {
-            Action::BlockCamera | Action::Kill => Color::Red,
-            Action::RestoreCamera => Color::Green,
-            _ => Color::Cyan,
-        };
-        let style = if disabled {
-            Style::default().bg(Color::DarkGray).fg(Color::Gray)
-        } else {
-            Style::default().bg(color).fg(Color::Black).bold()
-        };
+    let heading_height = u16::from(area.height >= 5);
+    let feedback_height = if area.height >= 10 {
+        5
+    } else if area.height >= 7 {
+        3
+    } else {
+        u16::from(area.height >= 4)
+    };
+    let controls = Rect::new(
+        area.x,
+        area.y + heading_height,
+        area.width,
+        area.height.saturating_sub(heading_height + feedback_height),
+    );
+    if heading_height != 0 {
         f.render_widget(
-            Paragraph::new(button_label(*action, state.lang)).style(style),
-            *rect,
+            Paragraph::new(text(
+                state.lang,
+                [
+                    "Actions",
+                    "Actions",
+                    "Aktionen",
+                    "Acciones",
+                    "操作",
+                    "操作",
+                    "Действия",
+                ],
+            ))
+            .style(Style::default().fg(Color::Gray).bold()),
+            Rect::new(area.x, area.y, area.width, heading_height),
         );
     }
-    let feedback = Rect::new(
-        area.x,
-        area.y + rows,
-        area.width,
-        area.height.saturating_sub(rows),
-    );
+    state.buttons.clear();
+    state.buttons.extend(button_rects(controls, state.lang));
+    let bordered =
+        control_rows(controls.width, state.lang, true) <= controls.height && controls.width >= 8;
+    for (rect, action) in &state.buttons {
+        let disabled = action_disabled(state, *action);
+        let color = if disabled {
+            Color::DarkGray
+        } else {
+            match action {
+                Action::BlockCamera | Action::Kill => Color::LightRed,
+                Action::RestoreCamera => Color::LightGreen,
+                _ => Color::LightCyan,
+            }
+        };
+        let label = button_label(*action, state.lang);
+        let style = Style::default().fg(if disabled {
+            Color::DarkGray
+        } else {
+            Color::White
+        });
+        if rect.width < 8 {
+            let key = &label[1..2];
+            f.render_widget(
+                Paragraph::new(if rect.width >= 3 { &label[..3] } else { key })
+                    .style(Style::default().fg(color).bold()),
+                *rect,
+            );
+            continue;
+        }
+        let block = Block::default()
+            .borders(if bordered {
+                Borders::ALL
+            } else {
+                Borders::LEFT | Borders::RIGHT
+            })
+            .border_style(Style::default().fg(color));
+        let inner = block.inner(*rect);
+        f.render_widget(block, *rect);
+        let lines = button_lines(label, rect.width - 4).map(|line| {
+            if line.starts_with(&label[..3]) {
+                Line::from(vec![
+                    Span::styled(&line[..3], Style::default().fg(color).bold()),
+                    Span::styled(&line[3..], style),
+                ])
+            } else {
+                Line::from(Span::styled(line, style))
+            }
+        });
+        f.render_widget(
+            Paragraph::new(lines.collect::<Vec<_>>()),
+            Rect::new(
+                inner.x + 1,
+                inner.y,
+                inner.width.saturating_sub(2),
+                inner.height,
+            ),
+        );
+    }
+    let feedback = Rect::new(area.x, controls.bottom(), area.width, feedback_height);
     let (message, color) = if let Some((message, created, color)) = &state.status_msg
         && (*color == Color::Red
             || state.action_pending.is_some()
@@ -2008,18 +2245,26 @@ fn draw_controls(f: &mut Frame, state: &mut TuiState, area: Rect) {
         Paragraph::new(message)
             .style(Style::default().fg(color))
             .wrap(Wrap { trim: false })
-            .block(Block::default().borders(Borders::ALL).title(text(
-                state.lang,
-                [
-                    " Actions / ↑↓ select ",
-                    " Actions / ↑↓ choisir ",
-                    " Aktionen / ↑↓ wählen ",
-                    " Acciones / ↑↓ elegir ",
-                    " 操作 / ↑↓選択 ",
-                    " 操作 / ↑↓选择 ",
-                    " Действия / ↑↓ выбор ",
-                ],
-            ))),
+            .block(
+                Block::default()
+                    .borders(if feedback.height >= 3 {
+                        Borders::ALL
+                    } else {
+                        Borders::NONE
+                    })
+                    .title(text(
+                        state.lang,
+                        [
+                            " Feedback / ↑↓ select ",
+                            " Retour / ↑↓ choisir ",
+                            " Meldung / ↑↓ wählen ",
+                            " Mensaje / ↑↓ elegir ",
+                            " メッセージ / ↑↓選択 ",
+                            " 提示 / ↑↓选择 ",
+                            " Сообщение / ↑↓ выбор ",
+                        ],
+                    )),
+            ),
         feedback,
     );
 }
@@ -2033,6 +2278,7 @@ mod tests {
         TuiState {
             lang,
             selected_access: 0,
+            kill_available: false,
             table_state: TableState::default(),
             events_log: Vec::new(),
             status_msg: None,
@@ -2093,65 +2339,222 @@ mod tests {
         assert!(handle_action(Action::Quit, &mut state, &[], &worker, &refresh).unwrap());
     }
 
+    const LANGUAGES: [Language; 7] = [
+        Language::En,
+        Language::Fr,
+        Language::De,
+        Language::Es,
+        Language::Ja,
+        Language::Zh,
+        Language::Ru,
+    ];
+
     #[test]
-    fn localized_buttons_fit_and_have_disjoint_click_targets() {
-        for lang in [
-            Language::En,
-            Language::Fr,
-            Language::De,
-            Language::Es,
-            Language::Ja,
-            Language::Zh,
-            Language::Ru,
-        ] {
-            for width in [40, 60, 80, 120] {
-                let area = Rect::new(2, 3, width, control_rows(width, lang));
+    fn localized_labels_wrap_without_losing_unicode_content() {
+        for lang in LANGUAGES {
+            for width in [8, 12, 20, 40, 60, 80, 120] {
+                let area = Rect::new(2, 3, width, control_rows(width, lang, true));
                 let buttons: Vec<_> = button_rects(area, lang).collect();
-                for (rect, action) in &buttons {
-                    assert!(
-                        Span::raw(button_label(*action, lang)).width() <= usize::from(rect.width)
-                    );
-                    assert!(contains(area, rect.x, rect.y));
+                assert_eq!(buttons.len(), ACTIONS.len());
+                for (rect, action) in buttons {
+                    let label = button_label(action, lang);
+                    let lines: Vec<_> = button_lines(label, rect.width - 4).collect();
                     assert_eq!(
-                        buttons
+                        lines
                             .iter()
-                            .filter(|(other, _)| contains(*other, rect.x, rect.y))
-                            .count(),
-                        1
+                            .flat_map(|line| line.chars())
+                            .filter(|c| !c.is_whitespace())
+                            .collect::<String>(),
+                        label
+                            .chars()
+                            .filter(|c| !c.is_whitespace())
+                            .collect::<String>(),
                     );
-                    assert!(!contains(*rect, rect.right(), rect.y));
+                    assert!(
+                        lines
+                            .iter()
+                            .all(|line| Span::raw(*line).width() <= usize::from(rect.width - 4))
+                    );
+                    assert_eq!(usize::from(rect.height - 2), lines.len());
                 }
-                assert_eq!(
-                    buttons
-                        .iter()
-                        .map(|(_, action)| *action)
-                        .collect::<Vec<_>>(),
-                    ACTIONS
-                );
             }
         }
     }
 
     #[test]
-    fn narrow_terminal_renders_camera_actions_without_clipping() {
-        for width in [40, 80] {
-            let mut terminal = Terminal::new(TestBackend::new(width, 24)).unwrap();
-            let mut state = state(Language::En);
+    fn terminal_sizes_keep_quit_and_refresh_inside_disjoint_visible_buttons() {
+        for lang in LANGUAGES {
+            for (width, height) in [
+                (1, 2),
+                (3, 6),
+                (8, 8),
+                (20, 12),
+                (40, 24),
+                (60, 24),
+                (80, 24),
+                (120, 40),
+            ] {
+                let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+                let mut state = state(lang);
+                terminal
+                    .draw(|frame| draw_ui(frame, &mut state, &[]))
+                    .unwrap();
+                let buffer = terminal.backend().buffer();
+                for action in [Action::Quit, Action::Refresh] {
+                    assert!(
+                        state
+                            .buttons
+                            .iter()
+                            .any(|(_, candidate)| *candidate == action),
+                        "{lang:?} {width}x{height}: {action:?}"
+                    );
+                }
+                for (rect, action) in &state.buttons {
+                    assert!(rect.width > 0 && rect.height > 0);
+                    assert!(rect.right() <= width && rect.bottom() <= height);
+                    let visible: String = (rect.y..rect.bottom())
+                        .flat_map(|y| (rect.x..rect.right()).map(move |x| (x, y)))
+                        .map(|position| buffer[position].symbol())
+                        .collect();
+                    assert!(visible.contains(&button_label(*action, lang)[1..2]));
+                    for y in rect.y..rect.bottom() {
+                        for x in rect.x..rect.right() {
+                            assert_eq!(
+                                state
+                                    .buttons
+                                    .iter()
+                                    .filter(|(other, _)| contains(*other, x, y))
+                                    .count(),
+                                1
+                            );
+                            assert_eq!(
+                                mouse_action(&state, x, y),
+                                if action_disabled(&state, *action) {
+                                    None
+                                } else {
+                                    Some(*action)
+                                }
+                            );
+                        }
+                    }
+                }
+                for y in 0..height {
+                    for x in 0..width {
+                        if !state.buttons.iter().any(|(rect, _)| contains(*rect, x, y)) {
+                            assert_eq!(mouse_action(&state, x, y), None);
+                        }
+                    }
+                }
+                assert_eq!(state.selected_access, 0);
+                assert!(action_disabled(&state, Action::Kill));
+            }
+        }
+    }
+
+    #[test]
+    fn bordered_buttons_have_unpainted_gaps_and_separate_hotkeys() {
+        for lang in LANGUAGES {
+            let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+            let mut state = state(lang);
             terminal
                 .draw(|frame| draw_ui(frame, &mut state, &[]))
                 .unwrap();
             let buffer = terminal.backend().buffer();
-            for action in [Action::BlockCamera, Action::RestoreCamera] {
-                let (rect, _) = state
-                    .buttons
-                    .iter()
-                    .find(|(_, candidate)| *candidate == action)
-                    .unwrap();
-                let rendered: String = (rect.x..rect.right())
-                    .map(|x| buffer[(x, rect.y)].symbol())
-                    .collect();
-                assert!(rendered.contains(button_label(action, Language::En)));
+            assert_eq!(state.buttons.len(), 6);
+            for (rect, action) in &state.buttons {
+                assert_eq!(buffer[(rect.x, rect.y)].symbol(), "┌");
+                assert_eq!(buffer[(rect.right() - 1, rect.bottom() - 1)].symbol(), "┘");
+                assert_eq!(buffer[(rect.x + 2, rect.y + 1)].symbol(), "[");
+                if !action_disabled(&state, *action) {
+                    assert!(
+                        buffer[(rect.x + 2, rect.y + 1)]
+                            .modifier
+                            .contains(ratatui::style::Modifier::BOLD)
+                    );
+                    assert_ne!(
+                        buffer[(rect.x + 2, rect.y + 1)].fg,
+                        buffer[(rect.x + 6, rect.y + 1)].fg
+                    );
+                }
+                if rect.right() < 120 {
+                    assert_eq!(mouse_action(&state, rect.right(), rect.y), None);
+                    assert_eq!(buffer[(rect.right(), rect.y)].symbol(), " ");
+                }
             }
         }
+    }
+
+    #[test]
+    fn feedback_wraps_below_controls_without_becoming_a_click_target() {
+        for lang in LANGUAGES {
+            let mut terminal = Terminal::new(TestBackend::new(40, 24)).unwrap();
+            let mut state = state(lang);
+            state.health_error =
+                Some("Collector unavailable; inspect permissions and retry. ".repeat(8));
+            terminal
+                .draw(|frame| draw_ui(frame, &mut state, &[]))
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            for y in 20..23 {
+                let line: String = (1..39).map(|x| buffer[(x, y)].symbol()).collect();
+                assert!(!line.trim().is_empty());
+                assert_eq!(buffer[(1, y)].fg, Color::Red);
+                for x in 0..40 {
+                    assert_eq!(mouse_action(&state, x, y), None);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn mouse_and_keyboard_refresh_share_dispatch_and_disabled_actions_send_nothing() {
+        let (commands, requests) = mpsc::channel();
+        let (_responses, responses) = mpsc::channel();
+        let worker = ActionWorker {
+            commands: Some(commands),
+            responses,
+            thread: None,
+        };
+        let (refresh, refreshes) = mpsc::channel();
+        let mut state = state(Language::En);
+        state
+            .buttons
+            .extend(button_rects(Rect::new(0, 0, 120, 20), state.lang));
+        let rect = state
+            .buttons
+            .iter()
+            .find(|(_, action)| *action == Action::Refresh)
+            .unwrap()
+            .0;
+        let clicked = mouse_action(&state, rect.x, rect.y).unwrap();
+        assert_eq!(Some(clicked), key_action(normalize_key(KeyCode::Char('R'))));
+        state.action_pending = Some(Action::BlockCamera);
+        assert!(!handle_action(clicked, &mut state, &[], &worker, &refresh).unwrap());
+        assert!(refreshes.try_recv().is_ok());
+        assert!(requests.try_recv().is_err());
+        assert!(!handle_action(Action::Mute, &mut state, &[], &worker, &refresh).unwrap());
+        assert!(!handle_action(Action::Quit, &mut state, &[], &worker, &refresh).unwrap());
+        assert!(requests.try_recv().is_err());
+        for (rect, action) in &state.buttons {
+            assert_eq!(
+                mouse_action(&state, rect.x, rect.y),
+                if *action == Action::Refresh {
+                    Some(*action)
+                } else {
+                    None
+                }
+            );
+        }
+        state.action_pending = None;
+        state.mute_state = MicrophoneMuteState::Unavailable;
+        assert!(!handle_action(Action::Mute, &mut state, &[], &worker, &refresh).unwrap());
+        assert!(requests.try_recv().is_err());
+        #[cfg(target_os = "linux")]
+        for action in [Action::BlockCamera, Action::RestoreCamera] {
+            assert!(action_disabled(&state, action));
+            assert!(!handle_action(action, &mut state, &[], &worker, &refresh).unwrap());
+            assert!(requests.try_recv().is_err());
+        }
+        assert!(handle_action(Action::Quit, &mut state, &[], &worker, &refresh).unwrap());
     }
 }

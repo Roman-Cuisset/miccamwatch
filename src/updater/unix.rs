@@ -10,6 +10,11 @@ use std::{
     process::{Command, Stdio},
     sync::atomic::{AtomicU64, Ordering as AtomicOrdering},
 };
+#[cfg(target_os = "macos")]
+use std::{
+    fs::{Metadata, OpenOptions},
+    os::unix::fs::{MetadataExt, OpenOptionsExt},
+};
 
 const INSTALLER: &str = include_str!("../../installer/install.sh");
 const LATEST: &str = "https://github.com/Roman-Cuisset/miccamwatch/releases/latest";
@@ -55,6 +60,34 @@ reported=$("$target" --version)
 printf 'mcw updated to %s.\n' "${tag#v}"
 "#;
 
+#[cfg(target_os = "macos")]
+const PORTABLE_ORCHESTRATION: &str = r#"#!/bin/sh
+set -eu
+umask 077
+stage=$1
+target=$2
+tag=$3
+digest=$4
+cleanup() {
+    rm -f "$stage/install.sh" "$stage/update.sh"
+    rmdir "$stage"
+}
+trap cleanup 0
+trap 'exit 130' INT
+trap 'exit 143' TERM HUP
+/bin/sh "$stage/install.sh" --update-portable "$target" --current-sha256 "$digest" --version "$tag" --no-modify-path
+reported=$("$target" --version)
+[ "$reported" = "mcw ${tag#v}" ] || {
+    printf '%s\n' 'mcw update: installed version validation failed; autostart was not refreshed.' >&2
+    exit 1
+}
+"$target" autostart refresh || {
+    printf '%s\n' 'mcw update: installation succeeded, but enabled autostart could not be refreshed; retry autostart enable after correcting the reported registration problem.' >&2
+    exit 1
+}
+printf 'mcw updated to %s.\n' "${tag#v}"
+"#;
+
 pub fn update() -> Result<()> {
     ordinary_user()?;
     #[cfg(target_os = "linux")]
@@ -66,6 +99,10 @@ pub fn update() -> Result<()> {
             .context("release tag must start with v")?,
     )?;
     let current = Version::parse(env!("CARGO_PKG_VERSION"))?;
+    #[cfg(target_os = "macos")]
+    if let Installation::Portable(portable) = &installation {
+        portable.verify_unchanged()?;
+    }
     if current.compare(&latest) != Ordering::Less {
         println!(
             "mcw {} is already up to date{}.",
@@ -80,20 +117,39 @@ pub fn update() -> Result<()> {
     }
     // The embedded installer rechecks ownership and running watchers/trays
     // under its own installation lock immediately before atomic replacement.
-    let staging = Staging::new(&installation.prefix)?;
+    let staging = Staging::new(installation.staging_parent())?;
     staging.write("install.sh", INSTALLER.as_bytes())?;
-    staging.write("update.sh", ORCHESTRATION.as_bytes())?;
+    staging.write("update.sh", installation.orchestration().as_bytes())?;
+    let installer_mode = match &installation {
+        Installation::Managed { .. } => "managed",
+        #[cfg(target_os = "macos")]
+        Installation::Portable(_) => "standalone",
+    };
     println!(
-        "Updating mcw {} to {} using the managed public installer.",
+        "Updating mcw {} to {} using the {} public installer.",
         env!("CARGO_PKG_VERSION"),
-        &tag[1..]
+        &tag[1..],
+        installer_mode
     );
     std::io::stdout().flush()?;
-    let error = Command::new("/bin/sh")
+    let mut command = Command::new("/bin/sh");
+    command
         .arg(staging.path.join("update.sh"))
-        .arg(&staging.path)
-        .arg(&installation.prefix)
-        .arg(&tag)
+        .arg(&staging.path);
+    match &installation {
+        Installation::Managed { prefix } => {
+            command.arg(prefix).arg(&tag);
+        }
+        #[cfg(target_os = "macos")]
+        Installation::Portable(portable) => {
+            portable.verify_unchanged()?;
+            command
+                .arg(&portable.target)
+                .arg(&tag)
+                .arg(&portable.digest);
+        }
+    }
+    let error = command
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
@@ -180,18 +236,37 @@ fn root_camera_installation_absent() -> Result<()> {
     Ok(())
 }
 
-struct Installation {
-    prefix: PathBuf,
+enum Installation {
+    Managed {
+        prefix: PathBuf,
+    },
+    #[cfg(target_os = "macos")]
+    Portable(PortableInstallation),
 }
 
 impl Installation {
     fn inspect() -> Result<Self> {
         let current = std::env::current_exe().context("cannot locate installed mcw")?;
-        if current.file_name() != Some(OsStr::new("mcw"))
-            || current.parent().and_then(Path::file_name) != Some(OsStr::new("bin"))
-        {
+        Self::inspect_at(&current)
+    }
+
+    fn inspect_at(current: &Path) -> Result<Self> {
+        if !current.is_absolute() || current.file_name() != Some(OsStr::new("mcw")) {
+            bail!("mcw update requires an absolute installed executable named mcw");
+        }
+        if current.parent().and_then(Path::file_name) != Some(OsStr::new("bin")) {
+            #[cfg(target_os = "macos")]
+            {
+                let portable = PortableInstallation::open(current)?;
+                verify_executable_version(current)?;
+                portable.verify_unchanged()?;
+                return Ok(Self::Portable(portable));
+            }
+            #[cfg(target_os = "linux")]
             bail!("mcw update requires a managed public-installer installation at PREFIX/bin/mcw");
         }
+        // A bin layout is never eligible for portable fallback: a missing or
+        // corrupt receipt may belong to a managed or package-manager install.
         let prefix = current
             .parent()
             .and_then(Path::parent)
@@ -239,21 +314,144 @@ impl Installation {
                 "installed executable was changed outside the public installer; it was preserved"
             );
         }
-        let output = Command::new(&current)
-            .arg("--version")
-            .output()
-            .context("cannot verify installed mcw version")?;
-        if !output.status.success()
-            || output.stdout != format!("mcw {}\n", env!("CARGO_PKG_VERSION")).as_bytes()
-        {
-            bail!(
-                "installed executable does not match the running updater; installed files were preserved"
-            );
-        }
+        verify_executable_version(current)?;
         #[cfg(target_os = "linux")]
         inspect_camera_payload(&prefix, &receipt)?;
-        Ok(Self { prefix })
+        Ok(Self::Managed { prefix })
     }
+
+    fn staging_parent(&self) -> &Path {
+        match self {
+            Self::Managed { prefix } => prefix,
+            #[cfg(target_os = "macos")]
+            Self::Portable(portable) => portable.target.parent().unwrap(),
+        }
+    }
+
+    fn orchestration(&self) -> &'static str {
+        match self {
+            Self::Managed { .. } => ORCHESTRATION,
+            #[cfg(target_os = "macos")]
+            Self::Portable(_) => PORTABLE_ORCHESTRATION,
+        }
+    }
+}
+
+fn verify_executable_version(current: &Path) -> Result<()> {
+    let output = Command::new(current)
+        .arg("--version")
+        .output()
+        .context("cannot verify installed mcw version")?;
+    if !output.status.success()
+        || output.stdout != format!("mcw {}\n", env!("CARGO_PKG_VERSION")).as_bytes()
+    {
+        bail!(
+            "installed executable does not match the running updater; installed files were preserved"
+        );
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+struct PortableInstallation {
+    target: PathBuf,
+    digest: String,
+    directory: Directory,
+    parent: File,
+    executable: File,
+    identity: Metadata,
+}
+
+#[cfg(target_os = "macos")]
+impl PortableInstallation {
+    fn open(target: &Path) -> Result<Self> {
+        if !target.is_absolute()
+            || target.file_name() != Some(OsStr::new("mcw"))
+            || target.parent().and_then(Path::file_name) == Some(OsStr::new("bin"))
+        {
+            bail!("portable update requires an absolute standalone mcw outside bin");
+        }
+        let text = target
+            .to_str()
+            .context("portable executable path must be UTF-8")?;
+        if text.contains(':') || text.chars().any(char::is_control) {
+            bail!("portable executable path contains a colon or control character");
+        }
+        let parent_path = target
+            .parent()
+            .context("portable executable has no parent")?;
+        let directory = Directory::open(parent_path, false)?;
+        let parent = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(parent_path)
+            .context("cannot retain portable executable parent")?;
+        let metadata = parent.metadata()?;
+        if metadata.uid() != unsafe { libc::getuid() } || metadata.mode() & 0o022 != 0 {
+            bail!("portable executable parent must be owned by you and not writable by others");
+        }
+        let executable = directory
+            .file(OsStr::new("mcw"))?
+            .context("portable executable disappeared")?;
+        let identity = executable.metadata()?;
+        if identity.mode() & 0o100 == 0 {
+            bail!("portable mcw must be executable by its owner");
+        }
+        let digest = sha256(executable.try_clone()?)?;
+        Ok(Self {
+            target: target.to_owned(),
+            digest,
+            directory,
+            parent,
+            executable,
+            identity,
+        })
+    }
+
+    fn verify_unchanged(&self) -> Result<()> {
+        let parent_path = self.target.parent().unwrap();
+        // Validate all ancestors again as well as the retained parent identity.
+        let directory = Directory::open(parent_path, false)?;
+        let parent = std::fs::symlink_metadata(parent_path)?;
+        let retained = self.parent.metadata()?;
+        if !parent.is_dir()
+            || parent.dev() != retained.dev()
+            || parent.ino() != retained.ino()
+            || parent.uid() != unsafe { libc::getuid() }
+            || parent.mode() & 0o022 != 0
+        {
+            bail!("portable executable parent changed; installed files were preserved");
+        }
+        let executable = directory
+            .file(OsStr::new("mcw"))?
+            .context("portable executable disappeared")?;
+        let retained_executable = self
+            .directory
+            .file(OsStr::new("mcw"))?
+            .context("retained portable executable disappeared")?;
+        if !same_executable(&self.identity, &executable.metadata()?)
+            || !same_executable(&self.identity, &self.executable.metadata()?)
+            || !same_executable(&self.identity, &retained_executable.metadata()?)
+            || sha256(executable)? != self.digest
+        {
+            bail!("portable executable changed during inspection; it was preserved");
+        }
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn same_executable(left: &Metadata, right: &Metadata) -> bool {
+    left.dev() == right.dev()
+        && left.ino() == right.ino()
+        && left.len() == right.len()
+        && left.uid() == right.uid()
+        && left.mode() == right.mode()
+        && left.nlink() == right.nlink()
+        && left.mtime() == right.mtime()
+        && left.mtime_nsec() == right.mtime_nsec()
+        && left.ctime() == right.ctime()
+        && left.ctime_nsec() == right.ctime_nsec()
 }
 
 #[cfg(target_os = "linux")]
@@ -571,6 +769,129 @@ fn identifiers(text: &str, numeric_leading_zero_rejected: bool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "macos")]
+    use std::os::unix::fs::symlink;
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+
+    struct Scratch(PathBuf);
+
+    impl Scratch {
+        fn new() -> Result<Self> {
+            let name = format!(
+                "mcw-updater-test-{}-{}",
+                std::process::id(),
+                STAGING_ID.fetch_add(1, AtomicOrdering::Relaxed)
+            );
+            let path = PathBuf::from(std::env::var_os("HOME").context("HOME is not set")?)
+                .canonicalize()?
+                .join(name);
+            std::fs::DirBuilder::new().mode(0o700).create(&path)?;
+            Ok(Self(path))
+        }
+
+        fn executable(&self) -> Result<PathBuf> {
+            let path = self.0.join("mcw");
+            // Filesystem-only fixture: never used as a substitute for a CLI.
+            std::fs::write(&path, b"owned fixture contents\n")?;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700))?;
+            Ok(path)
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn managed_layout_without_valid_receipt_never_becomes_portable() -> Result<()> {
+        let scratch = Scratch::new()?;
+        let bin = scratch.0.join("bin");
+        std::fs::create_dir(&bin)?;
+        let target = bin.join("mcw");
+        std::fs::write(&target, b"not an executable")?;
+        assert!(Installation::inspect_at(&target).is_err());
+        let receipt = scratch.0.join(".miccamwatch-install");
+        std::fs::DirBuilder::new().mode(0o700).create(&receipt)?;
+        let format = receipt.join("format");
+        std::fs::write(&format, b"corrupt\n")?;
+        std::fs::set_permissions(&format, std::fs::Permissions::from_mode(0o600))?;
+        assert!(Installation::inspect_at(&target).is_err());
+        assert_eq!(std::fs::read(&target)?, b"not an executable");
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_owned_standalone_still_requires_managed_installation() -> Result<()> {
+        let scratch = Scratch::new()?;
+        let target = scratch.executable()?;
+        assert!(Installation::inspect_at(&target).is_err());
+        assert_eq!(std::fs::read(&target)?, b"owned fixture contents\n");
+        Ok(())
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn portable_snapshot_admits_owned_file_and_detects_replacement() -> Result<()> {
+        let scratch = Scratch::new()?;
+        let target = scratch.executable()?;
+        let portable = PortableInstallation::open(&target)?;
+        // A safe path and digest alone do not authorize an arbitrary executable.
+        assert!(Installation::inspect_at(&target).is_err());
+        let replacement = scratch.0.join("replacement");
+        std::fs::write(&replacement, b"owned fixture contents\n")?;
+        std::fs::set_permissions(&replacement, std::fs::Permissions::from_mode(0o700))?;
+        std::fs::rename(replacement, &target)?;
+        assert!(portable.verify_unchanged().is_err());
+        Ok(())
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn portable_snapshot_refuses_aliases_and_unsafe_ownership() -> Result<()> {
+        let scratch = Scratch::new()?;
+        let target = scratch.executable()?;
+        let hardlink = scratch.0.join("hardlink");
+        std::fs::hard_link(&target, &hardlink)?;
+        assert!(PortableInstallation::open(&target).is_err());
+        std::fs::remove_file(hardlink)?;
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o722))?;
+        assert!(PortableInstallation::open(&target).is_err());
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600))?;
+        assert!(PortableInstallation::open(&target).is_err());
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o700))?;
+        let saved = scratch.0.join("saved");
+        std::fs::rename(&target, &saved)?;
+        symlink(&saved, &target)?;
+        assert!(PortableInstallation::open(&target).is_err());
+        std::fs::remove_file(&target)?;
+        std::fs::rename(&saved, &target)?;
+        let alias = scratch.0.join("alias");
+        symlink(&scratch.0, &alias)?;
+        assert!(PortableInstallation::open(&alias.join("mcw")).is_err());
+        std::fs::set_permissions(&scratch.0, std::fs::Permissions::from_mode(0o777))?;
+        assert!(PortableInstallation::open(&target).is_err());
+        std::fs::set_permissions(&scratch.0, std::fs::Permissions::from_mode(0o700))?;
+        // Existing root-owned macOS directory; refusal precedes file lookup.
+        if unsafe { libc::getuid() } != 0 {
+            assert!(PortableInstallation::open(Path::new("/usr/libexec/mcw")).is_err());
+            let system = Directory::open(Path::new("/usr/libexec"), false)?;
+            assert!(system.file(OsStr::new("PlistBuddy")).is_err());
+        }
+        assert!(PortableInstallation::open(&scratch.0.join("other-name")).is_err());
+        assert!(PortableInstallation::open(Path::new("mcw")).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn actual_executable_output_must_identify_this_cli_version() -> Result<()> {
+        // A genuine executable with successful exit but no mcw version output
+        // must not pass version identity validation.
+        assert!(verify_executable_version(Path::new("/usr/bin/true")).is_err());
+        Ok(())
+    }
 
     #[test]
     fn installer_receipts_do_not_authorize_unknown_or_ambiguous_files() -> Result<()> {

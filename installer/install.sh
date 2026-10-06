@@ -22,11 +22,20 @@ BACKUP=
 CONFIG_WORK=
 CAMERA_STAGE=
 TRANSACTION=no
+PORTABLE_TARGET=
+PORTABLE_HASH=
+PORTABLE_REQUESTED=no
+PORTABLE_HASH_REQUESTED=no
+PORTABLE_TRANSACTION=no
+PORTABLE_PARENT_ID=
+PORTABLE_STAGE_ID=
+PORTABLE_STAGE_QUARANTINE=
 
 say() { printf '%s\n' "$*"; }
 warn() { printf 'mcw installer: %s\n' "$*" >&2; }
 die() { warn "$*"; exit 1; }
 cleanup() {
+    if [ "$PORTABLE_TRANSACTION" = yes ]; then rollback_portable || :; fi
     if [ "$TRANSACTION" = yes ]; then rollback_linux || :; fi
     [ -z "$CAMERA_STAGE" ] || rm -rf "$CAMERA_STAGE"
     [ -z "$STAGE" ] || rm -f "$STAGE"
@@ -43,9 +52,11 @@ usage() {
     cat <<'HELP'
 Install MicCamWatch for the current user (no sudo).
 
-Usage: sh install.sh [--version v0.16.0] [--prefix ABSOLUTE_PREFIX]
+Usage: sh install.sh [--version v0.16.1] [--prefix ABSOLUTE_PREFIX]
                      [--add-path | --no-modify-path]
        sh install.sh --uninstall [--prefix ABSOLUTE_PREFIX]
+       sh install.sh --update-portable ABSOLUTE_MCW_PATH --current-sha256 SHA256
+                     [--version RELEASE_TAG] --no-modify-path
        sh install.sh --help
 
 --version           Release tag; default: latest, resolved before downloading.
@@ -53,6 +64,8 @@ Usage: sh install.sh [--version v0.16.0] [--prefix ABSOLUTE_PREFIX]
 --add-path          Explicitly add managed blocks to this user's shell startup files.
 --no-modify-path    Never change shell startup files.
 --uninstall         Remove only receipt-owned, unchanged executable/payload/PATH blocks.
+--update-portable    macOS only: explicitly replace an owned standalone mcw in place.
+--current-sha256     Required current executable digest for portable replacement.
 --help              Show this help without making changes.
 
 Without a PATH flag, an interactive terminal is asked (default: no).
@@ -74,6 +87,12 @@ while [ "$#" -gt 0 ]; do
         --prefix)
             [ "$#" -ge 2 ] || die '--prefix requires an absolute directory.'
             PREFIX=$2; EXPLICIT_PREFIX=yes; shift 2 ;;
+        --update-portable)
+            [ "$#" -ge 2 ] || die '--update-portable requires an absolute mcw path.'
+            PORTABLE_TARGET=$2; PORTABLE_REQUESTED=yes; shift 2 ;;
+        --current-sha256)
+            [ "$#" -ge 2 ] || die '--current-sha256 requires a digest.'
+            PORTABLE_HASH=$2; PORTABLE_HASH_REQUESTED=yes; shift 2 ;;
         --add-path)
             [ "$PATH_MODE" != never ] || die '--add-path and --no-modify-path are mutually exclusive.'
             PATH_MODE=add; shift ;;
@@ -88,7 +107,7 @@ done
 valid_tag() {
     printf '%s\n' "$1" | awk '/^v[0-9]+\.[0-9]+\.[0-9]+([-+][A-Za-z0-9][A-Za-z0-9.-]*)?$/ { ok=1 } END { exit !ok }'
 }
-[ "$VERSION" = latest ] || valid_tag "$VERSION" || die 'Use a release tag such as v0.14.0.'
+[ "$VERSION" = latest ] || valid_tag "$VERSION" || die 'Use a release tag such as v0.16.1.'
 [ "$(id -u)" != 0 ] || die 'Run this installer as your ordinary user, without sudo or root.'
 [ -n "${HOME:-}" ] || die 'HOME is not set.'
 case "$HOME" in /*) ;; *) die 'HOME must be an absolute path.' ;; esac
@@ -155,6 +174,80 @@ link_count() {
 regular_file() {
     [ ! -L "$1" ] && [ -f "$1" ] && [ "$(link_count "$1")" = 1 ]
 }
+
+portable_parent_safe() {
+    CHECK_DIRECTORY=$PREFIX
+    while :; do
+        [ ! -L "$CHECK_DIRECTORY" ] && [ -d "$CHECK_DIRECTORY" ] || return 1
+        CHECK_METADATA=$(stat -f '%u %Lp' "$CHECK_DIRECTORY") || return 1
+        printf '%s\n' "$CHECK_METADATA" | awk -v uid="$(id -u)" '
+            NF!=2 || ($1!=0 && $1!=uid) || $2 !~ /^[0-7]+$/ { bad=1 }
+            { group=substr($2,length($2)-1,1)+0; other=substr($2,length($2),1)+0;
+              if(group%4>=2 || other%4>=2) bad=1 }
+            END { exit bad || NR!=1 }' || return 1
+        [ "$CHECK_DIRECTORY" != / ] || break
+        CHECK_DIRECTORY=$(dirname "$CHECK_DIRECTORY")
+    done
+    [ "$(stat -f '%d:%i' "$PREFIX")" = "$PORTABLE_PARENT_ID" ]
+}
+portable_target_safe() {
+    portable_parent_safe && regular_file "$TARGET" || return 1
+    TARGET_METADATA=$(stat -f '%u %Lp' "$TARGET") || return 1
+    printf '%s\n' "$TARGET_METADATA" | awk -v uid="$(id -u)" '
+        NF!=2 || $1!=uid || $2 !~ /^[0-7]+$/ { bad=1 }
+        { group=substr($2,length($2)-1,1)+0; other=substr($2,length($2),1)+0;
+          if(group%4>=2 || other%4>=2) bad=1 }
+        END { exit bad || NR!=1 }'
+}
+portable_quarantine() {
+    QUARANTINE_ATTRIBUTES=$(xattr "$1") || return 1
+    if printf '%s\n' "$QUARANTINE_ATTRIBUTES" | grep -x 'com.apple.quarantine' >/dev/null; then
+        printf 'present:'
+        xattr -px com.apple.quarantine "$1"
+    else
+        printf 'absent\n'
+    fi
+}
+portable_replacement_unchanged() {
+    portable_target_safe &&
+        [ "$(stat -f '%d:%i' "$TARGET")" = "$PORTABLE_STAGE_ID" ] &&
+        [ "$(stat -f '%Lp' "$TARGET")" = "$PORTABLE_MODE" ] &&
+        [ "$(sha_file "$TARGET")" = "$NEW_HASH" ] &&
+        [ "$(portable_quarantine "$TARGET")" = "$PORTABLE_STAGE_QUARANTINE" ]
+}
+rollback_portable() {
+    PORTABLE_TRANSACTION=no
+    if portable_target_safe; then
+        RESTORE_HASH=$(sha_file "$TARGET") || RESTORE_HASH=
+        if [ "$RESTORE_HASH" = "$PORTABLE_HASH" ]; then
+            return 0
+        elif portable_replacement_unchanged; then
+            if mv -f "$BACKUP" "$TARGET"; then
+                BACKUP=
+                warn 'Failed portable update rolled back; previous executable restored.'
+                return 0
+            fi
+        fi
+    fi
+    warn "Portable rollback could not safely finish; previous executable retained at $BACKUP. Inspect it manually; no changed or quarantined file was restored."
+    BACKUP=
+    return 1
+}
+if [ "$PORTABLE_REQUESTED" = yes ]; then
+    [ "$OS" = Darwin ] || die 'Portable replacement is supported only on macOS.'
+    [ "$EXPLICIT_PREFIX" = no ] && [ "$UNINSTALL" = no ] && [ "$PATH_MODE" != add ] || die 'Portable replacement cannot be combined with --prefix, --uninstall or --add-path.'
+    valid_path "$PORTABLE_TARGET" || die 'Portable target must be absolute without colon/control characters.'
+    [ "${PORTABLE_TARGET##*/}" = mcw ] || die 'Portable target must be named mcw.'
+    PREFIX=$(dirname "$PORTABLE_TARGET")
+    [ "${PREFIX##*/}" != bin ] || die 'A bin/mcw installation requires its managed installer or package manager.'
+    printf '%s\n' "$PORTABLE_HASH" | awk 'length($0)!=64 || $0 ~ /[^0-9a-f]/ { bad=1 } END { exit bad || NR!=1 }' || die 'Portable replacement requires a valid current SHA-256.'
+    PORTABLE_PARENT_ID=$(stat -f '%d:%i' "$PREFIX") || die 'Portable parent directory is missing.'
+    portable_parent_safe || die 'Portable parent directory is unsafe.'
+    command -v xattr >/dev/null 2>&1 || die 'Portable replacement requires xattr to preserve quarantine.'
+    PATH_MODE=never
+elif [ "$PORTABLE_HASH_REQUESTED" = yes ]; then
+    die '--current-sha256 requires --update-portable.'
+fi
 root_camera_installation_absent() {
     # Metadata only: neither an Allowed state nor a version match proves the
     # privileged restoration journal is empty. Never call camera APIs here.
@@ -181,8 +274,10 @@ fi
 mkdir -p "$PREFIX" || die "Cannot create prefix: $PREFIX."
 PREFIX=$(CDPATH= cd "$PREFIX" && pwd -P) || die 'Cannot resolve prefix.'
 valid_path "$PREFIX" || die 'Resolved prefix contains unsupported characters.'
-BIN=$PREFIX/bin
-TARGET=$BIN/mcw
+if [ -n "$PORTABLE_TARGET" ]; then
+    [ "${PREFIX##*/}" != bin ] || die 'A bin/mcw installation requires its managed installer or package manager.'
+fi
+if [ -n "$PORTABLE_TARGET" ]; then BIN=$PREFIX; TARGET=$PREFIX/mcw; else BIN=$PREFIX/bin; TARGET=$BIN/mcw; fi
 STATE=$PREFIX/.miccamwatch-install
 CAMERA=$PREFIX/share/miccamwatch/linux-camera
 CAMERA_NAMES='mcw-camera-helper install-camera-helper.sh com.roman-cuisset.miccamwatch.camera.policy'
@@ -192,7 +287,9 @@ LOCK=$LOCK_PATH
 WORK=$(mktemp -d "$PREFIX/.mcw-install.XXXXXXXX") || die 'Cannot create a private temporary directory.'
 [ ! -L "$BIN" ] || die "Refusing symbolic-link bin directory: $BIN."
 [ ! -L "$STATE" ] || die 'Refusing symbolic-link receipt directory.'
-if [ -e "$STATE" ]; then
+if [ -n "$PORTABLE_TARGET" ]; then
+    : # Portable replacement has no managed ownership receipt.
+elif [ -e "$STATE" ]; then
     [ -d "$STATE" ] || die 'Receipt location is not a directory.'
     regular_file "$STATE/format" && [ "$(cat "$STATE/format")" = 1 ] || die 'Unrecognized installer receipt; refusing to overwrite it.'
     regular_file "$STATE/prefix" && [ "$(cat "$STATE/prefix")" = "$PREFIX" ] || die 'Receipt prefix mismatch; refusing to change files.'
@@ -215,6 +312,12 @@ else
 fi
 
 owned_binary() {
+    if [ -n "$PORTABLE_TARGET" ]; then
+        portable_target_safe || die 'Portable executable or directory is unsafe; it was preserved.'
+        CURRENT_HASH=$(sha_file "$TARGET") || die 'Cannot checksum portable executable.'
+        [ "$CURRENT_HASH" = "$PORTABLE_HASH" ] || die 'Portable executable changed concurrently; it was preserved.'
+        return
+    fi
     if [ -e "$TARGET" ] || [ -L "$TARGET" ]; then
         regular_file "$TARGET" || die "Refusing nonregular, symlink or hardlinked executable: $TARGET."
         [ -f "$STATE/binary.sha256" ] || die "No ownership receipt for $TARGET; preserving it."
@@ -507,9 +610,41 @@ STAGE=$(mktemp "$BIN/.mcw-stage.XXXXXXXX") || die 'Cannot create same-directory 
 tar -xOzf "$WORK/package.tar.gz" mcw > "$STAGE" || die 'Cannot stream the executable from the archive.'
 [ -s "$STAGE" ] || die 'Archive executable is empty.'
 chmod 755 "$STAGE" || die 'Cannot make staged executable runnable.'
+if [ -n "$PORTABLE_TARGET" ]; then
+    owned_binary
+    PORTABLE_MODE=$(stat -f '%Lp' "$TARGET" | awk '{ print substr($0,length($0)-2) }')
+    chmod "$PORTABLE_MODE" "$STAGE" || die 'Cannot preserve portable executable permissions.'
+    PORTABLE_ATTRIBUTES=$(xattr "$TARGET") || die 'Cannot inspect portable executable quarantine.'
+    if printf '%s\n' "$PORTABLE_ATTRIBUTES" | grep -x 'com.apple.quarantine' >/dev/null; then
+        PORTABLE_QUARANTINE=$(xattr -px com.apple.quarantine "$TARGET") || die 'Cannot read portable executable quarantine.'
+        xattr -wx com.apple.quarantine "$PORTABLE_QUARANTINE" "$STAGE" || die 'Cannot preserve portable executable quarantine.'
+    fi
+fi
 REPORTED=$("$STAGE" --version) || die 'Staged mcw --version failed; old executable preserved. On macOS check your Gatekeeper policy; this installer does not bypass it.'
 [ "$REPORTED" = "mcw ${VERSION#v}" ] || die "Executable version mismatch: expected mcw ${VERSION#v}, got $REPORTED. Old executable preserved."
 NEW_HASH=$(sha_file "$STAGE") || die 'Cannot checksum staged executable.'
+if [ -n "$PORTABLE_TARGET" ]; then
+    PORTABLE_STAGE_ID=$(stat -f '%d:%i' "$STAGE") || die 'Cannot pin staged portable executable identity.'
+    PORTABLE_STAGE_QUARANTINE=$(portable_quarantine "$STAGE") || die 'Cannot pin staged portable quarantine.'
+    owned_binary
+    refuse_running
+    BACKUP=$(mktemp "$BIN/.mcw-backup.XXXXXXXX") || die 'Cannot stage portable rollback executable.'
+    cp -p "$TARGET" "$BACKUP" || die 'Cannot snapshot portable executable.'
+    [ "$(sha_file "$BACKUP")" = "$PORTABLE_HASH" ] || die 'Portable executable changed during snapshot; it was preserved.'
+    owned_binary
+    refuse_running
+    PORTABLE_TRANSACTION=yes
+    mv -f "$STAGE" "$TARGET" || die 'Atomic portable replacement failed.'
+    STAGE=
+    portable_replacement_unchanged || die 'Portable target changed during replacement.'
+    REPORTED=$("$TARGET" --version) || die 'Final portable executable validation failed.'
+    [ "$REPORTED" = "mcw ${VERSION#v}" ] || die 'Final portable version mismatch.'
+    portable_replacement_unchanged || die 'Portable target changed during final validation.'
+    PORTABLE_TRANSACTION=no
+    rm -f "$BACKUP"; BACKUP=
+    say "Updated $REPORTED in place at $TARGET. No receipt, PATH or user preferences were changed."
+    exit 0
+fi
 if [ "$OS" = Linux ]; then
     owned_camera
     if [ "$CAMERA_REQUIRED" = yes ]; then
