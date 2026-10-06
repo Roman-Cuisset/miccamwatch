@@ -93,6 +93,26 @@ impl ProcessIdentity {
     }
 }
 
+// SO_PEERCRED can name the non-dumpable systemd socket activator, not
+// PipeWire itself. Session ownership pins its UID and process generation;
+// capture attribution still requires the full executable checks above.
+pub(super) fn verify_peer_instance(pid: u32, uid: u32, boot: &BootTime) -> Result<String> {
+    let directory = Path::new("/proc").join(pid.to_string());
+    let stat_path = directory.join("stat");
+    let first = fs::read_to_string(&stat_path)
+        .with_context(|| format!("cannot read {}", stat_path.display()))?;
+    let start_ticks = parse_process_stat(&first, pid)?.1;
+    if fs::metadata(&directory)?.uid() != uid {
+        bail!("PipeWire socket peer UID changed during identity verification");
+    }
+    let second = fs::read_to_string(&stat_path)?;
+    if parse_process_stat(&second, pid)?.1 != start_ticks || fs::metadata(&directory)?.uid() != uid
+    {
+        bail!("PipeWire socket peer process changed during identity verification");
+    }
+    Ok(format!("linux:{pid}:{}:{start_ticks}", boot.seconds))
+}
+
 pub(super) fn same_executable(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     left.is_file()
         && right.is_file()
@@ -176,5 +196,69 @@ mod tests {
         );
         assert!(first.created_at <= Utc::now());
         assert!(ProcessIdentity::verify(u32::MAX, &boot).is_err());
+    }
+
+    #[test]
+    fn socket_peer_generation_is_verified_without_reading_non_dumpable_executable() {
+        use std::{
+            io::Read,
+            os::fd::{FromRawFd, OwnedFd},
+        };
+
+        struct Child(libc::pid_t);
+        impl Drop for Child {
+            fn drop(&mut self) {
+                unsafe {
+                    libc::kill(self.0, libc::SIGTERM);
+                    while libc::waitpid(self.0, std::ptr::null_mut(), 0) < 0
+                        && std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR)
+                    {
+                    }
+                }
+            }
+        }
+
+        let boot = BootTime::read().unwrap();
+        let mut descriptors = [0; 2];
+        assert_eq!(
+            unsafe { libc::pipe2(descriptors.as_mut_ptr(), libc::O_CLOEXEC) },
+            0
+        );
+        let reader = unsafe { OwnedFd::from_raw_fd(descriptors[0]) };
+        let writer = unsafe { OwnedFd::from_raw_fd(descriptors[1]) };
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0);
+        if pid == 0 {
+            // After a multithreaded fork, the child uses only libc syscalls.
+            unsafe {
+                libc::close(descriptors[0]);
+                if libc::prctl(libc::PR_SET_DUMPABLE, 0) != 0
+                    || libc::write(descriptors[1], [1_u8].as_ptr().cast(), 1) != 1
+                {
+                    libc::_exit(1);
+                }
+                libc::close(descriptors[1]);
+                loop {
+                    libc::pause();
+                }
+            }
+        }
+        let _child = Child(pid);
+        drop(writer);
+        let mut ready = [0];
+        fs::File::from(reader).read_exact(&mut ready).unwrap();
+        assert_eq!(ready, [1]);
+        let pid = pid as u32;
+        let uid = unsafe { libc::geteuid() };
+        if uid != 0 {
+            assert!(ProcessIdentity::verify(pid, &boot).is_err());
+        }
+        let stat = fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
+        let ticks = parse_process_stat(&stat, pid).unwrap().1;
+        assert_eq!(
+            verify_peer_instance(pid, uid, &boot).unwrap(),
+            format!("linux:{pid}:{}:{ticks}", boot.seconds)
+        );
+        assert!(verify_peer_instance(pid, uid.wrapping_add(1), &boot).is_err());
     }
 }
