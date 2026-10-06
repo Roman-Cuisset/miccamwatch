@@ -202,7 +202,7 @@ fn block(store: &Store, journal: &mut Journal, uid: u32) -> Result<()> {
     let mut failures = Vec::new();
     for entry in &journal.entries {
         for name in ordered(entry) {
-            if let Err(error) = usb::write_driver(&entry.device, &name, false) {
+            if let Err(error) = usb::write_driver(&entry.device, name, false) {
                 failures.push(format!("{name}: {error:#}"));
                 break;
             }
@@ -225,7 +225,7 @@ fn restore_device(entry: &Entry) -> Result<()> {
     let before = usb::inventory()?;
     usb::matching(&before, &entry.device)?;
     for name in ordered(entry) {
-        usb::write_driver(&entry.device, &name, true)?;
+        usb::write_driver(&entry.device, name, true)?;
     }
     let actual = usb::inventory()?;
     if !restored(usb::matching(&actual, &entry.device)?, entry) {

@@ -469,12 +469,11 @@ pub(super) fn supported_configuration(identity: &DeviceIdentity) -> Result<()> {
                     .interfaces
                     .iter()
                     .find(|interface| usize::from(interface.number) == number)
+                    && (descriptor[5] != 0x0e || descriptor[6] != selected.subclass)
                 {
-                    if descriptor[5] != 0x0e || descriptor[6] != selected.subclass {
-                        bail!(
-                            "camera interface {number} has a non-video or changing control/streaming role in alternate {alternate}"
-                        );
-                    }
+                    bail!(
+                        "camera interface {number} has a non-video or changing control/streaming role in alternate {alternate}"
+                    );
                 }
             }
             _ => {}
