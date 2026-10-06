@@ -64,7 +64,7 @@ struct Reply {
 }
 
 pub fn camera_capability() -> &'static str {
-    "Explicit Polkit-authorized role-stable single-configuration USB/UVC driver controls (Linux >=5.9), pinned-device detach and owned restoration; no partly-bound originals, physical cutoff, non-USB control, automatic hotplug or silent action while locked"
+    "USB/UVC only (Linux >=5.9); explicit admin approval, owned restoration; no hotplug/lock blocking"
 }
 
 pub fn camera_state() -> Result<CameraPrivacyState> {
