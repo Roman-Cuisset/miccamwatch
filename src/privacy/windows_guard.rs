@@ -10,7 +10,13 @@ use std::{
     sync::{Arc, Mutex, OnceLock, atomic::AtomicBool},
     time::{Duration, Instant},
 };
-use windows::Win32::UI::Shell::{SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW, ShellExecuteExW};
+use windows::Win32::{
+    System::Console::FreeConsole,
+    UI::Shell::{
+        SEE_MASK_NO_CONSOLE, SEE_MASK_NOASYNC, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW,
+        ShellExecuteExW,
+    },
+};
 
 const MAX_CAMERAS: usize = 4096;
 const MAX_JOURNAL_BYTES: u64 = 2 * 1024 * 1024;
@@ -1971,7 +1977,7 @@ fn launch(legacy_restore: Option<LegacyTarget>) -> Result<Handle> {
     ));
     let mut info = SHELLEXECUTEINFOW {
         cbSize: size_of::<SHELLEXECUTEINFOW>() as u32,
-        fMask: SEE_MASK_NOCLOSEPROCESS,
+        fMask: SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC | SEE_MASK_NO_CONSOLE,
         lpVerb: PCWSTR(verb.as_ptr()),
         lpFile: PCWSTR(file.as_ptr()),
         lpParameters: PCWSTR(arguments.as_ptr()),
@@ -2190,6 +2196,9 @@ pub(super) fn run(encoded: &str) -> Result<()> {
         bootstrap.invoker_pid,
         bootstrap.invoker_created,
     )?;
+    // The helper is IPC-only and must outlive the caller's terminal without
+    // allocating a hidden console host or sharing its console-close events.
+    unsafe { FreeConsole() }.context("detach camera helper from caller console")?;
     crate::windows_control::grant_invoker_query(
         &bootstrap.identity,
         bootstrap.invoker_pid,
