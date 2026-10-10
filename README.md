@@ -124,6 +124,10 @@ The complete scenario exceeds both the 15 MB target and 30 MB reference; shared
 RSS counting and sampling gaps remain explicit. The protected medium-reader
 regression passed without broadening permissions. Approved one-target legacy
 camera recovery completed, followed by normal medium-client status, no new UAC.
+Further [native qualification at `29db092`](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38055262096)
+passed all four targets after correcting a Unix/AppKit stop-readiness race.
+Real Linux/macOS tray stop controls and process exits returned 0; all four
+baseline/candidate resource comparisons and Windows composed-owner proof passed.
 Physical microphone protection/restoration remains unqualified. A private Linux
 PipeWire fixture proved an external unmute remained after five seconds and was
 cleaned; that is not physical audio proof. macOS has no new physical validation.

@@ -393,6 +393,12 @@ main ; le visuel ignoré est exercé par le harness natif. Test ACL admin→medi
 passé sans élargissement des permissions. Recovery legacy ciblé UAC achevé,
 client medium status exit 0 et aucune nouvelle UAC.
 
+La requalification [native `29db092`](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38055262096)
+est également verte sur les quatre targets après correction de la course
+readiness AppKit/serveur stop. Contrôles stop et sorties tray Linux/macOS à 0,
+comparaisons ressources qualifiées et preuve composée Windows réussie ; ancien
+échec candidat conservé dans Architecture et journal, pas transformé en succès.
+
 Qualification composée réelle : deux gardes + top/tray, tous les rôles présents
 à chaque sample ; fermeture UI sans release, release explicite et cleanup
 réussis. Médianes **42,820/43,516 Mo**, gardes seules 27,922 Mo ; pic scénario

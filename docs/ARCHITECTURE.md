@@ -800,7 +800,12 @@ shutdown acknowledgment. The correction leaves readiness retirement to the main
 loop after it accepts stop; genuine host disconnect/error checks stay intact.
 This race is source evidence; the failed run did not retain its exact stop reply.
 Native stop assertions remain strict, with bounded control-only diagnostics now
-retained on failure. The corrected native path still requires requalification.
+retained on failure. [Native requalification at 29db092](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38055262096)
+passed all four targets. macOS ARM/Intel and Linux real tray stop controls and
+process exits returned 0, with no descendant cleanup failures. All four baseline/
+candidate resource comparisons completed and qualified. Windows composed proof
+also passed again, preserving both owners through frontend exit. The prior
+candidate failure remains recorded; no failed stop was accepted as success.
 
 An approved one-target legacy recovery cleared the disconnected camera's native
 disabled-configuration flag from 1 to 0. Its protected receipt is fulfilled,
