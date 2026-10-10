@@ -51,6 +51,8 @@ Les identifiants sont stables. À chaque livraison, remplacer l'état par **En c
 | P3-PTT | Reformulé en sourdine possédée, à faire | Élevée | P1-RESTORE, intentions et raccourcis OS |
 | P3-SOUND | START déjà disponible ; extension à faire | Moyenne | P2-HOOKS : sémantique des transitions |
 | P4-ANDROID | Hors cœur, reporté en dernier | Élevée | Projet indépendant et modèle de permissions |
+| SITE-ROOT | Demandé, à faire plus tard : ne plus servir l'ancienne page à la racine HTTPS `/` | Faible | Routage Caddy exact ; préserver `/mcw` et les autres services |
+| SITE-MCW | Demandé, à faire plus tard : améliorer la présentation et la lisibilité du site `/mcw` | Moyenne | Page statique, parcours Windows/Linux/macOS et vérification desktop/mobile |
 
 ## Phase 1 — Packaging et écosystème de distribution (immédiat)
 
@@ -316,6 +318,50 @@ Windows : `RegisterHotKey` seul n'offre pas un protocole PTT key-up complet ; va
 | Productivité/temps de parole | Aucun score de productivité ni métrique de durée de parole | Ne pas détourner `history`/`model` vers l'analytique ; timestamps = observations, pas parole mesurée | Moyenne si entreprise ; exclue |
 | Clients réseau lourds | Aucun SDK Slack/Discord/Telegram/IoT, client de réputation ou webhook intégré | Intégrations uniquement scripts/hooks et JSON standard ; updater/trust natifs existants restent des besoins distincts, pas un prétexte à étendre la surveillance réseau | Moyenne à Élevée si entreprise ; exclue |
 
+## Site HTTPS — demandes différées
+
+**État : demandé par l'utilisateur, à faire plus tard.** Cette inscription au
+suivi n'autorise aucune modification du site maintenant ; aucune des deux
+demandes ci-dessous n'est annoncée comme réalisée.
+
+### SITE-ROOT — Ne plus charger l'ancienne page à la racine
+
+**Demande :** retirer la page actuellement accessible à
+`https://serveur-asus.duckdns.org:9443/` pour qu'elle ne se charge plus.
+La racine exacte `/` ne doit plus servir cette interface ni ses contenus, et
+ne doit pas rediriger vers elle ou vers `/mcw`. Prévoir une réponse sans page,
+par exemple HTTP 404 avec corps vide ; pas une nouvelle page d'accueil.
+
+**Contraintes :** limiter la modification à l'exposition HTTP de cette racine ;
+ne pas supprimer les fichiers, données ou services sous-jacents hors périmètre.
+Conserver TLS, le port 9443 et le fonctionnement de
+`https://serveur-asus.duckdns.org:9443/mcw`, de `/mcw/` et de `/mcw/install.sh`.
+Ne pas casser les autres routes/services non concernés.
+
+**Validation future :** GET HTTPS strict de `/` sans ancien contenu ni
+redirection ; `/mcw` reste utilisable, éventuellement via sa redirection
+canonique vers `/mcw/` ; page et installateur accessibles, script inchangé et
+checksum vérifié. Vérifier les autres routes concernées avant/après.
+
+### SITE-MCW — Améliorer le site sans perdre son fonctionnement
+
+**Demande :** conserver `/mcw` fonctionnel mais améliorer la page actuelle,
+jugée mal présentée par l'utilisateur. Revoir la hiérarchie visuelle, la
+lisibilité, l'espacement et la navigation ; rendre le choix Windows/Linux/macOS,
+les téléchargements et les instructions d'installation faciles à trouver.
+Alléger la lecture de la page sans supprimer les limites ni les précautions.
+
+**Contraintes :** rester sur le site statique existant, sans framework/runtime
+ou service réseau supplémentaire. Garder les versions et liens réels,
+checksums/provenance, avertissements de signature et limites de protection/RAM.
+Ne pas confondre installateur Unix et packages Windows ; ne pas proposer de
+contournement antivirus/quarantaine ou de téléchargement non vérifié.
+
+**Validation future :** observer le vrai rendu desktop et mobile, navigation
+clavier et contraste lisibles, sans débordement horizontal global ; essayer les
+liens, le téléchargement du script et les instructions propres à chaque OS.
+Ne pas déployer cette refonte dans le cadre de la seule mise à jour du MD.
+
 ## Livraison Git, releases et suivi à chaque lot majeur
 
 1. **Avant modification :** fixer le lot, ses critères ci-dessus, la matrice OS touchée, les limites de preuve et le budget ressources. Ne pas attendre la fin d'une phase entière pour corriger un défaut de sécurité indépendant.
@@ -343,3 +389,4 @@ Windows : `RegisterHotKey` seul n'offre pas un protocole PTT key-up complet ; va
 | 2026-10-10 | Arrêt tray macOS avant tag | Nouveau défaut candidat découvert, publication bloquée | [CI `016df87`](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38053174757) Windows/Linux/macOS Intel verts ; macOS ARM baseline entière et profils candidat hors tray réussis, mais stop tray candidat échoue. Gate candidat reste faux, aucune publication. Source : readiness AppKit partagée effacée par le serveur stop avant acceptation par la boucle, interleaving pouvant produire une fausse déconnexion ; reply exact non conservé dans ce run | Correction de la transition sans masquer les vraies déconnexions ; assertion native stop inchangée et diagnostics de contrôle bornés ajoutés ; requalifier natif avant nouveau commit vérifié/tag, aucun autre lot rouvert |
 | 2026-10-10 | Requalification après correction arrêt AppKit | Validé logiciel/natif avant tag ; source `29db092` | [CI native complète](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38055262096) Windows/Linux/macOS ARM/Intel verte. Arrêts tray réels Linux/macOS : contrôle stop 0 et sortie processus 0, cleanup sans échec. Quatre comparaisons baseline/candidat complètes et qualifiées ; garde + top/tray Windows requalifiés, rôles présents, protections conservées et cleanup réussi. L'échec candidat précédent est conservé, non accepté | Commit de validation avant tag puis publication/provenance/migrations publiques ; 15/30 Mo composés et qualification physique toujours non acquis ; aucune modification de l'installation/tray utilisateur |
 | 2026-10-10 | Livraison P1-RAM/P1-RESTORE 0.17.0 | [Publié stable/latest](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.17.0), tag annoté immuable source `d1b8557f827e102df20c33dbac4ec99badba7d1a` | [CI exacte pré-tag](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38056837640), [release native](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38058344725), sept assets/digests et six attestations exactes vérifiés ; Windows public 0.16.1→0.17.0, paire ZIP/préférences/no-op et tray utilisateur étranger préservés ; [migrations publiques Unix](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38059262974) Linux/macOS ARM/Intel, managed 0.16.1→0.17.0 et bootstrap Mac depuis public 0.16.0, limites de fixture explicitement conservées ; DNS page/script/TLS/desktop/mobile/curl réel vérifiés ; source utilisateur inchangée | 15 Mo non acquis, scénario composé ~43 Mo et pics explicites ; physique/exclusif/ASIO non certifiés, EXE/MSI NotSigned, aucune nouvelle clearance AV/Apple ; Homebrew/AUR/Winget/Linux ARM64 et autres lots ouverts. Preuves post-publication dans commit ultérieur sans déplacer le tag |
+| Demande utilisateur après livraison 0.17.0 | SITE-ROOT / SITE-MCW | Consigné, différé ; aucune modification du site | Racine HTTPS à ne plus servir ; `/mcw` à conserver fonctionnel et à améliorer visuellement ; critères et limites dans la section Site HTTPS | Réaliser ultérieurement les deux demandes, puis vérifier HTTPS/routes/script et vrai rendu desktop/mobile |
