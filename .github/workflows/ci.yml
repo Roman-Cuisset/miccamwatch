@@ -63,7 +63,7 @@ jobs:
         shell: pwsh
         run: |
           $python = Join-Path $env:RUNNER_TEMP 'mcw-ui-proof-venv/Scripts/python.exe'
-          & $python -B installer/tests/native_resources.py --binary (Resolve-Path target/release/mcw.exe).Path --proof "$env:RUNNER_TEMP/native-windows-top/resources" --runner-desktop --scenario disposable_windows_native_collectors
+          & $python -B installer/tests/native_resources.py --binary (Resolve-Path target/release/mcw.exe).Path --gate-candidate --proof "$env:RUNNER_TEMP/native-windows-top/resources" --runner-desktop --scenario disposable_windows_native_collectors
           if ($LASTEXITCODE -ne 0) { throw 'Native resource qualification failed; inspect resources.json partial evidence' }
       - name: Upload Windows top terminal frames
         if: always()
@@ -350,7 +350,7 @@ jobs:
               record("resource-qualification",
                      [os.environ["MCW_UI_PROOF_PYTHON"], "-B",
                       str(pathlib.Path(os.environ["GITHUB_WORKSPACE"]) / "installer/tests/native_resources.py"),
-                      "--binary", binary, "--proof", str(proof / "resources"), "--runner-desktop",
+                      "--binary", binary, "--gate-candidate", "--proof", str(proof / "resources"), "--runner-desktop",
                       "--scenario", "isolated_pipewire_empty_graph_xfce" if linux else "native_macos_aqua_read_only_collectors"],
                      timeout=900)
               current = status("status")

@@ -703,7 +703,8 @@ def sustain(output, sampler, alive, pump=None):
     deadline = time.monotonic() + DURATION
     while time.monotonic() < deadline:
         assert alive(), "Product exited during sustained qualification"
-        assert not sampler.error, "OS sampler failed: " + str(sampler.error)
+        if sampler.error:
+            raise RuntimeError("OS sampler failed: " + str(sampler.error))
         if pump:
             pump(True)
         else:
@@ -762,10 +763,12 @@ def measure(binary, backend, mode, output):
         else:
             if mode == "tray":
                 if os.name == "nt":
-                    assert not windows_tray_window(), "Existing user tray detected; refusing to touch it"
+                    if windows_tray_window():
+                        raise RuntimeError("Existing user tray detected; refusing to touch it")
                 else:
                     before = subprocess.run([str(binary), "tray", "status"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
-                    assert before.returncode == 1, "Isolated tray namespace already occupied"
+                    if before.returncode != 1:
+                        raise RuntimeError("Isolated tray namespace already occupied")
             args = {"status": ["status", "--json"], "watch": ["watch", "--json", "--no-kill", "--interval", "200"], "tray": ["tray", "run"]}[mode]
             process = launch(binary, args, sampler.mark_launch)
             reader = Reader(process.stdout, sampler.started, json_lines=mode == "watch")
@@ -918,7 +921,7 @@ def isolate(root):
     return home
 
 
-def qualify(binary, backend, metadata, report, proof, scenario, desktop):
+def qualify(binary, backend, metadata, report, proof, scenario, desktop, *, reference_only=False):
     binary = binary.resolve()
     metadata.update(binary_sha256=sha256(binary), version=subprocess.check_output([str(binary), "--version"], timeout=30, text=True).strip())
     siblings = [binary.with_name(name) for name in ("mcw-tray.exe", "mcw-camera-helper")]
@@ -936,6 +939,7 @@ def qualify(binary, backend, metadata, report, proof, scenario, desktop):
              ("top", "controlled_refresh_burst_slow_consumer", "warm_process_new_spawn")]
     if desktop:
         specs.append(("tray", "idle", "warm_process_new_spawn"))
+    metadata["expected_run_count"] = len(specs)
     for mode, profile, cache in specs:
         row = dict(product=metadata["label"], profile=profile, cache_state=cache, graph_scenario=scenario,
                    collector_states=next((r["collector_states"] for r in reversed(report["runs"])
@@ -943,12 +947,27 @@ def qualify(binary, backend, metadata, report, proof, scenario, desktop):
         report["runs"].append(row)
         try:
             measure(binary, backend, mode, row)
+        except AssertionError:
+            # An immutable reference can expose a real old functional bug. Keep
+            # that failed row and exercise the remaining profiles and candidate.
+            # Never tolerate cleanup, sampler, integrity or isolation failures.
+            if not reference_only or row.get("cleanup_error") or row.get("functional") != "failed":
+                raise
+            print(f"::warning::Immutable baseline failed {mode}/{profile}: {row.get('error', 'functional assertion')}; comparison remains unqualified")
         finally:
             save(proof, report)
 
 
 def save(proof, report):
     report["functional_success"] = bool(report["runs"]) and all(row.get("functional") == "passed" for row in report["runs"]) and not report.get("operational_error")
+    for label in ("baseline", "candidate"):
+        rows = [row for row in report["runs"] if row["product"] == label]
+        metadata = report.get(label) or {}
+        report[label + "_functional_success"] = (
+            bool(rows) and len(rows) == metadata.get("expected_run_count")
+            and all(row.get("functional") == "passed" for row in rows)
+            and not report.get("operational_error"))
+    report["comparison_qualified"] = report["baseline_functional_success"] and report["candidate_functional_success"]
     report["budget_qualification"] = "unmet" if any(row.get("budget", {}).get("qualification") == "unmet" for row in report["runs"]) else "not_proven"
     temporary = proof / "resources.json.tmp"
     temporary.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
@@ -961,7 +980,11 @@ def main():
     parser.add_argument("--proof", type=Path, required=True)
     parser.add_argument("--runner-desktop", action="store_true", help="Opt into tray on a disposable native runner desktop ONLY")
     parser.add_argument("--scenario", default="local_read_only_native_collectors_no_physical_transition", help="Controlled collector/graph scenario label, not user activity")
+    parser.add_argument("--gate-candidate", action="store_true",
+                        help="Require every candidate profile; retain and warn on immutable baseline functional failures without treating the comparison as qualified")
     args = parser.parse_args()
+    if args.gate_candidate and not args.binary:
+        parser.error("--gate-candidate requires --binary")
     args.proof = args.proof.resolve()
     args.proof.mkdir(parents=True, exist_ok=True)
     system = {"Linux": "linux", "Darwin": "macos", "Windows": "windows"}[platform.system()]
@@ -972,6 +995,7 @@ def main():
                   runs=[], requested_modes=["status", "watch", "top"] + (["tray"] if args.runner_desktop else []),
                   privacy=dict(raw_status_events_terminal_clipboard_published=False, hardware_actions=False,
                                notifications_sound_history_lock_policy=False, autostart_enabled=False),
+                  functional_gate="candidate" if args.gate_candidate else "all_measured_products",
                   excluded_processes=["qualification Python sampler/PTY server", "desktop/window/session servers", "fixture PipeWire/pulse servers and virtual capture clients", "tray readiness/stop control probes"],
                   ram_policy=dict(target_bytes=BUDGET, policy="soft_optimization_target", acceptable_reference_bytes=30_000_000,
                                   reference_is_hard_cutoff=False, above_target_fails_functional_suite=False),
@@ -1013,7 +1037,8 @@ def main():
             root = Path(temporary)
             baseline = fetch_baseline(root, key, report["baseline"])
             isolate(root)
-            qualify(baseline, backend, report["baseline"], report, args.proof, args.scenario, args.runner_desktop)
+            qualify(baseline, backend, report["baseline"], report, args.proof, args.scenario, args.runner_desktop,
+                    reference_only=args.gate_candidate)
             assert report["baseline"]["version"] == "mcw 0.16.1", "Pinned public baseline reports unexpected version"
             if args.binary:
                 report["candidate"] = dict(label="candidate")
@@ -1028,9 +1053,13 @@ def main():
         if backend:
             backend.close()
         save(args.proof, report)
+    gate = report["candidate_functional_success"] if args.gate_candidate else report["functional_success"]
     print(json.dumps(dict(artifact=str(args.proof / "resources.json"), functional_success=report["functional_success"],
+                         candidate_functional_success=report["candidate_functional_success"],
+                         baseline_functional_success=report["baseline_functional_success"],
+                         comparison_qualified=report["comparison_qualified"], functional_gate=report["functional_gate"],
                          completed=report.get("completed", False), budget_qualification=report["budget_qualification"])))
-    return 0 if report.get("completed") and report["functional_success"] else 1
+    return 0 if report.get("completed") and gate else 1
 
 
 if __name__ == "__main__":

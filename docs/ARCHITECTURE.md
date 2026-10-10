@@ -724,6 +724,27 @@ WM_CLOSE does not release either requested protection. This composed scenario
 still needs its own native run; do not add the separate-profile medians and call
 that a measured combined total.
 
+The main runs [72a0bdd](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38049013635)
+and [6847482](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38050188591)
+retained a macOS ARM **immutable v0.16.1 baseline** failure: after the controlled
+refresh burst, native top did not exit within its 20-second Quit deadline.
+Those runs aborted resource comparison before measuring the candidate; they
+are not passing candidate evidence. The second Windows run also stopped before
+composed phases because its foreign-scope status probe incorrectly required
+exit 0, unlike other probes allowing status 1/2 with validated native protection
+fields. It now reuses that same strict zero-device/no-protection-error validator.
+
+CI resource qualification explicitly uses `--gate-candidate`: all candidate
+profiles must pass; immutable-reference functional failures are retained as
+failed rows and emitted as CI warnings, without stopping the remaining profiles.
+`functional_success` retains its all-products meaning. Separate
+`baseline_functional_success`, `candidate_functional_success` and
+`comparison_qualified` distinguish current-product qualification from a complete
+passing comparison. Default CLI behavior remains strict for all measured products;
+integrity, isolation, OS sampler and cleanup failures remain fatal in either mode.
+No failed reference row is relabeled passed and no 15/30 MB result is inferred.
+
+
 An approved one-target legacy recovery cleared the disconnected camera's native
 disabled-configuration flag from 1 to 0. Its protected receipt is fulfilled,
 generation 1, requested=false, with no owned entries. The medium client then

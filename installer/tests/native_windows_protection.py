@@ -163,10 +163,10 @@ def main():
             assert child.returncode in allowed, f"CLI {arguments} exited {child.returncode}: {stderr.decode('utf-8', errors='replace')[:8192]}"
         return stdout
 
-    def status():
+    def status(environment=None):
         # Status 1 means observed access, not a command failure; 2 means collector
         # degradation. Complete native protection data below must still be valid.
-        data = json.loads(command(["status", "--json", "--no-color"], allowed=(0, 1, 2)))["protection"]
+        data = json.loads(command(["status", "--json", "--no-color"], environment=environment, allowed=(0, 1, 2)))["protection"]
         assert data["microphone_error"] is None and data["camera_error"] is None, "Native observation unavailable"
         assert data["microphone"]["endpoint_count"] == 0, "Refusing microphone mutation on a machine with input endpoints"
         assert data["camera"]["present_total"] == 0 and data["camera"]["unknown_devices"] == 0, "Refusing camera mutation on a machine with present/unknown cameras"
@@ -218,7 +218,7 @@ def main():
         command(["unmute"], check=False, environment=other_env)
         original = status()
         assert original["microphone"]["requested"] and original["microphone"]["service_active"], "Foreign operational scope released original microphone protection"
-        other = json.loads(command(["status", "--json", "--no-color"], environment=other_env))["protection"]
+        other = status(other_env)
         assert not other["microphone"]["requested"] and not other["microphone"]["service_active"], "Foreign scope adopted another microphone owner's intent/service"
         command(["camera", "allow"], check=False, environment=other_env)
         original = status()
