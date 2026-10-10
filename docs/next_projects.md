@@ -8,8 +8,8 @@ Ce document planifie les prochains travaux ; sa création ne clôture aucune pha
 **Candidat source `0.17.0`, non publié :** Windows-first explicitement retenu pour
 la protection persistante. Les corrections candidates annotées ci-dessous ne
 réécrivent ni les défauts historiques ni les preuves de `v0.16.1`. Les pins
-d'installation restent `v0.16.1` jusqu'à publication ; P1-RAM/P1-RESTORE restent
-**En cours** jusqu'à qualification CI native/helpers/matérielle. Les autres lots
+d'installation restent `v0.16.1` jusqu'à publication ; P1-RAM/P1-RESTORE sont
+**Validés en logiciel/natif**, sans certification physique. Les autres lots
 demeurent ouverts. Voir le [contrat candidat et ses limites](ARCHITECTURE.md#candidate-0170-windows-first-protection-contract).
 
 ## Base réelle et décisions d'architecture
@@ -36,8 +36,8 @@ Les identifiants sont stables. À chaque livraison, remplacer l'état par **En c
 
 | Lot | Décision / état actuel | Complexité | Dépendance principale |
 | --- | --- | --- | --- |
-| P1-RAM | En cours : bornes candidates 0.17.0, mesure Windows locale >15 Mo ; qualification native/helpers restante | Moyenne | Mesures reproductibles de tout l'arbre produit |
-| P1-RESTORE | En cours : propriétaire natif Windows et journal par endpoint dans le candidat 0.17.0 | Élevée | Qualification CI native, états opposés/hotplug/restauration |
+| P1-RAM | Validé logiciel/natif : bornes et mesures complètes 0.17.0, 15 Mo non atteints, gardes Windows sans conhost qualifiés | Moyenne | Publication et maintien des preuves/limites canoniques |
+| P1-RESTORE | Validé logiciel/natif : propriétaire Windows, états opposés/hotplug/partiel simulés, release natif réel sans devices | Élevée | Pas de certification matérielle ou déni exclusif/ASIO |
 | P1-HB | Homebrew : à faire | Moyenne | Propriété installation/autostart, validation macOS |
 | P1-AUR | AUR : à faire | Moyenne | Dépendances PipeWire et frontière root |
 | P1-WG | Winget : à faire | Moyenne | Identité MSI et upgrades contrôlés |
@@ -68,13 +68,13 @@ explicites sans faux STOP ; files UI/notifications/caches bornés. `top` conserv
 une seule rangée horizontale de six boutons, avec représentation compacte aux
 petites largeurs. Cela corrige les risques historiques, sans certifier le RSS.
 
-**Preuve locale, pas CI complète :** comparaison Windows read-only `fe86151`/
-stable terminée, functional/completed true, cible **15 Mo non atteinte**.
-RAM/CPU/latence et limites dans la
+**Preuves locales et CI native :** comparaison Windows locale `fe86151`/stable
+sur machine peuplée et [CI complète `078cdc7`](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38047504453)
+terminées ; Windows/Linux/macOS ARM/Intel, garde/tray/menu, gros graphe PipeWire,
+rafales et lacunes explicites. **15 Mo non atteints.** Les gardes Windows sans
+conhost sont mesurés, pas estimés ; chiffres RAM/CPU/latence et limites dans la
 [table canonique](ARCHITECTURE.md#local-candidate-evidence-and-remaining-qualification).
-Aucun garde/tray actif dans cette mesure ; gaps candidats ≈63 ms, enfants/pics
-brefs potentiellement manqués. Tout l'arbre avec gardes/helpers et scénarios
-natifs reste à qualifier ; ne pas annoncer « optimisé sous 15 Mo ».
+Le runner vide ne remplace pas la machine locale ; pas d'affirmation sous 15 Mo.
 
 **Validation :** baseline stable/pic et latence sur les trois OS, gros graphes et rafales d'événements, UI lente, enfant bloqué/sortie excessive ; aucune accumulation et aucun STOP inventé en cas de limite. Toute impossibilité de respecter le budget doit être remontée avant ajout de fonctions, pas compensée par une mesure plus flatteuse.
 
@@ -106,16 +106,17 @@ Fenêtre brève d'arrivée, restart/veto/unknown restent explicites. IPC fixe li
 SID/session/data-dir hash et génération native, borné, sans chemins/devices
 arbitraires ; délégation admin alternatif QUERY-only.
 
-**Preuves locales :** source `fe86151`, Clippy strict feature, deux suites Windows
-(160 lib +1 main, 1 visuel ignoré), build release et huit tests IPC natifs réussis ;
-ConPTY sept langues, 120/150/40/20 colonnes, souris/refresh/quit et screenshot
-FR150 inspecté. Status d'absence normale et réservations update rebâtis.
-Fixture native : suppression de la rétention des pipes du CLI terminé par le
-garde détaché, sans aucune mutation physique. Inventaire micro/caméra lu seul.
+**Preuves :** Clippy strict feature, deux suites Windows (161 lib +1 main,
+1 visuel ignoré), build release et [CI native complète](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38047504453)
+réussis ; vrais propriétaires Windows sans devices, IPC fini, réservations
+update, test ACL admin→medium, TUI sept langues, 120/150/40/20 colonnes et
+souris/refresh/quit. La nouvelle TUI locale est également réussie ; aucun SDK
+micro modifié. Le recovery legacy caméra déconnectée approuvé a retiré l'ancien
+flag, puis status medium exit 0 sans nouvelle UAC ni dette restante.
 Release explicite et restauration achevée exigés avant remplacement ; jamais
-de release implicite pour updater. Qualification CI/helpers/matérielle restante.
+de release implicite pour updater. La restauration physique reste non certifiée.
 
-**Sécurité update candidate (tests natifs locaux, CI complète pendante) :** portable Windows
+**Sécurité update candidate (tests natifs locaux et CI native réussis) :** portable Windows
 réserve request locks et ressources natives micro/caméra avant stop/swap,
 refuse propriétaire actif/étranger, intention/token, release-pending ou journal
 non fiable. Readiness strictement read-only sans release/helper/SDK. Réservation
@@ -130,7 +131,7 @@ explicite, il ne devient pas une autorité élevée.
 
 **Validation :** deux entrées avec états opposés, changement manuel entre lock/unlock, hotplug et échec partiel ; seules les modifications possédées sont restaurées exactement. Pas de promesse de coupure électrique ou de déni d'accès WASAPI.
 
-**Complexité : Élevée.** Correction intégrée au candidat source `0.17.0`, non publiée ; qualification restante avant clôture P1-RESTORE, sans modifier les releases immuables.
+**Complexité : Élevée.** Correction 0.17.0 validée en logiciel/natif, non publiée ; limites physiques explicites, releases antérieures immuables.
 
 ### P1-HB — Formule Homebrew macOS
 
@@ -334,4 +335,4 @@ Windows : `RegisterHotKey` seul n'offre pas un protocole PTT key-up complet ; va
 | 2026-10-06 | Roadmap | Plan technique établi, aucune phase produit clôturée | Modules et contrats relus dans la base 0.16.0 ; propositions arbitrées ci-dessus | Démarrer par P1-RAM/P1-RESTORE ; packaging puis autres lots selon dépendances |
 | 2026-10-06 | Patch 0.16.1 updater/tray/top | [Livré stable/latest](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.16.1) | [CI complète](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37487806861), [release native](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37493346742), [migration publique 0.16.0](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37495128116) : Windows/Linux/macOS ARM/Intel ; menus Win32 560/562 px à 125 % de DPI, XFCE 399/398 px Latin/CJK, AppKit 240 pt sur 7 langues et diagnostics longs, détails complets. TUI : 7 langues, souris/clavier et redimensionnements. Bootstrap macOS public et updater corrigé, présence/absence de quarantaine, SIGTERM/rollback exact, changements concurrents préservés. Sept assets publics, hashes et six attestations vérifiés ; vrai updater Windows 0.16.0 → 0.16.1 puis no-op | Consolidation P1-UPGRADE et autres phases restent ouvertes ; pas de mesure RAM <15 Mo, de signature ni de nouvelle preuve matérielle |
 | 2026-10-09 | Candidat source 0.17.0 Windows-first P1-RAM/P1-RESTORE | En cours, non publié ; stable/latest reste v0.16.1 | Bornes et propriétaire natif implémentés ; [CI native `fe86151`](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38037123382) Windows/Linux/macOS ARM/Intel verte, propriétaires natifs sur Windows sans devices, PipeWire virtuel, ressources et limites dans Architecture | Modifications suivantes encore à qualifier ; aucune preuve physique microphone ou déni exclusif/ASIO, aucun autre lot clôturé |
-| 2026-10-10 | Détachement console et recovery legacy autorisé | Fix source, non publié ; récupération ciblée achevée | Régression pipes Windows reproduite puis corrigée sur fixture native ; UAC acceptée, ancien flag caméra déconnectée 1→0, reçu protégé fulfilled ; client medium reconstruit status exit 0 en 1,000 s, aucun blocked/pending/absent/unknown, garde inactive ; ACL inchangées, aucun changement micro ni capture ; fmt/Clippy/deux suites/release locaux verts | CI native de ces corrections avant intégration et tag ; test restreint admin→medium doit réellement s'exécuter sur runner admin ; mesures gardes sans conhost restantes |
+| 2026-10-10 | Détachement console et recovery legacy autorisé | Validé logiciel/natif, non publié ; récupération ciblée achevée | [CI native `078cdc7`](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38047504453) verte Windows/Linux/macOS ARM/Intel ; gardes sans conhost, EOF CLI correct, malformed peers, release explicite et cleanup ; test ACL admin→medium ; UAC acceptée, ancien flag caméra déconnectée 1→0, reçu fulfilled, client medium exit 0 ; aucune mutation micro/capture, ACL inchangées ; 161 lib +1 main, TUI sept langues locale et CI | Intégrer main et qualifier avant tag ; publier et vérifier les sept assets/provenance puis migrations publiques ; physical/ASIO non certifiés, 15 Mo non atteints, autres lots ouverts |

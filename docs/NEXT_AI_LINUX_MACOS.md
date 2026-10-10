@@ -309,10 +309,10 @@ historiques ni les limites matérielles.
   Roadmap actualisée ; P1-UPGRADE demeure partiel, aucune autre phase clôturée.
   Pas de mesure RAM <15 Mo, Linux ARM64, Homebrew/AUR/Winget ou contrôle nouveau.
 
-## Candidat source 0.17.0 — Windows-first, qualification en cours
+## Source 0.17.0 — Windows-first, qualification native validée
 
-P1-RAM/P1-RESTORE restent **En cours** jusqu'à CI native/helper qualification ;
-aucun tag/asset public ni signature/notarisation nouveau n'est revendiqué.
+P1-RAM/P1-RESTORE sont **Validés en logiciel/natif**, sans certification physique ;
+aucun tag/asset public ni signature/notarisation nouveau n'est encore revendiqué.
 Les liens et pins d'installation `v0.16.1` restent ceux du stable actuel.
 Homebrew/AUR/Winget/ARM64 et les autres lots de roadmap demeurent ouverts.
 Contrat détaillé : [Architecture candidate](ARCHITECTURE.md#candidate-0170-windows-first-protection-contract).
@@ -380,19 +380,23 @@ Contrat détaillé : [Architecture candidate](ARCHITECTURE.md#candidate-0170-win
   présent après cinq secondes ; fixture nettoyée sans accès audio physique.
   macOS : limitations candidates source seulement, pas nouvelle preuve physique.
 
-### Qualification restant à établir avant clôture
+### Qualification validée et limites restantes
 
-La [CI native `fe86151`](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38037123382)
-est verte sur Windows/Linux/macOS ARM et Intel : véritables propriétaires Windows
-sur runner sans devices, IPC fini, TUI multilingue, tray/menu, ressources et
-restauration simulée multi-endpoints. La modification suivante de détachement
-console a échoué sur les pipes capturés Windows ; Unix est resté vert. Le fix
-natif ferme les handles standard hérités et doit repasser toute la qualification.
-Le client medium lit désormais les métadonnées des parents protégés par requête
-nommée, sans élargir les ACL ; un test natif admin→medium vérifie lecture et refus
-de création de données. Les chiffres historiques ne qualifient pas ces nouveaux
-changements. Mesures et lacunes canoniques dans Architecture : **15 Mo non
-atteints**, environ 30 Mo comme référence et non seuil dur, coût des helpers et
-pages partagées explicite. Les scénarios simulés/virtuels et le runner vide ne
-certifient pas une protection physique ou un déni d'accès exclusif/ASIO.
+La [CI native `078cdc7`](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38047504453)
+est verte sur Windows/Linux/macOS ARM et Intel, après correction de la rétention
+des pipes : propriétaires Windows détachés sans conhost sur runner sans devices,
+IPC fini/malformed peers, TUI multilingue, tray/menu, ressources et restauration
+simulée multi-endpoints. Les deux suites Windows comprennent 161 tests lib +1
+main, un visuel ignoré ensuite exercé par le harness natif. Le test restreint
+admin→medium est passé ; les ACL restent inchangées. Recovery legacy ciblé UAC
+accepté et client medium status exit 0, aucune restauration pendante ou nouvelle
+UAC. La nouvelle TUI locale sept langues a également terminé exit 0.
+
+Mesures et lacunes canoniques dans Architecture : **15 Mo non atteints**, gardes
+Windows sans console à 27,959 Mo médiane soutenue et pic contrôle/démarrage
+50,991 Mo ; environ 30 Mo n'est pas un seuil dur. RSS partagé, enfants brefs et
+gaps restent explicites. Les scénarios simulés/virtuels et le runner vide ne
+certifient pas une protection physique ou un déni exclusif/ASIO. Intégration main,
+CI avant tag, publication et migrations depuis les assets publics restent à
+achever ; Homebrew/AUR/Winget/Linux ARM64 et les autres lots restent ouverts.
 

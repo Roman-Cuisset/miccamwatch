@@ -45,8 +45,8 @@ The [latest native dry run 37429480145](https://github.com/Roman-Cuisset/miccamw
 
 **Current public stable remains immutable `v0.16.1`.** The following describes
 candidate source, not an available release, a hardware certification or a
-change to the installation pins below. P1-RAM and P1-RESTORE remain in progress
-until native CI/helper qualification. Linux/macOS controls retain their honest
+change to the installation pins below. P1-RAM and P1-RESTORE are software/native
+qualified; publication is pending. Linux/macOS controls retain their honest
 one-shot scopes; they do not inherit the Windows background protection owner.
 
 - **Microphone:** requested manual protection, effective SDK endpoint mute and
@@ -100,9 +100,9 @@ notifications and caches are bounded. These bounds are not a claim of RSS below
 **15,000,000 B**, the soft target; approximately 30 MB is a reference, not a hard
 cutoff.
 
-**Local evidence only:** native Windows strict feature Clippy and two native
-unit suites passed (160 library + 1 main feature tests, 1 ignored visual test),
-including the missing-owner status and update-reservation corrections.
+**Native evidence:** Windows strict feature Clippy and both native unit suites
+passed (161 library +1 main tests, 1 ignored visual test), including missing-owner
+status, protected medium-reader and update-reservation regressions.
 Eight real native IPC tests passed. Real ConPTY `top` exercised all seven
 languages at 120/150/40/20 columns, refresh, mouse and quit; the rendered French
 150-column view was visually inspected with six bordered controls on one row.
@@ -111,16 +111,19 @@ a completed command open; the detached, non-inheriting launch released them
 in 0.282 seconds while its child remained alive for five seconds.
 Read-only resource sampling completed with **15 MB unmet**; the latest baseline/
 candidate comparison and sampling limits are in the linked architecture table.
-No active guard/tray was included in that local resource run. Native CI for
-source `fe86151` passed on Windows, Linux and both macOS architectures, including
-real Windows guards on a runner without capture devices and whole-tree resource
-sampling. Later console-detachment changes failed the Windows captured-pipe
-scenario and are being requalified after a native fix; that earlier green run
-does not qualify the newer source. A medium-integrity client metadata-read fix
-preserves the existing protected-folder permissions. Physical microphone
-protection/restoration remains unqualified. A private Linux PipeWire fixture
-proved an external unmute remained after five seconds and was cleaned; that is
-not physical audio proof. macOS has no new physical validation.
+No active guard/tray was included in that local resource run.
+[Native CI `078cdc7`](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38047504453)
+passed on Windows, Linux and both macOS architectures. Real Windows guards
+survived CLI/top exit on a runner without capture devices, rejected foreign scope
+and malformed peers, then retired on explicit release with clean teardown.
+Their whole-tree sustained RSS median was **27.959 MB**, sampled control/startup
+peak **50.991 MB**, without the former console host; these are different phases,
+not a promise to stay below 30 MB. The protected medium-reader regression passed;
+existing folder permissions were not broadened. The approved one-target legacy
+camera recovery completed, followed by a normal medium-client status, no new UAC.
+Physical microphone protection/restoration remains unqualified. A private Linux
+PipeWire fixture proved an external unmute remained after five seconds and was
+cleaned; that is not physical audio proof. macOS has no new physical validation.
 See [candidate architecture and proof
 boundaries](docs/ARCHITECTURE.md#candidate-0170-windows-first-protection-contract).
 

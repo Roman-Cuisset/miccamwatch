@@ -2483,13 +2483,6 @@ mod tests {
 
     #[test]
     fn medium_reader_inspects_shared_metadata_but_cannot_create_journal_data() -> Result<()> {
-        if token_identity(true).is_err() {
-            // Administrative fixture runs in hosted native CI, not on user hardware.
-            return Ok(());
-        }
-        let directory = tempfile::tempdir()?;
-        let shared = directory.path().join("shared");
-        create_protected_directory(&shared, None, true)?;
         let mut source_token = ptr::null_mut();
         unsafe {
             check(OpenProcessToken(
@@ -2499,6 +2492,24 @@ mod tests {
             ))?;
         }
         let source_token = Handle::new(source_token)?;
+        let (mut elevated, mut needed) = (0u32, 0u32);
+        unsafe {
+            check(GetTokenInformation(
+                source_token.0,
+                20,
+                (&mut elevated as *mut u32).cast(),
+                size_of::<u32>() as u32,
+                &mut needed,
+            ))?;
+        }
+        if elevated == 0 {
+            // Administrative fixture runs in hosted native CI, not on user hardware.
+            return Ok(());
+        }
+        token_identity(true)?;
+        let directory = tempfile::tempdir()?;
+        let shared = directory.path().join("shared");
+        create_protected_directory(&shared, None, true)?;
         let mut administrator = ptr::null_mut();
         let mut medium = ptr::null_mut();
         unsafe {

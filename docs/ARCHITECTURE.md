@@ -689,6 +689,34 @@ image/birth-verified native process handle proved it was still alive afterward
 and later exited 0. The corrected helper path needs actual hosted qualification;
 do not project savings or replace the failed result with that fixture.
 
+The [full native requalification `078cdc7`](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38047504453)
+passed on all four targets, including actual detached Windows owners, captured
+CLI pipes, explicit retirement and clean teardown. Foreign scope could not
+release the owner; oversized/malformed peers recovered in 0.032/0.031 s and a
+held-open peer in 4.047 s. No `conhost.exe` was observed in the guard product tree.
+The measured guard-only sustained window still includes verification/control
+commands; sampling gaps reached 62 ms, so no guaranteed 50 ms cadence is claimed.
+
+| Windows hosted phase / source | Sustained median MB | Sustained p95 MB | Sampled concurrent peak MB | Observed whole-scenario CPU seconds |
+| --- | --- | --- | --- | --- |
+| Both guards + console host, `fe86151` | 39.748 | 39.748 | 62.886 | — |
+| Both guards, no console host, `078cdc7` | 27.959 | 27.959 | 50.991 | 1.156 |
+| Baseline v0.16.1 watch idle, same `078cdc7` runner | 12.726 | 12.743 | 12.923 | 0.844 |
+| Candidate watch idle, `078cdc7` | 14.901 | 14.905 | 15.135 | 0.750 |
+| Baseline v0.16.1 top idle, same runner | 13.730 | 13.730 | 13.926 | 0.938 |
+| Candidate top idle, `078cdc7` | 15.892 | 15.901 | 16.089 | 1.031 |
+| Baseline v0.16.1 top burst / slow consumer, same runner | 13.799 | 13.799 | 14.017 | 1.656 |
+| Candidate top burst / slow consumer, `078cdc7` | 15.929 | 15.946 | 16.372 | 1.578 |
+| Baseline v0.16.1 tray, same runner | 15.450 | 15.450 | 27.967 | 0.453 |
+| Candidate tray, `078cdc7` | 16.519 | 16.519 | 24.183 | 0.453 |
+
+Decimal MB and shared-page-counting caveats apply. Guard steady-window observed
+CPU was 0.015625 s; the table's CPU includes control/startup/release instead.
+Current Windows budget qualification remains **unmet**, not sub-15 MB. Status
+completed in 0.031–0.047 s but had only one/two RSS samples; OS highwater and
+unobserved transient costs still matter. This empty runner does not supersede
+the local populated-machine measurements or certify hardware enforcement.
+
 An approved one-target legacy recovery cleared the disconnected camera's native
 disabled-configuration flag from 1 to 0. Its protected receipt is fulfilled,
 generation 1, requested=false, with no owned entries. The medium client then
@@ -705,8 +733,11 @@ inactive, no stderr or new UAC. Only the previously authorized disconnected
 camera's historical flag was changed; no microphone mutation or capture.
 Local fmt, both native unit suites (161 library +1 main, 1 visual ignored),
 strict feature Clippy and release build passed. The new administrative
-restricted-medium fixture returns without impersonation on this medium host;
-its actual execution must still be established on the hosted administrator.
+restricted-medium fixture returns without impersonation on this medium host.
+It passed in both hosted native Windows unit suites, with the administrator
+fixture enabled; the guard harness separately verified hosted administrator
+authority and zero-device SDK inventories. Its skip checks now interrogate
+TokenElevation explicitly and propagate unexpected native errors.
 
 Linux's real owned virtual PipeWire capture remained identifiable after adding
 16,384 irrelevant objects (3,080,587 output bytes). Malformed input, retained
