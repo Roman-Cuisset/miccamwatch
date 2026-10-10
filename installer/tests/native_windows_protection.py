@@ -141,7 +141,7 @@ def main():
     tracked_resources = set()
     terminal = None
 
-    def command(arguments, check=True, environment=None):
+    def command(arguments, check=True, environment=None, allowed=(0,)):
         child = subprocess.Popen([str(args.binary), *arguments], env=env if environment is None else environment, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         with sampler.lock:
             row = backend.read_handle(child._handle, child.pid, name="mcw.exe")
@@ -157,11 +157,13 @@ def main():
             child.wait(timeout=10)  # Do not wait again for an inherited pipe's EOF.
             raise
         if check:
-            assert child.returncode == 0, f"CLI {arguments} failed: {stderr.decode('utf-8', errors='replace')[:8192]}"
+            assert child.returncode in allowed, f"CLI {arguments} exited {child.returncode}: {stderr.decode('utf-8', errors='replace')[:8192]}"
         return stdout
 
     def status():
-        data = json.loads(command(["status", "--json", "--no-color"]))["protection"]
+        # Status 1 means observed access, not a command failure; 2 means collector
+        # degradation. Complete native protection data below must still be valid.
+        data = json.loads(command(["status", "--json", "--no-color"], allowed=(0, 1, 2)))["protection"]
         assert data["microphone_error"] is None and data["camera_error"] is None, "Native observation unavailable"
         assert data["microphone"]["endpoint_count"] == 0, "Refusing microphone mutation on a machine with input endpoints"
         assert data["camera"]["present_total"] == 0 and data["camera"]["unknown_devices"] == 0, "Refusing camera mutation on a machine with present/unknown cameras"

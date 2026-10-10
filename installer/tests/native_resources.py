@@ -41,8 +41,11 @@ DURATION = 20.0
 
 
 def sha256(path):
+    digest = hashlib.sha256()
     with path.open("rb") as stream:
-        return hashlib.file_digest(stream, "sha256").hexdigest()
+        while chunk := stream.read(65536):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def record(pid, parent, identity, name, rss, cpu, highwater=None):

@@ -68,13 +68,13 @@ explicites sans faux STOP ; files UI/notifications/caches bornés. `top` conserv
 une seule rangée horizontale de six boutons, avec représentation compacte aux
 petites largeurs. Cela corrige les risques historiques, sans certifier le RSS.
 
-**Preuve locale, pas CI complète :** rapport Windows read-only terminé,
-functional/completed true, cible **15 Mo non atteinte**. Status OSpeak ≈18,34 Mo ;
-watch médiane/pic 17,580032/18,362368 Mo ; top 18,1248/18,993152 Mo ; burst
-18,214912/19,079168 Mo. Aucun garde/tray actif dans cette mesure ; gaps maximaux
-63–78 ms, enfants/pics très brefs potentiellement manqués. Toute l'arborescence
-avec gardes/helpers, RSS partagée, CPU/latence et scénarios natifs restent à
-qualifier ; ne pas annoncer « optimisé sous 15 Mo ».
+**Preuve locale, pas CI complète :** comparaison Windows read-only `9fc99dd`/
+stable terminée, functional/completed true, cible **15 Mo non atteinte**.
+RAM/CPU/latence et limites dans la
+[table canonique](ARCHITECTURE.md#local-candidate-evidence-and-remaining-qualification).
+Aucun garde/tray actif dans cette mesure ; gaps candidats ≈63 ms, enfants/pics
+brefs potentiellement manqués. Tout l'arbre avec gardes/helpers et scénarios
+natifs reste à qualifier ; ne pas annoncer « optimisé sous 15 Mo ».
 
 **Validation :** baseline stable/pic et latence sur les trois OS, gros graphes et rafales d'événements, UI lente, enfant bloqué/sortie excessive ; aucune accumulation et aucun STOP inventé en cas de limite. Toute impossibilité de respecter le budget doit être remontée avant ajout de fonctions, pas compensée par une mesure plus flatteuse.
 
@@ -106,16 +106,16 @@ Fenêtre brève d'arrivée, restart/veto/unknown restent explicites. IPC fixe li
 SID/session/data-dir hash et génération native, borné, sans chemins/devices
 arbitraires ; délégation admin alternatif QUERY-only.
 
-**Preuves locales :** Clippy strict feature, deux suites Windows (156 lib +1 main,
-1 visuel ignoré) et huit tests IPC natifs réussis ; ConPTY sept langues,
-120/150/40/20 colonnes, souris/refresh/quit et screenshot FR150 inspecté. La
-dernière correction d'absence normale du helper sans intention n'est pas encore
-rebâtie. Un micro actif annonçant hardware mute et une caméra présents observés
-en lecture seule, aucune mutation physique. Release explicite et restauration
-achevée exigés avant remplacement binaire ; ne jamais relâcher implicitement
-pour updater. Ces résultats ne clôturent pas la qualification native/matérielle.
+**Preuves locales :** source `6bc7fd0`, Clippy strict feature, deux suites Windows
+(160 lib +1 main, 1 visuel ignoré), build release et huit tests IPC natifs réussis ;
+ConPTY sept langues, 120/150/40/20 colonnes, souris/refresh/quit et screenshot
+FR150 inspecté. Status d'absence normale et réservations update rebâtis.
+Fixture native : suppression de la rétention des pipes du CLI terminé par le
+garde détaché, sans aucune mutation physique. Inventaire micro/caméra lu seul.
+Release explicite et restauration achevée exigés avant remplacement ; jamais
+de release implicite pour updater. Qualification CI/helpers/matérielle restante.
 
-**Sécurité update candidate (source, pas encore qualifiée) :** portable Windows
+**Sécurité update candidate (tests natifs locaux, CI complète pendante) :** portable Windows
 réserve request locks et ressources natives micro/caméra avant stop/swap,
 refuse propriétaire actif/étranger, intention/token, release-pending ou journal
 non fiable. Readiness strictement read-only sans release/helper/SDK. Réservation

@@ -259,7 +259,7 @@ enum Action {
 }
 
 enum WorkerCommand {
-    Camera(Option<CameraPrivacyState>),
+    Camera(CameraPrivacyState),
     Mute,
     Kill { pid: u32, instance: String },
 }
@@ -289,9 +289,7 @@ impl ActionWorker {
                 let response = match command {
                     WorkerCommand::Camera(desired) => {
                         let result = (|| {
-                            if let Some(desired) = desired {
-                                privacy::set_camera_state(desired)?;
-                            }
+                            privacy::set_camera_state(desired)?;
                             read_camera()
                         })();
                         WorkerResponse::Camera(result)
@@ -343,7 +341,6 @@ struct Observation {
     snapshot: Result<Snapshot>,
     devices: Option<Result<Vec<Device>>>,
     mute: Option<(Instant, Result<MicObservation>)>,
-    #[cfg(windows)]
     camera: Option<(Instant, Result<CameraObservation>)>,
 }
 
@@ -359,7 +356,6 @@ fn observe(policy: Policy) -> (SyncSender<()>, Receiver<Observation>) {
                     snapshot: Err(error),
                     devices: None,
                     mute: None,
-                    #[cfg(windows)]
                     camera: None,
                 });
                 return;
@@ -377,11 +373,12 @@ fn observe(policy: Policy) -> (SyncSender<()>, Receiver<Observation>) {
             let mute = Some((read_started, read_microphone(&monitor)));
             #[cfg(windows)]
             let camera = Some((Instant::now(), read_camera()));
+            #[cfg(not(windows))]
+            let camera = refresh_controls.then(|| (Instant::now(), read_camera()));
             let observation = Observation {
                 snapshot,
                 devices,
                 mute,
-                #[cfg(windows)]
                 camera,
             };
             if updates.send(observation).is_err() {
@@ -430,7 +427,6 @@ struct TuiState {
     microphone_protection: Option<MicObservation>,
     #[cfg(windows)]
     camera_observation: Option<CameraObservation>,
-    #[cfg(windows)]
     camera_changed_at: Option<Instant>,
     #[cfg(windows)]
     protection_feedback: String,
@@ -626,12 +622,6 @@ fn handle_action(
                 Color::Red,
             ),
         }
-        if state.action_pending.is_none() && !state.camera_pending {
-            match worker.send(WorkerCommand::Camera(None)) {
-                Ok(()) => state.camera_pending = true,
-                Err(error) => state.message(format!("{error:#}"), Color::Red),
-            }
-        }
         return Ok(false);
     }
     if state.action_pending.is_some() || (state.camera_pending && action != Action::Quit) {
@@ -696,7 +686,7 @@ fn handle_action(
                 return Ok(false);
             }
             state.camera_error = None;
-            WorkerCommand::Camera(Some(desired))
+            WorkerCommand::Camera(desired)
         }
         Action::Mute => WorkerCommand::Mute,
         Action::Kill => {
@@ -849,7 +839,6 @@ fn tui_loop(
     lang: Language,
 ) -> Result<()> {
     let worker = ActionWorker::new(policy.clone());
-    worker.send(WorkerCommand::Camera(None))?;
     let (refresh, observations) = observe(policy);
     let mut state = TuiState {
         lang,
@@ -864,7 +853,6 @@ fn tui_loop(
         microphone_protection: None,
         #[cfg(windows)]
         camera_observation: None,
-        #[cfg(windows)]
         camera_changed_at: None,
         #[cfg(windows)]
         protection_feedback: lang.protection_limit().to_owned(),
@@ -888,7 +876,7 @@ fn tui_loop(
         operation_error: None,
         camera_state: None,
         camera_error: None,
-        camera_pending: true,
+        camera_pending: false,
         action_pending: None,
         controls_error: None,
         buttons: Vec::with_capacity(ACTIONS.len()),
@@ -903,16 +891,13 @@ fn tui_loop(
                 match response {
                     WorkerResponse::Camera(result) => {
                         state.camera_pending = false;
+                        state.camera_changed_at = Some(Instant::now());
                         match result {
                             Ok(camera) => {
                                 if completed_action.is_some() {
                                     state.operation_error = None;
                                 }
                                 state.apply_camera(camera);
-                                #[cfg(windows)]
-                                {
-                                    state.camera_changed_at = Some(Instant::now());
-                                }
                                 state.camera_error = None;
                                 state.message(
                                     format!(
@@ -1028,7 +1013,6 @@ fn tui_loop(
                     }
                 }
             }
-            #[cfg(windows)]
             if let Some((read_started, camera)) = observation.camera
                 && !state.camera_pending
                 && state
@@ -1036,7 +1020,10 @@ fn tui_loop(
                     .is_none_or(|changed| read_started >= changed)
             {
                 match camera {
-                    Ok(camera) => state.apply_camera(camera),
+                    Ok(camera) => {
+                        state.apply_camera(camera);
+                        state.camera_error = None;
+                    }
                     Err(error) => state.camera_error = Some(format!("{error:#}")),
                 }
             }
@@ -2588,7 +2575,6 @@ mod tests {
             microphone_protection: None,
             #[cfg(windows)]
             camera_observation: None,
-            #[cfg(windows)]
             camera_changed_at: None,
             #[cfg(windows)]
             protection_feedback: lang.protection_limit().to_owned(),

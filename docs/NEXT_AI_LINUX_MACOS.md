@@ -363,18 +363,19 @@ Contrat détaillé : [Architecture candidate](ARCHITECTURE.md#candidate-0170-win
   deadlines) ; dépassement/blocage/erreur = santé explicite et lacune, pas STOP.
   Files UI/notifications/caches bornés ; six boutons TUI dans une seule rangée
   horizontale, représentation compacte en terminal étroit.
-- Windows local : Clippy strict feature et deux suites natives réussis
-  (156 lib +1 main, 1 visuel ignoré), huit tests IPC natifs réels réussis.
-  ConPTY sept langues à 120/150/40/20 colonnes avec refresh/souris/quit ;
-  hitbox hors Quit à 150 colonnes, rendu FR150 inspecté visuellement sans overflow.
-  Dernière correction de status (helper absent normal seulement sans intention/
-  token/conflit, autres erreurs natives conservées) pas encore rebâtie.
+- Windows local source `6bc7fd0` : Clippy strict feature, deux suites natives
+  et build release réussis (160 lib +1 main, 1 visuel ignoré), huit tests IPC
+  natifs réels réussis. ConPTY sept langues à 120/150/40/20 colonnes avec
+  refresh/souris/quit ; hitbox hors Quit à 150 colonnes et rendu FR150 inspecté.
+  Absence normale du helper, erreurs natives et réservations update rebâties.
+  Fixture native isolée : pipes du parent terminé retenus jusqu'à la fin d'un
+  enfant de cinq secondes ; lancement sans héritage → EOF en 0,282 seconde.
 - Inventaire Windows read-only : un micro actif annonçant hardware mute et une
-  caméra présente. Aucune mutation de device/endpoints ni capture physique
-  nouvelle. Rapport ressources functional/completed true : **15 Mo non atteints**.
-  Status OSpeak ≈18,34 Mo ; watch médiane/pic 17,580032/18,362368 Mo ; top
-  18,1248/18,993152 Mo ; burst 18,214912/19,079168 Mo. Aucun garde/tray actif ;
-  gaps maximaux 63–78 ms, pas promesse ≤50 ms ou observation de tout pic bref.
+  caméra présente ; aucune mutation physique ni capture nouvelle. Dernière
+  comparaison ressources `9fc99dd`/stable functional/completed true :
+  **15 Mo non atteints**, sans garde/tray actif. Chiffres RAM/CPU/latence et
+  lacunes d'échantillonnage dans la
+  [table canonique](ARCHITECTURE.md#local-candidate-evidence-and-remaining-qualification).
 - Linux : fixture PipeWire privée réellement exercée, unmute externe encore
   présent après cinq secondes ; fixture nettoyée sans accès audio physique.
   macOS : limitations candidates source seulement, pas nouvelle preuve physique.

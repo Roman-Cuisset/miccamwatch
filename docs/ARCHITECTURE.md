@@ -500,6 +500,11 @@ the owner. Alternate-administrator UAC delegation permits QUERY-only native
 process/token inspection needed to validate the invoker; it grants neither
 token use/adjustment, termination nor general privileged authority.
 
+The microphone owner starts detached with native handle inheritance disabled.
+Redirecting Rust `Command` standard streams to NUL is insufficient on Windows:
+other inherited caller pipes can keep a completed CLI's output open. Operational
+scope files and locks stay outside the directory uploaded as native CI evidence.
+
 Updates must not implicitly release protection to replace a locked executable.
 Explicitly release microphone and camera intent and complete pending restoration
 before replacing binaries, including portable, MSI/package-manager or manual
@@ -548,12 +553,14 @@ bounds do not prove every native OS memory/latency budget.
 
 ### Local candidate evidence and remaining qualification
 
-Observed in the private Windows clone: strict feature Clippy and both native
-unit suites passed, with 156 library + 1 main feature tests and 1 ignored visual
-test. Eight real native IPC tests passed after queued-overlapped ownership and
-bounded response-ACK fixes. The subsequent missing-helper normal-status/native
-error-preservation correction has **not yet been rebuilt**; prior test results
-do not certify that final edit.
+Observed in the private Windows clone at source `6bc7fd0`: strict feature Clippy,
+both native unit suites and the optimized build passed, with 160 library + 1 main
+feature tests and 1 ignored visual test. This includes normal missing-owner status,
+native error preservation and portable-update reservations. Eight real native IPC
+tests passed after queued-overlapped ownership and bounded response-ACK fixes.
+An isolated native process fixture reproduced the completed parent's pipes
+remaining open until its five-second child exited. The non-inheriting native
+launch released both pipes in 0.282 seconds with the child still alive.
 
 Actual native ConPTY `top` passed seven languages at 120/150/40/20 columns with
 refresh, mouse and quit. The outside-Quit hitbox was tested at 150 columns;
@@ -562,13 +569,31 @@ bordered controls on one row, no overflow. The read-only host inventory has one
 active microphone advertising hardware mute and one present camera. No
 physical endpoint/capture/device setting was changed by this candidate proof.
 
-The read-only canonical resource report completed with functional/completed
-true, but **15,000,000 B is unmet**. Approximate status OS peak was 18.34 MB;
-watch median/peak 17.580032/18.362368 MB; top 18.1248/18.993152 MB;
-burst 18.214912/19.079168 MB (decimal MB). No active protection guard or tray was
-included in this local run. Maximum candidate sample gaps were 63–78 ms, not
-at most 50 ms; short-lived child lifetimes and between-sample peaks may escape
-observation. OS peak and sampled stable/peak values are not interchangeable.
+The latest completed read-only local resource comparison used the `9fc99dd`
+candidate binary (SHA-256 `0eba766505948a24a3b443886824bbcd71588cb5143af1dbca8bcf93dfc29c21`)
+and checksum-verified immutable `v0.16.1`. Functional/completed were true;
+**15,000,000 B is unmet**. Values below are decimal MB; CPU is process-tree
+CPU seconds over the approximately 20-second sustained interval after two
+seconds of warm-up. No active protection guard or tray was included.
+
+| Product / profile | Sustained RSS median MB | RSS p95 MB | Sampled concurrent peak MB | OS root peak MB | Sustained CPU seconds |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| v0.16.1 watch idle | 18.059 | 18.530 | 23.712 | 24.089 | 2.172 |
+| 0.17.0 watch idle | 20.054 | 20.681 | 25.244 | 26.075 | 1.906 |
+| v0.16.1 top idle | 19.050 | 19.669 | 23.970 | 25.133 | 1.859 |
+| 0.17.0 top idle | 21.029 | 21.271 | 26.743 | 27.173 | 1.891 |
+| v0.16.1 top refresh burst / slow consumer | 19.186 | 19.657 | 24.912 | 25.244 | 2.875 |
+| 0.17.0 top refresh burst / slow consumer | 21.189 | 21.778 | 27.066 | 27.316 | 2.641 |
+
+Three status runs had OS root peaks of 21.365–21.430 MB for the baseline
+and 21.578–21.692 MB for the candidate, with complete validated JSON observed
+in 0.734–0.750 seconds for the candidate. Top's first native output arrived in
+0.125 seconds; the rendered Quit control was validated after the harness's
+three-second drain, not a measured first-frame/physical-event deadline.
+Watch exposes no readiness protocol; survival is not proof of a first scan.
+Maximum candidate sampling gaps were approximately 63 ms, not at most 50 ms.
+Short-lived children and between-sample peaks may escape observation; OS peak,
+sampled concurrent peak and sustained values are not interchangeable.
 
 Qualification must account for the entire product process tree, including
 native guard/tray/embedded helper and transient `pw-dump`/sound children, and

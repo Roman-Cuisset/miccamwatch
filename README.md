@@ -101,21 +101,22 @@ notifications and caches are bounded. These bounds are not a claim of RSS below
 cutoff.
 
 **Local evidence only:** native Windows strict feature Clippy and two native
-unit suites passed (156 library + 1 main feature tests, 1 ignored visual test);
-eight real native IPC tests passed. Real ConPTY `top` exercised all seven
+unit suites passed (160 library + 1 main feature tests, 1 ignored visual test),
+including the missing-owner status and update-reservation corrections.
+Eight real native IPC tests passed. Real ConPTY `top` exercised all seven
 languages at 120/150/40/20 columns, refresh, mouse and quit; the rendered French
 150-column view was visually inspected with six bordered controls on one row.
-The final missing-owner status correction has not yet been rebuilt. Read-only
-resource sampling completed with **15 MB unmet**: status OS peak approximately
-18.34 MB; watch median/peak 17.580032/18.362368 MB; top
-18.1248/18.993152 MB; burst 18.214912/19.079168 MB. No active guard/tray was
-included in this local run; maximum sample gaps were 63–78 ms, so short-lived
-children or peaks may be missed. Full product-tree/shared-RSS accounting,
-guard-inclusive hosted Windows runs, full native OS CI and physical protection/
-restoration qualification remain pending. A private Linux PipeWire fixture
-proved an external unmute remained after five seconds and was cleaned; that is
-not physical audio proof. macOS has only source-scoped limitations for this
-candidate, not new physical validation. See [candidate architecture and proof
+An isolated native process fixture reproduced inherited caller pipes keeping
+a completed command open; the detached, non-inheriting launch released them
+in 0.282 seconds while its child remained alive for five seconds.
+Read-only resource sampling completed with **15 MB unmet**; the latest baseline/
+candidate comparison and sampling limits are in the architecture table below.
+No active guard/tray was included in that local resource run. Guard-inclusive
+hosted Windows runs, full native OS CI and physical protection/restoration
+qualification remain pending. A private Linux PipeWire fixture proved an
+external unmute remained after five seconds and was cleaned; that is not
+physical audio proof. macOS has source-scoped limitations, not new physical
+validation. See [candidate architecture and proof
 boundaries](docs/ARCHITECTURE.md#candidate-0170-windows-first-protection-contract).
 
 ## Commands
