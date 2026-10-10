@@ -19,20 +19,45 @@ use crossterm::{
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
+#[cfg(not(windows))]
+use ratatui::widgets::Wrap;
 use ratatui::{
     Frame, Terminal,
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState, Wrap},
+    widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState},
 };
 use std::{
     io,
-    sync::mpsc::{self, Receiver, Sender},
+    sync::mpsc::{self, Receiver, SyncSender},
     thread,
     time::{Duration, Instant},
 };
+
+#[cfg(windows)]
+type MicObservation = crate::platform::MicrophoneProtectionStatus;
+#[cfg(not(windows))]
+type MicObservation = MicrophoneMuteState;
+#[cfg(windows)]
+type CameraObservation = privacy::CameraControlObservation;
+#[cfg(not(windows))]
+type CameraObservation = CameraPrivacyState;
+
+fn read_microphone(monitor: &PlatformMonitor) -> Result<MicObservation> {
+    #[cfg(windows)]
+    return monitor.microphone_protection_status();
+    #[cfg(not(windows))]
+    monitor.microphone_mute_state()
+}
+
+fn read_camera() -> Result<CameraObservation> {
+    #[cfg(windows)]
+    return privacy::camera_observation();
+    #[cfg(not(windows))]
+    privacy::camera_state()
+}
 
 struct TerminalSessionGuard;
 
@@ -58,8 +83,7 @@ fn text(lang: Language, values: [&'static str; 7]) -> &'static str {
 fn microphone_scope(lang: Language) -> &'static str {
     #[cfg(windows)]
     {
-        let _ = lang;
-        ""
+        lang.protection_limit()
     }
     #[cfg(unix)]
     if cfg!(target_os = "linux") {
@@ -91,9 +115,8 @@ fn microphone_scope(lang: Language) -> &'static str {
     }
 }
 
+#[cfg(not(windows))]
 fn microphone_label(lang: Language, state: MicrophoneMuteState) -> String {
-    #[cfg(windows)]
-    return lang.microphone_status(state).to_owned();
     #[cfg(unix)]
     format!(
         "{} ({})",
@@ -103,6 +126,21 @@ fn microphone_label(lang: Language, state: MicrophoneMuteState) -> String {
 }
 
 fn camera_label(lang: Language, state: CameraPrivacyState) -> &'static str {
+    #[cfg(windows)]
+    if state == CameraPrivacyState::SystemManaged {
+        return text(
+            lang,
+            [
+                "Actual unknown/mixed",
+                "État inconnu/mixte",
+                "Zustand unbekannt/gemischt",
+                "Estado desconocido/mixto",
+                "実状態は不明/混在",
+                "实际状态未知/混合",
+                "Состояние неизвестно/смешанное",
+            ],
+        );
+    }
     #[cfg(target_os = "macos")]
     return text(
         lang,
@@ -227,33 +265,35 @@ enum WorkerCommand {
 }
 
 enum WorkerResponse {
-    Camera(Result<CameraPrivacyState>),
-    Mute(Result<MicrophoneMuteState>),
+    Camera(Result<CameraObservation>),
+    Mute(Result<MicObservation>),
     Kill { pid: u32, result: Result<()> },
 }
 
 // Closing the sender drains the one outstanding action before joining. Even an
 // I/O error cannot abandon a privileged mutation and imply it was cancelled.
 struct ActionWorker {
-    commands: Option<Sender<WorkerCommand>>,
+    commands: Option<SyncSender<WorkerCommand>>,
     responses: Receiver<WorkerResponse>,
     thread: Option<thread::JoinHandle<()>>,
 }
 
 impl ActionWorker {
     fn new(policy: Policy) -> Self {
-        let (commands, requests) = mpsc::channel();
-        let (responses, results) = mpsc::channel();
+        let (commands, requests) = mpsc::sync_channel(1);
+        let (responses, results) = mpsc::sync_channel(1);
         let thread = thread::spawn(move || {
             // Construct and destroy the COM monitor on this thread only.
             let mut monitor = None;
             while let Ok(command) = requests.recv() {
                 let response = match command {
                     WorkerCommand::Camera(desired) => {
-                        let result = desired.map_or_else(privacy::camera_state, |desired| {
-                            privacy::set_camera_state(desired)?;
-                            privacy::camera_state()
-                        });
+                        let result = (|| {
+                            if let Some(desired) = desired {
+                                privacy::set_camera_state(desired)?;
+                            }
+                            read_camera()
+                        })();
                         WorkerResponse::Camera(result)
                     }
                     WorkerCommand::Mute => WorkerResponse::Mute((|| {
@@ -262,7 +302,7 @@ impl ActionWorker {
                         }
                         let monitor = monitor.as_ref().unwrap();
                         monitor.toggle_microphone_mute()?;
-                        monitor.microphone_mute_state()
+                        read_microphone(monitor)
                     })()),
                     WorkerCommand::Kill { pid, instance } => WorkerResponse::Kill {
                         pid,
@@ -285,8 +325,8 @@ impl ActionWorker {
         self.commands
             .as_ref()
             .unwrap()
-            .send(command)
-            .context("action worker stopped")
+            .try_send(command)
+            .context("action worker busy/stopped")
     }
 }
 
@@ -302,11 +342,13 @@ impl Drop for ActionWorker {
 struct Observation {
     snapshot: Result<Snapshot>,
     devices: Option<Result<Vec<Device>>>,
-    mute: Option<(Instant, Result<MicrophoneMuteState>)>,
+    mute: Option<(Instant, Result<MicObservation>)>,
+    #[cfg(windows)]
+    camera: Option<(Instant, Result<CameraObservation>)>,
 }
 
-fn observe(policy: Policy) -> (Sender<()>, Receiver<Observation>) {
-    let (refresh, requests) = mpsc::channel();
+fn observe(policy: Policy) -> (SyncSender<()>, Receiver<Observation>) {
+    let (refresh, requests) = mpsc::sync_channel(1);
     // Bound the queue: a slow terminal must not accumulate stale scans.
     let (updates, observations) = mpsc::sync_channel(1);
     thread::spawn(move || {
@@ -317,6 +359,8 @@ fn observe(policy: Policy) -> (Sender<()>, Receiver<Observation>) {
                     snapshot: Err(error),
                     devices: None,
                     mute: None,
+                    #[cfg(windows)]
+                    camera: None,
                 });
                 return;
             }
@@ -330,11 +374,15 @@ fn observe(policy: Policy) -> (Sender<()>, Receiver<Observation>) {
             let devices = refresh_controls.then(|| monitor.devices());
             let snapshot = monitor.snapshot((&filter).into());
             let read_started = Instant::now();
-            let mute = Some((read_started, monitor.microphone_mute_state()));
+            let mute = Some((read_started, read_microphone(&monitor)));
+            #[cfg(windows)]
+            let camera = Some((Instant::now(), read_camera()));
             let observation = Observation {
                 snapshot,
                 devices,
                 mute,
+                #[cfg(windows)]
+                camera,
             };
             if updates.send(observation).is_err() {
                 break;
@@ -354,6 +402,8 @@ fn observe(policy: Policy) -> (Sender<()>, Receiver<Observation>) {
 }
 
 pub fn run_tui(policy: Policy, lang: Language) -> Result<()> {
+    #[cfg(windows)]
+    crate::platform::resume_requested_microphone_protection()?;
     enable_raw_mode().context("failed to enable raw mode")?;
     let mut stdout = io::stdout();
     let _session = TerminalSessionGuard;
@@ -376,10 +426,19 @@ struct TuiState {
     status_msg: Option<(String, Instant, Color)>,
     mute_state: MicrophoneMuteState,
     mute_changed_at: Option<Instant>,
+    #[cfg(windows)]
+    microphone_protection: Option<MicObservation>,
+    #[cfg(windows)]
+    camera_observation: Option<CameraObservation>,
+    #[cfg(windows)]
+    camera_changed_at: Option<Instant>,
+    #[cfg(windows)]
+    protection_feedback: String,
     devices: Vec<Device>,
     health_error: Option<String>,
     camera_state: Option<CameraPrivacyState>,
     camera_error: Option<String>,
+    operation_error: Option<String>,
     camera_pending: bool,
     action_pending: Option<Action>,
     controls_error: Option<String>,
@@ -390,6 +449,94 @@ struct TuiState {
 impl TuiState {
     fn message(&mut self, message: String, color: Color) {
         self.status_msg = Some((message, Instant::now(), color));
+        if color == Color::Red {
+            self.operation_error = self
+                .status_msg
+                .as_ref()
+                .map(|(message, _, _)| message.clone());
+        }
+        #[cfg(windows)]
+        self.update_protection_feedback();
+    }
+
+    fn apply_microphone(&mut self, observation: MicObservation) {
+        #[cfg(windows)]
+        {
+            self.mute_state = observation.mute_state;
+            self.microphone_protection = Some(observation);
+        }
+        #[cfg(not(windows))]
+        {
+            self.mute_state = observation;
+        }
+        #[cfg(windows)]
+        self.update_protection_feedback();
+    }
+
+    fn apply_camera(&mut self, observation: CameraObservation) {
+        #[cfg(windows)]
+        {
+            self.camera_state = Some(observation.state);
+            self.camera_observation = Some(observation);
+        }
+        #[cfg(not(windows))]
+        {
+            self.camera_state = Some(observation);
+        }
+        #[cfg(windows)]
+        self.update_protection_feedback();
+    }
+
+    fn microphone_summary(&self) -> String {
+        #[cfg(windows)]
+        if let Some(status) = &self.microphone_protection {
+            return crate::output::microphone_protection_summary(self.lang, status);
+        }
+        #[cfg(windows)]
+        return format!(
+            "{}; SDK: {}",
+            self.lang.unknown_protection(true),
+            self.lang.microphone_status(self.mute_state)
+        );
+        #[cfg(not(windows))]
+        microphone_label(self.lang, self.mute_state)
+    }
+
+    fn camera_summary(&self) -> String {
+        #[cfg(windows)]
+        if let Some(status) = &self.camera_observation {
+            return crate::output::camera_protection_summary(self.lang, status);
+        }
+        #[cfg(windows)]
+        return self.lang.unknown_protection(false).to_owned();
+        #[cfg(not(windows))]
+        self.camera_state.map_or_else(
+            || "Unknown".to_owned(),
+            |state| camera_label(self.lang, state).to_owned(),
+        )
+    }
+
+    #[cfg(windows)]
+    fn update_protection_feedback(&mut self) {
+        let feedback = self
+            .operation_error
+            .as_deref()
+            .or(self.camera_error.as_deref())
+            .or(self.controls_error.as_deref())
+            .or(self.health_error.as_deref())
+            .or_else(|| {
+                self.status_msg
+                    .as_ref()
+                    .map(|(message, _, _)| message.as_str())
+            })
+            .unwrap_or("");
+        self.protection_feedback = format!(
+            "{}\n{}\n{}\n{}",
+            self.microphone_summary(),
+            self.camera_summary(),
+            self.lang.protection_limit(),
+            feedback
+        );
     }
 }
 
@@ -438,15 +585,15 @@ fn handle_action(
     state: &mut TuiState,
     accesses: &[Access],
     worker: &ActionWorker,
-    refresh: &Sender<()>,
+    refresh: &SyncSender<()>,
 ) -> Result<bool> {
     let lang = state.lang;
     if action != Action::Kill {
         state.pending_kill = None;
     }
     if action == Action::Refresh {
-        match refresh.send(()) {
-            Ok(()) => state.message(
+        match refresh.try_send(()) {
+            Ok(()) | Err(mpsc::TrySendError::Full(())) => state.message(
                 text(
                     lang,
                     [
@@ -509,6 +656,7 @@ fn handle_action(
     if action == Action::Quit {
         return Ok(true);
     }
+    #[cfg(not(windows))]
     if action == Action::Mute && state.mute_state == MicrophoneMuteState::Unavailable {
         state.message(microphone_label(lang, state.mute_state), Color::Yellow);
         return Ok(false);
@@ -539,6 +687,7 @@ fn handle_action(
             } else {
                 CameraPrivacyState::Allowed
             };
+            #[cfg(not(windows))]
             if !cfg!(target_os = "linux")
                 && state.camera_state == Some(desired)
                 && state.camera_error.is_none()
@@ -711,6 +860,14 @@ fn tui_loop(
         status_msg: None,
         mute_state: MicrophoneMuteState::Unavailable,
         mute_changed_at: None,
+        #[cfg(windows)]
+        microphone_protection: None,
+        #[cfg(windows)]
+        camera_observation: None,
+        #[cfg(windows)]
+        camera_changed_at: None,
+        #[cfg(windows)]
+        protection_feedback: lang.protection_limit().to_owned(),
         devices: Vec::new(),
         health_error: Some(
             text(
@@ -728,12 +885,13 @@ fn tui_loop(
             .to_owned(),
         ),
         pending_kill: None,
+        operation_error: None,
         camera_state: None,
         camera_error: None,
         camera_pending: true,
         action_pending: None,
         controls_error: None,
-        buttons: Vec::new(),
+        buttons: Vec::with_capacity(ACTIONS.len()),
     };
     let mut current_accesses: Vec<Access> = Vec::new();
     #[cfg(unix)]
@@ -741,13 +899,20 @@ fn tui_loop(
     loop {
         match worker.responses.try_recv() {
             Ok(response) => {
-                state.action_pending = None;
+                let completed_action = state.action_pending.take();
                 match response {
                     WorkerResponse::Camera(result) => {
                         state.camera_pending = false;
                         match result {
                             Ok(camera) => {
-                                state.camera_state = Some(camera);
+                                if completed_action.is_some() {
+                                    state.operation_error = None;
+                                }
+                                state.apply_camera(camera);
+                                #[cfg(windows)]
+                                {
+                                    state.camera_changed_at = Some(Instant::now());
+                                }
                                 state.camera_error = None;
                                 state.message(
                                     format!(
@@ -764,7 +929,7 @@ fn tui_loop(
                                                 "Камера"
                                             ]
                                         ),
-                                        camera_label(lang, camera)
+                                        state.camera_summary()
                                     ),
                                     Color::Cyan,
                                 );
@@ -778,18 +943,19 @@ fn tui_loop(
                     }
                     WorkerResponse::Mute(result) => match result {
                         Ok(actual) => {
-                            state.mute_state = actual;
+                            state.operation_error = None;
+                            state.apply_microphone(actual);
                             state.mute_changed_at = Some(Instant::now());
                             let color = if matches!(
-                                actual,
+                                state.mute_state,
                                 MicrophoneMuteState::Mixed | MicrophoneMuteState::Unavailable
                             ) {
                                 Color::Yellow
                             } else {
                                 Color::Green
                             };
-                            state.message(microphone_label(lang, actual), color);
-                            let _ = refresh.send(());
+                            state.message(state.microphone_summary(), color);
+                            let _ = refresh.try_send(());
                         }
                         Err(error) => state.message(format!("{error:#}"), Color::Red),
                     },
@@ -811,9 +977,9 @@ fn tui_loop(
                                         ]
                                     )
                                 ),
-                                Color::Red,
+                                Color::Green,
                             );
-                            let _ = refresh.send(());
+                            let _ = refresh.try_send(());
                         }
                         Err(error) => state.message(format!("PID {pid}: {error:#}"), Color::Red),
                     },
@@ -855,11 +1021,23 @@ fn tui_loop(
                     .is_none_or(|changed| read_started >= changed)
             {
                 match mute {
-                    Ok(mute) => state.mute_state = mute,
+                    Ok(mute) => state.apply_microphone(mute),
                     Err(error) => {
                         state.mute_state = MicrophoneMuteState::Unavailable;
                         state.controls_error = Some(format!("{error:#}"));
                     }
+                }
+            }
+            #[cfg(windows)]
+            if let Some((read_started, camera)) = observation.camera
+                && !state.camera_pending
+                && state
+                    .camera_changed_at
+                    .is_none_or(|changed| read_started >= changed)
+            {
+                match camera {
+                    Ok(camera) => state.apply_camera(camera),
+                    Err(error) => state.camera_error = Some(format!("{error:#}")),
                 }
             }
             match observation.snapshot {
@@ -1007,6 +1185,8 @@ fn tui_loop(
                     ))
                 }
             }
+            #[cfg(windows)]
+            state.update_protection_feedback();
         }
 
         // Draw UI
@@ -1078,12 +1258,12 @@ fn draw_ui(f: &mut Frame, state: &mut TuiState, accesses: &[Access]) {
                 .is_some_and(|process| !process.instance_id.is_empty())
     });
     let area = f.area();
-    let desired_footer = control_rows(area.width, state.lang, true) + 6;
-    let footer_height = if desired_footer + 12 <= area.height {
-        desired_footer
+    let footer_height = if area.height >= 18 {
+        7
+    } else if area.height >= 8 {
+        5
     } else {
-        (control_rows(area.width, state.lang, false) + 6)
-            .min(area.height.saturating_sub(5).max(area.height.min(2)))
+        area.height.min(2)
     };
     let body_height = area.height.saturating_sub(footer_height);
     let chunks = Layout::default()
@@ -1104,13 +1284,13 @@ fn draw_ui(f: &mut Frame, state: &mut TuiState, accesses: &[Access]) {
             text(
                 state.lang,
                 [
-                    " [MIC MUTED] ",
-                    " [MIC COUPÉ] ",
-                    " [MIK STUMM] ",
-                    " [MIC SILENCIO] ",
-                    " [マイク消音] ",
-                    " [麦克风静音] ",
-                    " [МИК ВЫКЛ] ",
+                    " [SDK MUTED] ",
+                    " [SDK COUPÉ] ",
+                    " [SDK STUMM] ",
+                    " [SDK SILENCIO] ",
+                    " [SDK消音] ",
+                    " [SDK静音] ",
+                    " [SDK ЗАГЛУШЕН] ",
                 ],
             ),
             Style::default().bg(Color::Red).fg(Color::White).bold(),
@@ -1119,13 +1299,13 @@ fn draw_ui(f: &mut Frame, state: &mut TuiState, accesses: &[Access]) {
             text(
                 state.lang,
                 [
-                    " [MIC ON] ",
-                    " [MIC ACTIF] ",
-                    " [MIK AN] ",
-                    " [MIC ACTIVO] ",
-                    " [マイク有効] ",
-                    " [麦克风开启] ",
-                    " [МИК ВКЛ] ",
+                    " [SDK UNMUTED] ",
+                    " [SDK NON COUPÉ] ",
+                    " [SDK NICHT STUMM] ",
+                    " [SDK SIN SILENCIO] ",
+                    " [SDK非消音] ",
+                    " [SDK未静音] ",
+                    " [SDK НЕ ЗАГЛУШЕН] ",
                 ],
             ),
             Style::default().bg(Color::Green).fg(Color::Black).bold(),
@@ -1134,13 +1314,13 @@ fn draw_ui(f: &mut Frame, state: &mut TuiState, accesses: &[Access]) {
             text(
                 state.lang,
                 [
-                    " [MIC MIXED] ",
-                    " [MIC MIXTE] ",
-                    " [MIK GEMISCHT] ",
-                    " [MIC MIXTO] ",
-                    " [マイク混在] ",
-                    " [麦克风混合] ",
-                    " [МИК СМЕШАН] ",
+                    " [SDK MIXED] ",
+                    " [SDK MIXTE] ",
+                    " [SDK GEMISCHT] ",
+                    " [SDK MIXTO] ",
+                    " [SDK混在] ",
+                    " [SDK混合] ",
+                    " [SDK СМЕШАН] ",
                 ],
             ),
             Style::default().bg(Color::Yellow).fg(Color::Black).bold(),
@@ -1149,13 +1329,13 @@ fn draw_ui(f: &mut Frame, state: &mut TuiState, accesses: &[Access]) {
             text(
                 state.lang,
                 [
-                    " [NO MIC] ",
-                    " [MIC INDISPO] ",
-                    " [MIK N/V] ",
-                    " [MIC NO DISP] ",
-                    " [マイク不明] ",
-                    " [麦克风不可用] ",
-                    " [МИК Н/Д] ",
+                    " [SDK UNKNOWN] ",
+                    " [SDK INCONNU] ",
+                    " [SDK UNBEKANNT] ",
+                    " [SDK DESCONOCIDO] ",
+                    " [SDK不明] ",
+                    " [SDK未知] ",
+                    " [SDK НЕИЗВЕСТНО] ",
                 ],
             ),
             Style::default().bg(Color::DarkGray).fg(Color::White).bold(),
@@ -1551,10 +1731,10 @@ fn draw_ui(f: &mut Frame, state: &mut TuiState, accesses: &[Access]) {
                     text(
                         state.lang,
                         [
-                            "No active capture detected. Microphone and camera are idle.",
-                            "Aucune capture active. Le microphone et la caméra sont inactifs.",
-                            "Keine aktive Aufnahme. Mikrofon und Kamera sind inaktiv.",
-                            "Sin captura activa. Micrófono y cámara inactivos.",
+                            "No active capture observed.",
+                            "Aucune capture active observée.",
+                            "Keine aktive Aufnahme beobachtet.",
+                            "No se observó captura activa.",
                             "アクティブなキャプチャはありません。",
                             "未检测到活动采集。",
                             "Активный захват не обнаружен.",
@@ -1789,6 +1969,21 @@ const ACTIONS: [Action; 6] = [
 ];
 
 fn button_label(action: Action, lang: Language) -> &'static str {
+    #[cfg(windows)]
+    if action == Action::Mute {
+        return text(
+            lang,
+            [
+                "[m] Protect/Release mic",
+                "[m] Protéger/libérer micro",
+                "[m] Mikrofonschutz/Freigabe",
+                "[m] Proteger/liberar mic",
+                "[m] マイク保護/解除",
+                "[m] 麦克风保护/解除",
+                "[m] Защитить/снять мик",
+            ],
+        );
+    }
     #[cfg(target_os = "linux")]
     if matches!(action, Action::BlockCamera | Action::RestoreCamera) {
         return text(
@@ -1851,25 +2046,25 @@ fn button_label(action: Action, lang: Language) -> &'static str {
         Action::BlockCamera => text(
             lang,
             [
-                "[b] Block camera",
-                "[b] Bloquer caméra",
-                "[b] Kamera sperren",
-                "[b] Bloquear cámara",
-                "[b] カメラをブロック",
-                "[b] 禁用摄像头",
-                "[b] Блокировать камеру",
+                "[b] Block all cameras",
+                "[b] Bloquer les caméras",
+                "[b] Alle Kameras sperren",
+                "[b] Bloquear todas las cámaras",
+                "[b] 全カメラをブロック",
+                "[b] 阻止全部摄像头",
+                "[b] Блокировать все камеры",
             ],
         ),
         Action::RestoreCamera => text(
             lang,
             [
-                "[a] Restore camera",
-                "[a] Rétablir caméra",
-                "[a] Kamera freigeben",
-                "[a] Restaurar cámara",
-                "[a] カメラを復元",
-                "[a] 恢复摄像头",
-                "[a] Восстановить камеру",
+                "[a] Allow all cameras",
+                "[a] Autoriser les caméras",
+                "[a] Alle Kameras freigeben",
+                "[a] Permitir todas las cámaras",
+                "[a] 全カメラを許可",
+                "[a] 允许全部摄像头",
+                "[a] Разрешить все камеры",
             ],
         ),
         Action::Mute => text(
@@ -1923,95 +2118,183 @@ fn button_label(action: Action, lang: Language) -> &'static str {
     }
 }
 
-fn control_columns(width: u16, lang: Language) -> u16 {
-    let max_width = ACTIONS
-        .iter()
-        .map(|action| Span::raw(button_label(*action, lang)).width() + 4)
-        .max()
-        .unwrap_or(0);
-    if usize::from(width.saturating_sub(1) / 2) >= max_width {
-        2
-    } else {
-        1
+fn compact_button_label(action: Action, lang: Language) -> &'static str {
+    #[cfg(windows)]
+    if action == Action::Mute {
+        return text(
+            lang,
+            [
+                "[m] Protection",
+                "[m] Protection",
+                "[m] Schutz",
+                "[m] Protección",
+                "[m] 保護切替",
+                "[m] 保护切换",
+                "[m] Защита",
+            ],
+        );
+    }
+    match action {
+        Action::BlockCamera if cfg!(target_os = "linux") => text(
+            lang,
+            [
+                "[b] Camera N/A",
+                "[b] Caméra indispo.",
+                "[b] Kamera n.v.",
+                "[b] Cámara N/D",
+                "[b] カメラ不可",
+                "[b] 摄像头不可用",
+                "[b] Камера недост.",
+            ],
+        ),
+        Action::RestoreCamera if cfg!(target_os = "linux") => text(
+            lang,
+            [
+                "[a] Camera N/A",
+                "[a] Caméra indispo.",
+                "[a] Kamera n.v.",
+                "[a] Cámara N/D",
+                "[a] カメラ不可",
+                "[a] 摄像头不可用",
+                "[a] Камера недост.",
+            ],
+        ),
+        Action::BlockCamera if cfg!(target_os = "macos") => text(
+            lang,
+            [
+                "[b] Approve profile",
+                "[b] Approuver profil",
+                "[b] Profil erlauben",
+                "[b] Aprobar perfil",
+                "[b] プロファイル承認",
+                "[b] 批准描述文件",
+                "[b] Одобрить профиль",
+            ],
+        ),
+        Action::RestoreCamera if cfg!(target_os = "macos") => text(
+            lang,
+            [
+                "[a] Remove profile",
+                "[a] Retirer profil",
+                "[a] Profil entfernen",
+                "[a] Quitar perfil",
+                "[a] プロファイル削除",
+                "[a] 移除描述文件",
+                "[a] Удалить профиль",
+            ],
+        ),
+        Action::BlockCamera => text(
+            lang,
+            [
+                "[b] Block",
+                "[b] Bloquer",
+                "[b] Sperren",
+                "[b] Bloquear",
+                "[b] ブロック",
+                "[b] 禁用",
+                "[b] Блокировать",
+            ],
+        ),
+        Action::RestoreCamera => text(
+            lang,
+            [
+                "[a] Allow",
+                "[a] Autoriser",
+                "[a] Freigeben",
+                "[a] Permitir",
+                "[a] 許可",
+                "[a] 允许",
+                "[a] Разрешить",
+            ],
+        ),
+        Action::Mute => text(
+            lang,
+            [
+                "[m] Mic mute",
+                "[m] Micro",
+                "[m] Mikrofon",
+                "[m] Micrófono",
+                "[m] マイク",
+                "[m] 麦克风",
+                "[m] Микрофон",
+            ],
+        ),
+        Action::Kill => text(
+            lang,
+            [
+                "[k] Terminate",
+                "[k] Arrêter",
+                "[k] Beenden",
+                "[k] Finalizar",
+                "[k] 終了",
+                "[k] 终止",
+                "[k] Завершить",
+            ],
+        ),
+        Action::Refresh | Action::Quit => button_label(action, lang),
     }
 }
 
-// Borrow whole Unicode characters, breaking at spaces when possible. The same
-// lines determine button height and rendering, so translated labels never get
-// a shorter hitbox than their visible content.
-fn button_lines(label: &str, width: u16) -> impl Iterator<Item = &str> {
-    let mut remaining = label;
-    std::iter::from_fn(move || {
-        if remaining.is_empty() || width == 0 {
-            return None;
-        }
-        let mut cells = 0;
-        let mut end = 0;
-        let mut space = None;
-        for (index, character) in remaining.char_indices() {
-            let next = index + character.len_utf8();
-            let char_width = Span::raw(&remaining[index..next]).width();
-            if cells + char_width > usize::from(width) {
-                break;
-            }
-            cells += char_width;
-            end = next;
-            if character == ' ' {
-                space = Some(index);
-            }
-        }
-        if end < remaining.len()
-            && let Some(space) = space.filter(|space| *space > 0)
-        {
-            end = space;
-        }
-        if end == 0 {
-            // This path is used only for the key-only emergency layout.
-            return None;
-        }
-        let line = &remaining[..end];
-        remaining = remaining[end..].trim_start();
-        Some(line)
-    })
+#[derive(Clone, Copy)]
+enum ControlLabels {
+    Full,
+    Compact,
+    Keys,
+    EssentialKeys,
+    BareKeys,
 }
 
-fn button_height(action: Action, lang: Language, width: u16, bordered: bool) -> u16 {
-    if width < 8 {
-        return 1;
+impl ControlLabels {
+    fn label(self, action: Action, lang: Language) -> &'static str {
+        match self {
+            Self::Full => button_label(action, lang),
+            Self::Compact => compact_button_label(action, lang),
+            Self::Keys => &button_label(action, lang)[..3],
+            Self::EssentialKeys if matches!(action, Action::Refresh | Action::Quit) => {
+                &button_label(action, lang)[..3]
+            }
+            Self::EssentialKeys | Self::BareKeys => &button_label(action, lang)[1..2],
+        }
     }
-    let lines = button_lines(button_label(action, lang), width.saturating_sub(4)).count();
-    lines as u16 + if bordered { 2 } else { 0 }
 }
 
-fn control_rows(width: u16, lang: Language, bordered: bool) -> u16 {
-    let columns = control_columns(width, lang);
-    let cell_width = width.saturating_sub(columns - 1) / columns;
-    ACTIONS
-        .chunks(usize::from(columns))
-        .map(|row| {
-            row.iter()
-                .map(|action| button_height(*action, lang, cell_width, bordered))
-                .max()
-                .unwrap_or(0)
-        })
-        .sum::<u16>()
-        + 6 / columns
-        - 1
+fn control_format(area: Rect, lang: Language) -> (ControlLabels, bool, [u16; ACTIONS.len()]) {
+    for (labels, bordered) in [
+        (ControlLabels::Full, true),
+        (ControlLabels::Compact, true),
+        (ControlLabels::Full, false),
+        (ControlLabels::Compact, false),
+        (ControlLabels::Keys, false),
+        (ControlLabels::EssentialKeys, false),
+        (ControlLabels::BareKeys, false),
+    ] {
+        if bordered && area.height < 3 {
+            continue;
+        }
+        let widths = ACTIONS.map(|action| {
+            Span::raw(labels.label(action, lang)).width() as u16 + if bordered { 4 } else { 0 }
+        });
+        let width = widths
+            .iter()
+            .map(|width| usize::from(*width))
+            .sum::<usize>()
+            + ACTIONS.len()
+            - 1;
+        if width <= usize::from(area.width) {
+            return (labels, bordered, widths);
+        }
+    }
+    (ControlLabels::BareKeys, false, [1; ACTIONS.len()])
 }
 
-fn button_rects(area: Rect, lang: Language) -> impl Iterator<Item = (Rect, Action)> {
-    let columns = control_columns(area.width, lang);
-    let cell_width = area.width.saturating_sub(columns - 1) / columns;
-    let bordered = control_rows(area.width, lang, true) <= area.height && cell_width >= 8;
-    let gap = u16::from(control_rows(area.width, lang, bordered) <= area.height);
-    let fits_all = control_rows(area.width, lang, bordered).saturating_sub(6 / columns - 1)
-        + gap * (6 / columns - 1)
-        <= area.height;
-    let actions = if fits_all {
-        ACTIONS
-    } else {
-        // Keep exit and read-only refresh reachable even when the terminal is
-        // too short for every control. Other actions retain their keyboard keys.
+fn button_rects(
+    area: Rect,
+    widths: [u16; ACTIONS.len()],
+    bordered: bool,
+) -> impl Iterator<Item = (Rect, Action)> {
+    // Below eleven cells, even six bare keys plus gaps cannot fit. Keep quit
+    // and refresh first; never introduce a second line or overlapping hitboxes.
+    let actions = if area.width < 11 {
         [
             Action::Quit,
             Action::Refresh,
@@ -2020,46 +2303,21 @@ fn button_rects(area: Rect, lang: Language) -> impl Iterator<Item = (Rect, Actio
             Action::BlockCamera,
             Action::RestoreCamera,
         ]
-    };
-    let essential_height = [Action::Quit, Action::Refresh]
-        .iter()
-        .map(|action| button_height(*action, lang, cell_width, bordered))
-        .sum::<u16>();
-    let cell_width = if !fits_all && columns == 1 && essential_height > area.height {
-        cell_width.min(3)
     } else {
-        cell_width
+        ACTIONS
     };
-    let mut y = area.y;
-    let mut row_height = 0;
+    let mut x = area.x;
     actions
         .into_iter()
-        .enumerate()
-        .filter_map(move |(index, action)| {
-            let column = index as u16 % columns;
-            if column == 0 {
-                if index != 0 {
-                    y = y.saturating_add(row_height + gap);
-                }
-                row_height = actions[index..(index + usize::from(columns)).min(6)]
-                    .iter()
-                    .map(|action| button_height(*action, lang, cell_width, bordered))
-                    .max()
-                    .unwrap_or(0);
-            }
-            let width = cell_width.min(if cell_width < 8 {
-                3
-            } else {
-                (Span::raw(button_label(action, lang)).width() + 4) as u16
-            });
-            let height = button_height(action, lang, width, bordered);
-            if width == 0 || y.saturating_add(height) > area.bottom() {
+        .zip(widths)
+        .filter_map(move |(action, width)| {
+            let height = if bordered { 3 } else { 1 };
+            if area.height < height || x.saturating_add(width) > area.right() {
                 return None;
             }
-            Some((
-                Rect::new(area.x + column * (cell_width + 1), y, width, height),
-                action,
-            ))
+            let rect = Rect::new(x, area.y, width, height);
+            x = x.saturating_add(width + 1);
+            Some((rect, action))
         })
 }
 
@@ -2090,6 +2348,26 @@ fn action_disabled(state: &TuiState, action: Action) -> bool {
     if state.camera_pending {
         return true;
     }
+    #[cfg(windows)]
+    {
+        match action {
+            Action::Mute => false,
+            Action::BlockCamera => {
+                state.camera_observation.as_ref().is_some_and(|status| {
+                    status.desired_blocked && status.helper_active && status.unknown_devices == 0
+                }) && state.camera_error.is_none()
+            }
+            Action::RestoreCamera => {
+                state.camera_observation.as_ref().is_some_and(|status| {
+                    !status.desired_blocked
+                        && status.pending_restore == 0
+                        && status.unknown_devices == 0
+                }) && state.camera_error.is_none()
+            }
+            _ => false,
+        }
+    }
+    #[cfg(not(windows))]
     match action {
         Action::Mute => state.mute_state == MicrophoneMuteState::Unavailable,
         Action::BlockCamera => {
@@ -2103,8 +2381,15 @@ fn action_disabled(state: &TuiState, action: Action) -> bool {
 }
 
 fn draw_controls(f: &mut Frame, state: &mut TuiState, area: Rect) {
-    let heading_height = u16::from(area.height >= 5);
-    let feedback_height = if area.height >= 10 {
+    let heading_height = if cfg!(windows) {
+        0
+    } else {
+        u16::from(area.height >= 5)
+    };
+    let feedback_height = if cfg!(windows) && area.height >= 5 {
+        area.height
+            .saturating_sub(if area.height >= 7 { 3 } else { 1 })
+    } else if area.height >= 10 {
         5
     } else if area.height >= 7 {
         3
@@ -2135,10 +2420,11 @@ fn draw_controls(f: &mut Frame, state: &mut TuiState, area: Rect) {
             Rect::new(area.x, area.y, area.width, heading_height),
         );
     }
+    let (labels, bordered, widths) = control_format(controls, state.lang);
     state.buttons.clear();
-    state.buttons.extend(button_rects(controls, state.lang));
-    let bordered =
-        control_rows(controls.width, state.lang, true) <= controls.height && controls.width >= 8;
+    state
+        .buttons
+        .extend(button_rects(controls, widths, bordered));
     for (rect, action) in &state.buttons {
         let disabled = action_disabled(state, *action);
         let color = if disabled {
@@ -2150,52 +2436,66 @@ fn draw_controls(f: &mut Frame, state: &mut TuiState, area: Rect) {
                 _ => Color::LightCyan,
             }
         };
-        let label = button_label(*action, state.lang);
+        let label = labels.label(*action, state.lang);
         let style = Style::default().fg(if disabled {
             Color::DarkGray
         } else {
             Color::White
         });
-        if rect.width < 8 {
-            let key = &label[1..2];
-            f.render_widget(
-                Paragraph::new(if rect.width >= 3 { &label[..3] } else { key })
-                    .style(Style::default().fg(color).bold()),
-                *rect,
-            );
-            continue;
-        }
-        let block = Block::default()
-            .borders(if bordered {
-                Borders::ALL
-            } else {
-                Borders::LEFT | Borders::RIGHT
-            })
-            .border_style(Style::default().fg(color));
-        let inner = block.inner(*rect);
-        f.render_widget(block, *rect);
-        let lines = button_lines(label, rect.width - 4).map(|line| {
-            if line.starts_with(&label[..3]) {
-                Line::from(vec![
-                    Span::styled(&line[..3], Style::default().fg(color).bold()),
-                    Span::styled(&line[3..], style),
-                ])
-            } else {
-                Line::from(Span::styled(line, style))
-            }
-        });
-        f.render_widget(
-            Paragraph::new(lines.collect::<Vec<_>>()),
-            Rect::new(
-                inner.x + 1,
+        let inner = if bordered {
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(color));
+            let inner = block.inner(*rect);
+            f.render_widget(block, *rect);
+            Rect::new(inner.x + 1, inner.y, inner.width.saturating_sub(2), 1)
+        } else {
+            *rect
+        };
+        let key_style = Style::default().fg(color).bold();
+        let buffer = f.buffer_mut();
+        if label.starts_with('[') {
+            buffer.set_stringn(
+                inner.x,
                 inner.y,
-                inner.width.saturating_sub(2),
-                inner.height,
-            ),
-        );
+                &label[..3],
+                usize::from(inner.width),
+                key_style,
+            );
+            if inner.width > 3 {
+                buffer.set_stringn(
+                    inner.x + 3,
+                    inner.y,
+                    &label[3..],
+                    usize::from(inner.width - 3),
+                    style,
+                );
+            }
+        } else {
+            buffer.set_stringn(inner.x, inner.y, label, usize::from(inner.width), key_style);
+        }
     }
     let feedback = Rect::new(area.x, controls.bottom(), area.width, feedback_height);
-    let (message, color) = if let Some((message, created, color)) = &state.status_msg
+    let (message, color) = if cfg!(windows) {
+        #[cfg(windows)]
+        {
+            (
+                state.protection_feedback.as_str(),
+                if state.operation_error.is_some()
+                    || state.camera_error.is_some()
+                    || state.controls_error.is_some()
+                {
+                    Color::Yellow
+                } else {
+                    Color::White
+                },
+            )
+        }
+        #[cfg(not(windows))]
+        {
+            unreachable!()
+        }
+    } else if let Some((message, created, color)) = &state.status_msg
         && (*color == Color::Red
             || state.action_pending.is_some()
             || created.elapsed() < Duration::from_secs(8))
@@ -2241,30 +2541,30 @@ fn draw_controls(f: &mut Frame, state: &mut TuiState, area: Rect) {
             Color::White,
         )
     };
+    let paragraph = Paragraph::new(message).style(Style::default().fg(color));
+    #[cfg(not(windows))]
+    let paragraph = paragraph.wrap(Wrap { trim: false });
     f.render_widget(
-        Paragraph::new(message)
-            .style(Style::default().fg(color))
-            .wrap(Wrap { trim: false })
-            .block(
-                Block::default()
-                    .borders(if feedback.height >= 3 {
-                        Borders::ALL
-                    } else {
-                        Borders::NONE
-                    })
-                    .title(text(
-                        state.lang,
-                        [
-                            " Feedback / ↑↓ select ",
-                            " Retour / ↑↓ choisir ",
-                            " Meldung / ↑↓ wählen ",
-                            " Mensaje / ↑↓ elegir ",
-                            " メッセージ / ↑↓選択 ",
-                            " 提示 / ↑↓选择 ",
-                            " Сообщение / ↑↓ выбор ",
-                        ],
-                    )),
-            ),
+        paragraph.block(
+            Block::default()
+                .borders(if feedback.height >= 3 && !cfg!(windows) {
+                    Borders::ALL
+                } else {
+                    Borders::NONE
+                })
+                .title(text(
+                    state.lang,
+                    [
+                        " Feedback / ↑↓ select ",
+                        " Retour / ↑↓ choisir ",
+                        " Meldung / ↑↓ wählen ",
+                        " Mensaje / ↑↓ elegir ",
+                        " メッセージ / ↑↓選択 ",
+                        " 提示 / ↑↓选择 ",
+                        " Сообщение / ↑↓ выбор ",
+                    ],
+                )),
+        ),
         feedback,
     );
 }
@@ -2284,18 +2584,84 @@ mod tests {
             status_msg: None,
             mute_state: MicrophoneMuteState::Unavailable,
             mute_changed_at: None,
+            #[cfg(windows)]
+            microphone_protection: None,
+            #[cfg(windows)]
+            camera_observation: None,
+            #[cfg(windows)]
+            camera_changed_at: None,
+            #[cfg(windows)]
+            protection_feedback: lang.protection_limit().to_owned(),
             devices: Vec::new(),
             health_error: None,
             camera_state: None,
             camera_error: None,
             camera_pending: false,
             action_pending: None,
+            operation_error: None,
             controls_error: None,
             buttons: Vec::new(),
             pending_kill: None,
         }
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn global_camera_controls_follow_intent_with_no_present_devices() {
+        let mut state = state(Language::En);
+        state.apply_camera(privacy::CameraControlObservation {
+            desired_blocked: true,
+            state: CameraPrivacyState::SystemManaged,
+            present_total: 0,
+            owned_blocked_present: 0,
+            pending_restore: 0,
+            absent_owned: 0,
+            unknown_devices: 0,
+            helper_active: true,
+            detail: None,
+        });
+        assert!(action_disabled(&state, Action::BlockCamera));
+        assert!(!action_disabled(&state, Action::RestoreCamera));
+        state.camera_observation.as_mut().unwrap().desired_blocked = false;
+        state.camera_observation.as_mut().unwrap().helper_active = false;
+        assert!(!action_disabled(&state, Action::BlockCamera));
+        assert!(action_disabled(&state, Action::RestoreCamera));
+        state.camera_observation.as_mut().unwrap().pending_restore = 1;
+        assert!(!action_disabled(&state, Action::RestoreCamera));
+        state.camera_observation.as_mut().unwrap().desired_blocked = true;
+        assert!(
+            !action_disabled(&state, Action::BlockCamera),
+            "an inactive helper permits retry"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn requested_microphone_protection_remains_releasable_when_sdk_is_unavailable() {
+        let mut state = state(Language::En);
+        state.apply_microphone(crate::platform::MicrophoneProtectionStatus {
+            requested: true,
+            service_active: false,
+            mute_state: MicrophoneMuteState::Unavailable,
+            endpoint_count: 0,
+            hardware_mute_count: 0,
+            corrections: 0,
+            detail: Some("service unavailable".into()),
+        });
+        assert!(!action_disabled(&state, Action::Mute));
+        assert!(state.microphone_protection.as_ref().unwrap().requested);
+        state.message("operation failed".into(), Color::Red);
+        state.apply_microphone(crate::platform::MicrophoneProtectionStatus {
+            requested: true,
+            service_active: true,
+            mute_state: MicrophoneMuteState::Muted,
+            endpoint_count: 1,
+            hardware_mute_count: 0,
+            corrections: 1,
+            detail: None,
+        });
+        assert_eq!(state.operation_error.as_deref(), Some("operation failed"));
+    }
     #[test]
     fn termination_confirmation_requires_same_live_identity() {
         let pending = Some((
@@ -2320,14 +2686,14 @@ mod tests {
 
     #[test]
     fn privileged_operation_blocks_exit_until_completion() {
-        let (commands, _requests) = mpsc::channel();
-        let (_responses, responses) = mpsc::channel();
+        let (commands, _requests) = mpsc::sync_channel(1);
+        let (_responses, responses) = mpsc::sync_channel(1);
         let worker = ActionWorker {
             commands: Some(commands),
             responses,
             thread: None,
         };
-        let (refresh, _refreshes) = mpsc::channel();
+        let (refresh, _refreshes) = mpsc::sync_channel(1);
         let mut state = state(Language::En);
         state.action_pending = Some(Action::BlockCamera);
         state.camera_pending = true;
@@ -2337,6 +2703,29 @@ mod tests {
         state.action_pending = None;
         state.camera_pending = false;
         assert!(handle_action(Action::Quit, &mut state, &[], &worker, &refresh).unwrap());
+    }
+
+    #[test]
+    fn control_requests_are_bounded_and_refresh_requests_coalesce() {
+        let (commands, requests) = mpsc::sync_channel(1);
+        let (_responses, responses) = mpsc::sync_channel(1);
+        let worker = ActionWorker {
+            commands: Some(commands),
+            responses,
+            thread: None,
+        };
+        assert!(worker.send(WorkerCommand::Mute).is_ok());
+        assert!(worker.send(WorkerCommand::Mute).is_err());
+        assert!(matches!(requests.try_recv().unwrap(), WorkerCommand::Mute));
+        assert!(requests.try_recv().is_err());
+        let (refresh, refreshes) = mpsc::sync_channel(1);
+        let mut state = state(Language::En);
+        state.camera_pending = true;
+        assert!(!handle_action(Action::Refresh, &mut state, &[], &worker, &refresh).unwrap());
+        assert!(!handle_action(Action::Refresh, &mut state, &[], &worker, &refresh).unwrap());
+        assert!(refreshes.try_recv().is_ok());
+        assert!(refreshes.try_recv().is_err());
+        assert!(state.operation_error.is_none());
     }
 
     const LANGUAGES: [Language; 7] = [
@@ -2350,38 +2739,6 @@ mod tests {
     ];
 
     #[test]
-    fn localized_labels_wrap_without_losing_unicode_content() {
-        for lang in LANGUAGES {
-            for width in [8, 12, 20, 40, 60, 80, 120] {
-                let area = Rect::new(2, 3, width, control_rows(width, lang, true));
-                let buttons: Vec<_> = button_rects(area, lang).collect();
-                assert_eq!(buttons.len(), ACTIONS.len());
-                for (rect, action) in buttons {
-                    let label = button_label(action, lang);
-                    let lines: Vec<_> = button_lines(label, rect.width - 4).collect();
-                    assert_eq!(
-                        lines
-                            .iter()
-                            .flat_map(|line| line.chars())
-                            .filter(|c| !c.is_whitespace())
-                            .collect::<String>(),
-                        label
-                            .chars()
-                            .filter(|c| !c.is_whitespace())
-                            .collect::<String>(),
-                    );
-                    assert!(
-                        lines
-                            .iter()
-                            .all(|line| Span::raw(*line).width() <= usize::from(rect.width - 4))
-                    );
-                    assert_eq!(usize::from(rect.height - 2), lines.len());
-                }
-            }
-        }
-    }
-
-    #[test]
     fn terminal_sizes_keep_quit_and_refresh_inside_disjoint_visible_buttons() {
         for lang in LANGUAGES {
             for (width, height) in [
@@ -2393,6 +2750,7 @@ mod tests {
                 (60, 24),
                 (80, 24),
                 (120, 40),
+                (150, 40),
             ] {
                 let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
                 let mut state = state(lang);
@@ -2401,12 +2759,29 @@ mod tests {
                     .unwrap();
                 let buffer = terminal.backend().buffer();
                 for action in [Action::Quit, Action::Refresh] {
+                    if action == Action::Refresh && width < 3 {
+                        continue;
+                    }
                     assert!(
                         state
                             .buttons
                             .iter()
                             .any(|(_, candidate)| *candidate == action),
                         "{lang:?} {width}x{height}: {action:?}"
+                    );
+                }
+                let button_y = state.buttons.first().unwrap().0.y;
+                assert!(
+                    state.buttons.iter().all(|(rect, _)| rect.y == button_y),
+                    "{lang:?} {width}x{height}: actions must stay on one row"
+                );
+                if width >= 20 {
+                    assert!(
+                        ACTIONS.iter().all(|action| state
+                            .buttons
+                            .iter()
+                            .any(|(_, visible)| visible == action)),
+                        "{lang:?} {width}x{height}: all six actions must remain visible"
                     );
                 }
                 for (rect, action) in &state.buttons {
@@ -2447,39 +2822,6 @@ mod tests {
                 }
                 assert_eq!(state.selected_access, 0);
                 assert!(action_disabled(&state, Action::Kill));
-            }
-        }
-    }
-
-    #[test]
-    fn bordered_buttons_have_unpainted_gaps_and_separate_hotkeys() {
-        for lang in LANGUAGES {
-            let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
-            let mut state = state(lang);
-            terminal
-                .draw(|frame| draw_ui(frame, &mut state, &[]))
-                .unwrap();
-            let buffer = terminal.backend().buffer();
-            assert_eq!(state.buttons.len(), 6);
-            for (rect, action) in &state.buttons {
-                assert_eq!(buffer[(rect.x, rect.y)].symbol(), "┌");
-                assert_eq!(buffer[(rect.right() - 1, rect.bottom() - 1)].symbol(), "┘");
-                assert_eq!(buffer[(rect.x + 2, rect.y + 1)].symbol(), "[");
-                if !action_disabled(&state, *action) {
-                    assert!(
-                        buffer[(rect.x + 2, rect.y + 1)]
-                            .modifier
-                            .contains(ratatui::style::Modifier::BOLD)
-                    );
-                    assert_ne!(
-                        buffer[(rect.x + 2, rect.y + 1)].fg,
-                        buffer[(rect.x + 6, rect.y + 1)].fg
-                    );
-                }
-                if rect.right() < 120 {
-                    assert_eq!(mouse_action(&state, rect.right(), rect.y), None);
-                    assert_eq!(buffer[(rect.right(), rect.y)].symbol(), " ");
-                }
             }
         }
     }

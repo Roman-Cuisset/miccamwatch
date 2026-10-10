@@ -169,9 +169,9 @@ pub fn watch(
     defensive_kill: bool,
     history_enabled: bool,
 ) -> Result<()> {
-    let (stop_tx, stop_rx) = mpsc::channel();
+    let (stop_tx, stop_rx) = mpsc::sync_channel(1);
     ctrlc::set_handler(move || {
-        let _ = stop_tx.send(());
+        let _ = stop_tx.try_send(());
     })
     .context("cannot install Ctrl+C handler")?;
     let mut dispatcher = EventDispatcher::new(

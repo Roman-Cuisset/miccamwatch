@@ -1,5 +1,11 @@
 # Phase 3 : backend macOS 15+ et validations restantes
 
+**Lecture du journal :** les sections anciennes ci-dessous conservent l'état,
+les défauts et les limitations de leur époque ; elles ne décrivent pas toutes
+la source actuelle. Le dernier état publié reste `v0.16.1` immutable. Le bloc
+final `0.17.0` décrit un candidat non publié et ne remplace aucune preuve
+historique par une validation matérielle nouvelle.
+
 Les backends Linux/macOS de la PR #1 sont intégrés à `main`. [La répétition release 36682926446](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/36682926446) a réussi pour Windows, Linux x64 Ubuntu 22.04, macOS 15 Apple Silicon et Intel : archives extraites exécutées, helper Swift embarqué, CLI, arrêt SIGINT et MSI Windows. Le runner Apple Silicon était sous macOS 15.7.9. Les paquets Linux/macOS de v0.14.0 restent expérimentaux : cela ne prouve pas les transitions de micro/caméra physiques. Ne pas annoncer ces preuves matérielles.
 
 ## État après implémentation de la phase 3
@@ -302,4 +308,86 @@ historiques ni les limites matérielles.
 - Default du workflow d'installation publique désormais v0.16.1.
   Roadmap actualisée ; P1-UPGRADE demeure partiel, aucune autre phase clôturée.
   Pas de mesure RAM <15 Mo, Linux ARM64, Homebrew/AUR/Winget ou contrôle nouveau.
+
+## Candidat source 0.17.0 — Windows-first, qualification en cours
+
+P1-RAM/P1-RESTORE restent **En cours** jusqu'à CI native/helper qualification ;
+aucun tag/asset public ni signature/notarisation nouveau n'est revendiqué.
+Les liens et pins d'installation `v0.16.1` restent ceux du stable actuel.
+Homebrew/AUR/Winget/ARM64 et les autres lots de roadmap demeurent ouverts.
+Contrat détaillé : [Architecture candidate](ARCHITECTURE.md#candidate-0170-windows-first-protection-contract).
+
+### Portées candidates et invariants de migration
+
+- Windows a été explicitement choisi en premier pour la protection persistante.
+  L'intention manuelle micro appartient au broker natif jusqu'à `unmute`
+  explicite ; fermer `top`/tray ne la relâche pas. Pas de service login/autostart
+  implicite. Origine, génération et token automatiques par endpoint ; priorité
+  d'une action manuelle plus récente, readback et release-pending en cas d'échec.
+- Intention demandée, état SDK effectif et capture observée restent indépendants.
+  Mute logiciel n'est pas déni exclusif/ASIO/driver/hardware. GUID de contexte
+  CoreAudio consultatif, `SetMute` même valeur/`S_FALSE` sans callback possible :
+  pas d'attribution exacte Ktalk/Audition ni de détection de toute intention
+  externe invisible, pas de frontière absolue d'ownership/sécurité.
+- Caméra Windows : Block global même à zéro/1 000 appareils, helper temporaire
+  UAC pour arrivées futures ; Allow restaure uniquement les changements possédés.
+  Une caméra absente n'est ni inventaire attendu ni erreur en soi. Fenêtre brève
+  d'enforcement à l'arrivée, restart/veto/unknown/partiel restent visibles.
+  Journal admin protégé ; aucun import d'ownership legacy non signé.
+  `camera allow --restore-legacy INSTANCE_ID` = action explicite mono-cible,
+  nouvelle UAC et validation de classe caméra, pas exception Logitech.
+- IPC partagé à capacités fixes : SID/session/data-dir hash exacts, identité
+  native/birth time authentifiée, contrôle borné, pas de chemin/device arbitraire
+  en RPC normal. Admin alternatif : délégation QUERY-only, pas token-use ou kill.
+- Avant remplacement binaire, release micro/caméra explicite et restauration
+  achevée ; fermer l'UI ne suffit pas. Pas de release implicite par l'updater.
+  Le portable Windows candidat réserve les deux request locks et ressources
+  natives avant stop/swap ; propriétaire actif/étranger, intention/token,
+  release-pending et journals illisibles/corrompus/non supportés refusent.
+  Les reçus protégés caméra requested/owned/unfulfilled bloquent ; l'ancien
+  historique non signé `restore_on_arrival` owed-only, seul, ne bloque pas un
+  update autrement permis et reste inchangé pour recovery explicite, sans
+  acquérir d'autorité privilégiée.
+  Readiness en lecture seule sans collector/helper/mutation SDK ; réservation
+  swap/rollback, reprise avant rollback après échec restart. Si protection
+  reprise, rollback refusé et backups préservés ; no-op paire identique sans
+  réservation de remplacement. MSI externe/manuelle n'est pas protégée par ce
+  mécanisme portable : release préalable explicite reste obligatoire.
+- Linux/macOS conservent leurs contrôles one-shot approuvés, sans propriétaire
+  Windows fictif : session PipeWire, INPUT writable et profil manuel macOS,
+  helper USB Linux explicite, pas de déni global ALSA/V4L2 ou matériel universel.
+
+### Bornes et preuves locales réelles
+
+- Le lecteur PipeWire candidat est streaming borné (stdout/stderr, graphe,
+  deadlines) ; dépassement/blocage/erreur = santé explicite et lacune, pas STOP.
+  Files UI/notifications/caches bornés ; six boutons TUI dans une seule rangée
+  horizontale, représentation compacte en terminal étroit.
+- Windows local : Clippy strict feature et deux suites natives réussis
+  (156 lib +1 main, 1 visuel ignoré), huit tests IPC natifs réels réussis.
+  ConPTY sept langues à 120/150/40/20 colonnes avec refresh/souris/quit ;
+  hitbox hors Quit à 150 colonnes, rendu FR150 inspecté visuellement sans overflow.
+  Dernière correction de status (helper absent normal seulement sans intention/
+  token/conflit, autres erreurs natives conservées) pas encore rebâtie.
+- Inventaire Windows read-only : un micro actif annonçant hardware mute et une
+  caméra présente. Aucune mutation de device/endpoints ni capture physique
+  nouvelle. Rapport ressources functional/completed true : **15 Mo non atteints**.
+  Status OSpeak ≈18,34 Mo ; watch médiane/pic 17,580032/18,362368 Mo ; top
+  18,1248/18,993152 Mo ; burst 18,214912/19,079168 Mo. Aucun garde/tray actif ;
+  gaps maximaux 63–78 ms, pas promesse ≤50 ms ou observation de tout pic bref.
+- Linux : fixture PipeWire privée réellement exercée, unmute externe encore
+  présent après cinq secondes ; fixture nettoyée sans accès audio physique.
+  macOS : limitations candidates source seulement, pas nouvelle preuve physique.
+
+### Qualification restant à établir avant clôture
+
+CI native complète Windows/Linux/macOS, véritables helpers Windows sur runner
+sans devices, matrices opposées multi-endpoints/manuelle/hotplug/échec/release,
+caméra Block/Allow possédé et ressources avec gardes restent pendants. Mesurer
+tout l'arbre produit et les enfants brefs (`pw-dump`/son), publier RSS partagée et
+lacunes d'échantillonnage : somme RSS peut recompter des pages, RSS racine peut
+omettre des helpers. La cible souple est 15 000 000 B ; environ 30 Mo est une
+référence, pas seuil dur. Aucune affirmation d'optimisation sous 15 Mo.
+Les validations physiques historiques ne certifient pas ce nouveau candidat ;
+ne pas substituer fixture virtuelle, runner vide ou lecture source au matériel.
 

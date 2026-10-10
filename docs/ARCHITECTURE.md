@@ -419,3 +419,170 @@ reported `NotSigned`; local Defender completed its exact custom scan with
 active protections and no detection/remediation events in the observed window.
 See [signing evidence](SIGNING.md); this is not universal antivirus clearance.
 
+## Candidate 0.17.0 Windows-first protection contract
+
+This section describes candidate source only. Public stable/latest remains
+immutable `v0.16.1`, with its existing installation URLs, hashes and historical
+proofs unchanged. Windows-first persistent protection was explicitly chosen;
+Linux/macOS remain scoped one-shot controls, not substitutes for this owner.
+P1-RAM/P1-RESTORE are implemented in candidate source but remain **in progress**
+pending native qualification. No signing/notarization or publication is claimed.
+
+### Intent, effect and observation
+
+Requested protection is an owned intent, SDK mute/PnP state is an effective
+control readback, and observed capture is collector evidence. They are distinct:
+muted does not mean capture access is denied, and no capture observation is not
+proof of enforced protection. Windows microphone control operates on capture
+endpoint mute, not electrical isolation, exclusive/ASIO/direct-driver denial or
+a universal hardware mute. Hardware mute capability is not proof of such denial.
+
+Manual microphone protection is owned by MCW's native background broker until
+explicit release, even after CLI, `top` or tray exit. It is launched on demand;
+there is no implicitly installed login service, autostart or promise of reboot
+persistence. Automatic owners record each stable endpoint's original mute,
+generation, applied/readback state and intention token. Restoration uses this
+record, never an aggregate `Mixed`/`Muted` boolean applied to all endpoints.
+Generation changes, disconnects, hotplug and partial failures do not become
+silent success. A newer manual intent takes precedence over an older automatic
+restore. When release cannot safely finish, original/ownership evidence remains
+release-pending; dropping a UI or request is not permission to erase it.
+
+External changes are preserved when observable, but CoreAudio's event-context
+GUID is advisory, not authenticated caller identity. `SetMute` of the same
+value can return `S_FALSE` without emitting a callback. The SDK cannot identify
+an exact Ktalk/Audition actor or detect every invisible same-valued external
+intent. Generation/readback/manual precedence are safeguards, not an absolute
+ownership or security boundary against other software or administrators.
+Missing helper endpoint is normal only when no protection is requested, no
+automatic token exists and no resource conflict is present; requested-owner
+failures and other native transport errors stay explicit.
+
+### Global Windows camera ownership
+
+Global Block/Allow is an intention independent of discovered count, including
+zero, one or 1,000 cameras. Explicit Block requests UAC for a temporary native
+background helper, which maintains the requested block for supported present
+devices and future arrivals. UI exit does not release this manual intent.
+Allow clears the global intent and restores only the journaled protected owned
+changes. It is not "enable all cameras": externally disabled or initially
+disabled devices are not borrowed as MCW-owned changes.
+
+Inventory is current observation, not a retained list of expected cameras:
+an absent camera is neither an expected inventory entry nor an error by itself.
+Owned restoration evidence is separate. Device arrival and subsequent SDK
+enforcement have a brief window; restart-required changes, SDK vetoes, unknown
+status and partial failure remain reported. Intent alone cannot promise instant
+capture revocation, successful driver restart or verified denial.
+
+Ownership evidence is in an administrator-protected journal. Unsigned legacy
+user-writable ownership is not imported into elevated authority. Explicit
+`mcw camera allow --restore-legacy INSTANCE_ID` instead requests fresh UAC for
+that one target, validates its camera class and reports the actual result.
+It is general recovery, not an automatic unsigned-journal migration, arbitrary
+device-enable RPC or hardcoded Logitech privilege exception.
+
+### Shared native control boundary
+
+Microphone/camera owners use the shared fixed-capability native IPC transport.
+Endpoints bind the exact user SID, session and hash of the operationally scoped
+data directory; native peer tokens/processes are checked rather than trusting
+caller-supplied PID/name fields. Retained process handles and creation times
+authenticate process birth, preventing recycled numeric PIDs from authorizing
+an invoker. Native resource ownership refuses conflicting SDK mutations across
+owners/scopes.
+
+Normal RPC has typed fixed actions, no arbitrary path, device, command or shell
+payload. Frames are bounded (4,096 B request, 65,536 B response), with bounded
+three-second transport phases and a bounded reply acknowledgement before
+disconnect. Malformed/untrusted clients are disconnected without terminating
+the owner. Alternate-administrator UAC delegation permits QUERY-only native
+process/token inspection needed to validate the invoker; it grants neither
+token use/adjustment, termination nor general privileged authority.
+
+Updates must not implicitly release protection to replace a locked executable.
+Explicitly release microphone and camera intent and complete pending restoration
+before replacing binaries, including portable, MSI/package-manager or manual
+replacement. Merely closing the tray/top is insufficient. A missing readiness
+proof or a failed/pending release must not be described as safe ownership loss.
+
+Candidate portable Windows `mcw update` obtains the camera and microphone
+request locks and both validated global native `ResourceLease` reservations
+before tray shutdown or installed-byte swaps. It refuses active/foreign owners,
+requested manual intent, automatic microphone token/generation, pending
+microphone release/restore, desired global camera Block, and protected camera
+journal requested/owned/unfulfilled receipts or unreadable/corrupt/unsupported
+records. Unsigned legacy `restore_on_arrival` owed-only history alone neither
+authorizes elevated changes nor blocks an otherwise permitted update: it is
+preserved unchanged for explicit legacy recovery. Readiness inspection is
+read-only: it constructs no capture/trust collector, starts no helper, changes
+no SDK state and never selects Allow/unmute or clears intent.
+
+Reservations cover replacement and rollback, are released before restart and
+reacquired before rollback following restart failure. If protection resumed,
+rollback refuses and keeps backups rather than disturbing the new owner.
+Same-version already-matching CLI/tray no-op skips replacement reservations;
+explicit tray stop remains unchanged and is not release. A delayed unarmed
+helper after startup timeout can temporarily make ownership busy; this is not
+proof of successfully armed protection, and it cannot receive mismatched-version
+intent or write a false default. External MSI upgrades and manual/package-manager
+replacement bypass this portable-updater mechanism: no MSI enforcement or
+permission action is claimed. Explicit prior release remains the procedure.
+
+
+### Bounded collection and frontends
+
+The candidate Linux `pw-dump` reader parses the graph as a bounded stream rather
+than retaining a full raw document plus `Vec<Value>`. Child stdout/stderr,
+retained graph data and deadlines are bounded; oversized, malformed, stalled
+or failed child output becomes explicit unavailable/degraded health and an
+observation gap. Never silently truncate captures or infer STOP from that gap;
+recovery rebaselines. Identity evidence is not discarded to make RSS attractive.
+
+UI delivery queues, notification work, cooldown and identity caches are bounded.
+Refresh can coalesce where appropriate; control/failure state stays truthful.
+The shared TUI has one horizontal row of six controls, with compact labels at
+narrow widths rather than wrapping the controls into multiple rows. Narrow
+representations retain shortcuts, capability state and mouse hitboxes. These
+bounds do not prove every native OS memory/latency budget.
+
+### Local candidate evidence and remaining qualification
+
+Observed in the private Windows clone: strict feature Clippy and both native
+unit suites passed, with 156 library + 1 main feature tests and 1 ignored visual
+test. Eight real native IPC tests passed after queued-overlapped ownership and
+bounded response-ACK fixes. The subsequent missing-helper normal-status/native
+error-preservation correction has **not yet been rebuilt**; prior test results
+do not certify that final edit.
+
+Actual native ConPTY `top` passed seven languages at 120/150/40/20 columns with
+refresh, mouse and quit. The outside-Quit hitbox was tested at 150 columns;
+the rendered French 150-column screenshot was visually inspected: six compact
+bordered controls on one row, no overflow. The read-only host inventory has one
+active microphone advertising hardware mute and one present camera. No
+physical endpoint/capture/device setting was changed by this candidate proof.
+
+The read-only canonical resource report completed with functional/completed
+true, but **15,000,000 B is unmet**. Approximate status OS peak was 18.34 MB;
+watch median/peak 17.580032/18.362368 MB; top 18.1248/18.993152 MB;
+burst 18.214912/19.079168 MB (decimal MB). No active protection guard or tray was
+included in this local run. Maximum candidate sample gaps were 63–78 ms, not
+at most 50 ms; short-lived child lifetimes and between-sample peaks may escape
+observation. OS peak and sampled stable/peak values are not interchangeable.
+
+Qualification must account for the entire product process tree, including
+native guard/tray/embedded helper and transient `pw-dump`/sound children, and
+report shared resident pages without pretending summed RSS is unique physical
+memory. A tree sum can count shared pages repeatedly; root-only RSS can omit
+children. Report both the accounting method and known sampling gaps. The soft
+target is 15,000,000 B; the approximately 30 MB reference is not a hard cutoff.
+Neither bounded code nor these local numbers establish optimized sub-target RAM.
+
+A private Linux PipeWire fixture actually proved external unmute remained
+after five seconds; the fixture was cleaned, without physical audio access.
+The macOS candidate has source-scoped limitation evidence only, not new physical
+proof. Full native OS CI, full actual helpers on empty-device hosted Windows,
+guard-inclusive resource/latency measurements and material multi-endpoint,
+hotplug, camera denial/owned restoration remain pending. Historical v0.16.1
+publication and earlier hardware evidence do not qualify this candidate.
+

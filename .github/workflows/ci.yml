@@ -26,6 +26,8 @@ jobs:
         with:
           components: rustfmt, clippy
       - run: cargo fmt --check
+      - name: Verify basic Windows CLI without tray feature
+        run: cargo test --all-targets --locked
       - run: cargo clippy --all-targets --features windows-tray --locked -- -D warnings
       - run: cargo test --all-targets --features windows-tray --locked
       - name: Audit Rust dependencies
@@ -41,6 +43,28 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Native TUI proof dependencies failed' }
           & $python -B installer/tests/native_tui_controls.py --binary (Resolve-Path target/release/mcw.exe).Path --proof "$env:RUNNER_TEMP/native-windows-top"
           if ($LASTEXITCODE -ne 0) { throw 'Native Windows top controls smoke failed' }
+      - name: Exercise native zero-device protection owners and finite IPC
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') { throw 'Disposable hosted runner required' }
+          # Hosted Windows Server may stop audio services when no hardware is
+          # attached. Exercise real CoreAudio, not an unavailable-service fallback.
+          foreach ($name in @('AudioEndpointBuilder', 'Audiosrv')) {
+            $service = Get-Service $name -ErrorAction Stop
+            if ($service.Status -ne 'Running') {
+              Set-Service $name -StartupType Manual
+              Start-Service $name -ErrorAction Stop
+            }
+          }
+          $python = Join-Path $env:RUNNER_TEMP 'mcw-ui-proof-venv/Scripts/python.exe'
+          & $python -B installer/tests/native_windows_protection.py --binary (Resolve-Path target/release/mcw.exe).Path --proof "$env:RUNNER_TEMP/native-windows-top/guards"
+          if ($LASTEXITCODE -ne 0) { throw 'Native protection owner proof failed; inspect guards.json partial evidence' }
+      - name: Qualify immutable baseline and candidate real Windows resource usage
+        shell: pwsh
+        run: |
+          $python = Join-Path $env:RUNNER_TEMP 'mcw-ui-proof-venv/Scripts/python.exe'
+          & $python -B installer/tests/native_resources.py --binary (Resolve-Path target/release/mcw.exe).Path --proof "$env:RUNNER_TEMP/native-windows-top/resources" --runner-desktop --scenario disposable_windows_native_collectors
+          if ($LASTEXITCODE -ne 0) { throw 'Native resource qualification failed; inspect resources.json partial evidence' }
       - name: Upload Windows top terminal frames
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -321,6 +345,14 @@ jobs:
                       "Menu bar needs this user's Aqua/WindowServer session. Screenshot needs Screen Recording approval "
                       "for the runner process; notifications need native authorization. No TCC edits, permission requests, "
                       "camera profiles or writable-input mute mutations are performed. Public macOS lock state remains Unknown.\n")
+              # Run qualification before ANY PipeWire outage/desktop teardown.
+              # Reuse this exact real private XFCE/PipeWire or Aqua session.
+              record("resource-qualification",
+                     [os.environ["MCW_UI_PROOF_PYTHON"], "-B",
+                      str(pathlib.Path(os.environ["GITHUB_WORKSPACE"]) / "installer/tests/native_resources.py"),
+                      "--binary", binary, "--proof", str(proof / "resources"), "--runner-desktop",
+                      "--scenario", "isolated_pipewire_empty_graph_xfce" if linux else "native_macos_aqua_read_only_collectors"],
+                     timeout=900)
               current = status("status")
               doctor = record("doctor", [binary, "doctor", "--json"], (0, 2))
               checks = json.loads(doctor.stdout)
@@ -370,6 +402,12 @@ jobs:
                   until(lambda: any(a.get("pid") == capture.pid and a.get("activity") == "active"
                                     for a in status("virtual-status")["accesses"]), "Native virtual capture PID not observed")
                   record("virtual-active-graph", ["pw-dump"])
+                  record("pipewire-bounded-reader",
+                         [os.environ["MCW_UI_PROOF_PYTHON"], "-B",
+                          str(pathlib.Path(os.environ["GITHUB_WORKSPACE"]) / "installer/tests/native_pipewire_limits.py"),
+                          "--binary", binary, "--capture-pid", str(capture.pid),
+                          "--proof", str(proof / "pipewire-limits")],
+                         timeout=180)
                   def virtual_source():
                       return virtual_node("MCW_CI_Source")
                   def virtual_muted():

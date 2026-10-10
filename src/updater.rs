@@ -120,11 +120,7 @@ pub fn update() -> Result<()> {
     };
     let was_running = running.is_some();
     let count = replacements.len();
-    let mut operations = transaction::NativeOperations {
-        replacements,
-        running,
-        tray,
-    };
+    let mut operations = transaction::NativeOperations::new(replacements, running, tray);
     let outcome = transaction::apply(&mut operations, count, was_running);
     let recovery_backup_remains = outcome.is_err()
         && operations

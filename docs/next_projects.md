@@ -1,9 +1,16 @@
 # Roadmap technique post-v0.16.1
 
-Dernière mise à jour : **2026-10-06**. Responsable : lead architecture/développement.
+Dernière mise à jour : **2026-10-09**. Responsable : lead architecture/développement.
 Base publiée : [v0.16.1 stable/latest](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.16.1), source `7b134e3500860bd185ddc3955107b8082d414e78` ; [CI main](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37487806861) verte avant création du tag.
 
 Ce document planifie les prochains travaux ; sa création ne clôture aucune phase produit et ne justifie pas de nouvelle release binaire. Les fonctionnalités proposées ci-dessous ne sont pas annoncées comme disponibles. Les complexités sont des estimations de conception, pas des délais ni des mesures.
+
+**Candidat source `0.17.0`, non publié :** Windows-first explicitement retenu pour
+la protection persistante. Les corrections candidates annotées ci-dessous ne
+réécrivent ni les défauts historiques ni les preuves de `v0.16.1`. Les pins
+d'installation restent `v0.16.1` jusqu'à publication ; P1-RAM/P1-RESTORE restent
+**En cours** jusqu'à qualification CI native/helpers/matérielle. Les autres lots
+demeurent ouverts. Voir le [contrat candidat et ses limites](ARCHITECTURE.md#candidate-0170-windows-first-protection-contract).
 
 ## Base réelle et décisions d'architecture
 
@@ -17,7 +24,7 @@ Ce document planifie les prochains travaux ; sa création ne clôture aucune pha
 ### Règles anti-bloat et sécurité communes
 
 1. Garder le cœur Rust et les bridges natifs existants. Aucun runtime supplémentaire, framework web, serveur HTTP, lecteur multimédia, base embarquée ou SDK de messagerie pour les projets de cette roadmap.
-2. **Budget du produit : moins de 15 Mo de RAM (15 000 000 octets).** Ce seuil n'est pas établi par les validations fonctionnelles de v0.16.0. Mesurer résident stable et pics, CLI/watch/tray séparément, avec les helpers MCW inclus ; publier aussi le coût des enfants `pw-dump`/son. Aucun résultat « léger » en cachant le helper AppKit. Les scripts utilisateur externes ont un budget séparé : leur mémoire arbitraire ne peut pas être garantie par le cœur.
+2. **Cible souple : 15 Mo de RAM (15 000 000 octets) ; environ 30 Mo comme référence, pas seuil dur.** Ce choix remplace le seuil bloquant initial : ne pas déformer les mesures pour afficher moins de 15 Mo. Mesurer résident stable et pics, CLI/watch/top/tray séparément, avec tous les helpers/gardes MCW et enfants `pw-dump`/son. Publier la méthode de RSS partagée (une somme peut compter plusieurs fois les mêmes pages) et les lacunes d'échantillonnage/les enfants trop brefs. Aucun résultat « léger » en cachant le helper AppKit ou les pics de démarrage. Les scripts utilisateur externes ont un budget séparé : leur mémoire arbitraire ne peut pas être garantie par le cœur. Bornes explicites et absence d'accumulation restent obligatoires.
 3. Qualifier CPU au repos, démarrage jusqu'au premier résultat, cadence et latence des événements sur chaque OS. Le watch actuel utilise notamment une cadence par défaut de 750 ms : « instantané » ne signifie pas détection physique garantie en temps réel.
 4. Files, caches, réponses OS et sorties enfant bornés ; workers réutilisés ; pas de thread/processus par événement, de copie complète des preuves dans chaque file ou de travail coûteux lorsque l'option est désactivée.
 5. Aucune collecte audio/vidéo pour mieux détecter. Aucune élévation implicite, modification TCC/SIP/PAM, exclusion Defender ou restauration de quarantaine. `Unknown`, attribution absente et résultats partiels restent visibles.
@@ -29,8 +36,8 @@ Les identifiants sont stables. À chaque livraison, remplacer l'état par **En c
 
 | Lot | Décision / état actuel | Complexité | Dépendance principale |
 | --- | --- | --- | --- |
-| P1-RAM | Retenu, prioritaire, à faire | Moyenne | Mesures reproductibles des modes natifs |
-| P1-RESTORE | Retenu, prioritaire, à faire | Élevée | Restauration microphone Windows par endpoint |
+| P1-RAM | En cours : bornes candidates 0.17.0, mesure Windows locale >15 Mo ; qualification native/helpers restante | Moyenne | Mesures reproductibles de tout l'arbre produit |
+| P1-RESTORE | En cours : propriétaire natif Windows et journal par endpoint dans le candidat 0.17.0 | Élevée | Qualification CI native, états opposés/hotplug/restauration |
 | P1-HB | Homebrew : à faire | Moyenne | Propriété installation/autostart, validation macOS |
 | P1-AUR | AUR : à faire | Moyenne | Dépendances PipeWire et frontière root |
 | P1-WG | Winget : à faire | Moyenne | Identité MSI et upgrades contrôlés |
@@ -47,13 +54,27 @@ Les identifiants sont stables. À chaque livraison, remplacer l'état par **En c
 
 ## Phase 1 — Packaging et écosystème de distribution (immédiat)
 
-### P1-RAM — Qualifier et faire respecter le budget avant extension
+### P1-RAM — Qualifier la mémoire et borner les accumulations avant extension
 
 **Fonction :** établir une baseline puis supprimer les croissances non bornées avant d'élargir le produit. Priorité aux observations et aux effets existants, pas à une nouvelle abstraction de performance.
 
 **Modules Rust :** `src/platform/linux/pipewire.rs`, `src/watcher/windows.rs`, `src/watcher/unix.rs`, `src/frontends/tray.rs`, `src/frontends/tray/unix.rs`, `src/platform/macos.rs` ; `Cargo.toml`/`Cargo.lock` pour contrôler les dépendances.
 
-**Contraintes :** le JSON PipeWire autorise actuellement **16 MiB** de brut puis un `Vec<serde_json::Value>` ; cette limite n'est pas une borne RSS. `stderr` du subprocess n'est pas borné. Le tray Windows a des canaux non bornés et un thread par notification ; le cooldown du watcher Windows n'est pas purgé. Ces faits de code constituent des risques, pas une mesure de dépassement. Borner sans tronquer silencieusement les captures : dépassement = santé dégradée/indisponible explicite. Ne pas supprimer les preuves d'identité pour économiser la mémoire.
+**Contraintes historiques de la base, avant correction candidate :** le JSON PipeWire autorisait **16 MiB** de brut puis un `Vec<serde_json::Value>` ; cette limite n'était pas une borne RSS. `stderr` du subprocess n'était pas borné. Le tray Windows avait des canaux non bornés et un thread par notification ; le cooldown du watcher Windows n'était pas purgé. Ces faits de code constituaient des risques, pas une mesure de dépassement. Borner sans tronquer silencieusement les captures : dépassement = santé dégradée/indisponible explicite. Ne pas supprimer les preuves d'identité pour économiser la mémoire.
+
+**Implémenté en source candidate 0.17.0 :** lecture PipeWire streaming bornée,
+stdout/stderr et données retenues bornés, deadlines enfant et erreurs de santé
+explicites sans faux STOP ; files UI/notifications/caches bornés. `top` conserve
+une seule rangée horizontale de six boutons, avec représentation compacte aux
+petites largeurs. Cela corrige les risques historiques, sans certifier le RSS.
+
+**Preuve locale, pas CI complète :** rapport Windows read-only terminé,
+functional/completed true, cible **15 Mo non atteinte**. Status OSpeak ≈18,34 Mo ;
+watch médiane/pic 17,580032/18,362368 Mo ; top 18,1248/18,993152 Mo ; burst
+18,214912/19,079168 Mo. Aucun garde/tray actif dans cette mesure ; gaps maximaux
+63–78 ms, enfants/pics très brefs potentiellement manqués. Toute l'arborescence
+avec gardes/helpers, RSS partagée, CPU/latence et scénarios natifs restent à
+qualifier ; ne pas annoncer « optimisé sous 15 Mo ».
 
 **Validation :** baseline stable/pic et latence sur les trois OS, gros graphes et rafales d'événements, UI lente, enfant bloqué/sortie excessive ; aucune accumulation et aucun STOP inventé en cas de limite. Toute impossibilité de respecter le budget doit être remontée avant ajout de fonctions, pas compensée par une mesure plus flatteuse.
 
@@ -65,11 +86,51 @@ Les identifiants sont stables. À chaque livraison, remplacer l'état par **En c
 
 **Modules Rust :** `src/platform/windows.rs`, `src/frontends/tray.rs`, `src/collector.rs`, `src/model.rs` ; réutiliser les conventions de possession de `src/platform/linux/control.rs` et `src/platform/macos/control.rs`, sans remplacer leurs backends.
 
-**Contraintes :** dans v0.16.0, le tray sauvegarde `mute_state == Muted` dans un seul booléen. Un état `Mixed` devient donc `false`, ensuite appliqué à tous les endpoints : risque de démuter une entrée initialement coupée. Les originaux par endpoint du backend servent seulement au rollback immédiat. Conserver ID stable, original, génération/intention et readback ; une action manuelle récente prime sur une restauration tardive. Déconnexion, nouvel endpoint, redémarrage et échec de rollback ne doivent pas devenir un succès implicite.
+**Contraintes historiques :** dans v0.16.0, le tray sauvegardait `mute_state == Muted` dans un seul booléen. Un état `Mixed` devenait donc `false`, ensuite appliqué à tous les endpoints : risque de démuter une entrée initialement coupée. Les originaux par endpoint du backend servaient seulement au rollback immédiat. Exigence conservée : ID stable, original, génération/intention et readback ; une action manuelle récente prime sur une restauration tardive. Déconnexion, nouvel endpoint, redémarrage et échec de rollback ne doivent pas devenir un succès implicite.
+
+**Implémenté en source candidate 0.17.0 :** propriétaire natif de l'intention
+manuelle micro jusqu'au release explicite, indépendant de `top`/tray ; originaux,
+générations et tokens automatiques par endpoint, priorité manuelle et propriété
+release-pending en cas d'échec. Intention demandée, mute SDK effectif et capture
+observée restent séparés. Aucun service login/autostart implicite. Linux/macOS
+restent one-shot dans leurs portées approuvées.
+
+Le GUID de contexte CoreAudio est consultatif ; `SetMute` même valeur peut rendre
+`S_FALSE` sans callback. Attribution exacte Ktalk/Audition et toute intention
+externe invisible ne sont pas garanties : pas de frontière de sécurité absolue.
+Caméra Windows : Block global même à zéro/1 000 appareils, helper temporaire UAC
+pour arrivées futures ; Allow uniquement possédé, journal admin protégé, pas
+d'import legacy non signé. Recovery `camera allow --restore-legacy INSTANCE_ID`
+= nouvelle autorisation UAC/class validation mono-cible, pas exception Logitech.
+Fenêtre brève d'arrivée, restart/veto/unknown restent explicites. IPC fixe lié
+SID/session/data-dir hash et génération native, borné, sans chemins/devices
+arbitraires ; délégation admin alternatif QUERY-only.
+
+**Preuves locales :** Clippy strict feature, deux suites Windows (156 lib +1 main,
+1 visuel ignoré) et huit tests IPC natifs réussis ; ConPTY sept langues,
+120/150/40/20 colonnes, souris/refresh/quit et screenshot FR150 inspecté. La
+dernière correction d'absence normale du helper sans intention n'est pas encore
+rebâtie. Un micro actif annonçant hardware mute et une caméra présents observés
+en lecture seule, aucune mutation physique. Release explicite et restauration
+achevée exigés avant remplacement binaire ; ne jamais relâcher implicitement
+pour updater. Ces résultats ne clôturent pas la qualification native/matérielle.
+
+**Sécurité update candidate (source, pas encore qualifiée) :** portable Windows
+réserve request locks et ressources natives micro/caméra avant stop/swap,
+refuse propriétaire actif/étranger, intention/token, release-pending ou journal
+non fiable. Readiness strictement read-only sans release/helper/SDK. Réservation
+swap/rollback, réacquisition avant rollback post-restart ; protection reprise
+= rollback refusé et backups gardés. No-op paire identique sans réservation de
+remplacement. MSI externe/manuelle ne passe pas par ces gardes du portable ;
+release explicite reste la procédure, pas garantie d'enforcement MSI.
+L'intention globale Block et les reçus caméra protégés requested/owned/unfulfilled
+bloquent. L'historique legacy non signé `restore_on_arrival` owed-only, seul, ne
+bloque pas un remplacement autrement permis : préservé inchangé pour recovery
+explicite, il ne devient pas une autorité élevée.
 
 **Validation :** deux entrées avec états opposés, changement manuel entre lock/unlock, hotplug et échec partiel ; seules les modifications possédées sont restaurées exactement. Pas de promesse de coupure électrique ou de déni d'accès WASAPI.
 
-**Complexité : Élevée.** Candidat à un patch `0.16.x` autonome une fois reproduit et validé ; cette roadmap ne livre pas la correction.
+**Complexité : Élevée.** Correction intégrée au candidat source `0.17.0`, non publiée ; qualification restante avant clôture P1-RESTORE, sans modifier les releases immuables.
 
 ### P1-HB — Formule Homebrew macOS
 
@@ -272,3 +333,4 @@ Windows : `RegisterHotKey` seul n'offre pas un protocole PTT key-up complet ; va
 | 2026-10-06 | Baseline v0.16.0 | Publiée, hors nouvelles phases | [CI main](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37439356665), [release native](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37437092551), [migration 0.14.0](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37438076601), [migration 0.15.1](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37438076504) | Limites matérielles/OS dans Architecture ; aucune affirmation RAM <15 Mo |
 | 2026-10-06 | Roadmap | Plan technique établi, aucune phase produit clôturée | Modules et contrats relus dans la base 0.16.0 ; propositions arbitrées ci-dessus | Démarrer par P1-RAM/P1-RESTORE ; packaging puis autres lots selon dépendances |
 | 2026-10-06 | Patch 0.16.1 updater/tray/top | [Livré stable/latest](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.16.1) | [CI complète](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37487806861), [release native](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37493346742), [migration publique 0.16.0](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37495128116) : Windows/Linux/macOS ARM/Intel ; menus Win32 560/562 px à 125 % de DPI, XFCE 399/398 px Latin/CJK, AppKit 240 pt sur 7 langues et diagnostics longs, détails complets. TUI : 7 langues, souris/clavier et redimensionnements. Bootstrap macOS public et updater corrigé, présence/absence de quarantaine, SIGTERM/rollback exact, changements concurrents préservés. Sept assets publics, hashes et six attestations vérifiés ; vrai updater Windows 0.16.0 → 0.16.1 puis no-op | Consolidation P1-UPGRADE et autres phases restent ouvertes ; pas de mesure RAM <15 Mo, de signature ni de nouvelle preuve matérielle |
+| 2026-10-09 | Candidat source 0.17.0 Windows-first P1-RAM/P1-RESTORE | En cours, non publié ; stable/latest reste v0.16.1 | Bornes et propriétaire natif implémentés ; Clippy/tests/IPC/ConPTY Windows locaux, source PipeWire virtuelle externe démutée après 5 s et nettoyée ; mesures Windows read-only >15 Mo (voir Architecture) | CI native complète, helpers Windows vides réels et mesure avec gardes, qualification matérielle/restauration ; dernière correction status pas encore rebâtie ; aucun autre lot clôturé |

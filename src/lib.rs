@@ -34,4 +34,6 @@ pub mod updater;
 #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
 pub mod watcher;
 #[cfg(windows)]
+pub(crate) mod windows_control;
+#[cfg(windows)]
 pub(crate) mod windows_tools;

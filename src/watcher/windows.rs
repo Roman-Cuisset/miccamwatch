@@ -6,7 +6,8 @@ use crate::{
         EvidenceKind, SCHEMA_VERSION, Snapshot, event_code,
     },
     output,
-    platform::{PlatformMonitor, SessionLockState},
+    platform::{MicrophoneProtectionStatus, PlatformMonitor, SessionLockState},
+    privacy::{self, CameraControlObservation},
 };
 use anyhow::{Context, Result};
 use chrono::Utc;
@@ -25,7 +26,7 @@ use std::{
 };
 use windows::{
     Win32::{
-        Foundation::HANDLE,
+        Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0, WAIT_TIMEOUT},
         System::{
             EventLog::{
                 DeregisterEventSource, EVENTLOG_INFORMATION_TYPE, EVENTLOG_WARNING_TYPE,
@@ -34,6 +35,7 @@ use windows::{
             Registry::{
                 HKEY, REG_NOTIFY_CHANGE_LAST_SET, REG_NOTIFY_CHANGE_NAME, RegNotifyChangeKeyValue,
             },
+            Threading::{CreateEventW, WaitForSingleObject},
         },
     },
     core::PCWSTR,
@@ -58,11 +60,17 @@ pub fn watch(
     ctrlc::set_handler(move || signal.store(false, Ordering::SeqCst))
         .context("failed to install Ctrl+C handler")?;
 
-    let (wake_sender, wake_receiver) = mpsc::channel();
-    let _audio_notifications = monitor
-        .register_audio_notifications(wake_sender.clone())
-        .ok();
-    spawn_registry_watcher(wake_sender);
+    // Session/registry callbacks request a rescan, not an event delivery. One
+    // pending wake preserves that intent without retaining a callback burst.
+    let (wake_sender, wake_receiver) = mpsc::sync_channel(1);
+    let _audio_notifications = match monitor.register_audio_notifications(wake_sender.clone()) {
+        Ok(guard) => Some(guard),
+        Err(error) => {
+            eprintln!("audio notifications unavailable; polling remains active: {error:#}");
+            None
+        }
+    };
+    let _registry_watcher = spawn_registry_watcher(wake_sender, Arc::clone(&running));
     let mut log_writer = log_path
         .map(|path| {
             OpenOptions::new()
@@ -81,8 +89,10 @@ pub fn watch(
         None
     };
 
+    let mut protection_health = ProtectionHealthReporter::new();
+    protection_health.refresh(monitor, lang);
     let mut previous = snapshot_by_key(monitor, filter)?;
-    let mut last_notifications = HashMap::new();
+    let mut last_notifications = NotificationCooldowns::default();
     let mut denial_observations = HashMap::new();
     let mut terminated = HashSet::new();
 
@@ -113,6 +123,8 @@ pub fn watch(
             Ok(()) | Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
+        last_notifications.prune(Instant::now());
+        protection_health.refresh(monitor, lang);
         let current = snapshot_by_key(monitor, filter)?;
 
         for (key, access) in &current {
@@ -196,6 +208,90 @@ pub fn watch(
     Ok(())
 }
 
+// Protection health is separate from capture events. Polling is read-only,
+// rate-limited, and emits only meaningful changes; correction counters would
+// otherwise turn an application's repeated unmute into unbounded stderr noise.
+struct ProtectionHealthReporter {
+    next_poll: Instant,
+    microphone: Option<MicrophoneProtectionStatus>,
+    microphone_error: Option<String>,
+    camera: Option<CameraControlObservation>,
+    camera_error: Option<String>,
+}
+
+impl ProtectionHealthReporter {
+    fn new() -> Self {
+        Self {
+            next_poll: Instant::now(),
+            microphone: None,
+            microphone_error: None,
+            camera: None,
+            camera_error: None,
+        }
+    }
+
+    fn refresh(&mut self, monitor: &PlatformMonitor, lang: Language) {
+        let now = Instant::now();
+        if now < self.next_poll {
+            return;
+        }
+        self.next_poll = now + Duration::from_secs(2);
+        match monitor.microphone_protection_status() {
+            Ok(status) => {
+                let changed = self.microphone.as_ref().is_none_or(|old| {
+                    old.requested != status.requested
+                        || old.service_active != status.service_active
+                        || old.mute_state != status.mute_state
+                        || old.endpoint_count != status.endpoint_count
+                        || old.hardware_mute_count != status.hardware_mute_count
+                        || old.detail != status.detail
+                });
+                if changed || self.microphone_error.is_some() {
+                    eprintln!("{}", output::microphone_protection_summary(lang, &status));
+                }
+                self.microphone = Some(status);
+                self.microphone_error = None;
+            }
+            Err(error) => {
+                let detail = format!("{error:#}");
+                if self.microphone_error.as_ref() != Some(&detail) {
+                    eprintln!("{}: {detail}", lang.unknown_protection(true));
+                }
+                self.microphone = None;
+                self.microphone_error = Some(detail);
+            }
+        }
+        match privacy::camera_observation() {
+            Ok(status) => {
+                let changed = self.camera.as_ref().is_none_or(|old| {
+                    old.desired_blocked != status.desired_blocked
+                        || old.state != status.state
+                        || old.present_total != status.present_total
+                        || old.owned_blocked_present != status.owned_blocked_present
+                        || old.pending_restore != status.pending_restore
+                        || old.absent_owned != status.absent_owned
+                        || old.unknown_devices != status.unknown_devices
+                        || old.helper_active != status.helper_active
+                        || old.detail != status.detail
+                });
+                if changed || self.camera_error.is_some() {
+                    eprintln!("{}", output::camera_protection_summary(lang, &status));
+                }
+                self.camera = Some(status);
+                self.camera_error = None;
+            }
+            Err(error) => {
+                let detail = format!("{error:#}");
+                if self.camera_error.as_ref() != Some(&detail) {
+                    eprintln!("{}: {detail}", lang.unknown_protection(false));
+                }
+                self.camera = None;
+                self.camera_error = Some(detail);
+            }
+        }
+    }
+}
+
 fn snapshot_by_key(monitor: &PlatformMonitor, filter: &Filter) -> Result<HashMap<String, Access>> {
     let snapshot = monitor.snapshot(filter.into())?;
     ensure_collectors_available(&snapshot)?;
@@ -241,7 +337,7 @@ fn emit_event(
     lang: Language,
     notify: bool,
     sound: bool,
-    last_notifications: &mut HashMap<String, Instant>,
+    last_notifications: &mut NotificationCooldowns,
     log_writer: &mut Option<BufWriter<std::fs::File>>,
     event_source: &Option<HANDLE>,
     history_enabled: bool,
@@ -402,43 +498,119 @@ fn write_eventlog(event: &AccessEvent, handle: &Option<HANDLE>) {
     };
 }
 
-fn notification_due(last: &mut HashMap<String, Instant>, key: &str) -> bool {
-    const COOLDOWN: Duration = Duration::from_secs(30);
-    let now = Instant::now();
-    if last
-        .get(key)
-        .is_some_and(|previous| now.duration_since(*previous) < COOLDOWN)
-    {
-        return false;
+const NOTIFICATION_COOLDOWN: Duration = Duration::from_secs(30);
+const MAX_COOLDOWNS: usize = 4096;
+
+#[derive(Default)]
+struct NotificationCooldowns {
+    last: HashMap<String, Instant>,
+    overloaded: bool,
+}
+impl NotificationCooldowns {
+    fn prune(&mut self, now: Instant) {
+        self.last
+            .retain(|_, at| now.saturating_duration_since(*at) < NOTIFICATION_COOLDOWN);
+        if self.last.len() < MAX_COOLDOWNS {
+            self.overloaded = false;
+        }
     }
-    last.insert(key.to_owned(), now);
-    true
+    fn due(&mut self, key: &str, now: Instant) -> bool {
+        self.prune(now);
+        if self.last.contains_key(key) {
+            return false;
+        }
+        if self.last.len() == MAX_COOLDOWNS {
+            if !self.overloaded {
+                eprintln!(
+                    "notification cooldown overload: {MAX_COOLDOWNS} active identities; new toasts suppressed until cooldown expiry (event output/history preserved)"
+                );
+                self.overloaded = true;
+            }
+            return false;
+        }
+        self.last.insert(key.to_owned(), now);
+        true
+    }
+}
+fn notification_due(last: &mut NotificationCooldowns, key: &str) -> bool {
+    last.due(key, Instant::now())
 }
 
-fn spawn_registry_watcher(sender: mpsc::Sender<()>) {
-    std::thread::spawn(move || {
+struct RegistryWatcher {
+    running: Arc<AtomicBool>,
+    worker: Option<std::thread::JoinHandle<()>>,
+}
+impl Drop for RegistryWatcher {
+    fn drop(&mut self) {
+        self.running.store(false, Ordering::Release);
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+fn spawn_registry_watcher(
+    sender: mpsc::SyncSender<()>,
+    running: Arc<AtomicBool>,
+) -> RegistryWatcher {
+    let alive = Arc::clone(&running);
+    let worker = std::thread::spawn(move || {
         let root = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER);
         let Ok(key) = root.open_subkey(
             r"Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore",
         ) else {
+            eprintln!("registry notifications unavailable; polling remains active");
             return;
         };
+        let event = match unsafe { CreateEventW(None, false, false, None) } {
+            Ok(event) => event,
+            Err(error) => {
+                eprintln!("registry notification event unavailable: {error}");
+                return;
+            }
+        };
         let hkey = HKEY(key.raw_handle().cast());
-        loop {
+        'watch: while alive.load(Ordering::Acquire) {
             let status = unsafe {
                 RegNotifyChangeKeyValue(
                     hkey,
                     true,
                     REG_NOTIFY_CHANGE_NAME | REG_NOTIFY_CHANGE_LAST_SET,
-                    None,
-                    false,
+                    Some(event),
+                    true,
                 )
             };
-            if status.is_err() || sender.send(()).is_err() {
+            if status.is_err() {
+                eprintln!("registry notification registration failed: {status:?}");
+                break;
+            }
+            loop {
+                if !alive.load(Ordering::Acquire) {
+                    break 'watch;
+                }
+                match unsafe { WaitForSingleObject(event, 500) } {
+                    WAIT_OBJECT_0 => break,
+                    WAIT_TIMEOUT => continue,
+                    other => {
+                        eprintln!("registry notification wait failed: {other:?}");
+                        break 'watch;
+                    }
+                }
+            }
+            if matches!(
+                sender.try_send(()),
+                Err(mpsc::TrySendError::Disconnected(_))
+            ) {
                 break;
             }
         }
+        // Closing the registry key cancels its pending asynchronous registration.
+        drop(key);
+        let _ = unsafe { CloseHandle(event) };
     });
+    RegistryWatcher {
+        running,
+        worker: Some(worker),
+    }
 }
 
 fn by_key(accesses: Vec<Access>) -> HashMap<String, Access> {
@@ -452,6 +624,41 @@ fn by_key(accesses: Vec<Access>) -> HashMap<String, Access> {
 mod tests {
     use super::*;
     use crate::model::{Confidence, ProcessContext, Resource, Risk};
+
+    #[test]
+    fn callback_burst_retains_one_nonblocking_wake() {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        for _ in 0..10_000 {
+            let _ = sender.try_send(());
+        }
+        assert_eq!(receiver.try_recv(), Ok(()));
+        assert_eq!(receiver.try_recv(), Err(mpsc::TryRecvError::Empty));
+    }
+
+    #[test]
+    fn cooldown_expiry_prunes_without_rearming_early() {
+        let now = Instant::now();
+        let mut cooldowns = NotificationCooldowns::default();
+        assert!(cooldowns.due("a", now));
+        assert!(!cooldowns.due("a", now + Duration::from_secs(29)));
+        assert!(cooldowns.due("a", now + NOTIFICATION_COOLDOWN));
+        cooldowns.prune(now + NOTIFICATION_COOLDOWN * 2);
+        assert!(cooldowns.last.is_empty());
+    }
+
+    #[test]
+    fn cooldown_saturation_does_not_evict_active_identity() {
+        let now = Instant::now();
+        let mut cooldowns = NotificationCooldowns::default();
+        for n in 0..MAX_COOLDOWNS {
+            assert!(cooldowns.due(&n.to_string(), now));
+        }
+        assert!(!cooldowns.due("overflow", now));
+        assert!(!cooldowns.due("0", now + Duration::from_secs(1)));
+        assert_eq!(cooldowns.last.len(), MAX_COOLDOWNS);
+        assert!(cooldowns.due("overflow", now + NOTIFICATION_COOLDOWN));
+        assert_eq!(cooldowns.last.len(), 1);
+    }
 
     fn access(activity: Activity, decision: EnforcementDecision) -> Access {
         Access {

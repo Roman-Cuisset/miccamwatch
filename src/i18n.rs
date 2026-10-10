@@ -268,34 +268,151 @@ impl Language {
     pub fn microphone_status(&self, state: crate::model::MicrophoneMuteState) -> &'static str {
         use crate::model::MicrophoneMuteState::{Mixed, Muted, Unavailable, Unmuted};
         match (self, state) {
-            (Self::Fr, Unavailable) => "Aucun périphérique microphone actif.",
+            (Self::Fr, Unavailable) => "Sourdine micro inconnue/indisponible.",
             (Self::Fr, Muted) => "Le microphone est COUPÉ.",
             (Self::Fr, Unmuted) => "Le microphone est ACTIVÉ.",
             (Self::Fr, Mixed) => "Les microphones ont des états de sourdine MIXTES.",
-            (Self::De, Unavailable) => "Kein aktives Mikrofon gefunden.",
+            (Self::De, Unavailable) => "Mikrofon-Stummschaltung unbekannt/nicht verfügbar.",
             (Self::De, Muted) => "Das Mikrofon ist STUMMGESCHALTET.",
             (Self::De, Unmuted) => "Das Mikrofon ist AKTIVIERT.",
             (Self::De, Mixed) => "Die Mikrofone haben GEMISCHTE Stummschaltzustände.",
-            (Self::Es, Unavailable) => "No se encontró ningún micrófono activo.",
+            (Self::Es, Unavailable) => "Silencio de micrófono desconocido/no disponible.",
             (Self::Es, Muted) => "El micrófono está SILENCIADO.",
             (Self::Es, Unmuted) => "El micrófono está ACTIVADO.",
             (Self::Es, Mixed) => "Los micrófonos tienen estados de silencio MIXTOS.",
-            (Self::Ja, Unavailable) => "有効なマイクデバイスがありません。",
+            (Self::Ja, Unavailable) => "マイク消音状態は不明/利用不可。",
             (Self::Ja, Muted) => "マイクはミュートされています。",
             (Self::Ja, Unmuted) => "マイクは有効です。",
             (Self::Ja, Mixed) => "マイクのミュート状態が混在しています。",
-            (Self::Zh, Unavailable) => "未找到活动麦克风设备。",
+            (Self::Zh, Unavailable) => "麦克风静音状态未知/不可用。",
             (Self::Zh, Muted) => "麦克风已静音。",
             (Self::Zh, Unmuted) => "麦克风已启用。",
             (Self::Zh, Mixed) => "麦克风的静音状态不一致。",
-            (Self::Ru, Unavailable) => "Активные микрофоны не найдены.",
+            (Self::Ru, Unavailable) => "Состояние заглушения неизвестно/недоступно.",
             (Self::Ru, Muted) => "Микрофон ЗАГЛУШЕН.",
             (Self::Ru, Unmuted) => "Микрофон ВКЛЮЧЕН.",
             (Self::Ru, Mixed) => "Микрофоны имеют СМЕШАННЫЕ состояния.",
-            (Self::En, Unavailable) => "No active microphone capture device found.",
+            (Self::En, Unavailable) => "Microphone mute unavailable/unknown.",
             (Self::En, Muted) => "Microphone is MUTED.",
             (Self::En, Unmuted) => "Microphone is UNMUTED.",
             (Self::En, Mixed) => "Microphone devices have MIXED mute states.",
+        }
+    }
+
+    pub fn microphone_protection(&self, requested: bool) -> &'static str {
+        match (self, requested) {
+            (Self::En, true) => "Mic protection requested",
+            (Self::En, false) => "Mic protection released",
+            (Self::Fr, true) => "Protection micro demandée",
+            (Self::Fr, false) => "Protection micro désactivée",
+            (Self::De, true) => "Mikrofonschutz angefordert",
+            (Self::De, false) => "Mikrofonschutz freigegeben",
+            (Self::Es, true) => "Protección de mic solicitada",
+            (Self::Es, false) => "Protección de mic desactivada",
+            (Self::Ja, true) => "マイク保護を要求中",
+            (Self::Ja, false) => "マイク保護を解除",
+            (Self::Zh, true) => "已请求麦克风保护",
+            (Self::Zh, false) => "已解除麦克风保护",
+            (Self::Ru, true) => "Защита микрофона запрошена",
+            (Self::Ru, false) => "Защита микрофона снята",
+        }
+    }
+
+    pub fn protection_action(&self, release: bool) -> &'static str {
+        match (self, release) {
+            (Self::En, true) => "Release protection",
+            (Self::En, false) => "Protect",
+            (Self::Fr, true) => "Libérer la protection",
+            (Self::Fr, false) => "Protéger",
+            (Self::De, true) => "Schutz freigeben",
+            (Self::De, false) => "Schützen",
+            (Self::Es, true) => "Desactivar protección",
+            (Self::Es, false) => "Proteger",
+            (Self::Ja, true) => "保護を解除",
+            (Self::Ja, false) => "保護",
+            (Self::Zh, true) => "解除保护",
+            (Self::Zh, false) => "保护",
+            (Self::Ru, true) => "Снять защиту",
+            (Self::Ru, false) => "Защитить",
+        }
+    }
+
+    pub fn camera_intent(&self, blocked: bool) -> &'static str {
+        match (self, blocked) {
+            (Self::En, true) => "Global camera Block requested",
+            (Self::En, false) => "Global camera Allow requested",
+            (Self::Fr, true) => "Blocage global caméra demandé",
+            (Self::Fr, false) => "Autorisation globale caméra demandée",
+            (Self::De, true) => "Globale Kamerasperre angefordert",
+            (Self::De, false) => "Globale Kamerafreigabe angefordert",
+            (Self::Es, true) => "Bloqueo global de cámara solicitado",
+            (Self::Es, false) => "Permiso global de cámara solicitado",
+            (Self::Ja, true) => "全カメラのブロックを要求中",
+            (Self::Ja, false) => "全カメラの許可を要求中",
+            (Self::Zh, true) => "已请求全局摄像头阻止",
+            (Self::Zh, false) => "已请求全局摄像头允许",
+            (Self::Ru, true) => "Глобальная блокировка камер запрошена",
+            (Self::Ru, false) => "Глобальное разрешение камер запрошено",
+        }
+    }
+
+    pub fn protection_limit(&self) -> &'static str {
+        match self {
+            Self::En => {
+                "SDK mute is not access denial; exclusive capture may bypass software mute."
+            }
+            Self::Fr => {
+                "La sourdine SDK ne refuse pas l'accès ; la capture exclusive peut la contourner."
+            }
+            Self::De => {
+                "SDK-Stummschaltung sperrt keinen Zugriff; exklusive Aufnahme kann Software-Stummschaltung umgehen."
+            }
+            Self::Es => {
+                "El silencio SDK no deniega acceso; la captura exclusiva puede eludir el silencio por software."
+            }
+            Self::Ja => "SDK消音はアクセス拒否ではありません。排他録音はソフト消音を回避できます。",
+            Self::Zh => "SDK静音不等于拒绝访问；独占采集可能绕过软件静音。",
+            Self::Ru => {
+                "SDK mute не запрещает доступ; монопольный захват может обходить программное заглушение."
+            }
+        }
+    }
+
+    pub fn service_state(&self, active: bool) -> &'static str {
+        match (self, active) {
+            (Self::En, true) => "guard running",
+            (Self::En, false) => "guard inactive",
+            (Self::Fr, true) => "garde active",
+            (Self::Fr, false) => "garde inactive",
+            (Self::De, true) => "Wächter aktiv",
+            (Self::De, false) => "Wächter inaktiv",
+            (Self::Es, true) => "guardián activo",
+            (Self::Es, false) => "guardián inactivo",
+            (Self::Ja, true) => "保護プロセス実行中",
+            (Self::Ja, false) => "保護プロセス停止",
+            (Self::Zh, true) => "保护进程运行中",
+            (Self::Zh, false) => "保护进程未运行",
+            (Self::Ru, true) => "защитник работает",
+            (Self::Ru, false) => "защитник не работает",
+        }
+    }
+
+    pub fn unknown_protection(&self, microphone: bool) -> &'static str {
+        match (self, microphone) {
+            (Self::En, true) => "Mic protection intent unknown",
+            (Self::En, false) => "Camera intent/actual unknown",
+            (Self::Fr, true) => "Intention de protection micro inconnue",
+            (Self::Fr, false) => "Intention/état caméra inconnu",
+            (Self::De, true) => "Mikrofonschutzabsicht unbekannt",
+            (Self::De, false) => "Kameraabsicht/-zustand unbekannt",
+            (Self::Es, true) => "Intención de protección de mic desconocida",
+            (Self::Es, false) => "Intención/estado de cámara desconocido",
+            (Self::Ja, true) => "マイク保護要求は不明",
+            (Self::Ja, false) => "カメラ要求/実状態は不明",
+            (Self::Zh, true) => "麦克风保护意图未知",
+            (Self::Zh, false) => "摄像头意图/实际状态未知",
+            (Self::Ru, true) => "Намерение защиты микрофона неизвестно",
+            (Self::Ru, false) => "Намерение/состояние камер неизвестно",
         }
     }
 

@@ -95,7 +95,8 @@ pub enum EnforcementDecision {
     Unknown,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum MicrophoneMuteState {
     Unavailable,
     Muted,
@@ -245,14 +246,6 @@ pub struct Snapshot {
 }
 
 #[derive(Debug, Serialize)]
-pub struct StatusDocument<'a> {
-    pub schema_version: u8,
-    pub tool_version: &'static str,
-    pub collectors: &'a [CollectorHealth],
-    pub accesses: &'a [Access],
-}
-
-#[derive(Debug, Serialize)]
 pub struct Device {
     pub resource: Resource,
     pub id: String,
@@ -267,6 +260,8 @@ pub struct Device {
 pub(crate) struct CameraBlockRecord {
     pub(crate) blocked: Vec<String>,
     pub(crate) restore_on_arrival: Vec<String>,
+    pub(crate) desired_blocked: bool,
+    pub(crate) intent_generation: u64,
 }
 
 #[cfg(any(windows, test))]
@@ -293,11 +288,11 @@ impl CameraBlockRecord {
             StoredCameraBlockRecord::Current(record) => record,
             StoredCameraBlockRecord::LegacyList(blocked) => Self {
                 blocked,
-                restore_on_arrival: Vec::new(),
+                ..Self::default()
             },
             StoredCameraBlockRecord::LegacyDevices(legacy) => Self {
                 blocked: legacy.devices,
-                restore_on_arrival: Vec::new(),
+                ..Self::default()
             },
         })
     }
@@ -339,41 +334,6 @@ impl fmt::Display for DiagnosticStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn status_schema_is_explicit_and_dimensions_are_separate() {
-        let access = Access {
-            key: "camera:1".into(),
-            resource: Resource::Camera,
-            activity: Activity::Ready,
-            risk: Risk::Unexplained,
-            confidence: Confidence::Low,
-            application: "browser.exe".into(),
-            pid: Some(1),
-            parent_pid: None,
-            parent_name: None,
-            enforcement: EnforcementDecision::Alert,
-            executable: None,
-            signature: None,
-            device: None,
-            started_at: None,
-            modules: vec!["mfcaptureengine.dll".into()],
-            evidence: vec![],
-            process: None,
-        };
-        let value = serde_json::to_value(StatusDocument {
-            schema_version: SCHEMA_VERSION,
-            tool_version: env!("CARGO_PKG_VERSION"),
-            collectors: &[],
-            accesses: &[access],
-        })
-        .unwrap();
-        assert_eq!(value["schema_version"], 3);
-        assert_eq!(value["accesses"][0]["activity"], "ready");
-        assert_eq!(value["accesses"][0]["risk"], "unexplained");
-        assert_eq!(value["accesses"][0]["enforcement"], "alert");
-        assert_eq!(value["accesses"][0]["confidence"], "low");
-    }
 
     #[test]
     fn camera_record_reads_both_legacy_shapes_without_dropping_device_ids() {

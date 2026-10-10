@@ -5,8 +5,8 @@ use crate::{
         Access, AccessEvent, Action, Activity, CollectorState, MicrophoneMuteState, Resource,
         SCHEMA_VERSION, Snapshot, event_code,
     },
-    platform::{PlatformMonitor, SessionLockState},
-    privacy::CameraPrivacyState,
+    platform::{MicrophoneProtectionStatus, PlatformMonitor, SessionLockState},
+    privacy::{CameraControlObservation, CameraPrivacyState},
     settings::{PrivacyProfile, Settings},
 };
 use anyhow::{Context, Result};
@@ -19,7 +19,7 @@ use std::{
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering},
-        mpsc::{self, Receiver, Sender, SyncSender},
+        mpsc::{self, Receiver, SyncSender},
     },
     thread,
     time::{Duration, Instant},
@@ -62,6 +62,9 @@ use windows::{
     },
     core::PCWSTR,
 };
+
+#[path = "tray/windows_audio.rs"]
+mod microphone_worker;
 
 #[link(name = "user32")]
 unsafe extern "system" {
@@ -139,8 +142,9 @@ impl Drop for MutexGuard {
 
 struct TrayRefresh {
     snapshot: Result<Snapshot, String>,
-    mute_state: MicrophoneMuteState,
-    camera_state: CameraPrivacyState,
+    microphone: Result<MicrophoneProtectionStatus, String>,
+    microphone_generation: u64,
+    camera: Result<CameraControlObservation, String>,
     camera_generation: u64,
     lock_state: SessionLockState,
 }
@@ -159,8 +163,8 @@ enum CameraRequest {
     },
 }
 
-type CameraResult = (CameraRequest, Result<CameraPrivacyState, String>);
-type CameraWorker = (Sender<CameraRequest>, Receiver<CameraResult>);
+type CameraResult = (CameraRequest, Result<CameraControlObservation, String>);
+type CameraWorker = (SyncSender<CameraRequest>, Receiver<CameraResult>);
 
 #[derive(Debug, Default)]
 struct RestoreActivity {
@@ -177,17 +181,30 @@ impl Drop for RestorePermit {
     }
 }
 
+type RestoreResult = (RestorePermit, Result<usize, String>);
+
+struct CameraRefreshSignals {
+    dirty: Arc<AtomicBool>,
+    sequence: Arc<AtomicU64>,
+}
+
 struct TrayAppState {
-    monitor: PlatformMonitor,
     lang: Language,
     visual: TrayVisual,
     summary: String,
     mute_state: MicrophoneMuteState,
     camera_state: CameraPrivacyState,
+    microphone_protection: Option<MicrophoneProtectionStatus>,
+    camera_observation: Option<CameraControlObservation>,
+    microphone_status_error: Option<String>,
+    camera_status_error: Option<String>,
     autostart_state: crate::autostart::AutostartState,
     settings: Settings,
     lock_state: SessionLockState,
-    restore_mute: Option<bool>,
+    microphone_worker: microphone_worker::Worker,
+    pending_microphone: usize,
+    microphone_generation: u64,
+    operation_error: Option<String>,
     restore_camera: Option<CameraPrivacyState>,
     previous_accesses: HashMap<String, Access>,
     green_icon: HICON,
@@ -199,8 +216,8 @@ struct TrayAppState {
     camera_sequence: Arc<AtomicU64>,
     camera_generation: u64,
     hwnd_cell: Arc<AtomicIsize>,
-    restore_results: Receiver<Result<usize, String>>,
-    camera_requests: Sender<CameraRequest>,
+    restore_results: Receiver<RestoreResult>,
+    camera_requests: SyncSender<CameraRequest>,
     camera_results: Receiver<CameraResult>,
     camera_next_id: u64,
     manual_generation: u64,
@@ -209,10 +226,13 @@ struct TrayAppState {
     pending_lock_block: Option<u64>,
     pending_lock_restore: Option<u64>,
     restore_activity: Arc<Mutex<RestoreActivity>>,
+    workers_alive: Arc<AtomicBool>,
+    notifications: NotificationWorker,
 }
 
 impl Drop for TrayAppState {
     fn drop(&mut self) {
+        self.workers_alive.store(false, Ordering::Release);
         unsafe {
             let _ = DestroyIcon(self.green_icon);
             let _ = DestroyIcon(self.yellow_icon);
@@ -224,21 +244,32 @@ impl Drop for TrayAppState {
 
 fn start_refresh_worker(
     hwnd_cell: Arc<AtomicIsize>,
-    camera_dirty: Arc<AtomicBool>,
-    camera_sequence: Arc<AtomicU64>,
+    workers_alive: Arc<AtomicBool>,
+    camera: CameraRefreshSignals,
+    microphone_sequence: Arc<AtomicU64>,
     restore_requests: SyncSender<RestorePermit>,
     restore_activity: Arc<Mutex<RestoreActivity>>,
     policy: crate::config::Policy,
 ) -> Receiver<TrayRefresh> {
-    let (sender, receiver) = mpsc::channel();
+    let CameraRefreshSignals {
+        dirty: camera_dirty,
+        sequence: camera_sequence,
+    } = camera;
+    // Blocking is confined to this collector worker. Preserve every observed
+    // access transition and lock edge; coalescing arbitrary snapshots loses both.
+    let (sender, receiver) = mpsc::sync_channel(2);
     thread::spawn(move || {
+        let resume_error = crate::platform::resume_requested_microphone_protection()
+            .err()
+            .map(|error| format!("{error:#}"));
         let monitor = match PlatformMonitor::new(policy) {
             Ok(monitor) => monitor,
             Err(error) => {
                 let _ = sender.send(TrayRefresh {
                     snapshot: Err(format!("{error:#}")),
-                    mute_state: MicrophoneMuteState::Unavailable,
-                    camera_state: CameraPrivacyState::SystemManaged,
+                    microphone: Err(format!("{error:#}")),
+                    microphone_generation: 0,
+                    camera: Err("Camera observation unavailable".to_owned()),
                     camera_generation: 0,
                     lock_state: SessionLockState::Unknown,
                 });
@@ -261,20 +292,29 @@ fn start_refresh_worker(
             ..Filter::default()
         };
         let mut camera_generation = camera_sequence.load(Ordering::Acquire);
-        let mut camera_state =
-            crate::privacy::camera_state().unwrap_or(CameraPrivacyState::SystemManaged);
+        let mut camera = crate::privacy::camera_observation().map_err(|error| format!("{error:#}"));
         let mut last_camera_poll = Some(Instant::now());
         // Camera instance IDs already offered for restoration. Dropping an entry when
         // the device disappears is what re-arms the prompt after a replug, and it keeps
         // a declined UAC prompt from being raised again for the same arrival.
         let mut restore_offered: Vec<String> = Vec::new();
-        loop {
+        while workers_alive.load(Ordering::Acquire) {
             let snapshot = monitor
                 .snapshot((&filter).into())
                 .map_err(|error| format!("{error:#}"));
-            let mute_state = monitor
-                .microphone_mute_state()
-                .unwrap_or(MicrophoneMuteState::Unavailable);
+            let microphone_generation = microphone_sequence.load(Ordering::Acquire);
+            let microphone = monitor
+                .microphone_protection_status()
+                .map_err(|error| format!("{error:#}"))
+                .map(|mut status| {
+                    if let Some(error) = &resume_error {
+                        status.detail = Some(format!(
+                            "Resume failed: {error}; {}",
+                            status.detail.as_deref().unwrap_or("")
+                        ));
+                    }
+                    status
+                });
             // Session probes cross into the input desktop, so they stay off the window
             // thread or the popup menu paints late.
             let lock_state = crate::platform::session_lock_state();
@@ -286,20 +326,22 @@ fn start_refresh_worker(
                 .is_none_or(|last| now.duration_since(last) >= CAMERA_POLL_INTERVAL);
             if camera_stale || camera_dirty.swap(false, Ordering::AcqRel) {
                 let generation = camera_sequence.load(Ordering::Acquire);
-                camera_state =
-                    crate::privacy::camera_state().unwrap_or(CameraPrivacyState::SystemManaged);
+                camera = crate::privacy::camera_observation().map_err(|error| format!("{error:#}"));
                 camera_generation = generation;
                 last_camera_poll = Some(now);
             }
-            if sender
-                .send(TrayRefresh {
+            if enqueue_refresh(
+                &sender,
+                TrayRefresh {
                     snapshot,
-                    mute_state,
-                    camera_state,
+                    microphone,
+                    microphone_generation,
+                    camera: camera.clone(),
                     camera_generation,
                     lock_state,
-                })
-                .is_err()
+                },
+            )
+            .is_err()
             {
                 break;
             }
@@ -338,8 +380,29 @@ fn start_refresh_worker(
     receiver
 }
 
+fn enqueue_refresh<T>(sender: &SyncSender<T>, refresh: T) -> Result<(), mpsc::SendError<T>> {
+    match sender.try_send(refresh) {
+        Ok(()) => Ok(()),
+        Err(mpsc::TrySendError::Full(refresh)) => {
+            eprintln!(
+                "tray refresh queue saturated; collector backpressure delays observation cadence (retained lock/access transitions are not discarded)"
+            );
+            sender.send(refresh)
+        }
+        Err(mpsc::TrySendError::Disconnected(refresh)) => Err(mpsc::SendError(refresh)),
+    }
+}
+
+fn next_refresh<T>(receiver: &Receiver<T>, pending_microphone: usize) -> Option<T> {
+    if pending_microphone >= 8 {
+        None
+    } else {
+        receiver.try_recv().ok()
+    }
+}
+
 pub fn run_tray(
-    monitor: PlatformMonitor,
+    _monitor: PlatformMonitor,
     policy: crate::config::Policy,
     lang: Language,
     settings: Settings,
@@ -354,12 +417,19 @@ pub fn run_tray(
     let camera_dirty = Arc::new(AtomicBool::new(false));
     let camera_sequence = Arc::new(AtomicU64::new(0));
     let restore_activity = Arc::new(Mutex::new(RestoreActivity::default()));
+    let workers_alive = Arc::new(AtomicBool::new(true));
     let (restore_requests, restore_results) = start_restore_worker(Arc::clone(&hwnd_cell));
     let (camera_requests, camera_results) = start_camera_worker(Arc::clone(&hwnd_cell));
+    let microphone_worker =
+        microphone_worker::Worker::start(policy.clone(), Arc::clone(&hwnd_cell));
     let refreshes = start_refresh_worker(
         Arc::clone(&hwnd_cell),
-        Arc::clone(&camera_dirty),
-        Arc::clone(&camera_sequence),
+        Arc::clone(&workers_alive),
+        CameraRefreshSignals {
+            dirty: Arc::clone(&camera_dirty),
+            sequence: Arc::clone(&camera_sequence),
+        },
+        Arc::clone(&microphone_worker.sequence),
         restore_requests,
         Arc::clone(&restore_activity),
         policy,
@@ -369,19 +439,23 @@ pub fn run_tray(
     let icon_size = unsafe { GetSystemMetrics(SM_CXSMICON) }.max(16);
 
     let state = Box::new(TrayAppState {
-        mute_state: monitor
-            .microphone_mute_state()
-            .unwrap_or(MicrophoneMuteState::Unavailable),
-        camera_state: crate::privacy::camera_state().unwrap_or(CameraPrivacyState::SystemManaged),
+        mute_state: MicrophoneMuteState::Unavailable,
+        camera_state: CameraPrivacyState::SystemManaged,
+        microphone_protection: None,
+        camera_observation: None,
+        microphone_status_error: None,
+        camera_status_error: None,
         autostart_state: crate::autostart::state()
             .unwrap_or(crate::autostart::AutostartState::Disabled),
-        monitor,
         lang,
         visual: TrayVisual::Idle,
         summary: idle_text(lang).to_owned(),
         settings,
         lock_state: crate::platform::session_lock_state(),
-        restore_mute: None,
+        microphone_worker,
+        pending_microphone: 0,
+        microphone_generation: 0,
+        operation_error: None,
         refreshes,
         camera_dirty,
         camera_sequence,
@@ -398,6 +472,8 @@ pub fn run_tray(
         deferred_lock_block: false,
         pending_lock_block: None,
         pending_lock_restore: None,
+        workers_alive,
+        notifications: NotificationWorker::start(),
         previous_accesses: HashMap::new(),
         green_icon: create_status_icon((34, 197, 94), IconGlyph::Check, icon_size)?,
         yellow_icon: create_status_icon((245, 158, 11), IconGlyph::Ready, icon_size)?,
@@ -557,14 +633,17 @@ unsafe extern "system" fn tray_wnd_proc(
                     if let Some(state) = state(hwnd)
                         && let Err(error) = show_diagnostic_window(hwnd, &state.summary)
                     {
-                        notify_async("MicCamWatch details", &format!("{error:#}"));
+                        notify_async(state, "MicCamWatch details", &format!("{error:#}"));
                     }
                 }
                 CMD_EXIT if request_safe_close(hwnd) == UPDATE_BUSY => {
-                    notify_async(
-                        "MicCamWatch",
-                        "Finish the pending camera operation or UAC prompt before exiting. Nothing was cancelled.",
-                    );
+                    if let Some(state) = state(hwnd) {
+                        notify_async(
+                            state,
+                            "MicCamWatch",
+                            "Finish pending privacy operations or UAC prompts before exiting. Nothing was cancelled.",
+                        );
+                    }
                 }
                 _ => {}
             }
@@ -586,12 +665,14 @@ fn request_safe_close(hwnd: HWND) -> usize {
         return UPDATE_BUSY;
     };
     let mut activity = state.restore_activity.lock();
-    if !can_close_tray(
-        state.pending_manual,
-        state.pending_lock_block.is_some(),
-        state.pending_lock_restore.is_some(),
-        activity.pending,
-    ) {
+    if state.pending_microphone != 0
+        || !can_close_tray(
+            state.pending_manual,
+            state.pending_lock_block.is_some(),
+            state.pending_lock_restore.is_some(),
+            activity.pending,
+        )
+    {
         return UPDATE_BUSY;
     }
     activity.closing = true;
@@ -607,25 +688,29 @@ fn can_close_tray(manual: usize, block: bool, restore: bool, arrivals: usize) ->
 }
 
 fn start_camera_worker(hwnd_cell: Arc<AtomicIsize>) -> CameraWorker {
-    let (requests, pending) = mpsc::channel();
-    let (results, delivered) = mpsc::channel();
+    let (requests, pending) = mpsc::sync_channel(8);
+    // Results are effects, not snapshots. Backpressure never discards ownership.
+    let (results, delivered) = mpsc::sync_channel(8);
     thread::spawn(move || {
         camera_worker(
             pending,
             results,
             |request| {
-                match request {
-                    CameraRequest::Manual => crate::privacy::toggle_camera(),
-                    CameraRequest::Block { .. } => {
-                        crate::privacy::set_camera_state(CameraPrivacyState::Blocked)
-                            .and_then(|()| crate::privacy::camera_state())
+                (|| {
+                    match request {
+                        CameraRequest::Manual => {
+                            crate::privacy::toggle_camera()?;
+                        }
+                        CameraRequest::Block { .. } => {
+                            crate::privacy::set_camera_state(CameraPrivacyState::Blocked)?;
+                        }
+                        CameraRequest::Restore { previous, .. } => {
+                            crate::privacy::set_camera_state(previous)?;
+                        }
                     }
-                    CameraRequest::Restore { previous, .. } => {
-                        crate::privacy::set_camera_state(previous)
-                            .and_then(|()| crate::privacy::camera_state())
-                    }
-                }
-                .map_err(|error| format!("{error:#}"))
+                    crate::privacy::camera_observation()
+                })()
+                .map_err(|error: anyhow::Error| format!("{error:#}"))
             },
             || {
                 let h = hwnd_cell.load(Ordering::Relaxed);
@@ -646,10 +731,10 @@ fn start_camera_worker(hwnd_cell: Arc<AtomicIsize>) -> CameraWorker {
     (requests, delivered)
 }
 
-fn camera_worker(
+fn camera_worker<T>(
     requests: Receiver<CameraRequest>,
-    results: Sender<CameraResult>,
-    mut execute: impl FnMut(CameraRequest) -> Result<CameraPrivacyState, String>,
+    results: SyncSender<(CameraRequest, Result<T, String>)>,
+    mut execute: impl FnMut(CameraRequest) -> Result<T, String>,
     mut notify: impl FnMut(),
     mut alive: impl FnMut() -> bool,
 ) {
@@ -672,10 +757,12 @@ fn queue_lock_camera_restore(state: &mut TrayAppState, previous: CameraPrivacySt
     let id = state.camera_next_id;
     if state
         .camera_requests
-        .send(CameraRequest::Restore { id, previous })
+        .try_send(CameraRequest::Restore { id, previous })
         .is_ok()
     {
         state.pending_lock_restore = Some(id);
+    } else {
+        camera_queue_error(state);
     }
 }
 
@@ -688,7 +775,7 @@ fn queue_lock_camera_block(state: &mut TrayAppState, camera_state: CameraPrivacy
     let previous = state.restore_camera.unwrap_or(camera_state);
     if state
         .camera_requests
-        .send(CameraRequest::Block {
+        .try_send(CameraRequest::Block {
             id,
             previous,
             manual_generation: state.manual_generation,
@@ -696,6 +783,8 @@ fn queue_lock_camera_block(state: &mut TrayAppState, camera_state: CameraPrivacy
         .is_ok()
     {
         state.pending_lock_block = Some(id);
+    } else {
+        camera_queue_error(state);
     }
 }
 
@@ -705,10 +794,7 @@ fn apply_lock_policy(state: &mut TrayAppState, current: SessionLockState) {
     }
     if current == SessionLockState::Locked {
         if state.settings.mute_on_lock {
-            let was_muted = state.mute_state == MicrophoneMuteState::Muted;
-            if state.monitor.set_microphone_mute(true).is_ok() {
-                state.restore_mute = Some(was_muted);
-            }
+            queue_microphone(state, microphone_worker::Request::Lock);
         }
         if state.settings.block_camera_on_lock {
             if state.pending_manual == 0 {
@@ -720,9 +806,7 @@ fn apply_lock_policy(state: &mut TrayAppState, current: SessionLockState) {
     } else {
         state.deferred_lock_block = false;
         if current == SessionLockState::Unlocked && state.settings.restore_on_unlock {
-            if let Some(was_muted) = state.restore_mute.take() {
-                let _ = state.monitor.set_microphone_mute(was_muted);
-            }
+            queue_microphone(state, microphone_worker::Request::Unlock);
             if state.pending_lock_block.is_none()
                 && let Some(previous) = state.restore_camera
                 && previous == CameraPrivacyState::Allowed
@@ -734,47 +818,109 @@ fn apply_lock_policy(state: &mut TrayAppState, current: SessionLockState) {
     state.lock_state = current;
 }
 
-/// WinRT toast delivery round-trips through the shell and can take hundreds of
-/// milliseconds; running it inline would stall the window thread mid-menu.
-fn notify_async(title: &str, message: &str) {
-    let title = title.to_owned();
-    let message = message.to_owned();
-    thread::spawn(move || {
-        if let Err(error) = crate::notify::notify_message(&title, &message) {
-            eprintln!("notification failed: {error}");
+const NOTIFICATION_QUEUE_CAPACITY: usize = 32;
+struct NotificationWorker {
+    sender: SyncSender<(String, String)>,
+    overloaded: Arc<AtomicU64>,
+}
+impl NotificationWorker {
+    fn start() -> Self {
+        let (sender, pending) = mpsc::sync_channel::<(String, String)>(NOTIFICATION_QUEUE_CAPACITY);
+        let overloaded = Arc::new(AtomicU64::new(0));
+        let failed = Arc::clone(&overloaded);
+        thread::spawn(move || {
+            // A single shell round-trip at a time. Dropping the sender ends this
+            // finite worker after accepted toasts are drained.
+            while let Ok((title, message)) = pending.recv() {
+                if let Err(error) = crate::notify::notify_message(&title, &message) {
+                    failed.fetch_add(1, Ordering::Relaxed);
+                    eprintln!("notification failed: {error}");
+                }
+            }
+        });
+        Self { sender, overloaded }
+    }
+    fn submit(&self, title: &str, message: &str) -> bool {
+        if self
+            .sender
+            .try_send((title.to_owned(), message.to_owned()))
+            .is_err()
+        {
+            self.overloaded.fetch_add(1, Ordering::Relaxed);
+            eprintln!(
+                "notification queue overloaded/unavailable; toast not delivered: {title}: {message}"
+            );
+            false
+        } else {
+            true
         }
-    });
+    }
+}
+fn notify_async(state: &mut TrayAppState, title: &str, message: &str) {
+    if !state.notifications.submit(title, message) {
+        state.visual = TrayVisual::Error;
+        state.summary = format!(
+            "miccamwatch: notification queue overloaded/unavailable ({} undelivered toasts)",
+            state.notifications.overloaded.load(Ordering::Relaxed)
+        );
+    }
 }
 
-fn current_camera_from_refresh(
+fn accepts_control_refresh(
     refresh_generation: u64,
     completed_generation: u64,
-    refresh_state: CameraPrivacyState,
-    completed_state: CameraPrivacyState,
-) -> CameraPrivacyState {
-    if refresh_generation == completed_generation {
-        refresh_state
-    } else {
-        completed_state
-    }
+    pending: usize,
+) -> bool {
+    refresh_generation == completed_generation && pending == 0
 }
 
 fn refresh_state(hwnd: HWND, state: &mut TrayAppState) {
-    let mut latest = None;
-    while let Ok(refresh) = state.refreshes.try_recv() {
-        latest = Some(refresh);
+    // Consume each retained observation, then display the newest. Intermediate
+    // lock/unlock and capture transitions carry effects and cannot be skipped.
+    while let Some(refresh) = next_refresh(&state.refreshes, state.pending_microphone) {
+        apply_refresh(hwnd, state, refresh);
     }
-    let Some(refresh) = latest else { return };
-    let camera_state = current_camera_from_refresh(
+}
+
+fn apply_refresh(hwnd: HWND, state: &mut TrayAppState, refresh: TrayRefresh) {
+    let old_camera_state = state.camera_state;
+    if accepts_control_refresh(
         refresh.camera_generation,
         state.camera_generation,
-        refresh.camera_state,
-        state.camera_state,
-    );
-    let old_camera_state = state.camera_state;
-    state.camera_state = camera_state;
+        state.pending_manual
+            + usize::from(state.pending_lock_block.is_some())
+            + usize::from(state.pending_lock_restore.is_some()),
+    ) {
+        match refresh.camera {
+            Ok(camera) => {
+                state.camera_state = if camera.desired_blocked {
+                    CameraPrivacyState::Blocked
+                } else {
+                    CameraPrivacyState::Allowed
+                };
+                state.camera_observation = Some(camera);
+                state.camera_status_error = None;
+            }
+            Err(error) => state.camera_status_error = Some(error),
+        }
+    }
+    let camera_state = state.camera_state;
+    if accepts_control_refresh(
+        refresh.microphone_generation,
+        state.microphone_generation,
+        state.pending_microphone,
+    ) {
+        match refresh.microphone {
+            Ok(status) => {
+                state.mute_state = status.mute_state;
+                state.microphone_protection = Some(status);
+                state.microphone_status_error = None;
+            }
+            Err(error) => state.microphone_status_error = Some(error),
+        }
+    }
     apply_lock_policy(state, refresh.lock_state);
-    let (visual, summary) = match refresh.snapshot {
+    let (mut visual, mut summary) = match refresh.snapshot {
         Ok(snapshot) => {
             let unhealthy = snapshot
                 .collectors
@@ -815,7 +961,50 @@ fn refresh_state(hwnd: HWND, state: &mut TrayAppState) {
             format!("miccamwatch: telemetry error: {error}"),
         ),
     };
-    let mute_state = refresh.mute_state;
+    if let Some(status) = &state.microphone_protection {
+        summary.push_str(&format!(
+            "\n{}",
+            crate::output::microphone_protection_summary(state.lang, status)
+        ));
+        if status.requested
+            && (!status.service_active || status.mute_state != MicrophoneMuteState::Muted)
+        {
+            visual = TrayVisual::Error;
+        }
+    } else {
+        summary.push_str(&format!("\n{}", state.lang.unknown_protection(true)));
+    }
+    if let Some(status) = &state.camera_observation {
+        summary.push_str(&format!(
+            "\n{}",
+            crate::output::camera_protection_summary(state.lang, status)
+        ));
+        if (status.desired_blocked && !status.helper_active) || status.unknown_devices != 0 {
+            visual = TrayVisual::Error;
+        }
+    } else {
+        summary.push_str(&format!("\n{}", state.lang.unknown_protection(false)));
+    }
+    summary.push_str(&format!("\n{}", state.lang.protection_limit()));
+    for error in [&state.microphone_status_error, &state.camera_status_error]
+        .into_iter()
+        .flatten()
+    {
+        visual = TrayVisual::Error;
+        summary.push_str(&format!("\nProtection observation failed: {error}"));
+    }
+    if let Some(error) = &state.operation_error {
+        visual = TrayVisual::Error;
+        summary.push_str(&format!("\nPrivacy operation failed/partial: {error}"));
+    }
+    let undelivered = state.notifications.overloaded.load(Ordering::Relaxed);
+    if undelivered != 0 {
+        visual = TrayVisual::Error;
+        summary.push_str(&format!(
+            "\nNotification queue overloaded/unavailable: {undelivered} undelivered toasts"
+        ));
+    }
+    let mute_state = state.mute_state;
     if visual == state.visual
         && summary == state.summary
         && mute_state == state.mute_state
@@ -923,34 +1112,50 @@ fn summarize(accesses: &[&crate::model::Access]) -> String {
 
 fn toggle_mute(hwnd: HWND) {
     let Some(state) = state(hwnd) else { return };
-    let result = state
-        .monitor
-        .toggle_microphone_mute()
-        .and_then(|_| state.monitor.microphone_mute_state());
-    match result {
-        Ok(actual) => {
-            state.mute_state = actual;
-            let message = match actual {
-                MicrophoneMuteState::Muted => "Microphone muted",
-                MicrophoneMuteState::Unmuted => "Microphone unmuted",
-                MicrophoneMuteState::Mixed => "Microphone mute states are mixed",
-                MicrophoneMuteState::Unavailable => "Microphone mute state unavailable",
-            };
-            notify_async("miccamwatch", message);
-        }
-        Err(error) => {
-            state.summary = format!("miccamwatch: mute failed: {error}");
-            state.visual = TrayVisual::Error;
-        }
+    // Reserve two accepted slots for lock policy. Rejected manual clicks have
+    // no effects and are reported, rather than blocking the menu or disappearing.
+    if state.pending_microphone < 6 {
+        queue_microphone(state, microphone_worker::Request::Manual);
+    } else {
+        operation_error(state, "Microphone operation queue busy; request not accepted, retry after pending operations finish".to_owned());
     }
+}
+
+fn queue_microphone(state: &mut TrayAppState, request: microphone_worker::Request) {
+    if state.microphone_worker.requests.try_send(request).is_ok() {
+        state.pending_microphone += 1;
+    } else {
+        operation_error(
+            state,
+            "Microphone worker unavailable; request not accepted".to_owned(),
+        );
+    }
+}
+
+fn operation_error(state: &mut TrayAppState, message: String) {
+    state.operation_error = Some(message.clone());
+    state.summary = format!("miccamwatch: {message}");
+    state.visual = TrayVisual::Error;
+    notify_async(state, "MicCamWatch privacy operation", &message);
 }
 
 fn toggle_camera(hwnd: HWND) {
     let Some(state) = state(hwnd) else { return };
-    if state.camera_requests.send(CameraRequest::Manual).is_ok() {
+    if state.pending_manual < 6
+        && state
+            .camera_requests
+            .try_send(CameraRequest::Manual)
+            .is_ok()
+    {
         state.manual_generation = state.manual_generation.wrapping_add(1);
         state.pending_manual += 1;
+    } else {
+        camera_queue_error(state);
     }
+}
+
+fn camera_queue_error(state: &mut TrayAppState) {
+    operation_error(state, "Camera operation queue busy/unavailable; request not accepted, retry after pending operations finish".to_owned());
 }
 
 /// Narrows reconnected cameras down to the ones not yet offered for restoration,
@@ -978,9 +1183,9 @@ fn take_fresh_arrivals<E>(arrived: Result<&[String], E>, offered: &mut Vec<Strin
 // A one-slot queue coalesces multiple arrivals while a UAC prompt is in flight.
 fn start_restore_worker(
     hwnd_cell: Arc<AtomicIsize>,
-) -> (SyncSender<RestorePermit>, Receiver<Result<usize, String>>) {
+) -> (SyncSender<RestorePermit>, Receiver<RestoreResult>) {
     let (requests, pending) = mpsc::sync_channel(1);
-    let (results, delivered) = mpsc::channel();
+    let (results, delivered) = mpsc::sync_channel(2);
     thread::spawn(move || {
         restore_worker(
             pending,
@@ -1008,12 +1213,12 @@ fn start_restore_worker(
 
 fn restore_worker<T>(
     requests: Receiver<T>,
-    results: mpsc::Sender<Result<usize, String>>,
+    results: SyncSender<(T, Result<usize, String>)>,
     alive: impl Fn() -> bool,
     mut restore: impl FnMut() -> Result<usize, String>,
     mut notify: impl FnMut() -> bool,
 ) {
-    while let Ok(_request) = requests.recv() {
+    while let Ok(request) = requests.recv() {
         if !alive() {
             break;
         }
@@ -1023,7 +1228,8 @@ fn restore_worker<T>(
             // different camera arrived during that prompt.
             while requests.try_recv().is_ok() {}
         }
-        if results.send(result).is_err() {
+        // Ownership spans queued work, active UAC and the unconsumed completion.
+        if results.send((request, result)).is_err() {
             break;
         }
         // A failed post leaves the owned result in the tray's channel; its
@@ -1035,10 +1241,29 @@ fn restore_worker<T>(
 }
 
 fn handle_worker_results(state: &mut TrayAppState) {
+    while let Ok((request, generation, result)) = state.microphone_worker.results.try_recv() {
+        state.microphone_generation = generation;
+        state.pending_microphone = state.pending_microphone.saturating_sub(1);
+        match result {
+            Ok(actual) => {
+                state.mute_state = actual.mute_state;
+                let message = crate::output::microphone_protection_summary(state.lang, &actual);
+                state.microphone_protection = Some(actual);
+                state.microphone_status_error = None;
+                if matches!(request, microphone_worker::Request::Manual) {
+                    notify_async(state, "MicCamWatch", &message);
+                }
+            }
+            Err(error) => operation_error(
+                state,
+                format!("microphone {request:?} failed/partial: {error}"),
+            ),
+        }
+    }
     while let Ok((request, result)) = state.camera_results.try_recv() {
         handle_camera_operation_result(state, request, result);
     }
-    while let Ok(result) = state.restore_results.try_recv() {
+    while let Ok((_permit, result)) = state.restore_results.try_recv() {
         handle_restore_result(state, result);
     }
 }
@@ -1075,13 +1300,23 @@ fn should_queue_deferred_block(
 fn handle_camera_operation_result(
     state: &mut TrayAppState,
     request: CameraRequest,
-    result: Result<CameraPrivacyState, String>,
+    result: Result<CameraControlObservation, String>,
 ) {
     state.camera_generation = state.camera_generation.wrapping_add(1);
     state
         .camera_sequence
         .store(state.camera_generation, Ordering::Release);
     state.camera_dirty.store(true, Ordering::Release);
+    let result = result.map(|observation| {
+        let desired = if observation.desired_blocked {
+            CameraPrivacyState::Blocked
+        } else {
+            CameraPrivacyState::Allowed
+        };
+        state.camera_observation = Some(observation);
+        state.camera_status_error = None;
+        desired
+    });
     match request {
         CameraRequest::Manual => {
             state.pending_manual -= 1;
@@ -1130,9 +1365,10 @@ fn handle_camera_operation_result(
                 }
                 Err(error) => {
                     let message = format!("Camera lock policy failed: {error}");
+                    state.operation_error = Some(message.clone());
                     state.summary = format!("miccamwatch: {message}");
                     state.visual = TrayVisual::Error;
-                    notify_async("MicCamWatch camera", &message);
+                    notify_async(state, "MicCamWatch camera", &message);
                 }
             }
         }
@@ -1152,9 +1388,10 @@ fn handle_camera_operation_result(
                 }
                 Err(error) => {
                     let message = format!("Camera unlock policy failed: {error}");
+                    state.operation_error = Some(message.clone());
                     state.summary = format!("miccamwatch: {message}");
                     state.visual = TrayVisual::Error;
-                    notify_async("MicCamWatch camera", &message);
+                    notify_async(state, "MicCamWatch camera", &message);
                 }
             }
         }
@@ -1170,12 +1407,13 @@ fn handle_restore_result(state: &mut TrayAppState, result: Result<usize, String>
                 "Reconnected camera restored ({restored} device{}).",
                 if restored == 1 { "" } else { "s" }
             );
-            notify_async("MicCamWatch camera", &message);
+            notify_async(state, "MicCamWatch camera", &message);
         }
         Err(error) => {
             // Staying silent after a declined prompt matters more than reporting it,
             // so the failure only surfaces in the tray summary and tooltip.
             state.summary = format!("miccamwatch: camera restore failed: {error}");
+            state.operation_error = Some(format!("Camera restore failed: {error}"));
             state.visual = TrayVisual::Error;
         }
     }
@@ -1201,22 +1439,19 @@ fn handle_camera_result(state: &mut TrayAppState, result: Result<CameraPrivacySt
             // Force the poller to re-read privacy state instead of overwriting this
             // with a value captured before the toggle.
             state.camera_dirty.store(true, Ordering::Relaxed);
-            let message = match camera_state {
-                CameraPrivacyState::Allowed => {
-                    "Connected cameras are allowed. Plugged-in cameras that are still blocked will be restored automatically."
-                }
-                CameraPrivacyState::Blocked => "Connected cameras are blocked.",
-                CameraPrivacyState::SystemManaged => {
-                    "A blocked camera is still unplugged; it will be restored automatically when reconnected."
-                }
-            };
-            notify_async("MicCamWatch camera", message);
+            let message = state
+                .camera_observation
+                .as_ref()
+                .map(|status| crate::output::camera_protection_summary(state.lang, status))
+                .unwrap_or_else(|| "Camera protection observation unknown".to_owned());
+            notify_async(state, "MicCamWatch camera", &message);
         }
         Err(error) => {
             let message = format!("Camera control failed: {error}");
+            state.operation_error = Some(message.clone());
             state.summary = format!("miccamwatch: {message}");
             state.visual = TrayVisual::Error;
-            notify_async("MicCamWatch camera", &message);
+            notify_async(state, "MicCamWatch camera", &message);
         }
     }
 }
@@ -1233,7 +1468,7 @@ fn toggle_notifications(hwnd: HWND) {
         Ok(settings) => state.settings = settings,
         Err(error) => {
             state.summary = format!("miccamwatch: settings update failed: {error:#}");
-            notify_async("MicCamWatch settings", &state.summary);
+            notify_async(state, "MicCamWatch settings", &state.summary.clone());
         }
     }
 }
@@ -1264,7 +1499,7 @@ fn cycle_profile(hwnd: HWND) {
         Ok(settings) => state.settings = settings,
         Err(error) => {
             state.summary = format!("miccamwatch: settings update failed: {error:#}");
-            notify_async("MicCamWatch settings", &state.summary);
+            notify_async(state, "MicCamWatch settings", &state.summary.clone());
         }
     }
 }
@@ -1559,11 +1794,36 @@ unsafe extern "system" fn details_wnd_proc(
     }
 }
 
+fn camera_allow_label(lang: Language) -> &'static str {
+    match lang {
+        Language::En => "Allow all cameras",
+        Language::Fr => "Autoriser toutes les caméras",
+        Language::De => "Alle Kameras freigeben",
+        Language::Es => "Permitir todas las cámaras",
+        Language::Ja => "全カメラを許可",
+        Language::Zh => "允许全部摄像头",
+        Language::Ru => "Разрешить все камеры",
+    }
+}
+
+fn camera_block_label(lang: Language) -> &'static str {
+    match lang {
+        Language::En => "Block all cameras",
+        Language::Fr => "Bloquer toutes les caméras",
+        Language::De => "Alle Kameras sperren",
+        Language::Es => "Bloquear todas las cámaras",
+        Language::Ja => "全カメラをブロック",
+        Language::Zh => "阻止全部摄像头",
+        Language::Ru => "Блокировать все камеры",
+    }
+}
+
 fn build_context_menu(
     hwnd: HWND,
     summary: &str,
-    mute_state: MicrophoneMuteState,
-    camera_state: CameraPrivacyState,
+    lang: Language,
+    microphone_requested: Option<bool>,
+    camera_blocked: Option<bool>,
     settings: &Settings,
     autostart_state: crate::autostart::AutostartState,
 ) -> Result<HMENU> {
@@ -1574,27 +1834,24 @@ fn build_context_menu(
         let details = format_wide("Status details…");
         let _ = AppendMenuW(menu, MF_STRING, CMD_DETAILS, PCWSTR(details.as_ptr()));
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-        let mute_text = match mute_state {
-            MicrophoneMuteState::Muted => "Unmute microphone",
-            MicrophoneMuteState::Unmuted | MicrophoneMuteState::Mixed => "Mute microphone",
-            MicrophoneMuteState::Unavailable => "Microphone unavailable",
-        };
-        let mute_wide = format_wide(mute_text);
-        let mute_flags = if mute_state == MicrophoneMuteState::Unavailable {
-            MF_STRING | MF_DISABLED | MF_GRAYED
-        } else {
-            MF_STRING
-        };
+        let mute_text = microphone_requested.map_or(lang.unknown_protection(true), |requested| {
+            lang.protection_action(requested)
+        });
+        let mute_wide = format_wide(&format!(
+            "{}: {mute_text}",
+            lang.resource(Resource::Microphone)
+        ));
+        let mute_flags = MF_STRING;
         let _ = AppendMenuW(
             menu,
             mute_flags,
             CMD_TOGGLE_MUTE,
             PCWSTR(mute_wide.as_ptr()),
         );
-        let camera_text = format_wide(match camera_state {
-            CameraPrivacyState::Allowed => "Block camera",
-            CameraPrivacyState::Blocked => "Allow camera",
-            CameraPrivacyState::SystemManaged => "Allow camera (blocked camera unplugged)",
+        let camera_text = format_wide(match camera_blocked {
+            Some(true) => camera_allow_label(lang),
+            Some(false) => camera_block_label(lang),
+            None => lang.unknown_protection(false),
         });
         let _ = AppendMenuW(
             menu,
@@ -1643,8 +1900,15 @@ fn show_context_menu(hwnd: HWND) {
     let Ok(menu) = build_context_menu(
         hwnd,
         &state.summary,
-        state.mute_state,
-        state.camera_state,
+        state.lang,
+        state
+            .microphone_protection
+            .as_ref()
+            .map(|status| status.requested),
+        state
+            .camera_observation
+            .as_ref()
+            .map(|status| status.desired_blocked),
         &state.settings,
         state.autostart_state,
     ) else {
@@ -1684,7 +1948,7 @@ fn append_disabled(menu: windows::Win32::UI::WindowsAndMessaging::HMENU, text: &
 
 fn show_status_toast(hwnd: HWND) {
     let Some(state) = state(hwnd) else { return };
-    notify_async("miccamwatch", &state.summary);
+    notify_async(state, "miccamwatch", &state.summary.clone());
 }
 
 fn idle_text(lang: Language) -> &'static str {
@@ -1816,6 +2080,100 @@ fn line_distance(x: f32, y: f32, x1: f32, y1: f32, x2: f32, y2: f32) -> f32 {
 mod tests {
     use super::*;
 
+    #[test]
+    fn bounded_refresh_consumes_lock_edges_then_latest_snapshot() {
+        let (sender, receiver) = mpsc::sync_channel(2);
+        sender.try_send((SessionLockState::Locked, 1)).unwrap();
+        sender.try_send((SessionLockState::Unlocked, 2)).unwrap();
+        assert!(next_refresh(&receiver, 8).is_none());
+        assert!(matches!(
+            sender.try_send((SessionLockState::Locked, 3)),
+            Err(mpsc::TrySendError::Full(_))
+        ));
+        let first = next_refresh(&receiver, 0).unwrap();
+        sender.try_send((SessionLockState::Locked, 3)).unwrap();
+        let second = next_refresh(&receiver, 1).unwrap();
+        let latest = next_refresh(&receiver, 2).unwrap();
+        assert_eq!(
+            [first.0, second.0, latest.0],
+            [
+                SessionLockState::Locked,
+                SessionLockState::Unlocked,
+                SessionLockState::Locked
+            ]
+        );
+        assert_eq!(latest.1, 3);
+        assert!(next_refresh(&receiver, 3).is_none());
+    }
+
+    #[test]
+    fn saturated_refresh_backpressure_never_drops_an_observed_transition() {
+        let (sender, receiver) = mpsc::sync_channel(2);
+        enqueue_refresh(&sender, 0).unwrap();
+        enqueue_refresh(&sender, 1).unwrap();
+        let producer = thread::spawn(move || {
+            for value in 2..1000 {
+                enqueue_refresh(&sender, value).unwrap();
+            }
+        });
+        let values: Vec<_> = receiver.into_iter().collect();
+        producer.join().unwrap();
+        assert_eq!(values, (0..1000).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn notification_saturation_is_visible_and_preserves_accepted_toasts() {
+        let (sender, receiver) = mpsc::sync_channel(NOTIFICATION_QUEUE_CAPACITY);
+        let worker = NotificationWorker {
+            sender,
+            overloaded: Arc::new(AtomicU64::new(0)),
+        };
+        for value in 0..NOTIFICATION_QUEUE_CAPACITY {
+            assert!(worker.submit("title", &value.to_string()));
+        }
+        assert!(!worker.submit("title", "overflow"));
+        assert_eq!(worker.overloaded.load(Ordering::Relaxed), 1);
+        for value in 0..NOTIFICATION_QUEUE_CAPACITY {
+            assert_eq!(
+                receiver.try_recv().unwrap(),
+                ("title".to_owned(), value.to_string())
+            );
+        }
+        assert!(worker.submit("title", "next"));
+        assert_eq!(receiver.try_recv().unwrap().1, "next");
+    }
+
+    #[test]
+    fn bounded_camera_completion_delivery_keeps_every_accepted_effect() {
+        let (requests, pending) = mpsc::sync_channel(8);
+        let (results, delivered) = mpsc::sync_channel(1);
+        for _ in 0..8 {
+            requests.try_send(CameraRequest::Manual).unwrap();
+        }
+        assert!(matches!(
+            requests.try_send(CameraRequest::Manual),
+            Err(mpsc::TrySendError::Full(_))
+        ));
+        drop(requests);
+        let worker = thread::spawn(move || {
+            camera_worker(
+                pending,
+                results,
+                |_| Ok(CameraPrivacyState::Blocked),
+                || {},
+                || true,
+            );
+        });
+        let completions: Vec<_> = delivered.into_iter().collect();
+        worker.join().unwrap();
+        assert_eq!(completions.len(), 8);
+        assert!(completions.iter().all(|(request, result)| matches!(
+            request,
+            CameraRequest::Manual
+        ) && result
+            == &Ok(CameraPrivacyState::Blocked)));
+    }
+
     unsafe extern "system" fn native_test_wnd_proc(
         hwnd: HWND,
         message: u32,
@@ -1853,7 +2211,7 @@ mod tests {
         }
     }
 
-    fn assert_native_menu(menu: HMENU, owner: HWND, mute: MicrophoneMuteState) {
+    fn assert_native_menu(menu: HMENU, owner: HWND) {
         use windows::Win32::UI::WindowsAndMessaging::{
             GetMenuItemID, GetMenuState, GetMenuStringW, MF_BYPOSITION,
         };
@@ -1895,22 +2253,14 @@ mod tests {
                 CMD_TOGGLE_MUTE as u32,
                 windows::Win32::UI::WindowsAndMessaging::MF_BYCOMMAND,
             );
-            assert_eq!(
-                flags & (MF_DISABLED.0 | MF_GRAYED.0) != 0,
-                mute == MicrophoneMuteState::Unavailable
-            );
+            assert_eq!(flags & (MF_DISABLED.0 | MF_GRAYED.0), 0);
         }
     }
 
     #[test]
     fn native_menu_consumer_bounds_unicode_and_preserves_actions() {
         let owner = native_test_owner();
-        for mute in [
-            MicrophoneMuteState::Muted,
-            MicrophoneMuteState::Unmuted,
-            MicrophoneMuteState::Mixed,
-            MicrophoneMuteState::Unavailable,
-        ] {
+        for requested in [Some(true), Some(false), None] {
             for summary in [
                 format!("miccamwatch: collection failed: {}", "W".repeat(16 * 1024)),
                 format!(
@@ -1921,13 +2271,14 @@ mod tests {
                 let menu = build_context_menu(
                     owner,
                     &summary,
-                    mute,
-                    CameraPrivacyState::SystemManaged,
+                    Language::En,
+                    requested,
+                    None,
                     &Settings::default(),
                     crate::autostart::AutostartState::Disabled,
                 )
                 .unwrap();
-                assert_native_menu(menu, owner, mute);
+                assert_native_menu(menu, owner);
                 let _ = unsafe { DestroyMenu(menu) };
                 // The bounded consumer must not mutate the original diagnostic.
                 assert!(summary.len() > 16 * 1024);
@@ -1964,13 +2315,14 @@ mod tests {
             let menu = build_context_menu(
                 owner,
                 &summary,
-                MicrophoneMuteState::Muted,
-                CameraPrivacyState::SystemManaged,
+                Language::En,
+                Some(true),
+                Some(false),
                 &Settings::default(),
                 crate::autostart::AutostartState::Disabled,
             )
             .unwrap();
-            assert_native_menu(menu, owner, MicrophoneMuteState::Muted);
+            assert_native_menu(menu, owner);
             let work = monitor_work_area(owner);
             std::fs::write(
                 directory.join(format!("{name}-menu.json")),
@@ -2088,7 +2440,7 @@ mod tests {
             sender.send(RestorePermit(Arc::clone(&activity))).unwrap();
         }
         drop(sender);
-        let (results, delivered) = mpsc::channel();
+        let (results, delivered) = mpsc::sync_channel(2);
         let mut calls = 0;
         restore_worker(
             receiver,
@@ -2102,8 +2454,12 @@ mod tests {
             || true,
         );
         assert_eq!(calls, 1);
+        assert_eq!(activity.lock().pending, 1);
+        let (permit, result) = delivered.recv().unwrap();
+        assert!(result.is_err());
+        assert_eq!(activity.lock().pending, 1);
+        drop(permit);
         assert_eq!(activity.lock().pending, 0);
-        assert!(delivered.recv().unwrap().is_err());
     }
     fn observed(resource: Resource, key: &str) -> Access {
         Access {
@@ -2128,25 +2484,10 @@ mod tests {
     }
 
     #[test]
-    fn stale_camera_refresh_cannot_revert_manual_completion() {
-        assert_eq!(
-            current_camera_from_refresh(
-                4,
-                5,
-                CameraPrivacyState::Allowed,
-                CameraPrivacyState::Blocked,
-            ),
-            CameraPrivacyState::Blocked
-        );
-        assert_eq!(
-            current_camera_from_refresh(
-                5,
-                5,
-                CameraPrivacyState::Allowed,
-                CameraPrivacyState::Blocked,
-            ),
-            CameraPrivacyState::Allowed
-        );
+    fn stale_or_inflight_control_refresh_cannot_revert_completed_intent() {
+        assert!(!accepts_control_refresh(4, 5, 0));
+        assert!(!accepts_control_refresh(5, 5, 1));
+        assert!(accepts_control_refresh(5, 5, 0));
     }
 
     #[test]
@@ -2243,7 +2584,7 @@ mod tests {
     #[test]
     fn serialized_camera_worker_applies_manual_block_after_unlock_restore() {
         let (requests, pending) = mpsc::channel();
-        let (results, delivered) = mpsc::channel();
+        let (results, delivered) = mpsc::sync_channel(8);
         requests
             .send(CameraRequest::Restore {
                 id: 1,
@@ -2385,7 +2726,7 @@ mod tests {
     #[test]
     fn arrival_during_restore_waits_for_first_result_then_runs_once() {
         let (requests, pending) = mpsc::sync_channel(1);
-        let (results, delivered) = mpsc::channel();
+        let (results, delivered) = mpsc::sync_channel(2);
         let (started, entered) = mpsc::channel();
         let (release, resume) = mpsc::channel();
         let worker = thread::spawn(move || {
@@ -2416,11 +2757,11 @@ mod tests {
         ));
         release.send(()).unwrap();
         assert_eq!(
-            delivered.recv_timeout(Duration::from_secs(2)).unwrap(),
+            delivered.recv_timeout(Duration::from_secs(2)).unwrap().1,
             Ok(1)
         );
         assert_eq!(
-            delivered.recv_timeout(Duration::from_secs(2)).unwrap(),
+            delivered.recv_timeout(Duration::from_secs(2)).unwrap().1,
             Ok(2)
         );
         drop(requests);
@@ -2430,7 +2771,7 @@ mod tests {
     #[test]
     fn declined_prompt_discards_arrivals_queued_during_the_prompt() {
         let (requests, pending) = mpsc::sync_channel(1);
-        let (results, delivered) = mpsc::channel();
+        let (results, delivered) = mpsc::sync_channel(2);
         let (started, entered) = mpsc::channel();
         let (release, resume) = mpsc::channel();
         let worker = thread::spawn(move || {
@@ -2456,7 +2797,7 @@ mod tests {
         requests.try_send(()).unwrap();
         release.send(()).unwrap();
         assert_eq!(
-            delivered.recv_timeout(Duration::from_secs(2)).unwrap(),
+            delivered.recv_timeout(Duration::from_secs(2)).unwrap().1,
             Err("declined".to_owned())
         );
         drop(requests);
@@ -2470,7 +2811,7 @@ mod tests {
     #[test]
     fn closed_result_receiver_stops_worker_before_queued_restore() {
         let (requests, pending) = mpsc::sync_channel(1);
-        let (results, delivered) = mpsc::channel();
+        let (results, delivered) = mpsc::sync_channel(2);
         let (started, entered) = mpsc::channel();
         let (release, resume) = mpsc::channel();
         let worker = thread::spawn(move || {
@@ -2503,7 +2844,7 @@ mod tests {
     #[test]
     fn failed_post_keeps_result_owned_and_worker_available() {
         let (requests, pending) = mpsc::sync_channel(1);
-        let (results, delivered) = mpsc::channel();
+        let (results, delivered) = mpsc::sync_channel(2);
         let (started, entered) = mpsc::channel();
         let (release, resume) = mpsc::channel();
         let worker = thread::spawn(move || {
@@ -2528,12 +2869,12 @@ mod tests {
         entered.recv_timeout(Duration::from_secs(2)).unwrap();
         release.send(()).unwrap();
         assert_eq!(
-            delivered.recv_timeout(Duration::from_secs(2)).unwrap(),
+            delivered.recv_timeout(Duration::from_secs(2)).unwrap().1,
             Ok(1)
         );
         requests.try_send(()).unwrap();
         assert_eq!(
-            delivered.recv_timeout(Duration::from_secs(2)).unwrap(),
+            delivered.recv_timeout(Duration::from_secs(2)).unwrap().1,
             Ok(2)
         );
         drop(requests);
@@ -2543,7 +2884,7 @@ mod tests {
     #[test]
     fn closed_window_skips_pending_restore_without_invoking_privacy() {
         let (requests, pending) = mpsc::sync_channel(1);
-        let (results, delivered) = mpsc::channel();
+        let (results, delivered) = mpsc::sync_channel(2);
         let worker = thread::spawn(move || {
             let mut called = false;
             restore_worker(

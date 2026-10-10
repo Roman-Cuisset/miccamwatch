@@ -31,7 +31,7 @@ The [latest native dry run 37429480145](https://github.com/Roman-Cuisset/miccamw
 - High-contrast terminal color coding for instant status recognition (green, yellow, orange, red).
 - Seven display/help languages with native locale detection: English (`en`), French (`fr`), German (`de`), Spanish (`es`), Japanese (`ja`), Simplified Chinese (`zh`), Russian (`ru`).
 - Microphone mute/query/owned restoration (`mcw mute` / `mcw unmute` / `mcw mute --toggle`): Windows capture endpoints, Linux PipeWire session sources, or writable macOS CoreAudio inputs. This is not a universal hardware kill-switch or a guarantee against bypassing those scopes.
-- Interactive full-terminal live dashboard (`mcw top`) with keyboard and left-click controls. Shortcuts accept either case; `[b]` blocks supported connected Windows/USB Linux cameras and `[a]` restores cameras previously blocked by MicCamWatch; macOS retains manual profile approval/removal. Linux USB controls require separate administrator setup and explicit Polkit authorization. The controls wrap on narrow terminals. `[k]` requires a second confirmation for the same live process identity; Esc cancels without quitting. Camera approval runs off the UI thread; pending operations prevent an unsafe quit and failures remain visible.
+- Interactive full-terminal live dashboard (`mcw top`) with keyboard and left-click controls. Shortcuts accept either case; `[b]` blocks supported Windows/USB Linux cameras and `[a]` restores owned changes; macOS retains manual profile approval/removal. Linux USB controls require separate administrator setup and explicit Polkit authorization. Candidate `0.17.0` keeps all six buttons in one horizontal row with compact narrow representations. `[k]` requires a second confirmation for the same live process identity; Esc cancels without quitting. Camera approval runs off the UI thread; pending operations prevent an unsafe quit and failures remain visible.
 - Native desktop mode (`mcw tray`): Windows Notification Area, Linux StatusNotifierItem on a supporting desktop, or macOS AppKit menu bar.
 - Privacy commands expose the actual platform scope: Windows device blocking, Linux session-source mute and explicitly authorized USB `uvcvideo` controls, and writable macOS input mute plus an explicitly approved owned camera profile. Unsupported controls are disabled or refused, never reported as successful.
 - Persistent settings and rotating JSONL history use application-data directories on Windows and XDG/HOME directories on Unix. Query exact paths with `mcw config settings-path` and `mcw history path`.
@@ -40,6 +40,83 @@ The [latest native dry run 37429480145](https://github.com/Roman-Cuisset/miccamw
 - Three-state session lock detection on Windows/Linux; unknown lock state never triggers enforcement. Public macOS lock state stays unknown and enabling lock policy is refused.
 - Discreet native audio chime upon confirmed capture initiation (`--sound`).
 - Monitoring runs without administrator privileges. Windows camera device changes request administrator approval; Linux USB camera changes use a separately installed root-owned helper with explicit Polkit authorization; macOS camera profile installation/removal requires manual approval in System Settings.
+
+## Candidate 0.17.0 — Windows-first protection, not yet published
+
+**Current public stable remains immutable `v0.16.1`.** The following describes
+candidate source, not an available release, a hardware certification or a
+change to the installation pins below. P1-RAM and P1-RESTORE remain in progress
+until native CI/helper qualification. Linux/macOS controls retain their honest
+one-shot scopes; they do not inherit the Windows background protection owner.
+
+- **Microphone:** requested manual protection, effective SDK endpoint mute and
+  observed capture are separate facts. An owned native background broker keeps
+  manual intent after `top`/tray exit until explicit `mcw unmute`; it is not an
+  implicitly installed login service and does not enable autostart. Automatic
+  protection tracks each endpoint's original state, generation and ownership;
+  newer manual intent takes precedence. Release failures remain pending rather
+  than being reported as restored. No requested intent plus no owner is normal;
+  owner/transport failures while protection is requested remain explicit.
+- **Limits:** mute is software SDK control, not capture denial. Exclusive,
+  ASIO, direct-driver and hardware paths may bypass or differ from that scope.
+  The CoreAudio event-context GUID is advisory; same-value `SetMute` can return
+  `S_FALSE` without a callback. MCW cannot identify an exact Ktalk/Audition actor
+  or detect every invisible same-valued external intent. Ownership safeguards
+  are not an absolute security boundary.
+- **Windows camera:** global Block/Allow does not depend on present count:
+  zero, one or 1,000 supported cameras use the same intent. Block starts an
+  explicitly UAC-approved temporary native owner covering future arrivals;
+  Allow clears that intent and restores only protected owned changes, never
+  every disabled device. An absent camera is not expected inventory or an
+  error by itself. Arrival enforcement has a brief window; SDK restart needs,
+  vetoes and unknown/partial readback stay visible, not guaranteed denial.
+- **Legacy recovery:** old unsigned ownership files are not imported. Candidate
+  `mcw camera allow --restore-legacy INSTANCE_ID` is an explicit fresh,
+  single-target UAC action with camera-class validation, not automatic recovery
+  or a vendor-specific Logitech privilege exception. Camera ownership evidence
+  lives in an administrator-protected journal.
+- **Local control:** fixed-capability native IPC authenticates exact SID,
+  session, scoped data-directory hash and native process birth identity.
+  Requests/responses and deadlines are bounded; normal RPC accepts no arbitrary
+  paths/devices. Alternate-administrator delegation grants QUERY-only process
+  inspection, not token use, termination or general administrator authority.
+- **Replacement safety:** explicitly release microphone/camera protection and
+  finish pending restoration before replacing binaries. Closing a UI is not
+  release. Candidate portable Windows `mcw update` reserves both request locks
+  and validated native resource leases before tray shutdown or file swaps;
+  active/foreign owners, manual/automatic intent, pending owned restoration and
+  unreadable/corrupt/unsupported records refuse replacement. Unsigned legacy
+  owed-only camera history alone does not block update and survives unchanged
+  for explicit recovery; it is not privileged ownership. No helper launch, SDK
+  mutation or implicit release is used for readiness. Reservations cover swaps/
+  rollback; if protection resumes before a post-restart rollback, it refuses
+  rollback and retains backups. A same-version matching-pair no-op needs no
+  replacement reservation. **External MSI/manual replacement is not guarded by
+  this portable-updater mechanism** and still requires explicit prior release.
+
+Candidate PipeWire graph reading is streaming and bounded, with child-output
+limits/deadlines and truthful health errors instead of false STOP. UI queues,
+notifications and caches are bounded. These bounds are not a claim of RSS below
+**15,000,000 B**, the soft target; approximately 30 MB is a reference, not a hard
+cutoff.
+
+**Local evidence only:** native Windows strict feature Clippy and two native
+unit suites passed (156 library + 1 main feature tests, 1 ignored visual test);
+eight real native IPC tests passed. Real ConPTY `top` exercised all seven
+languages at 120/150/40/20 columns, refresh, mouse and quit; the rendered French
+150-column view was visually inspected with six bordered controls on one row.
+The final missing-owner status correction has not yet been rebuilt. Read-only
+resource sampling completed with **15 MB unmet**: status OS peak approximately
+18.34 MB; watch median/peak 17.580032/18.362368 MB; top
+18.1248/18.993152 MB; burst 18.214912/19.079168 MB. No active guard/tray was
+included in this local run; maximum sample gaps were 63–78 ms, so short-lived
+children or peaks may be missed. Full product-tree/shared-RSS accounting,
+guard-inclusive hosted Windows runs, full native OS CI and physical protection/
+restoration qualification remain pending. A private Linux PipeWire fixture
+proved an external unmute remained after five seconds and was cleaned; that is
+not physical audio proof. macOS has only source-scoped limitations for this
+candidate, not new physical validation. See [candidate architecture and proof
+boundaries](docs/ARCHITECTURE.md#candidate-0170-windows-first-protection-contract).
 
 ## Commands
 
@@ -142,6 +219,10 @@ The output is suitable for diagnostics and monitoring. It is not a forensic proo
 
 Download `miccamwatch-windows-x86_64.msi` from the [latest release](https://github.com/Roman-Cuisset/miccamwatch/releases/latest) for a per-user installation with `mcw` on `PATH` and a Start Menu entry. The portable `miccamwatch-windows-x86_64.zip` remains available.
 
+The following installer/update description is the current public `v0.16.1`
+baseline; candidate protection/readiness changes are documented above and do
+not retroactively change old binaries.
+
 For MSI installations, upgrade with the latest MSI from [GitHub Releases](https://github.com/Roman-Cuisset/miccamwatch/releases/latest); `mcw update` does not update MSI registration. Portable/Cargo installs use `mcw update` to install a matching CLI/tray pair. It verifies the selected release before requesting safe shutdown of a tray from this exact installation, refuses shutdown while camera/UAC operations are pending, and waits for actual process termination. A legacy v0.14.0 tray cannot acknowledge this protocol: finish pending operations and quit it manually, then retry. No force-kill or elevation is used to release an executable lock. Tray replacement is atomic; replacing the running CLI requires recoverable same-volume renames and has a brief pathname gap under the installation lock. Failed transactions roll back; incomplete recovery is reported without restarting an inconsistent pair. Only a previously running tray is restarted. Same-version repair verifies the pair but replaces only the missing/outdated tray; it does not pretend the CLI version is `0.0.0`.
 
 The Windows updater downloads one exact release ZIP and checks its SHA-256 against both the selected GitHub API asset digest and its exact named `SHA256SUMS` entry, then validates both staged executable versions before shutdown. These share a release channel and are not an independent publisher signature. Signing is conditional on a real release certificate. If Defender quarantines `mcw.exe`, a `PATH` change is not a remedy: preserve Protection History details and follow [signing, provenance and safe incident handling](docs/SIGNING.md). No exclusion, disabled protection or quarantine restoration is recommended.
@@ -182,6 +263,14 @@ curl --proto '=https' --tlsv1.2 -fsSL \
   https://raw.githubusercontent.com/Roman-Cuisset/miccamwatch/main/installer/install.sh \
   | sh
 ```
+
+An alternative HTTPS installer and documentation endpoint is available at
+[serveur-asus.duckdns.org:9443/mcw/](https://serveur-asus.duckdns.org:9443/mcw/).
+Replace the script URL above with
+`https://serveur-asus.duckdns.org:9443/mcw/install.sh`; download and inspect it
+before running the same installer options. This endpoint serves only static
+documentation and the reviewed installer, not a binary mirror. Release payloads
+and checksum validation still use GitHub. Do not disable TLS certificate checks.
 
 Use `--add-path` for explicitly requested automatic PATH integration, or `--no-modify-path` to leave shell configuration untouched. Without either flag, a missing PATH entry is proposed through `/dev/tty`; a noninteractive installation does not wait for input or silently edit the shell configuration. Bash, zsh (including `ZDOTDIR`), and fish are supported. Open a new terminal after accepting PATH integration: an installer subprocess cannot change its parent's environment. You can then run `mcw --version`, `mcw doctor --json`, and `mcw watch --json` from any directory.
 

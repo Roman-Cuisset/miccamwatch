@@ -13,7 +13,8 @@ use crate::{
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use std::{
-    collections::HashMap, ffi::OsStr, io, mem::size_of, path::Path, ptr, slice, sync::mpsc::Sender,
+    collections::HashMap, ffi::OsStr, io, mem::size_of, path::Path, ptr, slice,
+    sync::mpsc::SyncSender,
 };
 use windows::{
     Win32::{
@@ -83,6 +84,17 @@ use winreg::{RegKey, enums::HKEY_CURRENT_USER};
 
 #[path = "windows_camera.rs"]
 mod camera_activity;
+#[path = "windows_mute.rs"]
+mod microphone_lock;
+pub(crate) use microphone_protection::{
+    MicrophoneLockJournal, ensure_update_inactive as ensure_microphone_update_inactive,
+};
+#[path = "windows_protection.rs"]
+mod microphone_protection;
+pub use microphone_protection::{
+    MicrophoneProtectionStatus, resume_requested_microphone_protection,
+    run_microphone_protection_service,
+};
 const CONSENT_STORE: &str =
     r"Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore";
 const WINDOWS_TO_UNIX_EPOCH_100NS: i128 = 116_444_736_000_000_000;
@@ -143,7 +155,7 @@ windows::core::link!("ntdll.dll" "system" fn NtQueryInformationProcess(
 pub struct PlatformMonitor {
     enumerator: IMMDeviceEnumerator,
     policy: Policy,
-    _media_foundation: MediaFoundationGuard,
+    _media_foundation: Option<MediaFoundationGuard>,
     _com: ComGuard,
 }
 
@@ -178,7 +190,18 @@ impl PlatformMonitor {
         Ok(Self {
             enumerator,
             policy,
-            _media_foundation: media_foundation,
+            _media_foundation: Some(media_foundation),
+            _com: com,
+        })
+    }
+    fn new_microphone_owner() -> Result<Self> {
+        let com = ComGuard::new()?;
+        let enumerator = unsafe { CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL) }
+            .context("failed to create the Windows microphone enumerator")?;
+        Ok(Self {
+            enumerator,
+            policy: Policy::default(),
+            _media_foundation: None,
             _com: com,
         })
     }
@@ -303,7 +326,7 @@ impl PlatformMonitor {
 
     pub fn register_audio_notifications(
         &self,
-        sender: Sender<()>,
+        sender: SyncSender<()>,
     ) -> Result<AudioNotificationGuard> {
         let collection = unsafe {
             self.enumerator
@@ -311,7 +334,13 @@ impl PlatformMonitor {
                 .context("failed to enumerate microphone devices for notifications")?
         };
         let count = unsafe { collection.GetCount()? };
-        let mut registrations = Vec::with_capacity(count as usize);
+        anyhow::ensure!(
+            count <= 256,
+            "audio notification endpoint overload: {count} exceeds 256; polling remains available"
+        );
+        let mut guard = AudioNotificationGuard {
+            registrations: Vec::with_capacity(count as usize),
+        };
         for index in 0..count {
             let device = unsafe { collection.Item(index)? };
             let manager: IAudioSessionManager2 = unsafe { device.Activate(CLSCTX_ALL, None)? };
@@ -320,9 +349,9 @@ impl PlatformMonitor {
             }
             .into();
             unsafe { manager.RegisterSessionNotification(&callback)? };
-            registrations.push((manager, callback));
+            guard.registrations.push((manager, callback));
         }
-        Ok(AudioNotificationGuard { registrations })
+        Ok(guard)
     }
 
     pub fn devices(&self) -> Result<Vec<Device>> {
@@ -372,6 +401,10 @@ impl PlatformMonitor {
                 .context("failed to enumerate microphone devices")?
         };
         let count = unsafe { collection.GetCount()? };
+        anyhow::ensure!(
+            count <= 256,
+            "microphone endpoint overload: {count} exceeds 256"
+        );
         let mut volumes = Vec::with_capacity(count as usize);
         for index in 0..count {
             let device = unsafe { collection.Item(index)? };
@@ -381,37 +414,15 @@ impl PlatformMonitor {
     }
 
     pub fn set_microphone_mute(&self, mute: bool) -> Result<usize> {
-        let endpoints = self.microphone_volumes()?;
-        if endpoints.is_empty() {
-            anyhow::bail!("no active microphone capture device was found");
-        }
-        let original = endpoints
-            .iter()
-            .map(|volume| unsafe { volume.GetMute().map(|value| value.as_bool()) })
-            .collect::<windows::core::Result<Vec<_>>>()?;
-        for (index, volume) in endpoints.iter().enumerate() {
-            if let Err(error) = unsafe { volume.SetMute(mute, ptr::null()) } {
-                for (changed, was_muted) in endpoints[..index].iter().zip(&original[..index]) {
-                    let _ = unsafe { changed.SetMute(*was_muted, ptr::null()) };
-                }
-                return Err(error).context(
-                    "failed to change microphone mute state; prior devices were restored",
-                );
-            }
-        }
-        Ok(endpoints.len())
+        microphone_protection::set_requested(mute)
     }
 
     pub fn toggle_microphone_mute(&self) -> Result<bool> {
-        let mute = match self.microphone_mute_state()? {
-            MicrophoneMuteState::Unavailable => {
-                anyhow::bail!("no active microphone capture device was found")
-            }
-            MicrophoneMuteState::Muted => false,
-            MicrophoneMuteState::Unmuted | MicrophoneMuteState::Mixed => true,
-        };
-        self.set_microphone_mute(mute)?;
-        Ok(mute)
+        microphone_protection::toggle_requested()
+    }
+
+    pub fn microphone_protection_status(&self) -> Result<MicrophoneProtectionStatus> {
+        microphone_protection::status(self)
     }
 
     pub fn doctor(&self) -> Vec<DiagnosticCheck> {
@@ -798,7 +809,7 @@ impl CaptureCollector for PlatformMonitor {
 
 #[windows::core::implement(IAudioSessionNotification)]
 struct AudioSessionNotifier {
-    sender: Sender<()>,
+    sender: SyncSender<()>,
 }
 
 impl IAudioSessionNotification_Impl for AudioSessionNotifier_Impl {
@@ -806,7 +817,8 @@ impl IAudioSessionNotification_Impl for AudioSessionNotifier_Impl {
         &self,
         _new_session: windows::core::Ref<IAudioSessionControl>,
     ) -> windows::core::Result<()> {
-        let _ = self.sender.send(());
+        // A wake is level-triggered: one pending rescan covers a callback burst.
+        let _ = self.sender.try_send(());
         Ok(())
     }
 }
@@ -818,7 +830,9 @@ pub struct AudioNotificationGuard {
 impl Drop for AudioNotificationGuard {
     fn drop(&mut self) {
         for (manager, callback) in &self.registrations {
-            let _ = unsafe { manager.UnregisterSessionNotification(callback) };
+            if let Err(error) = unsafe { manager.UnregisterSessionNotification(callback) } {
+                eprintln!("audio session callback unregister failed: {error}");
+            }
         }
     }
 }

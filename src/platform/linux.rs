@@ -57,7 +57,10 @@ impl PlatformMonitor {
     }
 
     pub fn snapshot(&self, scope: CaptureScope) -> Result<Snapshot> {
-        let graph = Graph::read();
+        self.snapshot_with_graph(scope, Graph::read())
+    }
+
+    fn snapshot_with_graph(&self, scope: CaptureScope, graph: Result<Graph>) -> Result<Snapshot> {
         let boot = BootTime::read();
         let cameras = if scope.camera {
             Some(v4l2::devices())
@@ -369,5 +372,36 @@ impl CaptureCollector for PlatformMonitor {
 
     fn diagnostics(&self) -> Vec<DiagnosticCheck> {
         self.doctor()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn failed_graph_read_is_unavailable_and_cannot_prove_capture_stopped() {
+        let monitor = PlatformMonitor::new(Policy::default()).unwrap();
+        let scope = CaptureScope {
+            microphone: true,
+            camera: false,
+            include_ready: false,
+        };
+        let retained = r#"{"type":"PipeWire:Interface:Client/3"}"#;
+        let overloaded = format!("[{}]", vec![retained; 4097].join(","));
+        for graph in [
+            Err(anyhow::anyhow!("injected PipeWire reader failure")),
+            Graph::parse(b"malformed graph"),
+            Graph::parse(overloaded.as_bytes()),
+        ] {
+            let snapshot = monitor.snapshot_with_graph(scope, graph).unwrap();
+            assert!(snapshot.accesses.is_empty());
+            assert_eq!(snapshot.collectors.len(), 1);
+            assert_eq!(snapshot.collectors[0].state, CollectorState::Unavailable);
+            assert!(snapshot.collectors[0].detail.is_some());
+            // The watcher retains prior microphone observations across this
+            // gap instead of interpreting an empty access list as STOP.
+            assert_eq!(snapshot.observation_gaps, vec![Resource::Microphone]);
+        }
     }
 }

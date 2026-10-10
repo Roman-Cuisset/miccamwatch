@@ -73,7 +73,7 @@ finally:
 
 
 class NativeTerminal:
-    def __init__(self, binary, language, width, height):
+    def __init__(self, binary, language, width, height, *, launch_started=None):
         self.windows = os.name == "nt"
         self.raw = bytearray()
         self.decoder = codecs.getincrementaldecoder("utf-8")("replace")
@@ -83,6 +83,8 @@ class NativeTerminal:
         if self.windows:
             from winpty import PtyProcess
             from winpty.enums import Backend
+            if launch_started is not None:
+                launch_started()
             self.process = PtyProcess.spawn(command, dimensions=(height, width), backend=Backend.ConPTY)
         else:
             import fcntl
@@ -95,6 +97,8 @@ class NativeTerminal:
                 os.setsid()
                 fcntl.ioctl(0, termios.TIOCSCTTY, 0)
 
+            if launch_started is not None:
+                launch_started()
             self.process = subprocess.Popen(command, stdin=slave, stdout=slave, stderr=slave,
                                             preexec_fn=controlling_terminal, close_fds=True)
             os.close(slave)
@@ -216,17 +220,9 @@ def exercise(binary, proof, language):
     try:
         terminal.drain(6)
         assert terminal.alive(), "top exited before input"
-        for key in "bamkrq":
-            terminal.locate(key)
+        assert len({terminal.locate(key)[1] for key in "bamkrq"}) == 1, \
+            "The six visible actions must share one horizontal row"
         terminal.frame(proof / (language + "-120x40"))
-        qx, qy = terminal.locate("q")
-        row = terminal.screen.buffer[qy]
-        right_border = next((x for x in range(qx, terminal.screen.columns) if row[x].data == "│"), -1)
-        assert right_border >= 0 and right_border + 1 < terminal.screen.columns
-        assert row[right_border + 1].data == " ", "Quit has no empty click gap"
-        terminal.click(right_border + 1, qy)
-        terminal.drain(.3)
-        assert terminal.alive(), "Clicking the Quit gap executed Quit"
         if os.name != "nt" and os.uname().sysname == "Linux":
             for key in "ba":
                 x, y = terminal.locate(key)
@@ -244,13 +240,24 @@ def exercise(binary, proof, language):
         terminal.send("R")
         terminal.drain(.3)
         assert terminal.alive(), "Read-only refresh exited top"
-        for width, height in ((40, 24), (20, 12), (120, 40)):
+        for width, height in ((40, 24), (20, 12), (150, 40), (120, 40)):
             terminal.resize(width, height)
             terminal.drain(.8)
             terminal.locate("q")
+            if width >= 120:
+                assert len({terminal.locate(key)[1] for key in "bamkrq"}) == 1, \
+                    "Resizing stacked the action bar"
             terminal.locate("r")
             assert terminal.alive(), "Resize exited top"
             terminal.frame(proof / (language + f"-{width}x{height}-resized"))
+            if width == 150:
+                qx, qy = terminal.locate("q")
+                row = terminal.screen.buffer[qy]
+                last_painted = max(x for x in range(qx, terminal.screen.columns)
+                                   if row[x].data not in ("", " "))
+                terminal.click(last_painted + 1, qy)
+                terminal.drain(.3)
+                assert terminal.alive(), "Clicking outside the visible Quit button executed Quit"
             terminal.send("\x1b[A\x1b[B")  # Preserve process-selection navigation.
             terminal.drain(.2)
         # Use native mouse dispatch for one session, case-insensitive keyboard

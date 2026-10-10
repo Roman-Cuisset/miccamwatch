@@ -59,6 +59,15 @@ impl Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    #[cfg(windows)]
+    #[command(name = "__microphone-guard", hide = true)]
+    MicrophoneGuard,
+    #[cfg(windows)]
+    #[command(name = "__camera-guard", hide = true)]
+    CameraGuard {
+        #[arg(long, hide = true)]
+        bootstrap: String,
+    },
     /// Show capture access active right now
     Status(Options),
     /// Print access start and stop events until Ctrl+C
@@ -71,9 +80,9 @@ pub enum Command {
     Update,
     /// Run self-diagnostics and report system compatibility
     Doctor(OutputOptions),
-    /// Mute/query Windows capture, Linux PipeWire session sources, or writable macOS inputs
+    /// Windows persistent microphone protection; supported Unix microphone mute
     Mute(MuteOptions),
-    /// Restore microphone capture within the supported platform scope
+    /// Release Windows microphone protection, then unmute supported inputs
     Unmute,
     /// Launch the interactive full-terminal live dashboard
     Top,
@@ -136,6 +145,13 @@ pub enum TrayCommand {
 #[derive(Debug, Subcommand)]
 pub enum CameraCommand {
     Status,
+    #[cfg(windows)]
+    Allow {
+        /// Explicitly authorize restoring one legacy camera; may override an independent disable
+        #[arg(long, value_name = "INSTANCE_ID")]
+        restore_legacy: Option<String>,
+    },
+    #[cfg(not(windows))]
     Allow,
     Block,
     Toggle,
@@ -401,13 +417,13 @@ fn platform_help(lang: Language) -> &'static str {
     return help_text(
         lang,
         [
-            "Scope: capture-endpoint software mute; camera device controls need explicit administrator approval. Monitoring receives no media.",
-            "Portée : mute logiciel des entrées ; contrôle caméra avec approbation administrateur explicite. Aucun média reçu par le moniteur.",
-            "Umfang: Software-Stummschaltung der Eingänge; Kamerasteuerung benötigt ausdrückliche Administratorfreigabe. Keine Medienaufnahme durch den Monitor.",
-            "Alcance: silencio por software de entradas; control de cámara con aprobación explícita de administrador. El monitor no recibe medios.",
-            "範囲: 入力のソフトウェアミュート。カメラ制御には明示的な管理者承認が必要です。監視はメディアを受信しません。",
-            "范围：输入端点软件静音；摄像头控制需要明确的管理员批准。监控器不接收媒体。",
-            "Область: программное отключение звука входов; управление камерой требует явного согласия администратора. Монитор не получает медиаданные.",
+            "Windows: microphone guard persists until explicit Unmute/Release, including after UI exit; no automatic login launch. SDK mute is not access denial; exclusive capture may bypass software mute. Global camera Block includes future arrivals via a temporary UAC-approved helper until Allow. Allow restores only MCW changes. Status never starts helpers; monitoring receives no media.",
+            "Windows : garde micro jusqu'à Désactiver/Libérer, même après fermeture ; aucun lancement automatique. La sourdine SDK ne refuse pas l'accès ; capture exclusive parfois hors portée. Blocage global caméra et futures connexions via un helper temporaire approuvé UAC jusqu'à Autoriser. Seuls les changements MCW sont restaurés. Statut sans lancement ; aucun média reçu.",
+            "Windows: Mikrofonwächter bis Unmute/Freigeben, auch nach UI-Ende; kein automatischer Loginstart. SDK-Stummschaltung sperrt keinen Zugriff; exklusive Aufnahme kann sie umgehen. Globale Kamerasperre mit künftigen Geräten durch temporären UAC-Helper bis Allow; nur MCW-Änderungen werden restauriert. Status startet keine Helper; keine Medien.",
+            "Windows: guardián de mic hasta Unmute/Liberar, incluso al cerrar; sin inicio automático. Silencio SDK no deniega acceso; captura exclusiva puede eludirlo. Bloqueo global de cámaras futuras mediante helper temporal aprobado por UAC hasta Allow; restaura solo cambios MCW. Estado no inicia helpers; sin medios.",
+            "Windows: マイク保護は明示的なUnmute/解除まで継続し、画面終了後も有効。自動起動なし。SDK消音はアクセス拒否ではなく排他録音は回避可能。UAC承認済み一時ヘルパーがAllowまで今後接続する全カメラもブロック。MCWの変更のみ復元。状態確認はヘルパーを起動せず、メディアを受信しません。",
+            "Windows：麦克风保护持续到明确Unmute/解除，关闭界面不解除；不自动登录启动。SDK静音不是拒绝访问，独占采集可能绕过。临时UAC授权助手全局阻止未来接入的摄像头，直到Allow；只恢复MCW更改。状态查询不启动助手；不接收媒体。",
+            "Windows: защитник микрофона до явного Unmute/Снять, включая закрытие UI; без автозапуска. SDK mute не запрещает доступ, монопольный захват может обходить его. Глобальная блокировка будущих камер временным UAC-помощником до Allow; восстановление только изменений MCW. Статус не запускает помощников; без медиаданных.",
         ],
     );
     #[cfg(target_os = "linux")]
@@ -440,6 +456,26 @@ fn platform_help(lang: Language) -> &'static str {
 
 fn command_help(name: &str, root: bool, lang: Language) -> Option<&'static str> {
     let values = match name {
+        #[cfg(windows)]
+        "mute" => [
+            "Request persistent microphone protection or inspect intent/SDK mute",
+            "Demander la protection micro persistante ou voir intention/sourdine SDK",
+            "Dauerhaften Mikrofonschutz anfordern oder Absicht/SDK-Mute prüfen",
+            "Solicitar protección persistente o consultar intención/silencio SDK",
+            "永続マイク保護を要求、または要求状態とSDK消音を確認",
+            "请求持续麦克风保护或查询意图/SDK静音",
+            "Запросить постоянную защиту или проверить намерение/SDK mute",
+        ],
+        #[cfg(windows)]
+        "unmute" => [
+            "Release microphone protection before unmuting inputs",
+            "Désactiver la protection avant de réactiver les entrées",
+            "Mikrofonschutz vor Aufheben der Stummschaltung freigeben",
+            "Desactivar protección antes de quitar silencio",
+            "マイク保護を解除してから入力の消音を解除",
+            "先解除麦克风保护再取消输入静音",
+            "Снять защиту перед включением звука входов",
+        ],
         "mcw" => [
             "Observe microphone/camera access without recording media",
             "Observer les accès micro/caméra sans enregistrer de média",
@@ -512,6 +548,7 @@ fn command_help(name: &str, root: bool, lang: Language) -> Option<&'static str> 
             "使用已验证发行文件更新受管安装",
             "Обновить управляемую установку проверенными файлами выпуска",
         ],
+        #[cfg(not(windows))]
         "mute" => [
             "Mute/query inputs within the platform scope below",
             "Muter/interroger les entrées dans la portée ci-dessous",
@@ -521,6 +558,7 @@ fn command_help(name: &str, root: bool, lang: Language) -> Option<&'static str> 
             "在下述范围内静音或查询输入",
             "Отключить звук/проверить входы в указанной ниже области",
         ],
+        #[cfg(not(windows))]
         "unmute" => [
             "Restore input state within the supported platform scope",
             "Restaurer les entrées dans la portée prise en charge",
@@ -756,6 +794,16 @@ fn argument_help(name: &str, lang: Language) -> Option<&'static str> {
         return command_help(name, false, lang);
     }
     let values = match name {
+        #[cfg(windows)]
+        "restore_legacy" => [
+            "Explicitly consent to restore this legacy camera ID; may override an independent disable; requires new UAC approval",
+            "Consentir explicitement à restaurer cet ID caméra ancien ; peut annuler une désactivation indépendante ; nouvelle approbation UAC",
+            "Wiederherstellung dieser alten Kamera-ID ausdrücklich erlauben; kann fremde Deaktivierung aufheben; neue UAC-Freigabe",
+            "Autorizar explícitamente restaurar este ID antiguo; puede anular desactivación ajena; nueva aprobación UAC",
+            "この旧カメラIDの復元に明示同意。他者の無効化を解除する可能性があり、新たなUAC承認が必要",
+            "明确同意恢复此旧摄像头ID；可能覆盖独立禁用；需新的UAC授权",
+            "Явное согласие восстановить старый ID камеры; может отменить чужое отключение; новое одобрение UAC",
+        ],
         "config" => [
             "TOML policy file",
             "Fichier de politique TOML",
@@ -892,22 +940,22 @@ fn argument_help(name: &str, lang: Language) -> Option<&'static str> {
             "Отключить автоматическое завершение независимо от политики",
         ],
         "toggle" => [
-            "Toggle supported input mute state",
-            "Basculer le mute des entrées prises en charge",
-            "Unterstützte Eingangsstummschaltung umschalten",
-            "Alternar silencio de entradas compatibles",
-            "対応入力のミュートを切り替え",
-            "切换支持输入的静音状态",
-            "Переключить звук поддерживаемых входов",
+            "Toggle Windows protection intent; supported Unix input mute",
+            "Basculer la protection Windows ; sourdine Unix prise en charge",
+            "Windows-Schutzabsicht umschalten; unterstützte Unix-Stummschaltung",
+            "Alternar protección Windows; silencio Unix compatible",
+            "Windows保護要求、または対応Unix入力の消音を切替",
+            "切换Windows保护意图或支持的Unix输入静音",
+            "Переключить защиту Windows; поддерживаемый Unix mute",
         ],
         "status" => [
-            "Query effective mute state without changing it",
-            "Interroger le mute effectif sans le modifier",
-            "Tatsächlichen Stummzustand ohne Änderung abfragen",
-            "Consultar silencio efectivo sin modificarlo",
-            "変更せず実際のミュート状態を確認",
-            "查询实际静音状态，不进行更改",
-            "Проверить фактическое отключение звука без изменений",
+            "Inspect protection intent and actual SDK mute without starting a guard",
+            "Voir intention de protection et sourdine SDK sans démarrer la garde",
+            "Schutzabsicht und SDK-Mute ohne Wächterstart prüfen",
+            "Consultar intención y silencio SDK sin iniciar guardián",
+            "保護プロセスを起動せず保護要求とSDK消音を確認",
+            "查看保护意图和SDK静音，不启动保护进程",
+            "Проверить намерение и SDK mute без запуска защитника",
         ],
         "pid" => [
             "Process ID to inspect",
@@ -939,4 +987,72 @@ fn argument_help(name: &str, lang: Language) -> Option<&'static str> {
         _ => return None,
     };
     Some(help_text(lang, values))
+}
+
+#[cfg(all(test, windows))]
+mod protection_command_tests {
+    use super::*;
+
+    #[test]
+    fn internal_guard_commands_require_only_owned_bootstrap() {
+        assert!(matches!(
+            Cli::try_parse_from(["mcw", "__microphone-guard"])
+                .unwrap()
+                .command,
+            Command::MicrophoneGuard
+        ));
+        assert!(
+            matches!(Cli::try_parse_from(["mcw", "__camera-guard", "--bootstrap", "{}"]).unwrap().command, Command::CameraGuard { bootstrap } if bootstrap == "{}")
+        );
+        assert!(Cli::try_parse_from(["mcw", "__camera-guard"]).is_err());
+        assert!(
+            Cli::try_parse_from([
+                "mcw",
+                "__camera-guard",
+                "--bootstrap",
+                "{}",
+                "--device",
+                "arbitrary"
+            ])
+            .is_err()
+        );
+        let command = Cli::command();
+        for name in ["__microphone-guard", "__camera-guard"] {
+            assert!(command.find_subcommand(name).unwrap().is_hide_set());
+        }
+    }
+
+    #[test]
+    fn legacy_restore_is_an_explicit_camera_allow_option() {
+        let cli = Cli::try_parse_from([
+            "mcw",
+            "camera",
+            "allow",
+            "--restore-legacy",
+            "fixture-camera",
+        ])
+        .unwrap();
+        assert!(
+            matches!(cli.command, Command::Camera { command: CameraCommand::Allow { restore_legacy: Some(id) } } if id == "fixture-camera")
+        );
+        let cli = Cli::try_parse_from(["mcw", "camera", "allow"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Camera {
+                command: CameraCommand::Allow {
+                    restore_legacy: None
+                }
+            }
+        ));
+        assert!(
+            Cli::try_parse_from([
+                "mcw",
+                "camera",
+                "block",
+                "--restore-legacy",
+                "fixture-camera"
+            ])
+            .is_err()
+        );
+    }
 }

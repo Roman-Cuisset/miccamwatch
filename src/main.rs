@@ -1,9 +1,10 @@
 use anyhow::Result;
-use colored::Colorize;
 #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
 use miccamwatch::frontends::cli::CameraCommand;
 #[cfg(not(windows))]
 use miccamwatch::model::DiagnosticStatus;
+#[cfg(not(windows))]
+use miccamwatch::model::MicrophoneMuteState;
 #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
 use miccamwatch::privacy;
 #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
@@ -14,7 +15,6 @@ use miccamwatch::{
         cli::{AutostartCommand, LockPolicyCommand, NotificationCommand, TrayCommand},
         tray, tui,
     },
-    model::MicrophoneMuteState,
     updater,
 };
 use miccamwatch::{
@@ -45,6 +45,18 @@ fn main() -> ExitCode {
 
 fn run() -> Result<u8> {
     let cli = Cli::parse_localized();
+    #[cfg(windows)]
+    match &cli.command {
+        Command::MicrophoneGuard => {
+            miccamwatch::platform::run_microphone_protection_service()?;
+            return Ok(0);
+        }
+        Command::CameraGuard { bootstrap } => {
+            privacy::run_camera_protection_service(bootstrap)?;
+            return Ok(0);
+        }
+        _ => {}
+    }
     #[cfg(unix)]
     let tray_eventlog = match &cli.command {
         Command::Tray { eventlog, .. } => *eventlog,
@@ -104,10 +116,32 @@ fn run() -> Result<u8> {
                 .iter()
                 .any(|access| options.filter.risk.is_none_or(|risk| access.risk >= risk));
             let code = status_exit_code(has_access, &snapshot.collectors);
+            #[cfg(windows)]
+            {
+                let microphone = monitor.microphone_protection_status();
+                let camera = privacy::camera_observation();
+                let microphone_error = microphone.as_ref().err().map(|error| format!("{error:#}"));
+                let camera_error = camera.as_ref().err().map(|error| format!("{error:#}"));
+                output::print_protected_status(
+                    &snapshot,
+                    options.output.json,
+                    options.filter.risk,
+                    lang,
+                    &output::ProtectionMetadata {
+                        microphone: microphone.as_ref().ok(),
+                        microphone_error: microphone_error.as_deref(),
+                        camera: camera.as_ref().ok(),
+                        camera_error: camera_error.as_deref(),
+                    },
+                )?;
+            }
+            #[cfg(not(windows))]
             output::print_status(&snapshot, options.output.json, options.filter.risk, lang)?;
             Ok(code)
         }
         Command::Watch(options) => {
+            #[cfg(windows)]
+            miccamwatch::platform::resume_requested_microphone_protection()?;
             let monitor = PlatformMonitor::new(policy.clone())?;
             let defensive_kill = if options.no_kill {
                 false
@@ -181,35 +215,25 @@ fn run() -> Result<u8> {
         Command::Mute(opts) => {
             let monitor = PlatformMonitor::new(policy)?;
             if opts.status {
-                let state = monitor.microphone_mute_state()?;
-                let message = microphone_message(lang, state);
-                match state {
-                    MicrophoneMuteState::Muted => println!("{}", message.red().bold()),
-                    MicrophoneMuteState::Unmuted => println!("{}", message.green().bold()),
-                    MicrophoneMuteState::Unavailable | MicrophoneMuteState::Mixed => {
-                        println!("{}", message.yellow().bold())
-                    }
-                }
+                print_microphone_status(&monitor, lang)?;
                 return Ok(0);
             }
-            if opts.toggle {
-                monitor.toggle_microphone_mute()?;
+            let operation = if opts.toggle {
+                monitor.toggle_microphone_mute().map(|_| ())
             } else {
-                monitor.set_microphone_mute(true)?;
-            }
-            println!(
-                "{}",
-                microphone_message(lang, monitor.microphone_mute_state()?)
-            );
+                monitor.set_microphone_mute(true).map(|_| ())
+            };
+            let observation = print_microphone_status(&monitor, lang);
+            operation?;
+            observation?;
             Ok(0)
         }
         Command::Unmute => {
             let monitor = PlatformMonitor::new(policy)?;
-            monitor.set_microphone_mute(false)?;
-            println!(
-                "{}",
-                microphone_message(lang, monitor.microphone_mute_state()?)
-            );
+            let operation = monitor.set_microphone_mute(false);
+            let observation = print_microphone_status(&monitor, lang);
+            operation?;
+            observation?;
             Ok(0)
         }
         Command::Top => {
@@ -250,14 +274,46 @@ fn run() -> Result<u8> {
                 Ok(u8::from(!running))
             }
         },
-        #[cfg(any(windows, target_os = "macos"))]
+        #[cfg(windows)]
+        Command::Camera { command } => {
+            let operation: Result<()> = (|| {
+                match command {
+                    CameraCommand::Status => {}
+                    CameraCommand::Allow { restore_legacy } => {
+                        if let Some(instance_id) = restore_legacy {
+                            privacy::restore_legacy_camera(&instance_id)?;
+                        } else {
+                            privacy::set_camera_state(privacy::CameraPrivacyState::Allowed)?;
+                        }
+                    }
+                    CameraCommand::Block => {
+                        privacy::set_camera_state(privacy::CameraPrivacyState::Blocked)?
+                    }
+                    CameraCommand::Toggle => {
+                        privacy::toggle_camera()?;
+                    }
+                }
+                Ok(())
+            })();
+            let observation = privacy::camera_observation();
+            match &observation {
+                Ok(status) => println!("{}", output::camera_protection_summary(lang, status)),
+                Err(error) => eprintln!("{}: {error:#}", lang.unknown_protection(false)),
+            }
+            operation?;
+            observation?;
+            Ok(0)
+        }
+        #[cfg(windows)]
+        Command::MicrophoneGuard | Command::CameraGuard { .. } => {
+            unreachable!("guard dispatched before configuration")
+        }
+        #[cfg(target_os = "macos")]
         Command::Camera { command } => {
             let state = match command {
                 CameraCommand::Status => privacy::camera_state()?,
                 CameraCommand::Allow => {
                     privacy::set_camera_state(privacy::CameraPrivacyState::Allowed)?;
-                    // A camera that is unplugged right now leaves the switch partially
-                    // engaged, so report what Windows actually ends up in.
                     privacy::camera_state()?
                 }
                 CameraCommand::Block => {
@@ -422,9 +478,25 @@ fn run() -> Result<u8> {
     }
 }
 
-fn microphone_message(lang: Language, state: MicrophoneMuteState) -> String {
+fn print_microphone_status(monitor: &PlatformMonitor, lang: Language) -> Result<()> {
     #[cfg(windows)]
-    return lang.microphone_status(state).to_owned();
+    {
+        println!(
+            "{}",
+            output::microphone_protection_summary(lang, &monitor.microphone_protection_status()?)
+        );
+        println!("{}", lang.protection_limit());
+    }
+    #[cfg(not(windows))]
+    println!(
+        "{}",
+        microphone_message(lang, monitor.microphone_mute_state()?)
+    );
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn microphone_message(lang: Language, state: MicrophoneMuteState) -> String {
     #[cfg(unix)]
     {
         let scope = match lang {

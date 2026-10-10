@@ -1,4 +1,4 @@
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use std::{
     io,
     os::windows::ffi::OsStrExt,
@@ -23,6 +23,8 @@ pub struct Replacement {
 /// The transaction only starts after all downloads and version checks have succeeded.
 /// Tray swaps are atomic; the mapped CLI uses recoverable, same-volume renames.
 pub trait Operations {
+    fn reserve(&mut self) -> Result<()>;
+    fn release(&mut self);
     fn stop(&mut self) -> Result<()>;
     fn install(&mut self, index: usize) -> Result<()>;
     fn rollback(&mut self, index: usize) -> Result<()>;
@@ -47,15 +49,27 @@ impl std::error::Error for IncompleteRecovery {
 }
 
 pub fn apply(ops: &mut impl Operations, count: usize, was_running: bool) -> Result<()> {
-    if was_running {
-        ops.stop()?;
+    if count == 0 {
+        return Ok(());
+    }
+    // Reserve before stopping a frontend: tray exit never releases a background guard.
+    ops.reserve().context(
+        "update refused; installed binaries and tray unchanged; protection was not released",
+    )?;
+    if was_running && let Err(error) = ops.stop() {
+        ops.release();
+        return Err(error);
     }
     let mut installed = 0;
+    let mut reserved = true;
     let result: Result<()> = (|| {
         for index in 0..count {
             ops.install(index)?;
             installed += 1;
         }
+        // Restart may resume requested controls. Never hold their locks across startup.
+        ops.release();
+        reserved = false;
         if was_running {
             ops.restart()?;
         }
@@ -67,10 +81,25 @@ pub fn apply(ops: &mut impl Operations, count: usize, was_running: bool) -> Resu
             recovery_errors
                 .push("interrupted replacement was not recovered; tray remains stopped".to_owned());
         }
+        // A failed restart may already have activated a helper. Do not replace
+        // either image again unless its ownership can be reserved anew.
+        if !reserved {
+            match ops.reserve() {
+                Ok(()) => reserved = true,
+                Err(reservation) => {
+                    bail!(
+                        "update restart failed: {error:#}; rollback refused because protection may have resumed: {reservation:#}; transaction backups retained; protection was not released"
+                    );
+                }
+            }
+        }
         for index in (0..installed).rev() {
             if let Err(rollback) = ops.rollback(index) {
                 recovery_errors.push(format!("rollback: {rollback:#}"));
             }
+        }
+        if reserved {
+            ops.release();
         }
         // Do not start an inconsistent pair after a failed rollback.
         if was_running
@@ -90,16 +119,69 @@ pub fn apply(ops: &mut impl Operations, count: usize, was_running: bool) -> Resu
     Ok(())
 }
 
+struct ProtectionReservation {
+    _microphone_request: crate::windows_control::ResourceLease,
+    _camera_request: crate::windows_control::ResourceLease,
+    _microphone: crate::windows_control::ResourceLease,
+    _camera: crate::windows_control::ResourceLease,
+}
+impl ProtectionReservation {
+    fn acquire() -> Result<Self> {
+        let camera_request = crate::windows_control::acquire_request_lock("camera")?;
+        let microphone_request = crate::windows_control::acquire_request_lock("microphone")?;
+        let identity = crate::windows_control::current_identity()?;
+        let microphone = crate::windows_control::acquire_resource_for("microphone", &identity)?;
+        let camera = crate::windows_control::acquire_resource_for("camera", &identity)?;
+        // Live owners are excluded globally, including foreign operational scopes.
+        // Read dormant/manual/automatic intent only after locking out new owners.
+        crate::platform::ensure_microphone_update_inactive()?;
+        crate::privacy::ensure_camera_update_inactive()?;
+        Ok(Self {
+            _microphone_request: microphone_request,
+            _camera_request: camera_request,
+            _microphone: microphone,
+            _camera: camera,
+        })
+    }
+}
+
 pub struct NativeOperations {
     pub replacements: Vec<Replacement>,
     pub running: Option<super::process::RunningTray>,
     pub tray: PathBuf,
+    reservation: Option<ProtectionReservation>,
+}
+impl NativeOperations {
+    pub fn new(
+        replacements: Vec<Replacement>,
+        running: Option<super::process::RunningTray>,
+        tray: PathBuf,
+    ) -> Self {
+        Self {
+            replacements,
+            running,
+            tray,
+            reservation: None,
+        }
+    }
 }
 impl Operations for NativeOperations {
+    fn reserve(&mut self) -> Result<()> {
+        ensure!(self.reservation.is_none(), "update already reserved");
+        self.reservation = Some(ProtectionReservation::acquire()?);
+        Ok(())
+    }
+    fn release(&mut self) {
+        self.reservation = None;
+    }
     fn stop(&mut self) -> Result<()> {
         self.running.as_ref().unwrap().stop()
     }
     fn install(&mut self, index: usize) -> Result<()> {
+        ensure!(
+            self.reservation.is_some(),
+            "replacement requires protection reservation"
+        );
         let replacement = &self.replacements[index];
         swap(
             &replacement.staged,
@@ -116,6 +198,10 @@ impl Operations for NativeOperations {
                 replacement.backup.display()
             );
         }
+        ensure!(
+            self.reservation.is_some(),
+            "rollback requires protection reservation"
+        );
         if replacement.had_original {
             // Only move an extant transaction backup. Never recover quarantined bytes.
             let discarded = replacement.staged.with_extension("failed");
@@ -138,6 +224,10 @@ impl Operations for NativeOperations {
         }
     }
     fn restart(&mut self) -> Result<()> {
+        ensure!(
+            self.reservation.is_none(),
+            "tray restart requires released protection reservation"
+        );
         super::process::restart(&self.tray)
     }
 }
@@ -306,11 +396,24 @@ mod tests {
         fail_stop: bool,
         fail_rollback: bool,
         incomplete_install: bool,
+        guard_state: Option<&'static str>,
+        reserved: bool,
+        resume_on_failed_restart: bool,
         bytes: [u8; 2],
         running: bool,
         launched: Vec<[u8; 2]>,
     }
     impl Operations for Fake {
+        fn reserve(&mut self) -> Result<()> {
+            if let Some(state) = self.guard_state {
+                bail!("{state}");
+            }
+            self.reserved = true;
+            Ok(())
+        }
+        fn release(&mut self) {
+            self.reserved = false;
+        }
         fn stop(&mut self) -> Result<()> {
             if self.fail_stop {
                 bail!("busy camera");
@@ -319,6 +422,10 @@ mod tests {
             Ok(())
         }
         fn install(&mut self, i: usize) -> Result<()> {
+            assert!(
+                self.reserved,
+                "installed bytes may change only while reserved"
+            );
             if self.fail_install == Some(i) {
                 if self.incomplete_install {
                     self.bytes[i] = 2;
@@ -332,6 +439,10 @@ mod tests {
             Ok(())
         }
         fn rollback(&mut self, i: usize) -> Result<()> {
+            assert!(
+                self.reserved,
+                "rollback bytes may change only while reserved"
+            );
             if self.fail_rollback {
                 bail!("backup missing");
             }
@@ -339,7 +450,14 @@ mod tests {
             Ok(())
         }
         fn restart(&mut self) -> Result<()> {
+            assert!(
+                !self.reserved,
+                "restart must be able to resume requested controls"
+            );
             if std::mem::take(&mut self.fail_restart) {
+                if self.resume_on_failed_restart {
+                    self.guard_state = Some("helper resumed during failed restart");
+                }
                 bail!("antivirus");
             }
             self.running = true;
@@ -347,6 +465,172 @@ mod tests {
             Ok(())
         }
     }
+    #[test]
+    fn replacing_update_refusal_keeps_protection_tray_and_binaries() {
+        for state in [
+            "active owner",
+            "manual intent requested",
+            "ownership unknown",
+        ] {
+            let mut fake = Fake {
+                guard_state: Some(state),
+                running: true,
+                ..Default::default()
+            };
+            assert!(apply(&mut fake, 2, true).is_err());
+            assert!(fake.running);
+            assert_eq!(fake.bytes, [0, 0]);
+            assert_eq!(fake.guard_state, Some(state));
+            assert!(fake.launched.is_empty());
+        }
+    }
+    #[test]
+    fn no_replacement_leaves_guarded_tray_running() {
+        let mut fake = Fake {
+            guard_state: Some("active owner"),
+            running: true,
+            ..Default::default()
+        };
+        apply(&mut fake, 0, true).unwrap();
+        assert!(fake.running);
+        assert_eq!(fake.bytes, [0, 0]);
+        assert_eq!(fake.guard_state, Some("active owner"));
+    }
+    #[test]
+    fn resumed_protection_prevents_rollback_after_failed_restart() {
+        let mut fake = Fake {
+            fail_restart: true,
+            resume_on_failed_restart: true,
+            running: true,
+            ..Default::default()
+        };
+        assert!(apply(&mut fake, 2, true).is_err());
+        assert_eq!(fake.bytes, [1, 1]);
+        assert_eq!(
+            fake.guard_state,
+            Some("helper resumed during failed restart")
+        );
+        assert!(fake.launched.is_empty());
+    }
+
+    #[test]
+    fn native_dormant_or_unknown_protection_preserves_installed_files() -> Result<()> {
+        if std::env::var_os("MCW_TEST_UPDATE_REFUSAL").is_none() {
+            let isolated = tempfile::tempdir()?;
+            let output = std::process::Command::new(std::env::current_exe()?)
+                .args([
+                    "--exact",
+                    "updater::transaction::tests::native_dormant_or_unknown_protection_preserves_installed_files",
+                    "--test-threads=1",
+                    "--nocapture",
+                ])
+                .env("MCW_TEST_UPDATE_REFUSAL", "1")
+                .env("LOCALAPPDATA", isolated.path())
+                .env("APPDATA", isolated.path())
+                .output()?;
+            ensure!(
+                output.status.success(),
+                "isolated update refusal failed: {}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return Ok(());
+        }
+        let data = crate::settings::data_dir()?;
+        std::fs::create_dir_all(&data)?;
+        let identity = crate::windows_control::current_identity()?;
+        let intent_directory = data.join("microphone-protection").join(format!(
+            "{}-{}-{}",
+            identity.user, identity.session, identity.scope
+        ));
+        std::fs::create_dir_all(&intent_directory)?;
+        let intent = intent_directory.join("intent.json");
+        let camera = data.join("blocked-camera-devices.json");
+        let target = data.join("installed");
+        let staged = data.join("staged");
+        let backup = data.join("backup");
+        std::fs::write(&target, b"old")?;
+        std::fs::write(&staged, b"new")?;
+        let inactive = serde_json::json!({
+            "format": 1, "generation": 0, "requested": false,
+            "release_pending": false, "next_lock": 0, "automatic_token": 0,
+            "automatic_generation": 0, "automatic_restore_pending": false
+        });
+        let cases = [
+            ("requested", serde_json::json!(true)),
+            ("release_pending", serde_json::json!(true)),
+            ("automatic_token", serde_json::json!(1)),
+            ("automatic_restore_pending", serde_json::json!(true)),
+            ("format", serde_json::json!(2)),
+        ];
+        for (field, value) in cases {
+            let mut record = inactive.clone();
+            record[field] = value;
+            let bytes = serde_json::to_vec(&record)?;
+            std::fs::write(&intent, &bytes)?;
+            let mut ops = NativeOperations::new(
+                vec![Replacement {
+                    staged: staged.clone(),
+                    target: target.clone(),
+                    backup: backup.clone(),
+                    had_original: true,
+                    running_cli: false,
+                }],
+                None,
+                target.clone(),
+            );
+            let error = apply(&mut ops, 1, false).unwrap_err();
+            ensure!(format!("{error:#}").contains("microphone"), "{error:#}");
+            assert_eq!(std::fs::read(&target)?, b"old");
+            assert_eq!(std::fs::read(&staged)?, b"new");
+            assert_eq!(std::fs::read(&intent)?, bytes);
+            assert!(!backup.try_exists()?);
+        }
+        std::fs::write(&intent, serde_json::to_vec(&inactive)?)?;
+        for bytes in [
+            br#"{"blocked":[],"restore_on_arrival":[],"desired_blocked":true,"intent_generation":1}"#.as_slice(),
+            b"corrupt camera operational record".as_slice(),
+        ] {
+            std::fs::write(&camera, bytes)?;
+            let mut ops = NativeOperations::new(
+                vec![Replacement {
+                    staged: staged.clone(),
+                    target: target.clone(),
+                    backup: backup.clone(),
+                    had_original: true,
+                    running_cli: false,
+                }],
+                None,
+                target.clone(),
+            );
+            let error = apply(&mut ops, 1, false).unwrap_err();
+            ensure!(format!("{error:#}").contains("camera"), "{error:#}");
+            assert_eq!(std::fs::read(&target)?, b"old");
+            assert_eq!(std::fs::read(&staged)?, b"new");
+            assert_eq!(std::fs::read(&camera)?, bytes);
+            assert!(!backup.try_exists()?);
+        }
+        // Unsigned legacy restoration inventory must not become active-owner authority.
+        let legacy = br#"{"blocked":[],"restore_on_arrival":["USB\\synthetic-camera-instance"]}"#;
+        std::fs::write(&camera, legacy)?;
+        let mut ops = NativeOperations::new(
+            vec![Replacement {
+                staged: staged.clone(),
+                target: target.clone(),
+                backup: backup.clone(),
+                had_original: true,
+                running_cli: false,
+            }],
+            None,
+            target.clone(),
+        );
+        apply(&mut ops, 1, false)?;
+        assert_eq!(std::fs::read(&target)?, b"new");
+        assert_eq!(std::fs::read(&backup)?, b"old");
+        assert_eq!(std::fs::read(&camera)?, legacy);
+        Ok(())
+    }
+
     #[test]
     fn tray_failure_preserves_cli_and_restarts_original() {
         let mut fake = Fake {
@@ -433,6 +717,7 @@ mod tests {
         let mut ops = NativeOperations {
             tray: target.clone(),
             running: None,
+            reservation: None,
             replacements: vec![Replacement {
                 staged: temp.path().join("staged"),
                 target: target.clone(),
@@ -441,7 +726,12 @@ mod tests {
                 running_cli: false,
             }],
         };
-        assert!(ops.rollback(0).is_err());
+        assert!(
+            ops.rollback(0)
+                .unwrap_err()
+                .to_string()
+                .contains("disappeared")
+        );
         assert_eq!(std::fs::read(&target)?, b"new");
         Ok(())
     }

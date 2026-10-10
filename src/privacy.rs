@@ -1,6 +1,6 @@
 use crate::model::CameraBlockRecord;
 use anyhow::{Context, Result, bail};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet,
     fs,
@@ -11,47 +11,9 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 use windows::{
-    Win32::{
-        Foundation::{CloseHandle, ERROR_CANCELLED, HANDLE, WAIT_ABANDONED, WAIT_OBJECT_0},
-        Storage::FileSystem::{MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW},
-        System::Threading::{
-            CreateMutexW, GetExitCodeProcess, INFINITE, ReleaseMutex, WaitForSingleObject,
-        },
-        UI::Shell::{SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW, ShellExecuteExW},
-    },
-    core::{GUID, PCWSTR, w},
+    Win32::Storage::FileSystem::{MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW},
+    core::{GUID, PCWSTR},
 };
-
-// Both the tray and `mcw camera` can change privacy intent. Keep record reads,
-// UAC approval, device actions and record writes in one cross-process critical
-// section; otherwise an old auto-restore can run after a newer block commits.
-// A block requested during an already launched restore waits for it to finish;
-// that elevated enable cannot be canceled, but the block executes last.
-struct CameraOperationLock(HANDLE);
-
-impl CameraOperationLock {
-    fn acquire() -> Result<Self> {
-        let handle = unsafe { CreateMutexW(None, false, w!("Local\\MicCamWatch.CameraPrivacy")) }
-            .context("failed to create camera operation mutex")?;
-        let result = unsafe { WaitForSingleObject(handle, INFINITE) };
-        if result != WAIT_OBJECT_0 && result != WAIT_ABANDONED {
-            unsafe {
-                let _ = CloseHandle(handle);
-            }
-            bail!("failed to wait for camera operation mutex: {result:?}");
-        }
-        Ok(Self(handle))
-    }
-}
-
-impl Drop for CameraOperationLock {
-    fn drop(&mut self) {
-        unsafe {
-            let _ = ReleaseMutex(self.0);
-            let _ = CloseHandle(self.0);
-        }
-    }
-}
 
 #[link(name = "cfgmgr32")]
 unsafe extern "system" {
@@ -97,14 +59,17 @@ fn device_status_strict(instance_id: &str) -> Result<String> {
     if res != 0 {
         bail!("failed to read device {instance_id} status: configuration manager error {res}");
     }
-    Ok(if problem == 0 { "OK" } else { "Error" }.to_owned())
+    Ok(if problem == 22 {
+        "Disabled"
+    } else if problem == 0 && status & 8 != 0 {
+        "OK"
+    } else {
+        "Unknown"
+    }
+    .to_owned())
 }
 
-fn device_status(instance_id: &str) -> Option<String> {
-    device_status_strict(instance_id).ok()
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CameraPrivacyState {
     Allowed,
@@ -136,7 +101,7 @@ const VIDEO_CAMERA_INTERFACE: GUID = GUID::from_u128(0xe5323777_f976_4f5b_9b55_b
 const VIDEO_INTERFACE: GUID = GUID::from_u128(0x6994ad05_93ef_11d0_a3cc_00a0c9223196);
 const CAPTURE_INTERFACE: GUID = GUID::from_u128(0x65e8773d_8f56_11d0_a3b9_00a0c9223196);
 const CLASS_PRESENT: u32 = 0x0000_0300; // CM_GETIDLIST_FILTER_CLASS | CM_GETIDLIST_FILTER_PRESENT
-const INTERFACE_PRESENT: u32 = 0; // CM_GET_DEVICE_INTERFACE_LIST_PRESENT
+const INTERFACE_REGISTERED: u32 = 1; // CM_GET_DEVICE_INTERFACE_LIST_ALL_DEVICES
 const CR_BUFFER_SMALL: u32 = 0x1a;
 
 fn parse_device_ids(buffer: &[u16]) -> Result<Vec<String>> {
@@ -161,7 +126,7 @@ fn parse_device_ids(buffer: &[u16]) -> Result<Vec<String>> {
 
 fn class_device_ids(class_guid: &str) -> Result<Vec<String>> {
     let filter: Vec<u16> = class_guid.encode_utf16().chain(Some(0)).collect();
-    loop {
+    for _ in 0..8 {
         let mut length = 0;
         let res =
             unsafe { CM_Get_Device_ID_List_SizeW(&mut length, filter.as_ptr(), CLASS_PRESENT) };
@@ -171,6 +136,10 @@ fn class_device_ids(class_guid: &str) -> Result<Vec<String>> {
         if length == 0 {
             return Ok(Vec::new());
         }
+        anyhow::ensure!(
+            length <= 1_048_576,
+            "Windows camera inventory exceeds the explicit 2 MiB UTF-16 buffer limit"
+        );
         let mut buffer = vec![0u16; length as usize];
         let res = unsafe {
             CM_Get_Device_ID_ListW(filter.as_ptr(), buffer.as_mut_ptr(), length, CLASS_PRESENT)
@@ -183,22 +152,25 @@ fn class_device_ids(class_guid: &str) -> Result<Vec<String>> {
         }
         return parse_device_ids(&buffer);
     }
+    bail!("Windows camera inventory changed during all eight enumeration attempts")
 }
 
 // Configuration Manager can filter interface paths by their owning PnP
 // instance ID. Do not infer identity from the symbolic-link text or query a
 // device-instance property on the interface object.
 fn has_video_interface(interface: &GUID, instance_id: &str) -> Result<bool> {
+    video_interface(interface, instance_id, INTERFACE_REGISTERED)
+}
+
+// Class inventory independently selects present devnodes. Registered interfaces
+// classify their exact identity even when a disable makes interfaces inactive;
+// native status, not interface activation, determines whether a camera is enabled.
+fn video_interface(interface: &GUID, instance_id: &str, flags: u32) -> Result<bool> {
     let wide: Vec<u16> = instance_id.encode_utf16().chain(Some(0)).collect();
-    loop {
+    for _ in 0..8 {
         let mut length = 0;
         let res = unsafe {
-            CM_Get_Device_Interface_List_SizeW(
-                &mut length,
-                interface,
-                wide.as_ptr(),
-                INTERFACE_PRESENT,
-            )
+            CM_Get_Device_Interface_List_SizeW(&mut length, interface, wide.as_ptr(), flags)
         };
         if res != 0 {
             bail!(
@@ -208,6 +180,10 @@ fn has_video_interface(interface: &GUID, instance_id: &str) -> Result<bool> {
         if length == 0 {
             return Ok(false);
         }
+        anyhow::ensure!(
+            length <= 1_048_576,
+            "Windows camera interface inventory exceeds the explicit 2 MiB UTF-16 buffer limit"
+        );
         let mut buffer = vec![0u16; length as usize];
         let res = unsafe {
             CM_Get_Device_Interface_ListW(
@@ -215,7 +191,7 @@ fn has_video_interface(interface: &GUID, instance_id: &str) -> Result<bool> {
                 wide.as_ptr(),
                 buffer.as_mut_ptr(),
                 length,
-                INTERFACE_PRESENT,
+                flags,
             )
         };
         if res == CR_BUFFER_SMALL {
@@ -228,6 +204,7 @@ fn has_video_interface(interface: &GUID, instance_id: &str) -> Result<bool> {
         }
         return Ok(!parse_device_ids(&buffer)?.is_empty());
     }
+    bail!("Windows camera interface inventory changed during all eight enumeration attempts")
 }
 
 fn video_capture_ids(
@@ -284,7 +261,10 @@ fn blocked_devices_path() -> Result<std::path::PathBuf> {
 
 impl CameraBlockRecord {
     fn is_empty(&self) -> bool {
-        self.blocked.is_empty() && self.restore_on_arrival.is_empty()
+        !self.desired_blocked
+            && self.intent_generation == 0
+            && self.blocked.is_empty()
+            && self.restore_on_arrival.is_empty()
     }
 
     fn owns(&self, instance_id: &str) -> bool {
@@ -292,13 +272,6 @@ impl CameraBlockRecord {
             .iter()
             .chain(self.restore_on_arrival.iter())
             .any(|id| id.eq_ignore_ascii_case(instance_id))
-    }
-
-    /// Moves every recorded device into `blocked`, re-asserting the block over
-    /// anything that was still waiting to be restored.
-    fn supersede_pending_restore(&mut self) {
-        self.blocked.append(&mut self.restore_on_arrival);
-        dedupe_ascii_case(&mut self.blocked);
     }
 }
 
@@ -312,6 +285,12 @@ fn load_record() -> Result<Option<CameraBlockRecord>> {
 }
 
 fn load_record_at(path: &Path) -> Result<Option<CameraBlockRecord>> {
+    if let Ok(metadata) = fs::metadata(path) {
+        anyhow::ensure!(
+            metadata.len() <= 2 * 1024 * 1024,
+            "camera intent record exceeds 2 MiB"
+        );
+    }
     let bytes = match fs::read(path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -319,8 +298,17 @@ fn load_record_at(path: &Path) -> Result<Option<CameraBlockRecord>> {
             return Err(error).with_context(|| format!("failed to read {}", path.display()));
         }
     };
-    let record = CameraBlockRecord::from_json(&bytes)
+    anyhow::ensure!(
+        bytes.len() <= 2 * 1024 * 1024,
+        "camera intent record exceeds 2 MiB"
+    );
+    let mut record = CameraBlockRecord::from_json(&bytes)
         .with_context(|| format!("invalid camera block record {}", path.display()))?;
+    // Unsigned pre-policy records retain their historical requested intent, but
+    // generation zero never becomes privileged native restoration authority.
+    if record.intent_generation == 0 && !record.blocked.is_empty() {
+        record.desired_blocked = true;
+    }
     Ok(Some(record))
 }
 
@@ -373,315 +361,59 @@ fn save_record_at(path: &Path, record: &CameraBlockRecord) -> Result<()> {
     }
     result.with_context(|| format!("failed to save camera device state at {}", path.display()))
 }
+mod windows_guard;
+pub(crate) use windows_guard::ensure_update_inactive as ensure_camera_update_inactive;
 
-/// Whether a recorded device is connected but not running.
-fn needs_restore(instance_id: &str) -> bool {
-    device_status(instance_id).is_some_and(|status| status != "OK")
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CameraControlObservation {
+    pub desired_blocked: bool,
+    pub state: CameraPrivacyState,
+    pub present_total: usize,
+    pub owned_blocked_present: usize,
+    pub pending_restore: usize,
+    pub absent_owned: usize,
+    pub unknown_devices: usize,
+    pub helper_active: bool,
+    pub detail: Option<String>,
 }
 
-/// Recorded restorations whose camera is plugged back in but still disabled.
-///
-/// A device that is absent is not an arrival, and one that already runs needs no
-/// elevation, so neither may raise a prompt.
-fn pending_targets(
-    record: &CameraBlockRecord,
-    status: impl Fn(&str) -> Option<String>,
-) -> Vec<String> {
-    record
-        .restore_on_arrival
-        .iter()
-        .filter(|id| status(id).is_some_and(|report| report != "OK"))
-        .cloned()
-        .collect()
-}
-
-/// Blocked cameras the user asked to restore that have since been reconnected.
-pub fn arrived_restore_targets() -> Result<Vec<String>> {
-    let Some(record) = load_record()? else {
-        return Ok(Vec::new());
-    };
-    Ok(pending_targets(&record, device_status))
-}
-
-/// Completes the restore for reconnected cameras recorded by a previous `allow`.
-///
-/// Returns how many devices were re-enabled. The block record is the source of
-/// truth: a device that refuses to come back is kept for a later attempt rather
-/// than silently dropped.
-pub fn restore_arrived() -> Result<usize> {
-    let _operation = CameraOperationLock::acquire()?;
-    let Some(mut record) = load_record()? else {
-        return Ok(0);
-    };
-    let targets = pending_targets(&record, device_status);
-    if targets.is_empty() {
-        return Ok(0);
-    }
-    pnputil_elevated("enable", &targets)?;
-    let failed = settle_arrived(&mut record, &targets, device_status);
-    save_record(&record)?;
-    if failed {
-        bail!("Windows did not restore every reconnected camera device");
-    }
-    Ok(targets.len())
-}
-
-// Only devices targeted by this attempt may make it fail, including a target
-// unplugged during elevation. An unrelated absent camera stays pending quietly.
-fn settle_arrived(
-    record: &mut CameraBlockRecord,
-    targets: &[String],
-    status: impl Fn(&str) -> Option<String>,
-) -> bool {
-    let mut failed = false;
-    record.restore_on_arrival.retain(|id| match status(id) {
-        Some(report) if report == "OK" => false,
-        _ => {
-            if targets.iter().any(|target| target.eq_ignore_ascii_case(id)) {
-                failed = true;
-            }
-            true
-        }
-    });
-    failed
+pub fn camera_observation() -> Result<CameraControlObservation> {
+    windows_guard::observation()
 }
 
 pub fn camera_state() -> Result<CameraPrivacyState> {
-    let Some(record) = load_record()? else {
-        return Ok(CameraPrivacyState::Allowed);
-    };
-    let mut current = Vec::new();
-    for id in record
-        .blocked
-        .iter()
-        .chain(record.restore_on_arrival.iter())
-    {
-        if let Some(status) = device_status(id) {
-            current.push(CameraDevice {
-                instance_id: id.clone(),
-                status,
-            });
-        }
-    }
-    for dev in devices()? {
-        if !current
-            .iter()
-            .any(|c| c.instance_id.eq_ignore_ascii_case(&dev.instance_id))
-        {
-            current.push(dev);
-        }
-    }
-    let state = classify_devices(&record.blocked, &current);
-    Ok(apply_pending_restore(state, &record))
-}
-
-fn classify_devices(blocked: &[String], current: &[CameraDevice]) -> CameraPrivacyState {
-    let blocked_present = blocked.iter().any(|id| {
-        current
-            .iter()
-            .any(|device| device.instance_id.eq_ignore_ascii_case(id) && device.status != "OK")
-    });
-    let allowed_present = current.iter().any(|device| device.status == "OK");
-    if allowed_present && !blocked_present {
-        CameraPrivacyState::Allowed
-    } else if !allowed_present && blocked_present {
-        CameraPrivacyState::Blocked
-    } else {
-        CameraPrivacyState::SystemManaged
-    }
-}
-
-// Persist the explicit block before returning (including when nothing is
-// connected): otherwise an earlier deferred allow would remain live on disk.
-fn persist_block_intent(
-    mut record: CameraBlockRecord,
-    enabled: &[String],
-    persist: impl FnOnce(&CameraBlockRecord) -> Result<()>,
-) -> Result<()> {
-    let had_pending = !record.restore_on_arrival.is_empty();
-    record.supersede_pending_restore();
-    if enabled.is_empty() {
-        if record.blocked.is_empty() {
-            bail!("no enabled physical camera devices were found");
-        }
-        if had_pending {
-            persist(&record)?;
-        }
-        return Ok(());
-    }
-    for id in enabled {
-        if !record.owns(id) {
-            record.blocked.push(id.clone());
-        }
-    }
-    persist(&record)
-}
-
-/// Splits recorded cameras into the ones to re-enable now, plus the record that
-/// must survive the operation.
-///
-/// Anything still unplugged carries its request forward, so reconnecting the
-/// camera later completes the `allow` without another command.
-fn plan_allow(
-    record: &CameraBlockRecord,
-    status: impl Fn(&str) -> Option<String>,
-) -> (Vec<String>, CameraBlockRecord) {
-    let mut candidates = record.blocked.clone();
-    candidates.extend(record.restore_on_arrival.iter().cloned());
-    dedupe_ascii_case(&mut candidates);
-
-    let mut to_enable = Vec::new();
-    let mut awaiting = Vec::new();
-    for id in candidates {
-        match status(&id) {
-            None => awaiting.push(id),
-            Some(report) if report != "OK" => to_enable.push(id),
-            Some(_) => {}
-        }
-    }
-    (
-        to_enable,
-        CameraBlockRecord {
-            blocked: Vec::new(),
-            restore_on_arrival: awaiting,
-        },
-    )
-}
-
-/// A camera that is still waiting to come back keeps the switch partially
-/// engaged, so reporting a plain `allowed` would be a lie.
-fn apply_pending_restore(
-    state: CameraPrivacyState,
-    record: &CameraBlockRecord,
-) -> CameraPrivacyState {
-    if state == CameraPrivacyState::Allowed && !record.restore_on_arrival.is_empty() {
-        CameraPrivacyState::SystemManaged
-    } else {
-        state
-    }
-}
-
-fn pnputil_elevated(action: &str, instance_ids: &[String]) -> Result<()> {
-    if instance_ids.is_empty() {
-        return Ok(());
-    }
-    let pnputil = crate::windows_tools::system_executable("pnputil.exe")?;
-    let (file, parameters) = if instance_ids.len() == 1 {
-        (pnputil, format!("/{action}-device \"{}\"", instance_ids[0]))
-    } else {
-        let commands = instance_ids
-            .iter()
-            .map(|id| format!("\"{}\" /{action}-device \"{id}\"", pnputil.display()))
-            .collect::<Vec<_>>()
-            .join(" & ");
-        (
-            pnputil.with_file_name("cmd.exe"),
-            format!("/d /s /c \"{commands}\""),
-        )
-    };
-
-    let wide_verb: Vec<u16> = "runas\0".encode_utf16().collect();
-    let wide_file: Vec<u16> = file.as_os_str().encode_wide().chain(Some(0)).collect();
-    let wide_params: Vec<u16> = parameters.encode_utf16().chain(Some(0)).collect();
-
-    let mut info = SHELLEXECUTEINFOW {
-        cbSize: size_of::<SHELLEXECUTEINFOW>() as u32,
-        fMask: SEE_MASK_NOCLOSEPROCESS,
-        lpVerb: PCWSTR(wide_verb.as_ptr()),
-        lpFile: PCWSTR(wide_file.as_ptr()),
-        lpParameters: PCWSTR(wide_params.as_ptr()),
-        nShow: 0,
-        ..Default::default()
-    };
-
-    let result = unsafe { ShellExecuteExW(&mut info) };
-    if let Err(error) = result {
-        if error.code().0 == 0x8007_04C7_u32 as i32
-            || unsafe { windows::Win32::Foundation::GetLastError() } == ERROR_CANCELLED
-        {
-            bail!("camera {action} administrator approval was declined");
-        }
-        bail!("failed to request administrator approval for camera control: {error}");
-    }
-
-    if !info.hProcess.is_invalid() {
-        unsafe {
-            WaitForSingleObject(info.hProcess, INFINITE);
-            let mut exit_code = 0u32;
-            let _ = GetExitCodeProcess(info.hProcess, &mut exit_code);
-            let _ = CloseHandle(info.hProcess);
-            if exit_code != 0 {
-                bail!("camera {action} failed with exit code {exit_code}");
-            }
-        }
-    }
-    Ok(())
+    Ok(camera_observation()?.state)
 }
 
 pub fn set_camera_state(state: CameraPrivacyState) -> Result<()> {
-    let _operation = CameraOperationLock::acquire()?;
-    set_camera_state_locked(state)
-}
-
-fn set_camera_state_locked(state: CameraPrivacyState) -> Result<()> {
-    match state {
-        CameraPrivacyState::Blocked => {
-            let record = load_record()?.unwrap_or_default();
-            let enabled = devices()?
-                .into_iter()
-                .filter(|device| device.status == "OK")
-                .map(|device| device.instance_id)
-                .collect::<Vec<_>>();
-            persist_block_intent(record, &enabled, save_record)?;
-            if enabled.is_empty() {
-                return Ok(());
-            }
-            pnputil_elevated("disable", &enabled)?;
-            // Disabled legacy Image-class cameras lose their present video
-            // interface, so checking only a fresh interface inventory would
-            // falsely report success. Verify every device we actually targeted.
-            for id in &enabled {
-                if device_status_strict(id)? == "OK" {
-                    bail!("Windows did not disable camera device {id}");
-                }
-            }
-            if devices()?.iter().any(|device| device.status == "OK") {
-                bail!("Windows did not disable every connected camera device");
-            }
-        }
-        CameraPrivacyState::Allowed => {
-            let Some(record) = load_record()? else {
-                return Ok(());
-            };
-            if record.is_empty() {
-                return Ok(());
-            }
-            let (to_enable, updated) = plan_allow(&record, device_status);
-            if !to_enable.is_empty() {
-                pnputil_elevated("enable", &to_enable)?;
-                if let Some(stuck) = to_enable.iter().find(|id| needs_restore(id)) {
-                    bail!("Windows did not restore {stuck}; it is still disabled");
-                }
-            }
-            save_record(&updated)?;
-        }
-        CameraPrivacyState::SystemManaged => {
-            bail!("system-managed camera state cannot be selected")
-        }
-    }
-    Ok(())
+    anyhow::ensure!(
+        state != CameraPrivacyState::SystemManaged,
+        "system-managed camera state cannot be selected"
+    );
+    windows_guard::set_requested(state == CameraPrivacyState::Blocked)
 }
 
 pub fn toggle_camera() -> Result<CameraPrivacyState> {
-    let _operation = CameraOperationLock::acquire()?;
-    let next = match camera_state()? {
-        CameraPrivacyState::Allowed => CameraPrivacyState::Blocked,
-        CameraPrivacyState::Blocked | CameraPrivacyState::SystemManaged => {
-            CameraPrivacyState::Allowed
-        }
-    };
-    set_camera_state_locked(next)?;
+    windows_guard::toggle_requested()?;
     camera_state()
+}
+
+pub fn arrived_restore_targets() -> Result<Vec<String>> {
+    windows_guard::arrived_targets()
+}
+
+pub fn restore_arrived() -> Result<usize> {
+    windows_guard::restore_arrived()
+}
+
+pub fn run_camera_protection_service(bootstrap: &str) -> Result<()> {
+    windows_guard::run(bootstrap)
+}
+
+/// Explicit informed permission to override one historical camera disable.
+/// Never invoked automatically from a writable camera record.
+pub fn restore_legacy_camera(instance_id: &str) -> Result<CameraControlObservation> {
+    windows_guard::restore_legacy(instance_id)
 }
 
 #[cfg(test)]
@@ -732,6 +464,40 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["USB\\MODERN", "USB\\LEGACY", "USB\\CAMERA_INTERFACE"]
         );
+        Ok(())
+    }
+
+    #[test]
+    fn registered_inactive_image_video_interfaces_keep_disabled_present_cameras() -> Result<()> {
+        assert_eq!(
+            INTERFACE_REGISTERED, 1,
+            "identity classification must not depend on interface activation"
+        );
+        let inventory = collect_camera_devices(
+            |class| {
+                Ok(if class == IMAGE_CLASS {
+                    vec![
+                        "USB\\DISABLED_CAMERA".to_owned(),
+                        "USB\\SCANNER".to_owned(),
+                        "USB\\AUDIO_ONLY".to_owned(),
+                    ]
+                } else {
+                    Vec::new()
+                })
+            },
+            |category, id| {
+                Ok((id == "USB\\DISABLED_CAMERA"
+                    && (*category == VIDEO_INTERFACE || *category == CAPTURE_INTERFACE))
+                    || (id == "USB\\AUDIO_ONLY" && *category == CAPTURE_INTERFACE))
+            },
+            |id| {
+                assert_eq!(id, "USB\\DISABLED_CAMERA");
+                Ok("Disabled".to_owned())
+            },
+        )?;
+        assert_eq!(inventory.len(), 1);
+        assert_eq!(inventory[0].instance_id, "USB\\DISABLED_CAMERA");
+        assert_eq!(inventory[0].status, "Disabled");
         Ok(())
     }
 
@@ -796,252 +562,6 @@ mod tests {
     }
 
     #[test]
-    fn camera_block_reports_partial_and_new_devices() {
-        let blocked = vec!["USB\\CAMERA_A".to_owned()];
-        let disabled = CameraDevice {
-            instance_id: blocked[0].clone(),
-            status: "Error".to_owned(),
-        };
-        assert_eq!(
-            classify_devices(&blocked, std::slice::from_ref(&disabled)),
-            CameraPrivacyState::Blocked
-        );
-        assert_eq!(
-            classify_devices(&blocked, &[]),
-            CameraPrivacyState::SystemManaged
-        );
-        let enabled = CameraDevice {
-            instance_id: "USB\\CAMERA_B".to_owned(),
-            status: "OK".to_owned(),
-        };
-        assert_eq!(
-            classify_devices(&blocked, &[enabled]),
-            CameraPrivacyState::Allowed
-        );
-        assert_eq!(
-            classify_devices(
-                &blocked,
-                &[
-                    disabled,
-                    CameraDevice {
-                        instance_id: "USB\\CAMERA_B".to_owned(),
-                        status: "OK".to_owned(),
-                    }
-                ]
-            ),
-            CameraPrivacyState::SystemManaged
-        );
-    }
-
-    #[test]
-    fn allow_defers_cameras_that_are_still_unplugged() {
-        // The reported workflow: two cameras blocked, the external one unplugged,
-        // then `allow` restores the built-in and defers the other.
-        let record = CameraBlockRecord {
-            blocked: vec![
-                "USB\\CAMERA_BUILTIN".to_owned(),
-                "USB\\CAMERA_LOGI".to_owned(),
-            ],
-            restore_on_arrival: Vec::new(),
-        };
-        let disabled_builtin_only = |id: &str| {
-            if id.ends_with("BUILTIN") {
-                Some("Error".to_owned())
-            } else {
-                None
-            }
-        };
-        let (to_enable, deferred) = plan_allow(&record, disabled_builtin_only);
-        assert_eq!(to_enable, vec!["USB\\CAMERA_BUILTIN"]);
-        assert_eq!(
-            deferred,
-            CameraBlockRecord {
-                blocked: Vec::new(),
-                restore_on_arrival: vec!["USB\\CAMERA_LOGI".to_owned()],
-            }
-        );
-        assert!(!deferred.is_empty(), "the deferred request must survive");
-
-        // Plugging the camera back in turns the deferred entry into a target, so
-        // the tray can finish the job without another command.
-        let reconnected =
-            |id: &str| Some(if id.ends_with("LOGI") { "Error" } else { "OK" }.to_owned());
-        let (to_enable, settled) = plan_allow(&deferred, reconnected);
-        assert_eq!(to_enable, vec!["USB\\CAMERA_LOGI"]);
-        assert_eq!(settled, CameraBlockRecord::default());
-        assert!(settled.is_empty(), "an empty record clears the file");
-    }
-
-    #[test]
-    fn only_a_reconnected_disabled_camera_raises_a_prompt() {
-        let record = CameraBlockRecord {
-            blocked: Vec::new(),
-            restore_on_arrival: vec![
-                "USB\\CAMERA_ABSENT".to_owned(),
-                "USB\\CAMERA_DISABLED".to_owned(),
-                "USB\\CAMERA_RUNNING".to_owned(),
-            ],
-        };
-        let targets = pending_targets(&record, |id| {
-            if id.ends_with("ABSENT") {
-                None
-            } else if id.ends_with("DISABLED") {
-                Some("Error".to_owned())
-            } else {
-                Some("OK".to_owned())
-            }
-        });
-        // An unplugged camera must not prompt, and a running one needs no elevation.
-        assert_eq!(targets, vec!["USB\\CAMERA_DISABLED"]);
-    }
-
-    #[test]
-    fn arrived_restore_settles_only_target_and_leaves_absent_pending() {
-        let mut record = CameraBlockRecord {
-            blocked: vec!["USB\\CAMERA_BLOCKED".to_owned()],
-            restore_on_arrival: vec![
-                "USB\\CAMERA_TARGET".to_owned(),
-                "USB\\CAMERA_ABSENT".to_owned(),
-                "USB\\CAMERA_RUNNING".to_owned(),
-            ],
-        };
-        let targets = pending_targets(&record, |id| match id {
-            "USB\\CAMERA_TARGET" => Some("Error".to_owned()),
-            "USB\\CAMERA_RUNNING" => Some("OK".to_owned()),
-            _ => None,
-        });
-        assert_eq!(targets, vec!["USB\\CAMERA_TARGET"]);
-        let failed = settle_arrived(&mut record, &targets, |id| match id {
-            "USB\\CAMERA_TARGET" | "USB\\CAMERA_RUNNING" => Some("OK".to_owned()),
-            _ => None,
-        });
-        assert!(!failed);
-        assert_eq!(record.blocked, vec!["USB\\CAMERA_BLOCKED"]);
-        assert_eq!(record.restore_on_arrival, vec!["USB\\CAMERA_ABSENT"]);
-
-        let retry = pending_targets(&record, |_| Some("Error".to_owned()));
-        assert_eq!(retry, vec!["USB\\CAMERA_ABSENT"]);
-        assert!(settle_arrived(&mut record, &retry, |_| Some(
-            "Error".to_owned()
-        )));
-        assert_eq!(record.restore_on_arrival, retry);
-    }
-
-    #[test]
-    fn targeted_camera_disappearing_during_restore_reports_failure() {
-        let mut record = CameraBlockRecord {
-            blocked: Vec::new(),
-            restore_on_arrival: vec![
-                "USB\\CAMERA_TARGET".to_owned(),
-                "USB\\CAMERA_STILL_ABSENT".to_owned(),
-            ],
-        };
-        let targets = pending_targets(&record, |id| {
-            id.ends_with("TARGET").then(|| "Error".to_owned())
-        });
-        assert_eq!(targets, vec!["USB\\CAMERA_TARGET"]);
-        assert!(settle_arrived(&mut record, &targets, |_| None));
-        assert_eq!(
-            record.restore_on_arrival,
-            vec!["USB\\CAMERA_TARGET", "USB\\CAMERA_STILL_ABSENT"]
-        );
-
-        assert!(!settle_arrived(&mut record, &targets, |id| {
-            id.ends_with("TARGET").then(|| "OK".to_owned())
-        }));
-        assert_eq!(record.restore_on_arrival, vec!["USB\\CAMERA_STILL_ABSENT"]);
-    }
-
-    #[test]
-    fn plan_allow_leaves_healthy_cameras_alone() {
-        let record = CameraBlockRecord {
-            blocked: vec!["USB\\CAMERA_A".to_owned()],
-            restore_on_arrival: Vec::new(),
-        };
-        let (to_enable, deferred) = plan_allow(&record, |_| Some("OK".to_owned()));
-        assert!(to_enable.is_empty(), "a running camera needs no elevation");
-        assert!(deferred.is_empty());
-    }
-
-    #[test]
-    fn explicit_block_takes_back_devices_awaiting_restoration() {
-        let mut record = CameraBlockRecord {
-            blocked: vec!["USB\\CAMERA_BUILTIN".to_owned()],
-            restore_on_arrival: vec![
-                "USB\\CAMERA_LOGI".to_owned(),
-                "usb\\camera_builtin".to_owned(),
-            ],
-        };
-        record.supersede_pending_restore();
-        assert!(record.restore_on_arrival.is_empty());
-        assert_eq!(
-            record.blocked,
-            vec![
-                "USB\\CAMERA_BUILTIN".to_owned(),
-                "USB\\CAMERA_LOGI".to_owned()
-            ]
-        );
-    }
-
-    #[test]
-    fn block_with_no_enabled_devices_persists_cancellation() -> Result<()> {
-        let record = CameraBlockRecord {
-            blocked: vec!["USB\\CAMERA_BUILTIN".to_owned()],
-            restore_on_arrival: vec!["USB\\CAMERA_ABSENT".to_owned()],
-        };
-        let mut persisted = None;
-        persist_block_intent(record, &[], |updated| {
-            persisted = Some(serde_json::to_vec(updated)?);
-            Ok(())
-        })?;
-        let saved: CameraBlockRecord =
-            serde_json::from_slice(&persisted.context("block intent was not saved")?)?;
-        assert!(saved.restore_on_arrival.is_empty());
-        assert_eq!(
-            saved.blocked,
-            vec!["USB\\CAMERA_BUILTIN", "USB\\CAMERA_ABSENT"]
-        );
-        assert!(pending_targets(&saved, |_| Some("Error".to_owned())).is_empty());
-        Ok(())
-    }
-
-    #[test]
-    fn block_waits_out_restore_and_cancels_stale_arrival() -> Result<()> {
-        use std::sync::{Arc, Mutex, mpsc};
-
-        let pending = CameraBlockRecord {
-            blocked: Vec::new(),
-            restore_on_arrival: vec!["USB\\CAMERA_ABSENT".to_owned()],
-        };
-        let saved = Arc::new(Mutex::new(serde_json::to_vec(&pending)?));
-        let _block = CameraOperationLock::acquire()?;
-        let (probe_tx, probe_rx) = mpsc::channel();
-        let saved_for_restore = Arc::clone(&saved);
-        let restore = std::thread::spawn(move || -> Result<Vec<String>> {
-            let handle =
-                unsafe { CreateMutexW(None, false, w!("Local\\MicCamWatch.CameraPrivacy")) }?;
-            let waited = unsafe { WaitForSingleObject(handle, 0) };
-            unsafe { CloseHandle(handle)? };
-            probe_tx.send(waited)?;
-            let _operation = CameraOperationLock::acquire()?;
-            let bytes = saved_for_restore
-                .lock()
-                .expect("simulated record lock")
-                .clone();
-            let record: CameraBlockRecord = serde_json::from_slice(&bytes)?;
-            Ok(pending_targets(&record, |_| Some("Error".to_owned())))
-        });
-        assert_eq!(probe_rx.recv()?, windows::Win32::Foundation::WAIT_TIMEOUT);
-        persist_block_intent(pending, &[], |updated| {
-            *saved.lock().expect("simulated record lock") = serde_json::to_vec(updated)?;
-            Ok(())
-        })?;
-        drop(_block);
-        assert!(restore.join().expect("restore thread panicked")?.is_empty());
-        Ok(())
-    }
-
-    #[test]
     fn record_replacement_preserves_valid_json_and_cleans_temporary_file() -> Result<()> {
         use std::path::PathBuf;
 
@@ -1062,10 +582,14 @@ mod tests {
         let original = CameraBlockRecord {
             blocked: vec!["USB\\CAMERA_OLD".to_owned()],
             restore_on_arrival: Vec::new(),
+            desired_blocked: true,
+            ..Default::default()
         };
         let replacement = CameraBlockRecord {
             blocked: vec!["USB\\CAMERA_NEW".to_owned()],
             restore_on_arrival: vec!["USB\\CAMERA_LATER".to_owned()],
+            desired_blocked: true,
+            ..Default::default()
         };
         save_record_at(&path, &original)?;
         assert_eq!(load_record_at(&path)?, Some(original));
@@ -1080,37 +604,28 @@ mod tests {
             let migrated = load_record_at(&path)?.expect("legacy record remains readable");
             assert_eq!(migrated.blocked, ["USB\\CAMERA_A", "USB\\CAMERA_B"]);
             assert!(migrated.restore_on_arrival.is_empty());
+            assert!(
+                migrated.desired_blocked,
+                "legacy active blocks retain a requested global Block"
+            );
+            assert_eq!(migrated.intent_generation, 0, "legacy IDs stay unsigned");
             save_record_at(&path, &migrated)?;
             assert_eq!(load_record_at(&path)?, Some(migrated));
         }
+        fs::write(&path, br#"{"blocked":[],"restore_on_arrival":["USB\\VID_1234&PID_5678&MI_00\\synthetic-camera-instance"]}"#)?;
+        let owed_only =
+            load_record_at(&path)?.expect("owed-only historical record remains readable");
+        assert!(
+            !owed_only.desired_blocked,
+            "owed historical restoration is not an active global Block"
+        );
+        assert_eq!(owed_only.intent_generation, 0);
+        assert_eq!(owed_only.restore_on_arrival.len(), 1);
         fs::write(&path, br#"{"devices":["A"],"blocked":["B"]}"#)?;
         assert!(
             load_record_at(&path).is_err(),
             "ambiguous intent must not be discarded"
         );
         Ok(())
-    }
-
-    #[test]
-    fn pending_restore_is_not_reported_as_allowed() {
-        let pending = CameraBlockRecord {
-            blocked: Vec::new(),
-            restore_on_arrival: vec!["USB\\CAMERA_LOGI".to_owned()],
-        };
-        // The built-in still runs, yet the switch is not fully released.
-        assert_eq!(
-            apply_pending_restore(CameraPrivacyState::Allowed, &pending),
-            CameraPrivacyState::SystemManaged
-        );
-        // Real block and partial states keep their meaning.
-        assert_eq!(
-            apply_pending_restore(CameraPrivacyState::Blocked, &pending),
-            CameraPrivacyState::Blocked
-        );
-        let settled = CameraBlockRecord::default();
-        assert_eq!(
-            apply_pending_restore(CameraPrivacyState::Allowed, &settled),
-            CameraPrivacyState::Allowed
-        );
     }
 }

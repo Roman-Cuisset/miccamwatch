@@ -1,13 +1,143 @@
 use crate::{
     i18n::Language,
-    model::{
-        Access, AccessEvent, Action, Device, DiagnosticCheck, Risk, SCHEMA_VERSION, Snapshot,
-        StatusDocument,
-    },
+    model::{Access, AccessEvent, Action, Device, DiagnosticCheck, Risk, SCHEMA_VERSION, Snapshot},
 };
 use anyhow::Result;
 use chrono::Local;
 use colored::Colorize;
+
+use serde::ser::SerializeSeq;
+
+struct VisibleAccesses<'a> {
+    items: &'a [Access],
+    min_risk: Option<Risk>,
+}
+
+impl serde::Serialize for VisibleAccesses<'_> {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        let mut sequence = serializer.serialize_seq(None)?;
+        for access in self
+            .items
+            .iter()
+            .filter(|access| should_display(access, self.min_risk))
+        {
+            sequence.serialize_element(access)?;
+        }
+        sequence.end()
+    }
+}
+#[cfg(windows)]
+#[derive(serde::Serialize)]
+pub struct ProtectionMetadata<'a> {
+    pub microphone: Option<&'a crate::platform::MicrophoneProtectionStatus>,
+    pub microphone_error: Option<&'a str>,
+    pub camera: Option<&'a crate::privacy::CameraControlObservation>,
+    pub camera_error: Option<&'a str>,
+}
+
+#[derive(serde::Serialize)]
+struct StatusView<'a> {
+    schema_version: u8,
+    tool_version: &'static str,
+    collectors: &'a [crate::model::CollectorHealth],
+    accesses: VisibleAccesses<'a>,
+    #[cfg(windows)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    protection: Option<&'a ProtectionMetadata<'a>>,
+}
+
+#[cfg(windows)]
+pub fn microphone_protection_summary(
+    lang: Language,
+    status: &crate::platform::MicrophoneProtectionStatus,
+) -> String {
+    format!(
+        "{}; {}; SDK: {}; endpoints:{} hardware:{} corrections:{}{}{}",
+        lang.microphone_protection(status.requested),
+        lang.service_state(status.service_active),
+        lang.microphone_status(status.mute_state),
+        status.endpoint_count,
+        status.hardware_mute_count,
+        status.corrections,
+        if status.detail.is_some() { "; " } else { "" },
+        status.detail.as_deref().unwrap_or(""),
+    )
+}
+
+#[cfg(windows)]
+pub fn camera_protection_summary(
+    lang: Language,
+    status: &crate::privacy::CameraControlObservation,
+) -> String {
+    format!(
+        "{}; actual:{} present:{} blocked:{} pending:{} absent:{} unknown:{}; {}{}{}",
+        lang.camera_intent(status.desired_blocked),
+        match status.state {
+            crate::privacy::CameraPrivacyState::Allowed => "allowed",
+            crate::privacy::CameraPrivacyState::Blocked => "blocked",
+            crate::privacy::CameraPrivacyState::SystemManaged => "unknown/mixed",
+        },
+        status.present_total,
+        status.owned_blocked_present,
+        status.pending_restore,
+        status.absent_owned,
+        status.unknown_devices,
+        lang.service_state(status.helper_active),
+        if status.detail.is_some() { "; " } else { "" },
+        status.detail.as_deref().unwrap_or(""),
+    )
+}
+
+#[cfg(windows)]
+pub fn print_protected_status(
+    snapshot: &Snapshot,
+    json: bool,
+    min_risk: Option<Risk>,
+    lang: Language,
+    protection: &ProtectionMetadata<'_>,
+) -> Result<()> {
+    if json {
+        let document = status_view(snapshot, min_risk, Some(protection));
+        println!("{}", serde_json::to_string(&document)?);
+    } else {
+        if let Some(status) = protection.microphone {
+            println!("{}", microphone_protection_summary(lang, status));
+        }
+        if let Some(error) = protection.microphone_error {
+            println!("Microphone protection unknown: {error}");
+        }
+        if let Some(status) = protection.camera {
+            println!("{}", camera_protection_summary(lang, status));
+        }
+        if let Some(error) = protection.camera_error {
+            println!("Camera protection unknown: {error}");
+        }
+        println!("{}", lang.protection_limit());
+        print_status(snapshot, false, min_risk, lang)?;
+    }
+    Ok(())
+}
+
+fn status_view<'a>(
+    snapshot: &'a Snapshot,
+    min_risk: Option<Risk>,
+    #[cfg(windows)] protection: Option<&'a ProtectionMetadata<'a>>,
+) -> StatusView<'a> {
+    StatusView {
+        schema_version: SCHEMA_VERSION,
+        tool_version: env!("CARGO_PKG_VERSION"),
+        collectors: &snapshot.collectors,
+        accesses: VisibleAccesses {
+            items: &snapshot.accesses,
+            min_risk,
+        },
+        #[cfg(windows)]
+        protection,
+    }
+}
 
 pub fn print_status(
     snapshot: &Snapshot,
@@ -15,26 +145,25 @@ pub fn print_status(
     min_risk: Option<Risk>,
     lang: Language,
 ) -> Result<()> {
-    let visible: Vec<_> = snapshot
-        .accesses
-        .iter()
-        .filter(|access| should_display(access, min_risk))
-        .cloned()
-        .collect();
     if json {
         println!(
             "{}",
-            serde_json::to_string(&StatusDocument {
-                schema_version: SCHEMA_VERSION,
-                tool_version: env!("CARGO_PKG_VERSION"),
-                collectors: &snapshot.collectors,
-                accesses: &visible,
-            })?
+            serde_json::to_string(&status_view(
+                snapshot,
+                min_risk,
+                #[cfg(windows)]
+                None,
+            ))?
         );
         return Ok(());
     }
+    let mut visible = snapshot
+        .accesses
+        .iter()
+        .filter(|access| should_display(access, min_risk))
+        .peekable();
 
-    if visible.is_empty() {
+    if visible.peek().is_none() {
         if snapshot
             .collectors
             .iter()
@@ -68,7 +197,7 @@ pub fn print_status(
             }
         }
     }
-    for access in &visible {
+    for access in visible {
         print_access(access, None, lang);
     }
     Ok(())
@@ -319,5 +448,66 @@ mod tests {
             &access(Risk::Suspicious),
             Some(Risk::Suspicious)
         ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn typed_status_keeps_protection_intent_independent_of_sdk_and_capture() {
+        let microphone = crate::platform::MicrophoneProtectionStatus {
+            requested: true,
+            service_active: false,
+            mute_state: crate::model::MicrophoneMuteState::Muted,
+            endpoint_count: 1,
+            hardware_mute_count: 0,
+            corrections: 0,
+            detail: Some("guard unavailable; software mute only".into()),
+        };
+        let camera = crate::privacy::CameraControlObservation {
+            desired_blocked: true,
+            state: crate::privacy::CameraPrivacyState::SystemManaged,
+            present_total: 0,
+            owned_blocked_present: 0,
+            pending_restore: 0,
+            absent_owned: 0,
+            unknown_devices: 0,
+            helper_active: true,
+            detail: None,
+        };
+        let metadata = ProtectionMetadata {
+            microphone: Some(&microphone),
+            microphone_error: None,
+            camera: Some(&camera),
+            camera_error: None,
+        };
+        let snapshot = Snapshot {
+            collectors: vec![],
+            accesses: vec![access(Risk::Expected), access(Risk::Suspicious)],
+            observation_gaps: vec![],
+        };
+        let document = status_view(&snapshot, Some(Risk::Suspicious), Some(&metadata));
+        assert!(std::ptr::eq(
+            document.accesses.items,
+            snapshot.accesses.as_slice()
+        ));
+        let value = serde_json::to_value(document).unwrap();
+        assert_eq!(value["schema_version"], 3);
+        assert_eq!(value["accesses"].as_array().unwrap().len(), 1);
+        assert_eq!(value["accesses"][0]["activity"], "active");
+        assert_eq!(value["protection"]["microphone"]["requested"], true);
+        assert_eq!(value["protection"]["microphone"]["service_active"], false);
+        assert_eq!(value["protection"]["microphone"]["mute_state"], "muted");
+        assert_eq!(value["protection"]["camera"]["desired_blocked"], true);
+        assert_eq!(value["protection"]["camera"]["present_total"], 0);
+        assert_eq!(value["protection"]["camera"]["owned_blocked_present"], 0);
+        let errors = ProtectionMetadata {
+            microphone: None,
+            microphone_error: Some("intent unreadable"),
+            camera: None,
+            camera_error: Some("inventory unreadable"),
+        };
+        let value = serde_json::to_value(status_view(&snapshot, None, Some(&errors))).unwrap();
+        assert!(value["protection"]["microphone"].is_null());
+        assert_eq!(value["protection"]["microphone_error"], "intent unreadable");
+        assert!(value["protection"]["camera"].is_null());
     }
 }

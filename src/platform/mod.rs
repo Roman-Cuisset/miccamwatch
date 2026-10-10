@@ -14,8 +14,12 @@ pub use linux::PlatformMonitor;
 #[cfg(target_os = "macos")]
 pub use macos::PlatformMonitor;
 #[cfg(windows)]
+pub(crate) use windows::{MicrophoneLockJournal, ensure_microphone_update_inactive};
+#[cfg(windows)]
 pub use windows::{
-    PlatformMonitor, SessionLockState, play_chime, session_lock_state, terminate_process_by_pid,
+    MicrophoneProtectionStatus, PlatformMonitor, SessionLockState, play_chime,
+    resume_requested_microphone_protection, run_microphone_protection_service, session_lock_state,
+    terminate_process_by_pid,
 };
 
 #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
