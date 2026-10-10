@@ -717,6 +717,13 @@ completed in 0.031–0.047 s but had only one/two RSS samples; OS highwater and
 unobserved transient costs still matter. This empty runner does not supersede
 the local populated-machine measurements or certify hardware enforcement.
 
+The earlier guard window does not include a concurrently sustained top/tray.
+Additional hosted phases now retain both real owners while sustaining each
+frontend, verify all three roles in every retained sample and confirm that Quit/
+WM_CLOSE does not release either requested protection. This composed scenario
+still needs its own native run; do not add the separate-profile medians and call
+that a measured combined total.
+
 An approved one-target legacy recovery cleared the disconnected camera's native
 disabled-configuration flag from 1 to 0. Its protected receipt is fulfilled,
 generation 1, requested=false, with no owned entries. The medium client then

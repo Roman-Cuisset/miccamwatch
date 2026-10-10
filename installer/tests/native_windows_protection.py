@@ -12,12 +12,13 @@ import json
 import os
 from pathlib import Path
 import struct
+import statistics
 import shutil
 import subprocess
 import tempfile
 import time
 
-from native_resources import Sampler, WindowsProcesses
+from native_resources import Sampler, WindowsProcesses, sustain, windows_tray_window
 from native_tui_controls import NativeTerminal
 
 
@@ -140,6 +141,8 @@ def main():
     attempted = {}
     tracked_resources = set()
     terminal = None
+    tray = None
+    result["frontend_phases"] = []
 
     def command(arguments, check=True, environment=None, allowed=(0,)):
         child = subprocess.Popen([str(args.binary), *arguments], env=env if environment is None else environment, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -192,30 +195,6 @@ def main():
         tracked_resources.add("microphone")
         active = await_state(lambda s: s["microphone"]["requested"] and s["microphone"]["service_active"], "Microphone guard did not activate")
         assert active["microphone"]["mute_state"] == "unavailable", "Zero endpoints must not pretend effective SDK mute"
-        previous_environment = {key: os.environ.get(key) for key in ("APPDATA", "LOCALAPPDATA", "HOME", "USERPROFILE")}
-        try:
-            for key in previous_environment:
-                os.environ[key] = env[key]
-            terminal = NativeTerminal(args.binary, "en", 120, 30)
-        finally:
-            for key, value in previous_environment.items():
-                if value is None:
-                    os.environ.pop(key, None)
-                else:
-                    os.environ[key] = value
-        terminal.drain(2)
-        assert terminal.alive(), "Native top exited before interaction"
-        with sampler.lock:
-            row = backend.get(terminal.process.pid, name="mcw.exe")
-            assert row and not row["has_exited"], "Native top resource identity unavailable"
-            sampler.track(row)
-            sampler.tracked[(row["pid"], row["identity"])]["role"] = "top_frontend"
-        terminal.send("q")
-        terminal.drain(20)
-        assert not terminal.alive(), "Native top did not exit after Quit"
-        terminal.close()
-        terminal = None
-        assert status()["microphone"]["requested"] and status()["microphone"]["service_active"], "UI exit released requested protection"
         payloads = [(struct.pack("<I", 4097), False),
                     (struct.pack("<I", 1) + b"{", False),
                     (struct.pack("<I", 4096) + b"{", True)]
@@ -249,6 +228,56 @@ def main():
         time.sleep(20)
         result["sustained_end_seconds"] = time.monotonic() - sampler.started
         assert status()["camera"]["desired_blocked"] and status()["microphone"]["requested"]
+        previous_environment = {key: os.environ.get(key) for key in ("APPDATA", "LOCALAPPDATA", "HOME", "USERPROFILE")}
+        try:
+            for key in previous_environment:
+                os.environ[key] = env[key]
+            terminal = NativeTerminal(args.binary, "en", 120, 30)
+        finally:
+            for key, value in previous_environment.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+        terminal.drain(2)
+        assert terminal.alive(), "Native top exited before interaction"
+        with sampler.lock:
+            row = backend.get(terminal.process.pid, name="mcw.exe")
+            assert row and not row["has_exited"], "Native top resource identity unavailable"
+            sampler.track(row)
+            sampler.tracked[(row["pid"], row["identity"])]["role"] = "top_frontend"
+        phase = dict(frontend_role="top_frontend")
+        result["frontend_phases"].append(phase)
+        sustain(phase, sampler, terminal.alive, lambda _: terminal.drain(.1))
+        terminal.send("q")
+        terminal.drain(20)
+        assert not terminal.alive(), "Native top did not exit after Quit"
+        terminal.close()
+        terminal = None
+        observed = status()
+        assert observed["microphone"]["requested"] and observed["microphone"]["service_active"], "Top exit released microphone protection"
+        assert observed["camera"]["desired_blocked"] and observed["camera"]["helper_active"], "Top exit released global camera protection"
+        tray = subprocess.Popen([str(args.binary.with_name("mcw-tray.exe"))], env=env,
+                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        with sampler.lock:
+            row = backend.read_handle(tray._handle, tray.pid, name="mcw-tray.exe")
+            assert row and not row["has_exited"], "Native tray resource identity unavailable"
+            sampler.track(row, tray._handle)
+            sampler.tracked[(row["pid"], row["identity"])]["role"] = "tray_frontend"
+        deadline = time.monotonic() + 15
+        while not windows_tray_window(tray.pid):
+            assert tray.poll() is None and time.monotonic() < deadline, "Owned native tray window did not become ready"
+            time.sleep(.05)
+        phase = dict(frontend_role="tray_frontend")
+        result["frontend_phases"].append(phase)
+        sustain(phase, sampler, lambda: tray.poll() is None and windows_tray_window(tray.pid))
+        assert windows_tray_window(tray.pid, close=True), "Owned tray window unavailable at close"
+        tray.wait(timeout=15)
+        assert tray.returncode == 0, "Native tray did not exit cleanly"
+        tray = None
+        observed = status()
+        assert observed["microphone"]["requested"] and observed["microphone"]["service_active"], "Tray exit released microphone protection"
+        assert observed["camera"]["desired_blocked"] and observed["camera"]["helper_active"], "Tray exit released global camera protection"
         command(["camera", "allow"])
         await_state(lambda s: not s["camera"]["desired_blocked"] and not s["camera"]["helper_active"], "Allow did not clear global intent/stop helper")
         command(["unmute"])
@@ -273,6 +302,12 @@ def main():
                 terminal.close()
             except Exception as error:
                 cleanup_errors.append("top: " + str(error))
+        if tray is not None and tray.poll() is None:
+            try:
+                tray.terminate()  # Exact Popen-owned native handle, not a PID lookup.
+                tray.wait(timeout=10)
+            except Exception as error:
+                cleanup_errors.append("tray: " + str(error))
         # A failed CLI can still have started its broker. Recover custody only
         # from our private pipe, exact executable and bounded creation lifetime.
         for resource, earliest in attempted.items():
@@ -297,6 +332,22 @@ def main():
                 else:
                     cleanup_errors.append("Owned guard did not stop after failed-proof cleanup")
         sampler.finish()
+        for phase in result["frontend_phases"]:
+            rows = [row for row in result["samples"]
+                    if phase.get("sustained_start_seconds", float("inf")) <= row["seconds"] <= phase.get("sustained_end_seconds", -1)]
+            values = [row["product_rss_bytes"] for row in rows]
+            required = {"microphone_guard", "camera_guard", phase["frontend_role"]}
+            phase.update(
+                sample_count=len(rows),
+                sustained_rss_median_bytes=statistics.median(values) if values else None,
+                sustained_rss_p95_bytes=sorted(values)[int((len(values) - 1) * .95)] if values else None,
+                aggregate_concurrent_observed_peak_bytes=max(values, default=None),
+                cpu_delta_seconds=(rows[-1]["product_cpu_seconds"] - rows[0]["product_cpu_seconds"]) if len(rows) > 1 else None,
+                required_roles_present=bool(rows) and all(
+                    required <= {item["role"] for item in row["per_process_memory"]} for row in rows),
+            )
+            if not phase["required_roles_present"]:
+                cleanup_errors.append("Frontend phase did not observe both guards and UI: " + phase["frontend_role"])
         backend.close()
         try:
             shutil.rmtree(root)
