@@ -1,16 +1,16 @@
-# Roadmap technique post-v0.16.1
+# Roadmap technique post-v0.17.0
 
 Dernière mise à jour : **2026-10-10**. Responsable : lead architecture/développement.
-Base publiée : [v0.16.1 stable/latest](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.16.1), source `7b134e3500860bd185ddc3955107b8082d414e78` ; [CI main](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37487806861) verte avant création du tag.
+Base publiée : [v0.17.0 stable/latest](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.17.0), source `d1b8557f827e102df20c33dbac4ec99badba7d1a` ; [CI exacte avant tag](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38056837640) et [release native](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38058344725) vertes.
 
-Ce document planifie les prochains travaux ; sa création ne clôture aucune phase produit et ne justifie pas de nouvelle release binaire. Les fonctionnalités proposées ci-dessous ne sont pas annoncées comme disponibles. Les complexités sont des estimations de conception, pas des délais ni des mesures.
+Ce document planifie les prochains travaux et consigne les lots livrés. Les fonctionnalités encore proposées ne sont pas annoncées comme disponibles ; les livraisons sont explicitement marquées dans le tableau et le journal. Les complexités sont des estimations de conception, pas des délais ni des mesures.
 
-**Candidat source `0.17.0`, non publié :** Windows-first explicitement retenu pour
-la protection persistante. Les corrections candidates annotées ci-dessous ne
-réécrivent ni les défauts historiques ni les preuves de `v0.16.1`. Les pins
-d'installation restent `v0.16.1` jusqu'à publication ; P1-RAM/P1-RESTORE sont
-**Validés en logiciel/natif**, sans certification physique. Les autres lots
-demeurent ouverts. Voir le [contrat candidat et ses limites](ARCHITECTURE.md#candidate-0170-windows-first-protection-contract).
+**Livré `v0.17.0` :** Windows-first explicitement retenu pour la protection
+persistante. Les corrections ne réécrivent ni les défauts historiques ni les
+preuves des anciennes releases. Les pins d'installation passent à `v0.17.0` ;
+P1-RAM/P1-RESTORE sont **Publiés avec validation logiciel/natif**, sans
+certification physique ni objectif 15 Mo acquis. Les autres lots demeurent
+ouverts. Voir le [contrat de protection et ses limites](ARCHITECTURE.md#candidate-0170-windows-first-protection-contract).
 
 ## Base réelle et décisions d'architecture
 
@@ -36,8 +36,8 @@ Les identifiants sont stables. À chaque livraison, remplacer l'état par **En c
 
 | Lot | Décision / état actuel | Complexité | Dépendance principale |
 | --- | --- | --- | --- |
-| P1-RAM | Validé logiciel/natif : bornes et mesures complètes 0.17.0, 15 Mo non atteints, gardes Windows sans conhost qualifiés | Moyenne | Publication et maintien des preuves/limites canoniques |
-| P1-RESTORE | Validé logiciel/natif : propriétaire Windows, états opposés/hotplug/partiel simulés, release natif réel sans devices | Élevée | Pas de certification matérielle ou déni exclusif/ASIO |
+| P1-RAM | Publié 0.17.0, validé logiciel/natif : bornes et mesures complètes, 15 Mo non atteints, scénario composé Windows ~43 Mo | Moyenne | Maintien des preuves/limites canoniques ; 30 Mo reste une référence |
+| P1-RESTORE | Publié 0.17.0, validé logiciel/natif : propriétaire Windows, états opposés/hotplug/partiel simulés, release natif réel sans devices | Élevée | Pas de certification matérielle ou déni exclusif/ASIO |
 | P1-HB | Homebrew : à faire | Moyenne | Propriété installation/autostart, validation macOS |
 | P1-AUR | AUR : à faire | Moyenne | Dépendances PipeWire et frontière root |
 | P1-WG | Winget : à faire | Moyenne | Identité MSI et upgrades contrôlés |
@@ -62,7 +62,7 @@ Les identifiants sont stables. À chaque livraison, remplacer l'état par **En c
 
 **Contraintes historiques de la base, avant correction candidate :** le JSON PipeWire autorisait **16 MiB** de brut puis un `Vec<serde_json::Value>` ; cette limite n'était pas une borne RSS. `stderr` du subprocess n'était pas borné. Le tray Windows avait des canaux non bornés et un thread par notification ; le cooldown du watcher Windows n'était pas purgé. Ces faits de code constituaient des risques, pas une mesure de dépassement. Borner sans tronquer silencieusement les captures : dépassement = santé dégradée/indisponible explicite. Ne pas supprimer les preuves d'identité pour économiser la mémoire.
 
-**Implémenté en source candidate 0.17.0 :** lecture PipeWire streaming bornée,
+**Livré en 0.17.0 :** lecture PipeWire streaming bornée,
 stdout/stderr et données retenues bornés, deadlines enfant et erreurs de santé
 explicites sans faux STOP ; files UI/notifications/caches bornés. `top` conserve
 une seule rangée horizontale de six boutons, avec représentation compacte aux
@@ -88,7 +88,7 @@ Le runner vide ne remplace pas la machine locale ; pas d'affirmation sous 15 Mo.
 
 **Contraintes historiques :** dans v0.16.0, le tray sauvegardait `mute_state == Muted` dans un seul booléen. Un état `Mixed` devenait donc `false`, ensuite appliqué à tous les endpoints : risque de démuter une entrée initialement coupée. Les originaux par endpoint du backend servaient seulement au rollback immédiat. Exigence conservée : ID stable, original, génération/intention et readback ; une action manuelle récente prime sur une restauration tardive. Déconnexion, nouvel endpoint, redémarrage et échec de rollback ne doivent pas devenir un succès implicite.
 
-**Implémenté en source candidate 0.17.0 :** propriétaire natif de l'intention
+**Livré en 0.17.0 :** propriétaire natif de l'intention
 manuelle micro jusqu'au release explicite, indépendant de `top`/tray ; originaux,
 générations et tokens automatiques par endpoint, priorité manuelle et propriété
 release-pending en cas d'échec. Intention demandée, mute SDK effectif et capture
@@ -116,7 +116,7 @@ flag, puis status medium exit 0 sans nouvelle UAC ni dette restante.
 Release explicite et restauration achevée exigés avant remplacement ; jamais
 de release implicite pour updater. La restauration physique reste non certifiée.
 
-**Sécurité update candidate (tests natifs locaux et CI native réussis) :** portable Windows
+**Sécurité update 0.17.0 (tests natifs locaux et CI native réussis) :** portable Windows
 réserve request locks et ressources natives micro/caméra avant stop/swap,
 refuse propriétaire actif/étranger, intention/token, release-pending ou journal
 non fiable. Readiness strictement read-only sans release/helper/SDK. Réservation
@@ -342,3 +342,4 @@ Windows : `RegisterHotKey` seul n'offre pas un protocole PTT key-up complet ; va
 | 2026-10-10 | Qualification composée et candidat complet | Validé logiciel/natif avant publication ; source `32f87cd`, pas encore de tag | [CI main complète](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38051530685) Windows/Linux/macOS ARM/Intel verte ; quatre comparaisons ressources complètes et qualifiées baseline/candidat, anciens échecs conservés. Deux gardes + top/tray réellement concurrents : rôles présents dans tous les samples, Quit/WM_CLOSE préservent les protections, release explicite et cleanup sans erreurs. Médianes 42,820/43,516 Mo, pics de fenêtre 43,098/43,721 Mo ; gardes seules 27,922 Mo, pic scénario complet 56,041 Mo. Tableau RAM/CPU multi-OS et limites dans Architecture | Commit de validation documentaire puis tag/release ; vérifier sept assets/hashs/six attestations et migrations publiques avant annonce stable. 15/30 Mo non atteints en scénario composé ; matériel, ASIO/exclusif et autres lots non certifiés/clôturés |
 | 2026-10-10 | Arrêt tray macOS avant tag | Nouveau défaut candidat découvert, publication bloquée | [CI `016df87`](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38053174757) Windows/Linux/macOS Intel verts ; macOS ARM baseline entière et profils candidat hors tray réussis, mais stop tray candidat échoue. Gate candidat reste faux, aucune publication. Source : readiness AppKit partagée effacée par le serveur stop avant acceptation par la boucle, interleaving pouvant produire une fausse déconnexion ; reply exact non conservé dans ce run | Correction de la transition sans masquer les vraies déconnexions ; assertion native stop inchangée et diagnostics de contrôle bornés ajoutés ; requalifier natif avant nouveau commit vérifié/tag, aucun autre lot rouvert |
 | 2026-10-10 | Requalification après correction arrêt AppKit | Validé logiciel/natif avant tag ; source `29db092` | [CI native complète](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38055262096) Windows/Linux/macOS ARM/Intel verte. Arrêts tray réels Linux/macOS : contrôle stop 0 et sortie processus 0, cleanup sans échec. Quatre comparaisons baseline/candidat complètes et qualifiées ; garde + top/tray Windows requalifiés, rôles présents, protections conservées et cleanup réussi. L'échec candidat précédent est conservé, non accepté | Commit de validation avant tag puis publication/provenance/migrations publiques ; 15/30 Mo composés et qualification physique toujours non acquis ; aucune modification de l'installation/tray utilisateur |
+| 2026-10-10 | Livraison P1-RAM/P1-RESTORE 0.17.0 | [Publié stable/latest](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.17.0), tag annoté immuable source `d1b8557f827e102df20c33dbac4ec99badba7d1a` | [CI exacte pré-tag](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38056837640), [release native](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38058344725), sept assets/digests et six attestations exactes vérifiés ; Windows public 0.16.1→0.17.0, paire ZIP/préférences/no-op et tray utilisateur étranger préservés ; [migrations publiques Unix](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38059262974) Linux/macOS ARM/Intel, managed 0.16.1→0.17.0 et bootstrap Mac depuis public 0.16.0, limites de fixture explicitement conservées ; DNS page/script/TLS/desktop/mobile/curl réel vérifiés ; source utilisateur inchangée | 15 Mo non acquis, scénario composé ~43 Mo et pics explicites ; physique/exclusif/ASIO non certifiés, EXE/MSI NotSigned, aucune nouvelle clearance AV/Apple ; Homebrew/AUR/Winget/Linux ARM64 et autres lots ouverts. Preuves post-publication dans commit ultérieur sans déplacer le tag |

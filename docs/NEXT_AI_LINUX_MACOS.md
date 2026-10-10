@@ -2,9 +2,10 @@
 
 **Lecture du journal :** les sections anciennes ci-dessous conservent l'état,
 les défauts et les limitations de leur époque ; elles ne décrivent pas toutes
-la source actuelle. Le dernier état publié reste `v0.16.1` immutable. Le bloc
-final `0.17.0` décrit un candidat non publié et ne remplace aucune preuve
-historique par une validation matérielle nouvelle.
+la source actuelle. Le dernier état publié est `v0.17.0`, tag immuable sur
+`d1b8557f827e102df20c33dbac4ec99badba7d1a`. Le bloc final décrit la livraison
+logiciel/native et ne remplace aucune preuve historique par une validation
+matérielle nouvelle.
 
 Les backends Linux/macOS de la PR #1 sont intégrés à `main`. [La répétition release 36682926446](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/36682926446) a réussi pour Windows, Linux x64 Ubuntu 22.04, macOS 15 Apple Silicon et Intel : archives extraites exécutées, helper Swift embarqué, CLI, arrêt SIGINT et MSI Windows. Le runner Apple Silicon était sous macOS 15.7.9. Les paquets Linux/macOS de v0.14.0 restent expérimentaux : cela ne prouve pas les transitions de micro/caméra physiques. Ne pas annoncer ces preuves matérielles.
 
@@ -309,15 +310,16 @@ historiques ni les limites matérielles.
   Roadmap actualisée ; P1-UPGRADE demeure partiel, aucune autre phase clôturée.
   Pas de mesure RAM <15 Mo, Linux ARM64, Homebrew/AUR/Winget ou contrôle nouveau.
 
-## Source 0.17.0 — Windows-first, qualification native validée
+## Livraison 0.17.0 — Windows-first, qualification native validée
 
-P1-RAM/P1-RESTORE sont **Validés en logiciel/natif**, sans certification physique ;
-aucun tag/asset public ni signature/notarisation nouveau n'est encore revendiqué.
-Les liens et pins d'installation `v0.16.1` restent ceux du stable actuel.
-Homebrew/AUR/Winget/ARM64 et les autres lots de roadmap demeurent ouverts.
-Contrat détaillé : [Architecture candidate](ARCHITECTURE.md#candidate-0170-windows-first-protection-contract).
+P1-RAM/P1-RESTORE sont **Publiés avec validation logiciel/natif**, sans
+certification physique. [Stable/latest v0.17.0](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.17.0)
+est publié ; les pins d'installation passent à cette version. Aucune signature
+Windows ni notarisation Apple nouvelle n'est revendiquée. Homebrew/AUR/Winget/
+ARM64 et les autres lots de roadmap demeurent ouverts.
+Contrat détaillé : [Architecture de protection](ARCHITECTURE.md#candidate-0170-windows-first-protection-contract).
 
-### Portées candidates et invariants de migration
+### Portées livrées et invariants de migration
 
 - Windows a été explicitement choisi en premier pour la protection persistante.
   L'intention manuelle micro appartient au broker natif jusqu'à `unmute`
@@ -341,7 +343,7 @@ Contrat détaillé : [Architecture candidate](ARCHITECTURE.md#candidate-0170-win
   en RPC normal. Admin alternatif : délégation QUERY-only, pas token-use ou kill.
 - Avant remplacement binaire, release micro/caméra explicite et restauration
   achevée ; fermer l'UI ne suffit pas. Pas de release implicite par l'updater.
-  Le portable Windows candidat réserve les deux request locks et ressources
+  Le portable Windows 0.17.0 réserve les deux request locks et ressources
   natives avant stop/swap ; propriétaire actif/étranger, intention/token,
   release-pending et journals illisibles/corrompus/non supportés refusent.
   Les reçus protégés caméra requested/owned/unfulfilled bloquent ; l'ancien
@@ -359,7 +361,7 @@ Contrat détaillé : [Architecture candidate](ARCHITECTURE.md#candidate-0170-win
 
 ### Bornes et preuves locales réelles
 
-- Le lecteur PipeWire candidat est streaming borné (stdout/stderr, graphe,
+- Le lecteur PipeWire 0.17.0 est streaming borné (stdout/stderr, graphe,
   deadlines) ; dépassement/blocage/erreur = santé explicite et lacune, pas STOP.
   Files UI/notifications/caches bornés ; six boutons TUI dans une seule rangée
   horizontale, représentation compacte en terminal étroit.
@@ -405,8 +407,41 @@ réussis. Médianes **42,820/43,516 Mo**, gardes seules 27,922 Mo ; pic scénari
 complet 56,041 Mo. **15 et 30 Mo non atteints en scénario composé** ; 30 Mo
 reste une référence, pas un seuil dur. Tableaux et limites canoniques dans
 Architecture : RSS partagé, enfants brefs, CPU lower-bound et gaps explicites.
-Source intégrée main ; commit de validation avant tag, publication et migrations
-depuis les assets publics restent à achever. Runner vide/fixtures ne certifient
-pas une protection physique ou un déni exclusif/ASIO. Homebrew/AUR/Winget/
-Linux ARM64 et les autres lots restent ouverts.
+Source intégrée main, commit de validation avant tag et release publique native
+réussis. Les observations de publication sont consignées ci-dessous sans
+déplacer le tag. Runner vide/fixtures ne certifient pas une protection physique
+ou un déni exclusif/ASIO. Homebrew/AUR/Winget/Linux ARM64 et les autres lots
+restent ouverts.
+
+### Publication et migrations publiques v0.17.0
+
+- Tag annoté immuable sur `d1b8557f827e102df20c33dbac4ec99badba7d1a`.
+  [CI exacte avant tag](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38056837640)
+  et [release native](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38058344725)
+  vertes Windows/Linux/macOS ARM/Intel. API tag/latest concordantes : stable,
+  non-draft, sept assets ; digests API, six entrées manifeste et six attestations
+  workflow/ref/source/runner exacts vérifiés après téléchargement.
+- Updater public Windows 0.16.1→0.17.0 réellement exécuté dans un préfixe privé :
+  paire exacte au ZIP, préférences conservées, second appel no-op avec hashes/
+  mtimes inchangés, processus exact du tray utilisateur étranger préservé.
+  Installation utilisateur non remplacée. CLI publique readonly schema 3/version
+  0.17.0, caméra Allow normale sans pending/absent/unknown ; aucune mutation SDK.
+  EXE/MSI publics `NotSigned` ; aucun verdict Defender ou notarisation inventé.
+- [Migrations Unix publiques](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38059262974)
+  vertes sur trois runners : packages réels, managed 0.16.1→0.17.0,
+  bash/zsh/fish, PATH/préférences/history et désinstallation possédée.
+  Session installer Linux sans PipeWire utilisable : indisponibilité visible.
+  Bootstrap standalone Mac depuis vrai 0.16.0 public vers archive 0.17.0 ;
+  quarantaine, interruptions et changements concurrents conservés. La fixture
+  updater corrigé inter-version utilise la source actuelle avec métadonnées
+  privées anciennes et sélection transport ; pas preuve du vieux client
+  historique, d'autostart activé ou d'approbation Gatekeeper.
+- Page DNS `/mcw/` déployée 0.17.0 sans changer/redémarrer Caddy ; script byte-for-
+  byte identique au commit tagué. HTTPS strict, redirect/404/nosniff/root existant
+  vérifiés ; vues desktop/mobile et exemple PowerShell curl réels réussis.
+  Default du workflow public porté à 0.17.0 après disponibilité vérifiée.
+- Observations consignées dans ce commit post-publication, sans déplacement de
+  tag. P1-RAM/P1-RESTORE publiés logiciel/natif ; 15 Mo non atteints, scénario
+  composé Windows ~43 Mo, aucune certification physique/exclusif/ASIO nouvelle.
+  Homebrew/AUR/Winget/Linux ARM64 et les autres lots restent ouverts.
 

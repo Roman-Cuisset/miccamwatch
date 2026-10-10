@@ -421,12 +421,12 @@ See [signing evidence](SIGNING.md); this is not universal antivirus clearance.
 
 ## Candidate 0.17.0 Windows-first protection contract
 
-This section describes candidate source only. Public stable/latest remains
-immutable `v0.16.1`, with its existing installation URLs, hashes and historical
-proofs unchanged. Windows-first persistent protection was explicitly chosen;
-Linux/macOS remain scoped one-shot controls, not substitutes for this owner.
-P1-RAM/P1-RESTORE are implemented in candidate source but remain **in progress**
-pending native qualification. No signing/notarization or publication is claimed.
+This pre-publication source contract is now released as immutable stable/latest
+`v0.17.0`, with software/native P1-RAM/P1-RESTORE qualification, not physical
+certification or an achieved 15 MB target. Previous installation artifacts, hashes
+and historical proofs remain unchanged. Windows-first persistent protection was
+explicitly chosen; Linux/macOS remain scoped one-shot controls, not substitutes
+for this owner. Post-publication evidence is recorded separately below.
 
 ### Intent, effect and observation
 
@@ -849,4 +849,51 @@ readiness protocol. No ≤50 ms sampling or physical-event latency is claimed.
 The macOS ARM menu bar also exceeds the 30 MB reference; that reference is not
 a hard cutoff. No working-set trimming, hidden helper cost or false sub-target
 claim is used.
+
+### Post-publication v0.17.0 evidence
+
+The annotated immutable tag points to `d1b8557f827e102df20c33dbac4ec99badba7d1a`.
+[Exact source CI](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38056837640)
+and [release packaging/publication](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38058344725)
+passed Windows, Linux and macOS ARM/Intel. Public tag/latest API responses agree:
+stable, non-draft, exactly seven assets. All downloaded assets matched API
+digests; all six payload/SBOM manifest entries and authenticated attestations
+matched the exact release workflow, tag ref, source digest and hosted runners.
+Older tags/assets were not modified.
+
+A genuine private public Windows 0.16.1 CLI/tray pair ran its actual updater to
+0.17.0; both EXEs matched the verified public ZIP. Preferences survived, a second
+update preserved hashes/mtimes, and the unrelated user's existing tray stayed
+alive through its retained exact process handle. Published native read-only
+status returned schema 3/version 0.17.0; camera Allow reported present=1 with
+blocked/pending/absent/unknown=0. The user installation was not replaced and no
+microphone/camera/capture-permission mutation was made by these release smokes.
+Actual public EXE/MSI Authenticode status is `NotSigned`, not AV clearance.
+
+[Public Unix installation/migration](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38059262974)
+passed Linux and both macOS architectures using genuine published packages.
+Managed 0.16.1→0.17.0 upgrades exercised bash/zsh/fish PATH, settings/history
+preservation, reinstall and owned removal. Linux's installer session had no
+usable PipeWire session; unavailable devices remained explicit, not healthy
+empty inventory. The release's separate native desktop/virtual-PipeWire proofs
+do not turn this installation-only session into hardware evidence.
+
+macOS standalone bootstrap began with the immutable public 0.16.0 executable
+and the verified public 0.17.0 archive. Quarantine retention, interruption,
+concurrent replacement preservation and actual current public no-op were
+exercised. The separate cross-version corrected-updater fixture uses current
+source with private 0.16.0 metadata and transport-only selection; it is not
+proof that the historical 0.16.0 updater supports standalone replacement.
+No enabled autostart registration, Gatekeeper approval or physical capture
+transition was proven by this fixture.
+
+The HTTPS `/mcw/` page now describes 0.17.0; only documentation was replaced,
+with no Caddy configuration change/restart or binary mirror. The served 51,052 B
+installer exactly matches immutable tag-source bytes, SHA-256
+`0aae803ddbf483579dd4d6d191986a70ef76e505bffa4341414dd52252ee34a1`.
+Strict TLS GET verified page/script 200, `/mcw` redirect 308, unknown file 404,
+`nosniff` and the existing root route 200. Real Chromium desktop/mobile views
+had no document-wide horizontal overflow, and the exact published PowerShell
+curl example downloaded the ZIP with matching digest/manifest without executing
+it. RAM/physical/exclusive/ASIO and signing limits above are unchanged.
 

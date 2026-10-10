@@ -99,7 +99,7 @@ The [release run 37493346742](https://github.com/Roman-Cuisset/miccamwatch/actio
 built and exercised the extracted ZIP CLI/tray and native per-user MSI
 installation/removal from `7b134e3500860bd185ddc3955107b8082d414e78`,
 immutable tag `v0.16.1`. Windows publication remained explicitly approved.
-The complete seven-asset release is stable/latest.
+The complete seven-asset release was stable/latest when this verification ran.
 
 - Public ZIP SHA-256: `276f0719b595e30b171ab1010e418de7bc4defcfc05e87b7e048a11406981e70`.
 - Public MSI SHA-256: `0d9aad13942538c00f5735e8366bc0dd215b817feb964644b062bf404f0aba71`.
@@ -115,4 +115,30 @@ A second call was up-to-date and preserved both hashes.
 `NotSigned`, with no signer. No new Defender scan or Microsoft verdict is
 claimed for v0.16.1; the historical v0.16.0 observations above are not
 transferable clearance. No protection bypass was used.
+
+## Published stable Windows v0.17.0 verification
+
+The [release workflow](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38058344725)
+passed Windows ZIP/MSI and Linux/macOS ARM/Intel native package smoke. Annotated
+tag `v0.17.0` points to `d1b8557f827e102df20c33dbac4ec99badba7d1a`; API tag/latest
+agree on a stable, non-draft seven-asset release. All downloaded bytes matched
+API SHA-256 digests; all six payload/SBOM entries matched `SHA256SUMS` and GitHub
+attestations constrained to the release workflow, exact tag/source and hosted
+runners.
+
+- Public ZIP SHA-256: `6dda0fc0b35744e15a1a76b39e43c8264bba81c13446f31dfe7d08d18c9b8e36`.
+- Public MSI SHA-256: `a0b469654b8b1a1f3dcc0cec7fd9088b92d86f11926256096a028350398484ed`.
+
+A genuine private public `0.16.1` CLI/tray pair updated through its actual
+`mcw update` to `0.17.0`. Both EXEs matched the verified ZIP; preferences survived,
+and a second update retained hashes and mtimes. An unrelated existing user tray
+was retained by exact process handle and remained alive. No user installation,
+microphone, camera or capture permission was changed by this migration smoke.
+Published read-only status returned schema 3/version 0.17.0 and normal camera
+Allow with no pending/absent/unknown entries.
+
+Actual `Get-AuthenticodeSignature` on the downloaded public EXEs/MSI reported
+`NotSigned`. No new Defender scan, Microsoft clearance or Apple Developer ID/
+notarization is claimed. Provenance is not antivirus clearance; no security
+protection was bypassed.
 

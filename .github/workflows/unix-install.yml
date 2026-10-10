@@ -21,7 +21,7 @@ on:
     inputs:
       version:
         description: Public release to install
-        default: v0.16.1
+        default: v0.17.0
         required: true
         type: string
       upgrade-from:
@@ -46,7 +46,7 @@ jobs:
       # public head commit, including the head repository for forked PRs.
       SOURCE_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
       SOURCE_REF: ${{ github.event.pull_request.head.sha || github.sha }}
-      RELEASE_VERSION: ${{ inputs.version || 'v0.16.1' }}
+      RELEASE_VERSION: ${{ inputs.version || 'v0.17.0' }}
       UPGRADE_FROM: ${{ inputs.upgrade-from || '' }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
