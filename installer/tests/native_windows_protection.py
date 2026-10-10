@@ -12,7 +12,9 @@ import json
 import os
 from pathlib import Path
 import struct
+import shutil
 import subprocess
+import tempfile
 import time
 
 from native_resources import Sampler, WindowsProcesses
@@ -122,7 +124,9 @@ def main():
     args = parser.parse_args()
     assert os.name == "nt" and os.environ.get("GITHUB_ACTIONS") == "true" and os.environ.get("RUNNER_ENVIRONMENT") == "github-hosted", "Disposable hosted native Windows runner only"
     args.proof.mkdir(parents=True, exist_ok=True)
-    root = args.proof / "private-scope"
+    # Operational locks/journals are not publishable evidence and may remain
+    # locked during a failed scenario. Keep them outside the uploaded directory.
+    root = Path(tempfile.mkdtemp(prefix="mcw-native-guards-"))
     appdata, localdata = root / "roaming", root / "local"
     directory = localdata / "MicCamWatch"
     (appdata / "MicCamWatch").mkdir(parents=True)
@@ -133,6 +137,8 @@ def main():
     result = dict(scenario="disposable_windows_zero_native_inputs", physical_device_mutations=False, audio_capture=False, proof_complete=False)
     sampler = Sampler(backend, result)
     owned = []
+    attempted = {}
+    tracked_resources = set()
     terminal = None
 
     def command(arguments, check=True, environment=None):
@@ -148,7 +154,7 @@ def main():
             stdout, stderr = child.communicate(timeout=25)
         except BaseException:
             child.terminate()  # Popen owns the exact native process HANDLE.
-            child.communicate(timeout=10)
+            child.wait(timeout=10)  # Do not wait again for an inherited pipe's EOF.
             raise
         if check:
             assert child.returncode == 0, f"CLI {arguments} failed: {stderr.decode('utf-8', errors='replace')[:8192]}"
@@ -178,10 +184,12 @@ def main():
         command(["__microphone-guard"])
         (appdata / "MicCamWatch" / "settings.toml").write_text('notifications_enabled=false\nsound_enabled=false\nhistory_enabled=false\nmute_on_lock=false\nblock_camera_on_lock=false\nrestore_on_unlock=false\n', encoding="utf-8")
         earliest = int(time.time() * 10_000_000) + 116444736000000000
+        attempted["microphone"] = earliest
         command(["mute"])
+        owned.append(native.track_server("microphone", backend, sampler, earliest))
+        tracked_resources.add("microphone")
         active = await_state(lambda s: s["microphone"]["requested"] and s["microphone"]["service_active"], "Microphone guard did not activate")
         assert active["microphone"]["mute_state"] == "unavailable", "Zero endpoints must not pretend effective SDK mute"
-        owned.append(native.track_server("microphone", backend, sampler, earliest))
         previous_environment = {key: os.environ.get(key) for key in ("APPDATA", "LOCALAPPDATA", "HOME", "USERPROFILE")}
         try:
             for key in previous_environment:
@@ -219,10 +227,12 @@ def main():
             assert elapsed < 10, "Malformed peer exceeded finite transport recovery deadline"
             result["malformed_peers"].append(dict(sent_bytes=len(payload), peer_held_open=hold_open, recovery_seconds=elapsed))
         earliest = int(time.time() * 10_000_000) + 116444736000000000
+        attempted["camera"] = earliest
         command(["camera", "block"])
+        owned.append(native.track_server("camera", backend, sampler, earliest))
+        tracked_resources.add("camera")
         blocked = await_state(lambda s: s["camera"]["desired_blocked"] and s["camera"]["helper_active"], "Zero-camera global Block helper did not activate")
         assert blocked["camera"]["owned_blocked_present"] == 0, "Invented expected camera/owned device"
-        owned.append(native.track_server("camera", backend, sampler, earliest))
         other_env = dict(env, LOCALAPPDATA=str(root / "other-local"))
         command(["unmute"], check=False, environment=other_env)
         original = status()
@@ -255,17 +265,48 @@ def main():
         result["failure"] = type(error).__name__ + ": " + str(error)
         raise
     finally:
+        cleanup_errors = []
         if terminal is not None:
-            terminal.close()
+            try:
+                terminal.close()
+            except Exception as error:
+                cleanup_errors.append("top: " + str(error))
+        # A failed CLI can still have started its broker. Recover custody only
+        # from our private pipe, exact executable and bounded creation lifetime.
+        for resource, earliest in attempted.items():
+            if resource not in tracked_resources:
+                try:
+                    owned.append(native.track_server(resource, backend, sampler, earliest))
+                except Exception as error:
+                    cleanup_errors.append(resource + " custody unavailable: " + str(error))
         # Never signal by name or unverified PID. Exact known broker instances
         # can be terminated only as failed-proof cleanup on this disposable host.
+        deadline = time.monotonic() + 10
         for key in owned:
-            row = backend.read_handle(backend.owned_handles[key], key[0])
+            handle = backend.owned_handles[key]
+            row = backend.read_handle(handle, key[0])
             if row and not row["has_exited"]:
                 backend.terminate(*key)
+                while time.monotonic() < deadline:
+                    row = backend.read_handle(handle, key[0])
+                    if row is None or row["has_exited"]:
+                        break
+                    time.sleep(.05)
+                else:
+                    cleanup_errors.append("Owned guard did not stop after failed-proof cleanup")
         sampler.finish()
         backend.close()
+        try:
+            shutil.rmtree(root)
+        except Exception as error:
+            cleanup_errors.append("Private operational scope cleanup: " + str(error))
+        result["cleanup_errors"] = cleanup_errors
+        had_complete_proof = result["proof_complete"]
+        if cleanup_errors:
+            result["proof_complete"] = False
         (args.proof / "guards.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+        if cleanup_errors and had_complete_proof:
+            raise AssertionError("Native proof cleanup failed: " + "; ".join(cleanup_errors))
     print("Native zero-device guard lifecycle, malformed-peer recovery and inclusive RSS proof passed")
 
 

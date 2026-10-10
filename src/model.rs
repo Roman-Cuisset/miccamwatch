@@ -1,7 +1,5 @@
 use chrono::{DateTime, Utc};
-#[cfg(any(windows, test))]
-use serde::Deserialize;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::fmt;
 
 pub const SCHEMA_VERSION: u8 = 3;

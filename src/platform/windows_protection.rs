@@ -9,9 +9,8 @@ use serde::{Deserialize, Serialize};
 use std::{
     fs::{self, File, OpenOptions},
     io::{Read, Write},
-    os::windows::{ffi::OsStrExt, process::CommandExt},
+    os::windows::ffi::OsStrExt,
     path::PathBuf,
-    process::{Command, Stdio},
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -22,11 +21,18 @@ use std::{
 };
 use windows::{
     Win32::{
+        Foundation::CloseHandle,
         Media::Audio::{DEVICE_STATE_ACTIVE, Endpoints::IAudioEndpointVolume, eCapture},
         Storage::FileSystem::{MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW},
-        System::Com::CLSCTX_ALL,
+        System::{
+            Com::CLSCTX_ALL,
+            Threading::{
+                CREATE_NO_WINDOW, CreateProcessW, DETACHED_PROCESS, PROCESS_INFORMATION,
+                STARTUPINFOW,
+            },
+        },
     },
-    core::PCWSTR,
+    core::{PCWSTR, PWSTR},
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -312,14 +318,34 @@ fn spawn_owner() -> Result<()> {
         executable.is_file(),
         "paired current-version mcw.exe is unavailable"
     );
-    Command::new(executable)
-        .arg("__microphone-guard")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .creation_flags(0x08000000 | 0x00000008)
-        .spawn()
-        .context("start temporary microphone guard")?;
+    // Redirecting Command stdio to NUL still inherits other inheritable handles,
+    // including the caller's original pipes. A detached owner must inherit none.
+    let mut command: Vec<u16> = std::iter::once(b'"' as u16)
+        .chain(executable.as_os_str().encode_wide())
+        .chain("\" __microphone-guard\0".encode_utf16())
+        .collect();
+    let startup = STARTUPINFOW {
+        cb: std::mem::size_of::<STARTUPINFOW>() as u32,
+        ..Default::default()
+    };
+    let mut process = PROCESS_INFORMATION::default();
+    unsafe {
+        CreateProcessW(
+            PCWSTR::null(),
+            Some(PWSTR(command.as_mut_ptr())),
+            None,
+            None,
+            false,
+            DETACHED_PROCESS | CREATE_NO_WINDOW,
+            None,
+            PCWSTR::null(),
+            &startup,
+            &mut process,
+        )
+        .context("start temporary microphone guard without inherited caller handles")?;
+        let _ = CloseHandle(process.hThread);
+        let _ = CloseHandle(process.hProcess);
+    }
     Ok(())
 }
 fn connect_owner() -> Result<()> {
