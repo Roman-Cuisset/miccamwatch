@@ -635,7 +635,7 @@ proof. Material multi-endpoint, hotplug, exclusive/ASIO capture and camera
 denial/owned restoration remain unverified on physical devices. Historical
 v0.16.1 publication and earlier hardware evidence do not certify this candidate.
 
-### Native candidate qualification
+### Historical native candidate qualification
 
 [CI 38037123382](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38037123382)
 passed at source `fe86151362bd4df71a9c6040dcbb99432aaf8bcd` on Windows,
@@ -643,8 +643,8 @@ Linux x86_64 and macOS ARM/Intel. Actual CLI, seven-language TUI, native
 tray/menu/details, packaging and Windows MSI install/uninstall passed.
 Resource comparisons against checksum-verified immutable `v0.16.1` completed
 and passed their functional checks on all four runners. The following are
-sampled whole-product-tree RSS, decimal MB; CPU is the observed tree delta over
-the approximately 20-second sustained window, not a physical-event deadline.
+sampled whole-product-tree RSS, decimal MB; CPU is the observed whole-scenario
+tree delta, including startup/shutdown; sustained windows last approximately 20 s.
 
 | Runner / profile | v0.16.1 median MB | Candidate median MB | v0.16.1 concurrent peak MB | Candidate concurrent peak MB | Observed CPU seconds baseline / candidate |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -717,12 +717,53 @@ completed in 0.031–0.047 s but had only one/two RSS samples; OS highwater and
 unobserved transient costs still matter. This empty runner does not supersede
 the local populated-machine measurements or certify hardware enforcement.
 
-The earlier guard window does not include a concurrently sustained top/tray.
-Additional hosted phases now retain both real owners while sustaining each
-frontend, verify all three roles in every retained sample and confirm that Quit/
-WM_CLOSE does not release either requested protection. This composed scenario
-still needs its own native run; do not add the separate-profile medians and call
-that a measured combined total.
+### Pre-publication qualification at 32f87cd
+
+[CI 38051530685](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38051530685)
+passed Windows, Linux x86_64 and macOS ARM/Intel at
+`32f87cd941171c1d9174e1c5845694873802439f`. All four resource reports completed:
+baseline and candidate functional checks passed, and `comparison_qualified=true`.
+Earlier failed baseline runs remain failure evidence, not discarded measurements.
+Actual native menus/details, seven-language TUI, finite IPC, Windows MSI and
+Unix package/bootstrap smoke passed. No physical enforcement claim follows.
+
+| Runner / profile | v0.16.1 median MB | Candidate median MB | v0.16.1 concurrent peak MB | Candidate concurrent peak MB | Observed whole-scenario CPU seconds baseline / candidate |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Windows watch | 12.726 | 14.914 | 13.017 | 15.139 | 0.641 / 0.719 |
+| Windows top idle | 13.693 | 15.872 | 13.943 | 16.069 | 0.844 / 0.984 |
+| Windows top burst / slow consumer | 13.840 | 15.933 | 14.127 | 16.200 | 1.562 / 1.500 |
+| Windows tray | 15.385 | 16.531 | 25.170 | 28.664 | 0.344 / 0.391 |
+| Linux watch | 6.423 | 5.898 | 6.423 | 5.898 | 0.200 / 0.100 |
+| Linux top idle | 10.375 | 9.892 | 11.301 | 10.756 | 0.650 / 0.480 |
+| Linux top burst / slow consumer | 10.437 | 10.281 | 11.166 | 11.293 | 0.870 / 0.600 |
+| Linux tray | 12.734 | 12.599 | 12.915 | 12.730 | 0.120 / 0.080 |
+| macOS ARM watch | 5.374 | 5.423 | 19.857 | 18.842 | 0.035 / 0.026 |
+| macOS ARM top idle | 6.554 | 6.537 | 23.953 | 21.168 | 0.043 / 0.028 |
+| macOS ARM top burst / slow consumer | 13.025 | 10.650 | 25.805 | 19.939 | 0.075 / 0.046 |
+| macOS ARM menu bar | 33.522 | 33.391 | 45.449 | 45.384 | 0.013 / 0.016 |
+| macOS Intel watch | 3.690 | 3.678 | 12.247 | 10.822 | 2.120 / 2.003 |
+| macOS Intel top idle | 4.772 | 4.714 | 15.917 | 12.517 | 2.444 / 2.326 |
+| macOS Intel top burst / slow consumer | 9.023 | 8.196 | 17.084 | 13.144 | 3.914 / 3.086 |
+| macOS Intel menu bar | 22.909 | 22.934 | 30.077 | 30.142 | 0.801 / 0.983 |
+
+The Windows composed proof retained both actual owners throughout each frontend
+window and verified all three roles in every sample. Quit and owned WM_CLOSE
+preserved both requested/active protections; explicit release retired them and
+cleanup had no errors. These are measured totals, not sums of separate medians:
+
+| Windows composed sustained phase | Duration s | Samples | Median MB | p95 MB | Concurrent sustained peak MB | Observed phase CPU seconds |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Both guards + top | 20.078 | 804 | 42.820 | 42.902 | 43.098 | 0.922 |
+| Both guards + tray | 20.016 | 801 | 43.516 | 43.524 | 43.721 | 0.344 |
+
+The guard-only median/p95 was 27.922 MB. Whole control/startup/release concurrent
+sampled peak was 56.041 MB. Summed native RSS can count shared pages repeatedly;
+it is not unique physical RAM or PSS. The complete composed scenario exceeds
+both the 15 MB soft target and 30 MB reference; no optimized-budget success is
+claimed. Windows guard sampling gaps reached 63 ms; macOS ARM/Intel had larger
+gaps (up to 343/206 ms here), and transient-helper/final CPU remain lower bounds.
+Native functional qualification does not remove those measurement limits.
+
 
 The main runs [72a0bdd](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38049013635)
 and [6847482](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38050188591)

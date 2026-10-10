@@ -382,21 +382,25 @@ Contrat détaillé : [Architecture candidate](ARCHITECTURE.md#candidate-0170-win
 
 ### Qualification validée et limites restantes
 
-La [CI native `078cdc7`](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38047504453)
-est verte sur Windows/Linux/macOS ARM et Intel, après correction de la rétention
-des pipes : propriétaires Windows détachés sans conhost sur runner sans devices,
-IPC fini/malformed peers, TUI multilingue, tray/menu, ressources et restauration
-simulée multi-endpoints. Les deux suites Windows comprennent 161 tests lib +1
-main, un visuel ignoré ensuite exercé par le harness natif. Le test restreint
-admin→medium est passé ; les ACL restent inchangées. Recovery legacy ciblé UAC
-accepté et client medium status exit 0, aucune restauration pendante ou nouvelle
-UAC. La nouvelle TUI locale sept langues a également terminé exit 0.
+La [CI main native `32f87cd`](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38051530685)
+est verte sur Windows/Linux/macOS ARM et Intel : TUI multilingue, menus/détails,
+IPC fini, propriétaires Windows sans conhost sur runner vide, packaging/MSI et
+bootstrap Unix. Les quatre comparaisons RAM/CPU baseline/candidat ont terminé
+et sont qualifiées. Les anciens échecs Quit de la référence macOS ARM restent
+conservés ; le gate candidat explicite ne transforme pas une référence échouée
+en comparaison réussie. Les deux suites Windows comprennent 161 tests lib +1
+main ; le visuel ignoré est exercé par le harness natif. Test ACL admin→medium
+passé sans élargissement des permissions. Recovery legacy ciblé UAC achevé,
+client medium status exit 0 et aucune nouvelle UAC.
 
-Mesures et lacunes canoniques dans Architecture : **15 Mo non atteints**, gardes
-Windows sans console à 27,959 Mo médiane soutenue et pic contrôle/démarrage
-50,991 Mo ; environ 30 Mo n'est pas un seuil dur. RSS partagé, enfants brefs et
-gaps restent explicites. Les scénarios simulés/virtuels et le runner vide ne
-certifient pas une protection physique ou un déni exclusif/ASIO. Intégration main,
-CI avant tag, publication et migrations depuis les assets publics restent à
-achever ; Homebrew/AUR/Winget/Linux ARM64 et les autres lots restent ouverts.
+Qualification composée réelle : deux gardes + top/tray, tous les rôles présents
+à chaque sample ; fermeture UI sans release, release explicite et cleanup
+réussis. Médianes **42,820/43,516 Mo**, gardes seules 27,922 Mo ; pic scénario
+complet 56,041 Mo. **15 et 30 Mo non atteints en scénario composé** ; 30 Mo
+reste une référence, pas un seuil dur. Tableaux et limites canoniques dans
+Architecture : RSS partagé, enfants brefs, CPU lower-bound et gaps explicites.
+Source intégrée main ; commit de validation avant tag, publication et migrations
+depuis les assets publics restent à achever. Runner vide/fixtures ne certifient
+pas une protection physique ou un déni exclusif/ASIO. Homebrew/AUR/Winget/
+Linux ARM64 et les autres lots restent ouverts.
 

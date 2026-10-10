@@ -112,15 +112,18 @@ in 0.282 seconds while its child remained alive for five seconds.
 Read-only resource sampling completed with **15 MB unmet**; the latest baseline/
 candidate comparison and sampling limits are in the linked architecture table.
 No active guard/tray was included in that local resource run.
-[Native CI `078cdc7`](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38047504453)
-passed on Windows, Linux and both macOS architectures. Real Windows guards
-survived CLI/top exit on a runner without capture devices, rejected foreign scope
-and malformed peers, then retired on explicit release with clean teardown.
-Their whole-tree sustained RSS median was **27.959 MB**, sampled control/startup
-peak **50.991 MB**, without the former console host; these are different phases,
-not a promise to stay below 30 MB. The protected medium-reader regression passed;
-existing folder permissions were not broadened. The approved one-target legacy
-camera recovery completed, followed by a normal medium-client status, no new UAC.
+[Native CI `32f87cd`](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38051530685)
+passed on Windows, Linux and both macOS architectures; all four baseline/
+candidate resource comparisons completed and qualified. On a zero-device
+Windows runner, both real guards remained active through sustained `top`/tray
+and their Quit/WM_CLOSE, rejected foreign scope and malformed peers, then retired
+on explicit release with clean teardown. Composed sustained RSS medians were
+**42.820 MB with top / 43.516 MB with tray**; guards alone used **27.922 MB**.
+The sampled whole-scenario control/startup/release peak was **56.041 MB**.
+The complete scenario exceeds both the 15 MB target and 30 MB reference; shared
+RSS counting and sampling gaps remain explicit. The protected medium-reader
+regression passed without broadening permissions. Approved one-target legacy
+camera recovery completed, followed by normal medium-client status, no new UAC.
 Physical microphone protection/restoration remains unqualified. A private Linux
 PipeWire fixture proved an external unmute remained after five seconds and was
 cleaned; that is not physical audio proof. macOS has no new physical validation.
