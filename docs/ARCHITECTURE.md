@@ -786,6 +786,22 @@ integrity, isolation, OS sampler and cleanup failures remain fatal in either mod
 No failed reference row is relabeled passed and no 15/30 MB result is inferred.
 
 
+The [documentation-head CI at 016df87](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38053174757)
+passed Windows/Linux/macOS Intel but failed the **candidate** macOS ARM native
+tray stop. All baseline profiles and other candidate profiles passed; the report
+kept candidate qualification false and publication remained blocked. Unlike the
+earlier reference failures, this is a current-product shutdown failure.
+
+The Unix control server and AppKit host share native readiness. The stop handler
+used to clear it immediately after requesting stop, while the main loop could
+have already checked the stop bit and be entering `host.check()`. That interleaving
+can turn a legitimate stop into a false AppKit-disconnected error and failed
+shutdown acknowledgment. The correction leaves readiness retirement to the main
+loop after it accepts stop; genuine host disconnect/error checks stay intact.
+This race is source evidence; the failed run did not retain its exact stop reply.
+Native stop assertions remain strict, with bounded control-only diagnostics now
+retained on failure. The corrected native path still requires requalification.
+
 An approved one-target legacy recovery cleared the disconnected camera's native
 disabled-configuration flag from 1 to 0. Its protected receipt is fulfilled,
 generation 1, requested=false, with no owned entries. The medium client then

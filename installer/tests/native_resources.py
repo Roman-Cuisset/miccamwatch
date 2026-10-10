@@ -822,7 +822,14 @@ def measure(binary, backend, mode, output):
                 if os.name == "nt":
                     assert windows_tray_window(process.pid, close=True), "Owned tray window disappeared"
                 else:
-                    assert subprocess.run([str(binary), "tray", "stop"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20).returncode == 0, "Isolated tray stop failed"
+                    stopped = subprocess.run([str(binary), "tray", "stop"], stdout=subprocess.PIPE,
+                                             stderr=subprocess.PIPE, timeout=20)
+                    output["stop_control_exit_code"] = stopped.returncode
+                    if stopped.returncode != 0:
+                        # Stop replies contain control diagnostics, never capture
+                        # inventories or terminal/status event payloads.
+                        output["stop_control_error"] = stopped.stderr[:4096].decode(errors="replace")
+                    assert stopped.returncode == 0, "Isolated tray stop failed"
                 output["exit_code"] = process.wait(timeout=20)
                 output["latency"]["exit_seconds"] = time.monotonic() - sampler.started
                 assert process.returncode == 0, "Native tray did not exit cleanly"

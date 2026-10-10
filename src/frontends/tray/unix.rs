@@ -273,7 +273,8 @@ impl Lifecycle {
                                 }),
                                 b"stop" => {
                                     flags.1.store(true, Ordering::Release);
-                                    flags.0.store(false, Ordering::Release);
+                                    // Main loop retires readiness after accepting stop.
+                                    // Clearing the shared AppKit flag here races host.check().
                                     let deadline = Instant::now() + Duration::from_secs(40);
                                     while !flags.2.load(Ordering::Acquire)
                                         && Instant::now() < deadline
