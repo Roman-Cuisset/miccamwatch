@@ -448,7 +448,10 @@ silent success. A newer manual intent takes precedence over an older automatic
 restore. When release cannot safely finish, original/ownership evidence remains
 release-pending; dropping a UI or request is not permission to erase it.
 
-External changes are preserved when observable, but CoreAudio's event-context
+Automatic restoration relinquishes ownership after observable external changes.
+Manual persistent protection deliberately reasserts mute until explicit MCW
+release; an application's unmute does not deactivate the requested protection.
+CoreAudio's event-context
 GUID is advisory, not authenticated caller identity. `SetMute` of the same
 value can return `S_FALSE` without emitting a callback. The SDK cannot identify
 an exact Ktalk/Audition actor or detect every invisible same-valued external
@@ -457,6 +460,15 @@ ownership or security boundary against other software or administrators.
 Missing helper endpoint is normal only when no protection is requested, no
 automatic token exists and no resource conflict is present; requested-owner
 failures and other native transport errors stay explicit.
+
+The [IAudioEndpointVolume SDK contract](https://learn.microsoft.com/en-us/windows/win32/api/endpointvolume/nn-endpointvolume-iaudioendpointvolume)
+distinguishes hardware and software controls: advertised hardware mute affects
+shared/exclusive endpoint streams, while software-only mute affects shared mode
+and is bypassed in exclusive mode. `QueryHardwareSupport` reports capability,
+not actual capture denial. Direct-driver/ASIO paths are not certified by that
+readback. MCW's reassertion is reactive, not an atomic permission boundary or a
+guarantee of zero intervening audio frames.
+
 
 ### Global Windows camera ownership
 
@@ -481,6 +493,15 @@ user-writable ownership is not imported into elevated authority. Explicit
 that one target, validates its camera class and reports the actual result.
 It is general recovery, not an automatic unsigned-journal migration, arbitrary
 device-enable RPC or hardcoded Logitech privilege exception.
+
+The temporary helper requests no new console through `SEE_MASK_NO_CONSOLE`,
+then clears/closes unique inherited standard handles and calls `FreeConsole`
+after validating its administrator token and invoker. `FreeConsole` alone does
+not release redirected pipes inherited through the shell launch.
+It uses IPC, not a hidden console host, and must not share the caller's
+console-close lifetime. `SEE_MASK_NOASYNC` completes shell launch before the
+short-lived caller exits. The invoker's console is not destroyed by detachment.
+
 
 ### Shared native control boundary
 
@@ -546,6 +567,10 @@ recovery rebaselines. Identity evidence is not discarded to make RSS attractive.
 
 UI delivery queues, notification work, cooldown and identity caches are bounded.
 Refresh can coalesce where appropriate; control/failure state stays truthful.
+Read-only camera refresh uses the coalesced observation worker, not the joined
+action worker. The latter accepts only actual mutations; Quit never waits for
+a read-only refresh to finish. Camera reads started before a completed mutation
+cannot overwrite that newer state, including failed/partial completions.
 The shared TUI has one horizontal row of six controls, with compact labels at
 narrow widths rather than wrapping the controls into multiple rows. Narrow
 representations retain shortcuts, capability state and mouse hitboxes. These
@@ -553,7 +578,7 @@ bounds do not prove every native OS memory/latency budget.
 
 ### Local candidate evidence and remaining qualification
 
-Observed in the private Windows clone at source `6bc7fd0`: strict feature Clippy,
+Observed in the private Windows clone at source `fe86151`: strict feature Clippy,
 both native unit suites and the optimized build passed, with 160 library + 1 main
 feature tests and 1 ignored visual test. This includes normal missing-owner status,
 native error preservation and portable-update reservations. Eight real native IPC
@@ -569,8 +594,8 @@ bordered controls on one row, no overflow. The read-only host inventory has one
 active microphone advertising hardware mute and one present camera. No
 physical endpoint/capture/device setting was changed by this candidate proof.
 
-The latest completed read-only local resource comparison used the `9fc99dd`
-candidate binary (SHA-256 `0eba766505948a24a3b443886824bbcd71588cb5143af1dbca8bcf93dfc29c21`)
+The latest completed read-only local resource comparison used the `fe86151`
+candidate binary (SHA-256 `059c06062f814ad12488f4a7d2d9efb84d86e51f11d98c94079a201e371e429e`)
 and checksum-verified immutable `v0.16.1`. Functional/completed were true;
 **15,000,000 B is unmet**. Values below are decimal MB; CPU is process-tree
 CPU seconds over the approximately 20-second sustained interval after two
@@ -578,17 +603,17 @@ seconds of warm-up. No active protection guard or tray was included.
 
 | Product / profile | Sustained RSS median MB | RSS p95 MB | Sampled concurrent peak MB | OS root peak MB | Sustained CPU seconds |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| v0.16.1 watch idle | 18.059 | 18.530 | 23.712 | 24.089 | 2.172 |
-| 0.17.0 watch idle | 20.054 | 20.681 | 25.244 | 26.075 | 1.906 |
-| v0.16.1 top idle | 19.050 | 19.669 | 23.970 | 25.133 | 1.859 |
-| 0.17.0 top idle | 21.029 | 21.271 | 26.743 | 27.173 | 1.891 |
-| v0.16.1 top refresh burst / slow consumer | 19.186 | 19.657 | 24.912 | 25.244 | 2.875 |
-| 0.17.0 top refresh burst / slow consumer | 21.189 | 21.778 | 27.066 | 27.316 | 2.641 |
+| v0.16.1 watch idle | 17.805 | 17.965 | 23.769 | 23.880 | 2.078 |
+| 0.17.0 watch idle | 20.079 | 20.713 | 25.653 | 26.206 | 2.141 |
+| v0.16.1 top idle | 19.091 | 19.419 | 24.068 | 25.141 | 2.453 |
+| 0.17.0 top idle | 21.123 | 21.512 | 26.350 | 27.111 | 2.484 |
+| v0.16.1 top refresh burst / slow consumer | 19.227 | 19.800 | 23.306 | 25.330 | 3.000 |
+| 0.17.0 top refresh burst / slow consumer | 21.152 | 21.742 | 25.027 | 27.193 | 3.109 |
 
-Three status runs had OS root peaks of 21.365–21.430 MB for the baseline
-and 21.578–21.692 MB for the candidate, with complete validated JSON observed
-in 0.734–0.750 seconds for the candidate. Top's first native output arrived in
-0.125 seconds; the rendered Quit control was validated after the harness's
+Three status runs had OS root peaks of 21.373–21.385 MB for the baseline
+and 21.672–21.742 MB for the candidate, with complete validated JSON observed
+in 0.781–0.797 seconds for the candidate. Top's first native output arrived in
+0.109–0.125 seconds; the rendered Quit control was validated after the harness's
 three-second drain, not a measured first-frame/physical-event deadline.
 Watch exposes no readiness protocol; survival is not proof of a first scan.
 Maximum candidate sampling gaps were approximately 63 ms, not at most 50 ms.
@@ -606,8 +631,101 @@ Neither bounded code nor these local numbers establish optimized sub-target RAM.
 A private Linux PipeWire fixture actually proved external unmute remained
 after five seconds; the fixture was cleaned, without physical audio access.
 The macOS candidate has source-scoped limitation evidence only, not new physical
-proof. Full native OS CI, full actual helpers on empty-device hosted Windows,
-guard-inclusive resource/latency measurements and material multi-endpoint,
-hotplug, camera denial/owned restoration remain pending. Historical v0.16.1
-publication and earlier hardware evidence do not qualify this candidate.
+proof. Material multi-endpoint, hotplug, exclusive/ASIO capture and camera
+denial/owned restoration remain unverified on physical devices. Historical
+v0.16.1 publication and earlier hardware evidence do not certify this candidate.
+
+### Native candidate qualification
+
+[CI 38037123382](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38037123382)
+passed at source `fe86151362bd4df71a9c6040dcbb99432aaf8bcd` on Windows,
+Linux x86_64 and macOS ARM/Intel. Actual CLI, seven-language TUI, native
+tray/menu/details, packaging and Windows MSI install/uninstall passed.
+Resource comparisons against checksum-verified immutable `v0.16.1` completed
+and passed their functional checks on all four runners. The following are
+sampled whole-product-tree RSS, decimal MB; CPU is the observed tree delta over
+the approximately 20-second sustained window, not a physical-event deadline.
+
+| Runner / profile | v0.16.1 median MB | Candidate median MB | v0.16.1 concurrent peak MB | Candidate concurrent peak MB | Observed CPU seconds baseline / candidate |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Windows watch | 12.743 | 14.934 | 12.968 | 15.167 | 0.734 / 0.672 |
+| Windows top idle | 13.779 | 15.909 | 14.021 | 16.175 | 0.672 / 0.891 |
+| Windows top burst / slow consumer | 13.824 | 15.942 | 14.090 | 16.105 | 1.281 / 1.516 |
+| Windows tray | 15.405 | 16.470 | 25.113 | 24.752 | 0.281 / 0.281 |
+| Linux watch | 6.291 | 5.767 | 6.554 | 5.898 | 0.100 / 0.070 |
+| Linux top idle | 10.269 | 10.039 | 10.473 | 10.826 | 0.390 / 0.320 |
+| Linux top burst / slow consumer | 10.318 | 10.113 | 11.227 | 10.936 | 0.550 / 0.410 |
+| Linux tray | 12.685 | 12.583 | 12.685 | 12.640 | 0.080 / 0.060 |
+| macOS ARM watch | 5.407 | 5.374 | 18.760 | 17.416 | 0.025 / 0.009 |
+| macOS ARM top idle | 6.537 | 6.521 | 25.117 | 20.152 | 0.018 / 0.014 |
+| macOS ARM top burst / slow consumer | 12.304 | 6.521 | 25.805 | 18.596 | 0.046 / 0.017 |
+| macOS ARM menu bar | 33.554 | 33.522 | 45.482 | 45.515 | 0.014 / 0.006 |
+| macOS Intel watch | 3.670 | 3.690 | 12.247 | 12.337 | 1.867 / 2.574 |
+| macOS Intel top idle | 4.772 | 4.719 | 15.819 | 13.341 | 3.108 / 2.833 |
+| macOS Intel top burst / slow consumer | 8.987 | 8.708 | 16.749 | 13.263 | 4.026 / 4.167 |
+| macOS Intel menu bar | 22.929 | 22.987 | 30.048 | 30.175 | 0.682 / 1.230 |
+
+Guards were measured separately in a disposable administrator-owned Windows
+profile with independently verified zero native inputs, zero present cameras
+and no unknown inventory. Actual microphone and camera owners survived CLI/top
+exit, foreign scope could not release the owner, explicit release retired the
+helpers, and cleanup completed without error. Oversized/malformed peers and a
+peer holding its pipe open recovered; the slow-peer case completed in 4.031 s.
+No physical device mutation or audio capture occurred. At this pre-console-fix
+source the two guards and their hidden `conhost.exe` used a sustained median/
+p95 of 39.748 MB, with a sampled concurrent control/startup peak of 62.886 MB.
+The console host alone had an observed peak of 11.796 MB and OS highwater of
+12.202 MB. Those are measurements, not bytes subtracted from a newer result.
+
+Source `2e6be9b` removed the camera console host, but
+[qualification 38039480512](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38039480512)
+found redirected CLI pipes retained by the background camera owner: the command
+timed out after 25 s. Unix native jobs passed; Windows guard proof was incomplete,
+with verified cleanup and no hardware changes. This failed run is not a RAM or
+protection qualification. An isolated native ShellExecute fixture reproduced
+pipe EOF only after the five-second child exited (5.235 s). Closing unique
+inherited standard handles before detachment gave EOF in 0.250 s; the child's
+image/birth-verified native process handle proved it was still alive afterward
+and later exited 0. The corrected helper path needs actual hosted qualification;
+do not project savings or replace the failed result with that fixture.
+
+An approved one-target legacy recovery cleared the disconnected camera's native
+disabled-configuration flag from 1 to 0. Its protected receipt is fulfilled,
+generation 1, requested=false, with no owned entries. The medium client then
+failed opening the two shared metadata-only parents, although named ACL queries
+and handles to the scoped directory/journal succeeded. The correction uses named
+security inspection plus a reparse-attribute check for those admin-owned shared
+parents only; existing ancestor/scoped-directory/journal handle checks remain.
+ACLs are unchanged. This is not protection against malicious administrators.
+A native restricted-medium regression verifies metadata readability and denied
+journal-data creation; its administrative fixture runs in hosted Windows CI.
+The rebuilt normal medium client completed `mcw --lang fr camera status` in
+1.000 s, exit 0: allowed, present=1, blocked/pending/absent/unknown=0, guard
+inactive, no stderr or new UAC. Only the previously authorized disconnected
+camera's historical flag was changed; no microphone mutation or capture.
+Local fmt, both native unit suites (161 library +1 main, 1 visual ignored),
+strict feature Clippy and release build passed. The new administrative
+restricted-medium fixture returns without impersonation on this medium host;
+its actual execution must still be established on the hosted administrator.
+
+Linux's real owned virtual PipeWire capture remained identifiable after adding
+16,384 irrelevant objects (3,080,587 output bytes). Malformed input, retained
+object limit, stdout/stderr flood, blocked child and inherited-pipe orphan
+reported unavailable health, explicit watch gaps and subsequent recovery,
+never a false STOP for the continuously owned capture. The baseline orphan
+timed out after 8.067 s; the candidate returned its timeout diagnosis in 3.038 s.
+This is controlled virtual/native-subprocess evidence, not hardware recording.
+
+The 15 MB target is unmet on Windows and macOS. Linux's full budget is
+**not proven**, not "met": fast status and transient children escaped samples.
+Maximum observed candidate gaps were about 63 ms on Windows, 31.4 ms in Linux
+long-lived profiles, 191 ms on macOS ARM and 294 ms on macOS Intel; macOS does
+not supply OS RSS highwater here. Shared pages remain counted in summed RSS.
+Brief helpers and their final CPU can escape sampling, so observed CPU is a
+lower-bound measurement, particularly on macOS, not a complete CPU total.
+Top readiness follows the harness's three-second drain; watch has no first-scan
+readiness protocol. No ≤50 ms sampling or physical-event latency is claimed.
+The macOS ARM menu bar also exceeds the 30 MB reference; that reference is not
+a hard cutoff. No working-set trimming, hidden helper cost or false sub-target
+claim is used.
 

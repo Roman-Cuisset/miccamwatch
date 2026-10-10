@@ -363,7 +363,7 @@ Contrat détaillé : [Architecture candidate](ARCHITECTURE.md#candidate-0170-win
   deadlines) ; dépassement/blocage/erreur = santé explicite et lacune, pas STOP.
   Files UI/notifications/caches bornés ; six boutons TUI dans une seule rangée
   horizontale, représentation compacte en terminal étroit.
-- Windows local source `6bc7fd0` : Clippy strict feature, deux suites natives
+- Windows local source `fe86151` : Clippy strict feature, deux suites natives
   et build release réussis (160 lib +1 main, 1 visuel ignoré), huit tests IPC
   natifs réels réussis. ConPTY sept langues à 120/150/40/20 colonnes avec
   refresh/souris/quit ; hitbox hors Quit à 150 colonnes et rendu FR150 inspecté.
@@ -372,7 +372,7 @@ Contrat détaillé : [Architecture candidate](ARCHITECTURE.md#candidate-0170-win
   enfant de cinq secondes ; lancement sans héritage → EOF en 0,282 seconde.
 - Inventaire Windows read-only : un micro actif annonçant hardware mute et une
   caméra présente ; aucune mutation physique ni capture nouvelle. Dernière
-  comparaison ressources `9fc99dd`/stable functional/completed true :
+  comparaison ressources `fe86151`/stable functional/completed true :
   **15 Mo non atteints**, sans garde/tray actif. Chiffres RAM/CPU/latence et
   lacunes d'échantillonnage dans la
   [table canonique](ARCHITECTURE.md#local-candidate-evidence-and-remaining-qualification).
@@ -382,13 +382,17 @@ Contrat détaillé : [Architecture candidate](ARCHITECTURE.md#candidate-0170-win
 
 ### Qualification restant à établir avant clôture
 
-CI native complète Windows/Linux/macOS, véritables helpers Windows sur runner
-sans devices, matrices opposées multi-endpoints/manuelle/hotplug/échec/release,
-caméra Block/Allow possédé et ressources avec gardes restent pendants. Mesurer
-tout l'arbre produit et les enfants brefs (`pw-dump`/son), publier RSS partagée et
-lacunes d'échantillonnage : somme RSS peut recompter des pages, RSS racine peut
-omettre des helpers. La cible souple est 15 000 000 B ; environ 30 Mo est une
-référence, pas seuil dur. Aucune affirmation d'optimisation sous 15 Mo.
-Les validations physiques historiques ne certifient pas ce nouveau candidat ;
-ne pas substituer fixture virtuelle, runner vide ou lecture source au matériel.
+La [CI native `fe86151`](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38037123382)
+est verte sur Windows/Linux/macOS ARM et Intel : véritables propriétaires Windows
+sur runner sans devices, IPC fini, TUI multilingue, tray/menu, ressources et
+restauration simulée multi-endpoints. La modification suivante de détachement
+console a échoué sur les pipes capturés Windows ; Unix est resté vert. Le fix
+natif ferme les handles standard hérités et doit repasser toute la qualification.
+Le client medium lit désormais les métadonnées des parents protégés par requête
+nommée, sans élargir les ACL ; un test natif admin→medium vérifie lecture et refus
+de création de données. Les chiffres historiques ne qualifient pas ces nouveaux
+changements. Mesures et lacunes canoniques dans Architecture : **15 Mo non
+atteints**, environ 30 Mo comme référence et non seuil dur, coût des helpers et
+pages partagées explicite. Les scénarios simulés/virtuels et le runner vide ne
+certifient pas une protection physique ou un déni d'accès exclusif/ASIO.
 

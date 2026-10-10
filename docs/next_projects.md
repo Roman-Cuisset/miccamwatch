@@ -1,6 +1,6 @@
 # Roadmap technique post-v0.16.1
 
-Dernière mise à jour : **2026-10-09**. Responsable : lead architecture/développement.
+Dernière mise à jour : **2026-10-10**. Responsable : lead architecture/développement.
 Base publiée : [v0.16.1 stable/latest](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.16.1), source `7b134e3500860bd185ddc3955107b8082d414e78` ; [CI main](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37487806861) verte avant création du tag.
 
 Ce document planifie les prochains travaux ; sa création ne clôture aucune phase produit et ne justifie pas de nouvelle release binaire. Les fonctionnalités proposées ci-dessous ne sont pas annoncées comme disponibles. Les complexités sont des estimations de conception, pas des délais ni des mesures.
@@ -68,7 +68,7 @@ explicites sans faux STOP ; files UI/notifications/caches bornés. `top` conserv
 une seule rangée horizontale de six boutons, avec représentation compacte aux
 petites largeurs. Cela corrige les risques historiques, sans certifier le RSS.
 
-**Preuve locale, pas CI complète :** comparaison Windows read-only `9fc99dd`/
+**Preuve locale, pas CI complète :** comparaison Windows read-only `fe86151`/
 stable terminée, functional/completed true, cible **15 Mo non atteinte**.
 RAM/CPU/latence et limites dans la
 [table canonique](ARCHITECTURE.md#local-candidate-evidence-and-remaining-qualification).
@@ -106,7 +106,7 @@ Fenêtre brève d'arrivée, restart/veto/unknown restent explicites. IPC fixe li
 SID/session/data-dir hash et génération native, borné, sans chemins/devices
 arbitraires ; délégation admin alternatif QUERY-only.
 
-**Preuves locales :** source `6bc7fd0`, Clippy strict feature, deux suites Windows
+**Preuves locales :** source `fe86151`, Clippy strict feature, deux suites Windows
 (160 lib +1 main, 1 visuel ignoré), build release et huit tests IPC natifs réussis ;
 ConPTY sept langues, 120/150/40/20 colonnes, souris/refresh/quit et screenshot
 FR150 inspecté. Status d'absence normale et réservations update rebâtis.
@@ -333,4 +333,5 @@ Windows : `RegisterHotKey` seul n'offre pas un protocole PTT key-up complet ; va
 | 2026-10-06 | Baseline v0.16.0 | Publiée, hors nouvelles phases | [CI main](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37439356665), [release native](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37437092551), [migration 0.14.0](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37438076601), [migration 0.15.1](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37438076504) | Limites matérielles/OS dans Architecture ; aucune affirmation RAM <15 Mo |
 | 2026-10-06 | Roadmap | Plan technique établi, aucune phase produit clôturée | Modules et contrats relus dans la base 0.16.0 ; propositions arbitrées ci-dessus | Démarrer par P1-RAM/P1-RESTORE ; packaging puis autres lots selon dépendances |
 | 2026-10-06 | Patch 0.16.1 updater/tray/top | [Livré stable/latest](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.16.1) | [CI complète](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37487806861), [release native](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37493346742), [migration publique 0.16.0](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37495128116) : Windows/Linux/macOS ARM/Intel ; menus Win32 560/562 px à 125 % de DPI, XFCE 399/398 px Latin/CJK, AppKit 240 pt sur 7 langues et diagnostics longs, détails complets. TUI : 7 langues, souris/clavier et redimensionnements. Bootstrap macOS public et updater corrigé, présence/absence de quarantaine, SIGTERM/rollback exact, changements concurrents préservés. Sept assets publics, hashes et six attestations vérifiés ; vrai updater Windows 0.16.0 → 0.16.1 puis no-op | Consolidation P1-UPGRADE et autres phases restent ouvertes ; pas de mesure RAM <15 Mo, de signature ni de nouvelle preuve matérielle |
-| 2026-10-09 | Candidat source 0.17.0 Windows-first P1-RAM/P1-RESTORE | En cours, non publié ; stable/latest reste v0.16.1 | Bornes et propriétaire natif implémentés ; Clippy/tests/IPC/ConPTY Windows locaux, source PipeWire virtuelle externe démutée après 5 s et nettoyée ; mesures Windows read-only >15 Mo (voir Architecture) | CI native complète, helpers Windows vides réels et mesure avec gardes, qualification matérielle/restauration ; dernière correction status pas encore rebâtie ; aucun autre lot clôturé |
+| 2026-10-09 | Candidat source 0.17.0 Windows-first P1-RAM/P1-RESTORE | En cours, non publié ; stable/latest reste v0.16.1 | Bornes et propriétaire natif implémentés ; [CI native `fe86151`](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38037123382) Windows/Linux/macOS ARM/Intel verte, propriétaires natifs sur Windows sans devices, PipeWire virtuel, ressources et limites dans Architecture | Modifications suivantes encore à qualifier ; aucune preuve physique microphone ou déni exclusif/ASIO, aucun autre lot clôturé |
+| 2026-10-10 | Détachement console et recovery legacy autorisé | Fix source, non publié ; récupération ciblée achevée | Régression pipes Windows reproduite puis corrigée sur fixture native ; UAC acceptée, ancien flag caméra déconnectée 1→0, reçu protégé fulfilled ; client medium reconstruit status exit 0 en 1,000 s, aucun blocked/pending/absent/unknown, garde inactive ; ACL inchangées, aucun changement micro ni capture ; fmt/Clippy/deux suites/release locaux verts | CI native de ces corrections avant intégration et tag ; test restreint admin→medium doit réellement s'exécuter sur runner admin ; mesures gardes sans conhost restantes |

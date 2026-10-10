@@ -110,13 +110,18 @@ An isolated native process fixture reproduced inherited caller pipes keeping
 a completed command open; the detached, non-inheriting launch released them
 in 0.282 seconds while its child remained alive for five seconds.
 Read-only resource sampling completed with **15 MB unmet**; the latest baseline/
-candidate comparison and sampling limits are in the architecture table below.
-No active guard/tray was included in that local resource run. Guard-inclusive
-hosted Windows runs, full native OS CI and physical protection/restoration
-qualification remain pending. A private Linux PipeWire fixture proved an
-external unmute remained after five seconds and was cleaned; that is not
-physical audio proof. macOS has source-scoped limitations, not new physical
-validation. See [candidate architecture and proof
+candidate comparison and sampling limits are in the linked architecture table.
+No active guard/tray was included in that local resource run. Native CI for
+source `fe86151` passed on Windows, Linux and both macOS architectures, including
+real Windows guards on a runner without capture devices and whole-tree resource
+sampling. Later console-detachment changes failed the Windows captured-pipe
+scenario and are being requalified after a native fix; that earlier green run
+does not qualify the newer source. A medium-integrity client metadata-read fix
+preserves the existing protected-folder permissions. Physical microphone
+protection/restoration remains unqualified. A private Linux PipeWire fixture
+proved an external unmute remained after five seconds and was cleaned; that is
+not physical audio proof. macOS has no new physical validation.
+See [candidate architecture and proof
 boundaries](docs/ARCHITECTURE.md#candidate-0170-windows-first-protection-contract).
 
 ## Commands

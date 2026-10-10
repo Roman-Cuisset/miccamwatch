@@ -11,7 +11,10 @@ use std::{
     time::{Duration, Instant},
 };
 use windows::Win32::{
-    System::Console::FreeConsole,
+    System::Console::{
+        FreeConsole, GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
+        SetStdHandle,
+    },
     UI::Shell::{
         SEE_MASK_NO_CONSOLE, SEE_MASK_NOASYNC, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW,
         ShellExecuteExW,
@@ -94,6 +97,7 @@ unsafe extern "system" {
     fn CloseHandle(handle: Raw) -> i32;
     fn LocalFree(memory: Raw) -> Raw;
     fn CreateDirectoryW(path: *const u16, attributes: *const SecurityAttributes) -> i32;
+    fn GetFileAttributesW(path: *const u16) -> u32;
     fn CreateFileW(
         path: *const u16,
         access: u32,
@@ -226,6 +230,16 @@ unsafe extern "system" {
         sacl: *mut Raw,
         descriptor: *mut Raw,
     ) -> u32;
+    fn GetNamedSecurityInfoW(
+        name: *const u16,
+        object_type: u32,
+        information: u32,
+        owner: *mut Raw,
+        group: *mut Raw,
+        dacl: *mut Raw,
+        sacl: *mut Raw,
+        descriptor: *mut Raw,
+    ) -> u32;
     fn GetAce(acl: Raw, index: u32, ace: *mut Raw) -> i32;
 }
 fn wide(s: &str) -> Vec<u16> {
@@ -349,51 +363,81 @@ fn inspect_security(
     ancestor: bool,
 ) -> Result<Local> {
     let name: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
-    let handle = Handle::new(unsafe {
-        CreateFileW(
-            name.as_ptr(),
-            0x20080,
-            7,
-            ptr::null(),
-            3,
-            0x42200000,
-            ptr::null_mut(),
-        )
-    })?;
-    #[repr(C)]
-    struct AttributeTag {
-        attributes: u32,
-        tag: u32,
-    }
-    let mut tag = AttributeTag {
-        attributes: 0,
-        tag: 0,
-    };
-    unsafe {
-        check(GetFileInformationByHandleEx(
-            handle.0,
-            9,
-            (&mut tag as *mut AttributeTag).cast(),
-            size_of::<AttributeTag>() as u32,
-        ))?;
-    }
-    ensure!(
-        tag.attributes & 0x400 == 0,
-        "camera journal path is a reparse point: {}",
-        path.display()
-    );
     let (mut acl, mut owner, mut descriptor) = (ptr::null_mut(), ptr::null_mut(), ptr::null_mut());
-    let result = unsafe {
-        GetSecurityInfo(
-            handle.0,
-            1,
-            5,
-            &mut owner,
-            ptr::null_mut(),
-            &mut acl,
-            ptr::null_mut(),
-            &mut descriptor,
-        )
+    let result = if shared {
+        // Shared parents grant metadata inspection, not file-handle access.
+        // Their validated ancestors forbid ordinary replacement. Leaf directories
+        // and journal files still use pinned native handles below.
+        let attributes = unsafe { GetFileAttributesW(name.as_ptr()) };
+        if attributes == u32::MAX {
+            return Err(std::io::Error::last_os_error()).with_context(|| {
+                format!("cannot inspect camera shared parent: {}", path.display())
+            });
+        }
+        ensure!(
+            attributes & 0x400 == 0,
+            "camera journal path is a reparse point: {}",
+            path.display()
+        );
+        unsafe {
+            GetNamedSecurityInfoW(
+                name.as_ptr(),
+                1,
+                5,
+                &mut owner,
+                ptr::null_mut(),
+                &mut acl,
+                ptr::null_mut(),
+                &mut descriptor,
+            )
+        }
+    } else {
+        let handle = Handle::new(unsafe {
+            CreateFileW(
+                name.as_ptr(),
+                0x20080,
+                7,
+                ptr::null(),
+                3,
+                0x42200000,
+                ptr::null_mut(),
+            )
+        })
+        .with_context(|| format!("cannot open camera journal metadata: {}", path.display()))?;
+        #[repr(C)]
+        struct AttributeTag {
+            attributes: u32,
+            tag: u32,
+        }
+        let mut tag = AttributeTag {
+            attributes: 0,
+            tag: 0,
+        };
+        unsafe {
+            check(GetFileInformationByHandleEx(
+                handle.0,
+                9,
+                (&mut tag as *mut AttributeTag).cast(),
+                size_of::<AttributeTag>() as u32,
+            ))?;
+        }
+        ensure!(
+            tag.attributes & 0x400 == 0,
+            "camera journal path is a reparse point: {}",
+            path.display()
+        );
+        unsafe {
+            GetSecurityInfo(
+                handle.0,
+                1,
+                5,
+                &mut owner,
+                ptr::null_mut(),
+                &mut acl,
+                ptr::null_mut(),
+                &mut descriptor,
+            )
+        }
     };
     ensure!(
         result == 0,
@@ -2198,6 +2242,22 @@ pub(super) fn run(encoded: &str) -> Result<()> {
     )?;
     // The helper is IPC-only and must outlive the caller's terminal without
     // allocating a hidden console host or sharing its console-close events.
+    // FreeConsole does not close inherited redirected pipes. Standard handles
+    // are optional for GUI callers; clear all slots before closing unique copies.
+    let streams = [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE];
+    let inherited = streams.map(|stream| unsafe { GetStdHandle(stream) }.ok());
+    for stream in streams {
+        unsafe { SetStdHandle(stream, Default::default()) }
+            .context("clear inherited camera helper standard handle")?;
+    }
+    for (index, handle) in inherited.iter().enumerate() {
+        if let Some(handle) = handle
+            && !inherited[..index].contains(&Some(*handle))
+        {
+            unsafe { windows::Win32::Foundation::CloseHandle(*handle) }
+                .context("close inherited camera helper standard handle")?;
+        }
+    }
     unsafe { FreeConsole() }.context("detach camera helper from caller console")?;
     crate::windows_control::grant_invoker_query(
         &bootstrap.identity,
@@ -2390,6 +2450,120 @@ pub(super) fn run(encoded: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[repr(C)]
+    struct SidAttributes {
+        sid: Raw,
+        attributes: u32,
+    }
+    #[link(name = "advapi32")]
+    unsafe extern "system" {
+        fn ConvertStringSidToSidW(text: *const u16, sid: *mut Raw) -> i32;
+        fn GetLengthSid(sid: *const c_void) -> u32;
+        fn CreateRestrictedToken(
+            existing: Raw,
+            flags: u32,
+            disabled_count: u32,
+            disabled: *const SidAttributes,
+            privilege_count: u32,
+            privileges: *const c_void,
+            restricting_count: u32,
+            restricting: *const SidAttributes,
+            result: *mut Raw,
+        ) -> i32;
+        fn SetTokenInformation(
+            token: Raw,
+            class: u32,
+            information: *const c_void,
+            length: u32,
+        ) -> i32;
+        fn ImpersonateLoggedOnUser(token: Raw) -> i32;
+        fn RevertToSelf() -> i32;
+    }
+
+    #[test]
+    fn medium_reader_inspects_shared_metadata_but_cannot_create_journal_data() -> Result<()> {
+        if token_identity(true).is_err() {
+            // Administrative fixture runs in hosted native CI, not on user hardware.
+            return Ok(());
+        }
+        let directory = tempfile::tempdir()?;
+        let shared = directory.path().join("shared");
+        create_protected_directory(&shared, None, true)?;
+        let mut source_token = ptr::null_mut();
+        unsafe {
+            check(OpenProcessToken(
+                GetCurrentProcess(),
+                2 | 8 | 0x80,
+                &mut source_token,
+            ))?;
+        }
+        let source_token = Handle::new(source_token)?;
+        let mut administrator = ptr::null_mut();
+        let mut medium = ptr::null_mut();
+        unsafe {
+            check(ConvertStringSidToSidW(
+                wide("S-1-5-32-544").as_ptr(),
+                &mut administrator,
+            ))?;
+            check(ConvertStringSidToSidW(
+                wide("S-1-16-8192").as_ptr(),
+                &mut medium,
+            ))?;
+        }
+        let _administrator = Local(administrator);
+        let _medium = Local(medium);
+        let disabled = SidAttributes {
+            sid: administrator,
+            attributes: 0,
+        };
+        let mut restricted = ptr::null_mut();
+        unsafe {
+            check(CreateRestrictedToken(
+                source_token.0,
+                1,
+                1,
+                &disabled,
+                0,
+                ptr::null(),
+                0,
+                ptr::null(),
+                &mut restricted,
+            ))?;
+        }
+        let restricted = Handle::new(restricted)?;
+        let integrity = SidAttributes {
+            sid: medium,
+            attributes: 0x20,
+        };
+        unsafe {
+            check(SetTokenInformation(
+                restricted.0,
+                25,
+                (&integrity as *const SidAttributes).cast(),
+                size_of::<SidAttributes>() as u32 + GetLengthSid(medium),
+            ))?;
+            check(ImpersonateLoggedOnUser(restricted.0))?;
+        }
+        struct Revert;
+        impl Drop for Revert {
+            fn drop(&mut self) {
+                unsafe {
+                    RevertToSelf();
+                }
+            }
+        }
+        let revert = Revert;
+        inspect_security(&shared, None, true, false)?;
+        let unauthorized = shared.join("unauthorized.json");
+        assert_eq!(
+            fs::write(&unauthorized, b"forged").unwrap_err().kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+        drop(revert);
+        assert!(!unauthorized.exists());
+        Ok(())
+    }
 
     #[test]
     fn zero_camera_block_is_a_real_global_intent() -> Result<()> {
