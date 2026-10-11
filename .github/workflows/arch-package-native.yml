@@ -1,0 +1,49 @@
+name: Native Arch source package
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - distribution/aur/**
+      - .github/workflows/arch-package-native.yml
+  pull_request:
+    paths:
+      - distribution/aur/**
+      - .github/workflows/arch-package-native.yml
+
+permissions:
+  contents: read
+
+jobs:
+  arch-x86_64:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Qualify source package in fresh native Arch userland
+        shell: bash
+        env:
+          PROOF: ${{ runner.temp }}/arch-package-proof
+        run: |
+          set -euo pipefail
+          mkdir -p "$PROOF"
+          # Arch's rolling build environment is recorded, not misrepresented as
+          # a frozen dependency snapshot. The application source itself is
+          # commit/digest pinned and Cargo builds with its immutable lockfile.
+          docker pull --platform linux/amd64 archlinux:base-devel
+          image=$(docker image inspect --format '{{.Id}}' archlinux:base-devel)
+          docker image inspect "$image" > "$PROOF/container-image.json"
+          # No --privileged, hardware devices, host service/runtime directories,
+          # Docker socket, or write access to the checked-out recipe are exposed.
+          docker run --rm --platform linux/amd64 \
+            --mount "type=bind,src=$GITHUB_WORKSPACE/distribution/aur,dst=/recipe,readonly" \
+            --mount "type=bind,src=$PROOF,dst=/proof" \
+            "$image" bash -lc \
+            'pacman -Syu --noconfirm --needed python && python /recipe/qualify-native.py --disposable --proof /proof'
+      - name: Retain native package and transaction evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: arch-x86_64-source-package-native-proof
+          path: ${{ runner.temp }}/arch-package-proof
+          if-no-files-found: error

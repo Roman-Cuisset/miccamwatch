@@ -56,6 +56,8 @@ jobs:
               Start-Service $name -ErrorAction Stop
             }
           }
+          cargo test --lib --locked --features windows-tray updater::transaction::tests::native_dormant_or_unknown_protection_preserves_installed_files -- --ignored --exact --test-threads=1
+          if ($LASTEXITCODE -ne 0) { throw 'Disposable native readiness/refusal regression failed' }
           $python = Join-Path $env:RUNNER_TEMP 'mcw-ui-proof-venv/Scripts/python.exe'
           & $python -B installer/tests/native_windows_protection.py --binary (Resolve-Path target/release/mcw.exe).Path --proof "$env:RUNNER_TEMP/native-windows-top/guards"
           if ($LASTEXITCODE -ne 0) { throw 'Native protection owner proof failed; inspect guards.json partial evidence' }

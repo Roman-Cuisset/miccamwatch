@@ -274,7 +274,7 @@ impl Installation {
             .to_owned();
         let _prefix_directory = Directory::open(&prefix, false)?;
         let receipt = Directory::open(&prefix.join(".miccamwatch-install"), false).context(
-            "no safe public-installer receipt; reinstall with the public installer instead",
+            "no safe public-installer receipt; use the package manager that owns this installation, or reinstall a reviewed installer-owned copy",
         )?;
         validate_receipt_files(&receipt)?;
         if receipt.read("format")?.as_deref() != Some(b"1\n")

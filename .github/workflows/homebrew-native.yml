@@ -1,0 +1,87 @@
+name: Native Homebrew distribution qualification
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate-source-url:
+        description: "Optional immutable upstream codeload URL; supply all four candidate fields"
+        type: string
+        default: ""
+      candidate-source-sha256:
+        description: "Exact SHA256 of the candidate commit archive"
+        type: string
+        default: ""
+      candidate-ref:
+        description: "Full 40-character upstream source commit SHA (not a mutable branch/tag)"
+        type: string
+        default: ""
+      candidate-version:
+        description: "Exact Cargo package version of the candidate (compatible autostart requires 0.17.1+)"
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: homebrew-native-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  homebrew-native:
+    name: ${{ matrix.architecture }} / ${{ matrix.intent }} autostart
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - runner: macos-15
+            architecture: arm64
+            intent: loaded
+          - runner: macos-15
+            architecture: arm64
+            intent: dormant
+          - runner: macos-15
+            architecture: arm64
+            intent: disabled
+          - runner: macos-15-intel
+            architecture: x86_64
+            intent: loaded
+          - runner: macos-15-intel
+            architecture: x86_64
+            intent: dormant
+          - runner: macos-15-intel
+            architecture: x86_64
+            intent: disabled
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Qualify genuine brew packages and native AppKit lifecycle
+        shell: bash
+        env:
+          CANDIDATE_SOURCE_URL: ${{ inputs.candidate-source-url }}
+          CANDIDATE_SOURCE_SHA256: ${{ inputs.candidate-source-sha256 }}
+          CANDIDATE_REF: ${{ inputs.candidate-ref }}
+          CANDIDATE_VERSION: ${{ inputs.candidate-version }}
+          EXPECTED_ARCH: ${{ matrix.architecture }}
+          AUTOSTART_INTENT: ${{ matrix.intent }}
+        run: |
+          test "$GITHUB_ACTIONS" = true
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          python3 -B distribution/homebrew/native_qualification.py \
+            --disposable-machine \
+            --architecture "$EXPECTED_ARCH" \
+            --autostart-intent "$AUTOSTART_INTENT" \
+            --candidate-source-url "$CANDIDATE_SOURCE_URL" \
+            --candidate-source-sha256 "$CANDIDATE_SOURCE_SHA256" \
+            --candidate-ref "$CANDIDATE_REF" \
+            --candidate-version "$CANDIDATE_VERSION" \
+            --proof "$RUNNER_TEMP/homebrew-native-proof"
+      - name: Retain genuine native evidence and failures
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: homebrew-native-${{ matrix.architecture }}-${{ matrix.intent }}
+          path: ${{ runner.temp }}/homebrew-native-proof
+          if-no-files-found: error

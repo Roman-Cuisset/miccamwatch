@@ -184,7 +184,7 @@ pub fn state() -> Result<AutostartState> {
 
 pub fn enable() -> Result<()> {
     let store = Store::open()?;
-    enable_in(&store, env!("CARGO_PKG_VERSION"))
+    enable_in(&store, env!("CARGO_PKG_VERSION"), true)
 }
 
 #[cfg(target_os = "macos")]
@@ -231,14 +231,11 @@ pub fn refresh_if_enabled(version: &str) -> Result<()> {
     if registration.is_none() {
         return Ok(());
     }
-    #[cfg(target_os = "macos")]
-    if Native::open()?.disabled()? {
-        return Ok(());
-    }
-    enable_in(&store, version)
+    // Refresh an owned registration without changing its loaded/disabled intent.
+    enable_in(&store, version, false)
 }
 
-fn enable_in(store: &Store, version: &str) -> Result<()> {
+fn enable_in(store: &Store, version: &str, activate: bool) -> Result<()> {
     if version != env!("CARGO_PKG_VERSION") {
         bail!("autostart refresh must be performed by the matching mcw {version} executable");
     }
@@ -256,7 +253,7 @@ fn enable_in(store: &Store, version: &str) -> Result<()> {
         bail!("mcw executable is not executable");
     }
     let new = Registration {
-        executable,
+        executable: registration_executable(executable)?,
         version: version.to_owned(),
     };
     let new_bytes = registration_bytes(&new)?;
@@ -279,6 +276,9 @@ fn enable_in(store: &Store, version: &str) -> Result<()> {
     };
     #[cfg(target_os = "macos")]
     let was_disabled = native.disabled()?;
+    if !activate && old.as_ref() == Some(&new) && old_bytes.as_deref() == Some(&new_bytes) {
+        return Ok(());
+    }
     let mut journal = old.clone().into_iter().collect::<Vec<_>>();
     if !journal.contains(&new) {
         journal.push(new.clone());
@@ -293,11 +293,14 @@ fn enable_in(store: &Store, version: &str) -> Result<()> {
             .target
             .replace(&store.name, old_bytes.as_deref(), Some(&new_bytes))?;
         #[cfg(target_os = "macos")]
-        {
+        if activate || was_loaded {
             if was_disabled {
                 native.set_disabled(false)?;
             }
             native.bootstrap(&store.path, &new)?;
+            if was_disabled && !activate {
+                native.set_disabled(true)?;
+            }
         }
         store.save_receipt(vec![new.clone()], Some(&journal_bytes))?;
         Ok(())
@@ -325,11 +328,14 @@ fn enable_in(store: &Store, version: &str) -> Result<()> {
             }
             #[cfg(target_os = "macos")]
             {
+                if was_loaded {
+                    if was_disabled {
+                        native.set_disabled(false)?;
+                    }
+                    native.bootstrap(&store.path, old.as_ref().unwrap())?;
+                }
                 if was_disabled {
                     native.set_disabled(true)?;
-                }
-                if was_loaded {
-                    native.bootstrap(&store.path, old.as_ref().unwrap())?;
                 }
             }
             store
@@ -343,6 +349,33 @@ fn enable_in(store: &Store, version: &str) -> Result<()> {
         };
     }
     Ok(())
+}
+
+fn registration_executable(current: PathBuf) -> Result<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        // Homebrew owns versioned Cellar files. Only its verified opt alias is
+        // stable across upgrade/cleanup; never infer a target from environment.
+        let version = current.parent().and_then(Path::parent);
+        if let Some(package) = version.and_then(Path::parent)
+            && package.file_name() == Some(OsStr::new("miccamwatch"))
+            && let Some(cellar) = package.parent()
+            && cellar.file_name() == Some(OsStr::new("Cellar"))
+            && let Some(prefix) = cellar.parent()
+        {
+            let opt = prefix.join("opt");
+            let _directory = Directory::open(&opt, false)?;
+            let target = opt.join("miccamwatch/bin/mcw");
+            if std::fs::canonicalize(&target)
+                .context("Homebrew opt target is unavailable; registration preserved")?
+                != current
+            {
+                bail!("Homebrew opt target does not match this executable; registration preserved");
+            }
+            return Ok(target);
+        }
+    }
+    Ok(current)
 }
 
 pub fn disable() -> Result<()> {

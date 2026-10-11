@@ -1,6 +1,6 @@
 # Roadmap technique post-v0.17.0
 
-Dernière mise à jour : **2026-10-10**. Responsable : lead architecture/développement.
+Dernière mise à jour : **2026-10-11**. Responsable : lead architecture/développement.
 Base publiée : [v0.17.0 stable/latest](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.17.0), source `d1b8557f827e102df20c33dbac4ec99badba7d1a` ; [CI exacte avant tag](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38056837640) et [release native](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38058344725) vertes.
 
 Ce document planifie les prochains travaux et consigne les lots livrés. Les fonctionnalités encore proposées ne sont pas annoncées comme disponibles ; les livraisons sont explicitement marquées dans le tableau et le journal. Les complexités sont des estimations de conception, pas des délais ni des mesures.
@@ -38,8 +38,8 @@ Les identifiants sont stables. À chaque livraison, remplacer l'état par **En c
 | --- | --- | --- | --- |
 | P1-RAM | Publié 0.17.0, validé logiciel/natif : bornes et mesures complètes, 15 Mo non atteints, scénario composé Windows ~43 Mo | Moyenne | Maintien des preuves/limites canoniques ; 30 Mo reste une référence |
 | P1-RESTORE | Publié 0.17.0, validé logiciel/natif : propriétaire Windows, états opposés/hotplug/partiel simulés, release natif réel sans devices | Élevée | Pas de certification matérielle ou déni exclusif/ASIO |
-| P1-HB | Homebrew : à faire | Moyenne | Propriété installation/autostart, validation macOS |
-| P1-AUR | AUR : à faire | Moyenne | Dépendances PipeWire et frontière root |
+| P1-HB | En cours : formule native ARM/Intel et qualification brew ; correction amont d'autostart 0.17.1, preuves et tap public requis avant disponibilité | Moyenne | Propriété installation/autostart, validation macOS |
+| P1-AUR | En cours : PKGBUILD/.SRCINFO immuables et qualification native makepkg/pacman ; publication AUR non effectuée | Moyenne | Dépendances PipeWire et frontière root |
 | P1-WG | Winget : à faire | Moyenne | Identité MSI et upgrades contrôlés |
 | P1-ARM | Linux ARM64 : à faire | Élevée | ABI/sysroot, installation et tests natifs |
 | P1-UPGRADE | Partiel : correction macOS standalone livrée en 0.16.1 ; consolidation restante à faire | Moyenne | Contrats receipt, PATH, root et package manager |
@@ -53,6 +53,7 @@ Les identifiants sont stables. À chaque livraison, remplacer l'état par **En c
 | P4-ANDROID | Hors cœur, reporté en dernier | Élevée | Projet indépendant et modèle de permissions |
 | SITE-ROOT | Demandé, à faire plus tard : ne plus servir l'ancienne page à la racine HTTPS `/` | Faible | Routage Caddy exact ; préserver `/mcw` et les autres services |
 | SITE-MCW | Demandé, à faire plus tard : améliorer la présentation et la lisibilité du site `/mcw` | Moyenne | Page statique, parcours Windows/Linux/macOS et vérification desktop/mobile |
+| TRAY-WIN | Correctif 0.17.1 en cours : statut compact, erreurs récupérées sans redémarrage ; avertissements de garde absente conservés | Moyenne | Preuve Win32 locale, CI native et publication |
 
 ## Phase 1 — Packaging et écosystème de distribution (immédiat)
 
@@ -133,7 +134,7 @@ explicite, il ne devient pas une autorité élevée.
 
 **Validation :** deux entrées avec états opposés, changement manuel entre lock/unlock, hotplug et échec partiel ; seules les modifications possédées sont restaurées exactement. Pas de promesse de coupure électrique ou de déni d'accès WASAPI.
 
-**Complexité : Élevée.** Correction 0.17.0 validée en logiciel/natif, non publiée ; limites physiques explicites, releases antérieures immuables.
+**Complexité : Élevée.** Correction 0.17.0 publiée et validée en logiciel/natif ; limites physiques explicites, releases antérieures immuables.
 
 ### P1-HB — Formule Homebrew macOS
 
@@ -144,6 +145,18 @@ explicite, il ne devient pas une autorité élevée.
 **Contraintes :** formule versionnée, source/artefacts immuables et checksums ; recettes de build avec dépendances verrouillées. Homebrew possède le préfixe, pas le receipt de l'installateur curl : pas de double updater ni de remplacement des fichiers du gestionnaire par `mcw update`. Valider la cible de LaunchAgent après upgrade sans écraser une inscription externe ou activer l'autostart. Aucune modification Gatekeeper/quarantaine et aucune signature Developer ID fictive.
 
 **Validation :** `brew install/upgrade/uninstall`, CLI et menu natif, conservation des préférences/historique et de l'intention d'autostart sur ARM/Intel.
+
+**Implémentation en qualification :** `distribution/homebrew/Formula/miccamwatch.rb`,
+fixture publique 0.16.1 et `native_qualification.py` ; workflow
+`homebrew-native.yml`, ARM/Intel × loaded/dormant/disabled. Vrais
+install/upgrade/cleanup/test/uninstall/reinstall, menu AppKit, conservation des
+préférences/historique et refus des inscriptions externes ; postinstall absent
+sans activation ni receipt. L'amont 0.17.1 vérifie la cible `opt` et préserve
+le chargement/disabled lors d'un refresh ; no-op déjà courant sans redémarrage.
+Source 0.17.0 historique immuable, pas de patch de formule pour masquer le défaut.
+Publication exige le digest observé du correctif et le tap maintenu
+`Roman-Cuisset/homebrew-miccamwatch`, puis un vrai install depuis ce tap ;
+Homebrew/core et Developer ID/notarisation ne sont pas revendiqués.
 
 **Complexité : Moyenne.**
 
@@ -156,6 +169,19 @@ explicite, il ne devient pas une autorité élevée.
 **Contraintes :** dépendances PipeWire/SPA/`pw-dump` déclarées ; outils desktop/sons seulement pour les usages associés. Le package manager possède ses fichiers. L'installation du paquet ne doit ni activer l'autostart ni installer/autoriser silencieusement le helper root et sa policy Polkit. Les chemins privilégiés et receipts actuels ne deviennent pas une seconde convention AUR : payload reviewable et bootstrap administrateur explicite séparés ; tout changement de chemin exige une migration propre.
 
 **Validation :** construction en environnement Arch propre, installation/upgrade/removal, PipeWire réel et PATH ; absence d'action caméra/root et préservation des fichiers utilisateur.
+
+**Implémentation en qualification :** `distribution/aur/PKGBUILD`, `.SRCINFO` et
+`qualify-native.py`, workflow `arch-package-native.yml`. Makepkg ordinaire,
+Cargo fetch verrouillé puis build frozen ; patch `vendor/libspa` conservé,
+providers PipeWire/SPA/pw-dump déclarés. Container Arch natif x64 sans devices,
+pas de privilèges ou sockets hôte. Pacman install/reinstall/upgrade **pkgrel**
+et removal ; vraie session PipeWire privée/D-Bus et PTY ; strace du refus
+updater avant Internet, byte-preservation des settings/history/autostart externe.
+Cette mise à niveau de révision n'est pas une migration de version amont.
+Payload root simplement consultable sous `/usr/share/miccamwatch/linux-camera` ;
+bootstrap séparé avec archive release et SHA-256 fiables, jamais tarball source
+ou package pacman substitué. AUR nécessite un accès SSH mainteneur vérifié ;
+nom libre au RPC du 2026-10-11, aucune soumission ou acceptation officielle.
 
 **Complexité : Moyenne.**
 

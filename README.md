@@ -2,11 +2,11 @@
 
 `mcw` monitors microphone and camera access using platform-specific evidence. Windows uses native capture and privacy APIs; Linux and macOS 15+ provide native monitoring, desktop frontends and scoped controls with narrower evidence. It supports high-contrast terminal colors, seven display languages, policy-driven trust validation, JSONL history and native event notifications. Detailed evidence remains in English for stable machine-readable diagnostics. The coordinated `v0.17.0` distribution includes Windows ZIP/MSI, Linux x64 and macOS Apple Silicon/Intel packages; previous release tags and assets remain unchanged.
 
-## Thank you @repentandliveholy — macOS camera fix
+## macOS camera activity
 
-**Thank you [@repentandliveholy](https://github.com/repentandliveholy)** for the real-device diagnosis, public CoreMediaIO fix and local validation that made this correction possible. On a MacBook Pro with Apple Silicon and macOS 27, @repentandliveholy reported that Telegram circle recording left the previous AVFoundation activity property false, while CoreMediaIO correctly transitioned **0 → 1 → 0**; their locally patched build reported **FaceTime HD Camera START/STOP**. This is friend-reported hardware evidence, not a run performed by the maintainers or hosted CI.
+Camera inventory uses passive AVFoundation discovery; activity uses public CoreMediaIO device running-state. A real-device report on Apple Silicon/macOS 27 confirmed Telegram **0 → 1 → 0** and FaceTime HD Camera START/STOP after the correction; that reported evidence is documented with attribution in [Architecture](docs/ARCHITECTURE.md), not represented as a maintainer or hosted-CI hardware run.
 
-The `0.16.0` source integrates that correction; published `v0.15.1` remains unchanged. AVFoundation still discovers cameras; public CoreMediaIO reports device running-state with **unknown client/PID**, medium confidence and degraded coverage. It does not prove frame flow or permit per-application enforcement. Read errors stay unknown, never silently inactive.
+Client/PID remain **unknown**, confidence medium and coverage degraded. Running-state does not prove frame flow or permit per-application enforcement. Read errors stay unknown, never silently inactive.
 
 The revised helper passed native macOS 15.7.9 Apple Silicon/Intel builds, regressions and extracted CLI/TUI/menu-bar smoke in the [successful three-platform dry run 37425122074](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/37425122074). Both system and MCW inventories reported zero cameras on the macOS runners; they cannot establish macOS 27 hardware parity. Linux privileged installation/recovery and ordinary-user lifecycle checks also passed. On the authorized Linux hardware host, real Polkit-approved CLI block/allow revoked an ongoing UVC capture, denied new capture even to root, and restored the original bindings and capture. See [verification boundaries](docs/ARCHITECTURE.md#native-0160-software-verification-boundaries) for exact sources, agent prerequisites and remaining physical limits.
 
@@ -149,6 +149,40 @@ installation-only Linux session had no usable PipeWire session; physical
 capture, enabled autostart and Gatekeeper approval are not proven by these
 migrations. Full fixture boundaries and post-publication DNS checks are in
 [Architecture](docs/ARCHITECTURE.md#post-publication-v0170-evidence).
+
+## v0.17.1 corrective candidate
+
+Windows tray status is a compact first line; complete privacy/collector diagnostics
+remain in **Status details**. A stopped approved camera guard stays a warning:
+requested Block is not proof that future camera arrivals are protected.
+Recovered privacy operations clear only their own applicable errors; automatic
+policy cannot acknowledge a failed explicit request. Positive native notification
+delivery clears current unavailability without deleting undelivered-message history.
+
+Local Windows qualification passed strict Clippy, 162 library tests and one CLI
+test, release build, and the real Win32 popup/details consumer. Three native popup
+cases (idle with protection details, long failure, Unicode/control characters)
+stayed compact; native text preserved complete diagnostics. Clipboard contents,
+microphone/camera state and the installed user tray were not changed. The local
+details screenshot was occluded by another application and is not GUI evidence.
+Shared-native readiness tests require unowned resources and run explicitly on a
+disposable Windows runner, not by stopping the user's protection.
+
+Distribution recipes are under `distribution/homebrew` and `distribution/aur`.
+They build immutable commit/digest-pinned source with locked Cargo dependencies;
+they do not manufacture public-installer receipts. Upgrade through the owning
+package manager, never overwrite a package with the curl installer or `mcw update`.
+Homebrew embeds the existing Swift/AppKit helper; its refresh preserves absent,
+dormant, disabled and externally owned autostart rather than enabling it.
+Arch installs only reviewable camera-bootstrap materials under
+`/usr/share/miccamwatch/linux-camera`, not an active root helper or Polkit action.
+Administrator setup remains a separate reviewed matching-release archive operation;
+package installation/removal never grants camera control or deletes user data.
+
+Native Homebrew ARM/Intel lifecycle and native Arch makepkg/pacman/private-PipeWire
+qualification must pass before publication. A source recipe is not a published tap,
+Homebrew/core acceptance, AUR submission or official Arch repository inclusion.
+Current public release remains `v0.17.0` until corrective publication is verified.
 
 ## Commands
 

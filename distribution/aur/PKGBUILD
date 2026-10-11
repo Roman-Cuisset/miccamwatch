@@ -1,0 +1,57 @@
+# Maintainer: Roman Cuisset <rcuisset69@gmail.com>
+pkgname=miccamwatch
+pkgver=0.17.0
+pkgrel=1
+pkgdesc='Monitor microphone and camera access from the command line'
+arch=('x86_64')
+url='https://github.com/Roman-Cuisset/miccamwatch'
+license=('MIT')
+depends=('glibc' 'gcc-libs' 'libpipewire' 'pipewire')
+options=('!debug')
+makedepends=('cargo' 'clang' 'pkgconf')
+optdepends=(
+  'dbus: desktop-session tray and freedesktop notifications'
+  'libcanberra: optional desktop notification sounds (canberra-gtk-play)'
+  'gtk3: graphical session for canberra-gtk-play'
+  'sound-theme-freedesktop: optional notification sound theme'
+  'gnupg: optional detached executable signature inspection'
+  'python: separately reviewed administrator camera-helper bootstrap'
+  'polkit: separately approved administrator camera-helper authorization'
+)
+# v0.17.0 annotated tag f710752e9e0d9393ebcd312b40e2d1ea023a56b7
+# resolves to this commit. Pin the commit, not the movable tag archive URL.
+_commit=d1b8557f827e102df20c33dbac4ec99badba7d1a
+source=("${pkgname}-${pkgver}-${_commit}.tar.gz::https://codeload.github.com/Roman-Cuisset/miccamwatch/tar.gz/${_commit}")
+sha256sums=('82bab62b58bd3fa1f78f671fbf8131bf620b779f93106ca2b84ad3aeb318ecec')
+
+prepare() {
+  cd "$srcdir/$pkgname-$_commit"
+  export CARGO_HOME="$srcdir/cargo-home"
+  # Keep Cargo.toml's vendor/libspa patch unchanged: it gates only the
+  # VideoInfoRaw ABI introduced in PipeWire 0.3.65, not native SPA headers.
+  # libpipewire supplies both libpipewire-0.3 and libspa-0.2 headers/pkg-config;
+  # pipewire supplies the real pw-dump runtime command.
+  cargo fetch --locked --target x86_64-unknown-linux-gnu
+}
+
+build() {
+  cd "$srcdir/$pkgname-$_commit"
+  export CARGO_HOME="$srcdir/cargo-home"
+  export CARGO_TARGET_DIR="$srcdir/target"
+  cargo build --release --frozen --target x86_64-unknown-linux-gnu \
+    --features linux-camera-helper --bin mcw --bin mcw-camera-helper
+}
+
+package() {
+  cd "$srcdir/$pkgname-$_commit"
+  install -Dm755 "$srcdir/target/x86_64-unknown-linux-gnu/release/mcw" "$pkgdir/usr/bin/mcw"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+
+  # Reviewable payload only. No install script, pacman hook, privileged-path
+  # installation, Polkit action registration, receipt, service or autostart.
+  local payload="$pkgdir/usr/share/$pkgname/linux-camera"
+  install -Dm755 "$srcdir/target/x86_64-unknown-linux-gnu/release/mcw-camera-helper" "$payload/mcw-camera-helper"
+  install -Dm755 installer/install-camera-helper.sh "$payload/install-camera-helper.sh"
+  install -Dm644 installer/com.roman-cuisset.miccamwatch.camera.policy "$payload/com.roman-cuisset.miccamwatch.camera.policy"
+}

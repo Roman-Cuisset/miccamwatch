@@ -1,0 +1,26 @@
+pkgbase = miccamwatch
+	pkgdesc = Monitor microphone and camera access from the command line
+	pkgver = 0.17.0
+	pkgrel = 1
+	url = https://github.com/Roman-Cuisset/miccamwatch
+	arch = x86_64
+	license = MIT
+	makedepends = cargo
+	makedepends = clang
+	makedepends = pkgconf
+	depends = glibc
+	depends = gcc-libs
+	depends = libpipewire
+	depends = pipewire
+	optdepends = dbus: desktop-session tray and freedesktop notifications
+	optdepends = libcanberra: optional desktop notification sounds (canberra-gtk-play)
+	optdepends = gtk3: graphical session for canberra-gtk-play
+	optdepends = sound-theme-freedesktop: optional notification sound theme
+	optdepends = gnupg: optional detached executable signature inspection
+	optdepends = python: separately reviewed administrator camera-helper bootstrap
+	optdepends = polkit: separately approved administrator camera-helper authorization
+	options = !debug
+	source = miccamwatch-0.17.0-d1b8557f827e102df20c33dbac4ec99badba7d1a.tar.gz::https://codeload.github.com/Roman-Cuisset/miccamwatch/tar.gz/d1b8557f827e102df20c33dbac4ec99badba7d1a
+	sha256sums = 82bab62b58bd3fa1f78f671fbf8131bf620b779f93106ca2b84ad3aeb318ecec
+
+pkgname = miccamwatch

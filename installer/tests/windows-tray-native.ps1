@@ -80,7 +80,7 @@ try {
     # otherwise can report a null ExitCode for a completed Start-Process.
     $null = $process.Handle
     $measurements = @()
-    foreach ($name in @('long-error', 'unicode-controls')) {
+    foreach ($name in @('long-error', 'unicode-controls', 'idle-protected')) {
         $menu = Wait-ProofFile "$name-menu.json"
         $owner = [IntPtr][long]$menu.owner
         [uint32]$ownerPid = 0
@@ -100,7 +100,7 @@ try {
         $bounds = Capture-NativeWindow $popup "$name-menu"
         $row = New-Object McwNativeProof+RECT
         if (-not [McwNativeProof]::GetMenuItemRect($owner, [IntPtr][long]$menu.menu, 1, [ref]$row)) { throw 'Native diagnostic menu row was not measurable.' }
-        $limit = [Math]::Min(600 * [double]$menu.dpi / 96, [double]$menu.work_width * 0.75)
+        $limit = [Math]::Min(400 * [double]$menu.dpi / 96, [double]$menu.work_width * 0.75)
         if ($bounds.width -gt $limit) { throw "Native popup width $($bounds.width) exceeds compact bound $limit" }
         [void][McwNativeProof]::PostMessage($owner, 0x001f, [IntPtr]::Zero, [IntPtr]::Zero) # WM_CANCELMODE; no privacy action
         $details = Wait-ProofFile "$name-details.json"

@@ -188,6 +188,42 @@ struct CameraRefreshSignals {
     sequence: Arc<AtomicU64>,
 }
 
+#[derive(Default)]
+struct PrivacyOperationErrors {
+    microphone: [Option<String>; 2],
+    camera: [Option<String>; 2],
+}
+
+impl PrivacyOperationErrors {
+    fn slots(&mut self, resource: Resource) -> &mut [Option<String>; 2] {
+        match resource {
+            Resource::Microphone => &mut self.microphone,
+            Resource::Camera => &mut self.camera,
+        }
+    }
+
+    fn failed(&mut self, resource: Resource, manual: bool, message: String) {
+        self.slots(resource)[usize::from(manual)] = Some(message);
+    }
+
+    fn completed(&mut self, resource: Resource, manual: bool) {
+        let slots = self.slots(resource);
+        // An explicit successful action supersedes automatic policy; automatic
+        // success cannot acknowledge a failed explicit request or another device.
+        slots[0] = None;
+        if manual {
+            slots[1] = None;
+        }
+    }
+
+    fn messages(&self) -> impl Iterator<Item = &str> {
+        self.microphone
+            .iter()
+            .chain(&self.camera)
+            .filter_map(Option::as_deref)
+    }
+}
+
 struct TrayAppState {
     lang: Language,
     visual: TrayVisual,
@@ -204,7 +240,7 @@ struct TrayAppState {
     microphone_worker: microphone_worker::Worker,
     pending_microphone: usize,
     microphone_generation: u64,
-    operation_error: Option<String>,
+    operation_errors: PrivacyOperationErrors,
     restore_camera: Option<CameraPrivacyState>,
     previous_accesses: HashMap<String, Access>,
     green_icon: HICON,
@@ -455,7 +491,7 @@ pub fn run_tray(
         microphone_worker,
         pending_microphone: 0,
         microphone_generation: 0,
-        operation_error: None,
+        operation_errors: PrivacyOperationErrors::default(),
         refreshes,
         camera_dirty,
         camera_sequence,
@@ -819,26 +855,43 @@ fn apply_lock_policy(state: &mut TrayAppState, current: SessionLockState) {
 }
 
 const NOTIFICATION_QUEUE_CAPACITY: usize = 32;
+#[derive(Default)]
+struct NotificationHealth {
+    undelivered: AtomicU64,
+    unavailable: AtomicBool,
+}
+impl NotificationHealth {
+    fn failed(&self) {
+        self.undelivered.fetch_add(1, Ordering::Relaxed);
+        self.unavailable.store(true, Ordering::Relaxed);
+    }
+    fn delivered(&self) {
+        self.unavailable.store(false, Ordering::Relaxed);
+    }
+}
 struct NotificationWorker {
     sender: SyncSender<(String, String)>,
-    overloaded: Arc<AtomicU64>,
+    health: Arc<NotificationHealth>,
 }
 impl NotificationWorker {
     fn start() -> Self {
         let (sender, pending) = mpsc::sync_channel::<(String, String)>(NOTIFICATION_QUEUE_CAPACITY);
-        let overloaded = Arc::new(AtomicU64::new(0));
-        let failed = Arc::clone(&overloaded);
+        let health = Arc::new(NotificationHealth::default());
+        let delivery = Arc::clone(&health);
         thread::spawn(move || {
             // A single shell round-trip at a time. Dropping the sender ends this
             // finite worker after accepted toasts are drained.
             while let Ok((title, message)) = pending.recv() {
                 if let Err(error) = crate::notify::notify_message(&title, &message) {
-                    failed.fetch_add(1, Ordering::Relaxed);
+                    delivery.failed();
                     eprintln!("notification failed: {error}");
+                } else {
+                    // This is positive delivery evidence, not deletion of loss history.
+                    delivery.delivered();
                 }
             }
         });
-        Self { sender, overloaded }
+        Self { sender, health }
     }
     fn submit(&self, title: &str, message: &str) -> bool {
         if self
@@ -846,7 +899,7 @@ impl NotificationWorker {
             .try_send((title.to_owned(), message.to_owned()))
             .is_err()
         {
-            self.overloaded.fetch_add(1, Ordering::Relaxed);
+            self.health.failed();
             eprintln!(
                 "notification queue overloaded/unavailable; toast not delivered: {title}: {message}"
             );
@@ -861,7 +914,11 @@ fn notify_async(state: &mut TrayAppState, title: &str, message: &str) {
         state.visual = TrayVisual::Error;
         state.summary = format!(
             "miccamwatch: notification queue overloaded/unavailable ({} undelivered toasts)",
-            state.notifications.overloaded.load(Ordering::Relaxed)
+            state
+                .notifications
+                .health
+                .undelivered
+                .load(Ordering::Relaxed)
         );
     }
 }
@@ -993,16 +1050,28 @@ fn apply_refresh(hwnd: HWND, state: &mut TrayAppState, refresh: TrayRefresh) {
         visual = TrayVisual::Error;
         summary.push_str(&format!("\nProtection observation failed: {error}"));
     }
-    if let Some(error) = &state.operation_error {
+    for error in state.operation_errors.messages() {
         visual = TrayVisual::Error;
         summary.push_str(&format!("\nPrivacy operation failed/partial: {error}"));
     }
-    let undelivered = state.notifications.overloaded.load(Ordering::Relaxed);
+    let undelivered = state
+        .notifications
+        .health
+        .undelivered
+        .load(Ordering::Relaxed);
     if undelivered != 0 {
-        visual = TrayVisual::Error;
         summary.push_str(&format!(
-            "\nNotification queue overloaded/unavailable: {undelivered} undelivered toasts"
+            "\nNotification history: {undelivered} undelivered toasts"
         ));
+    }
+    if state
+        .notifications
+        .health
+        .unavailable
+        .load(Ordering::Relaxed)
+    {
+        visual = TrayVisual::Error;
+        summary.push_str("\nNotification delivery currently overloaded/unavailable");
     }
     let mute_state = state.mute_state;
     if visual == state.visual
@@ -1117,7 +1186,7 @@ fn toggle_mute(hwnd: HWND) {
     if state.pending_microphone < 6 {
         queue_microphone(state, microphone_worker::Request::Manual);
     } else {
-        operation_error(state, "Microphone operation queue busy; request not accepted, retry after pending operations finish".to_owned());
+        operation_error(state, Resource::Microphone, true, "Microphone operation queue busy; request not accepted, retry after pending operations finish".to_owned());
     }
 }
 
@@ -1127,13 +1196,17 @@ fn queue_microphone(state: &mut TrayAppState, request: microphone_worker::Reques
     } else {
         operation_error(
             state,
+            Resource::Microphone,
+            matches!(request, microphone_worker::Request::Manual),
             "Microphone worker unavailable; request not accepted".to_owned(),
         );
     }
 }
 
-fn operation_error(state: &mut TrayAppState, message: String) {
-    state.operation_error = Some(message.clone());
+fn operation_error(state: &mut TrayAppState, resource: Resource, manual: bool, message: String) {
+    state
+        .operation_errors
+        .failed(resource, manual, message.clone());
     state.summary = format!("miccamwatch: {message}");
     state.visual = TrayVisual::Error;
     notify_async(state, "MicCamWatch privacy operation", &message);
@@ -1155,7 +1228,7 @@ fn toggle_camera(hwnd: HWND) {
 }
 
 fn camera_queue_error(state: &mut TrayAppState) {
-    operation_error(state, "Camera operation queue busy/unavailable; request not accepted, retry after pending operations finish".to_owned());
+    operation_error(state, Resource::Camera, true, "Camera operation queue busy/unavailable; request not accepted, retry after pending operations finish".to_owned());
 }
 
 /// Narrows reconnected cameras down to the ones not yet offered for restoration,
@@ -1246,6 +1319,10 @@ fn handle_worker_results(state: &mut TrayAppState) {
         state.pending_microphone = state.pending_microphone.saturating_sub(1);
         match result {
             Ok(actual) => {
+                state.operation_errors.completed(
+                    Resource::Microphone,
+                    matches!(request, microphone_worker::Request::Manual),
+                );
                 state.mute_state = actual.mute_state;
                 let message = crate::output::microphone_protection_summary(state.lang, &actual);
                 state.microphone_protection = Some(actual);
@@ -1256,6 +1333,8 @@ fn handle_worker_results(state: &mut TrayAppState) {
             }
             Err(error) => operation_error(
                 state,
+                Resource::Microphone,
+                matches!(request, microphone_worker::Request::Manual),
                 format!("microphone {request:?} failed/partial: {error}"),
             ),
         }
@@ -1314,6 +1393,9 @@ fn handle_camera_operation_result(
             CameraPrivacyState::Allowed
         };
         state.camera_observation = Some(observation);
+        state
+            .operation_errors
+            .completed(Resource::Camera, matches!(request, CameraRequest::Manual));
         state.camera_status_error = None;
         desired
     });
@@ -1365,7 +1447,9 @@ fn handle_camera_operation_result(
                 }
                 Err(error) => {
                     let message = format!("Camera lock policy failed: {error}");
-                    state.operation_error = Some(message.clone());
+                    state
+                        .operation_errors
+                        .failed(Resource::Camera, false, message.clone());
                     state.summary = format!("miccamwatch: {message}");
                     state.visual = TrayVisual::Error;
                     notify_async(state, "MicCamWatch camera", &message);
@@ -1388,7 +1472,9 @@ fn handle_camera_operation_result(
                 }
                 Err(error) => {
                     let message = format!("Camera unlock policy failed: {error}");
-                    state.operation_error = Some(message.clone());
+                    state
+                        .operation_errors
+                        .failed(Resource::Camera, false, message.clone());
                     state.summary = format!("miccamwatch: {message}");
                     state.visual = TrayVisual::Error;
                     notify_async(state, "MicCamWatch camera", &message);
@@ -1403,6 +1489,9 @@ fn handle_restore_result(state: &mut TrayAppState, result: Result<usize, String>
     state.camera_dirty.store(true, Ordering::Relaxed);
     match result {
         Ok(restored) => {
+            if restored != 0 {
+                state.operation_errors.completed(Resource::Camera, false);
+            }
             let message = format!(
                 "Reconnected camera restored ({restored} device{}).",
                 if restored == 1 { "" } else { "s" }
@@ -1413,7 +1502,11 @@ fn handle_restore_result(state: &mut TrayAppState, result: Result<usize, String>
             // Staying silent after a declined prompt matters more than reporting it,
             // so the failure only surfaces in the tray summary and tooltip.
             state.summary = format!("miccamwatch: camera restore failed: {error}");
-            state.operation_error = Some(format!("Camera restore failed: {error}"));
+            state.operation_errors.failed(
+                Resource::Camera,
+                false,
+                format!("Camera restore failed: {error}"),
+            );
             state.visual = TrayVisual::Error;
         }
     }
@@ -1448,7 +1541,9 @@ fn handle_camera_result(state: &mut TrayAppState, result: Result<CameraPrivacySt
         }
         Err(error) => {
             let message = format!("Camera control failed: {error}");
-            state.operation_error = Some(message.clone());
+            state
+                .operation_errors
+                .failed(Resource::Camera, true, message.clone());
             state.summary = format!("miccamwatch: {message}");
             state.visual = TrayVisual::Error;
             notify_async(state, "MicCamWatch camera", &message);
@@ -1540,13 +1635,14 @@ fn menu_summary_width(hwnd: HWND) -> i32 {
     let dpi = unsafe { GetDpiForWindow(hwnd) }.max(96) as i32;
     let work = monitor_work_area(hwnd);
     // Reserve native checkmark, submenu and border gutters separately from text.
-    (360 * dpi / 96)
+    (200 * dpi / 96)
         .min((work.right - work.left) / 2 - 80 * dpi / 96)
         .max(1)
 }
 
 fn menu_plain_text(summary: &str) -> (String, bool) {
-    let mut chars = summary.chars();
+    // Protection diagnostics remain in Details, not flattened into a wide menu row.
+    let mut chars = summary.lines().next().unwrap_or_default().chars();
     let text = chars.by_ref().take(256).map(|c| {
         if c.is_control() || c.is_whitespace()
             || matches!(c, '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
@@ -1899,7 +1995,7 @@ fn show_context_menu(hwnd: HWND) {
     }
     let Ok(menu) = build_context_menu(
         hwnd,
-        &state.summary,
+        context_menu_summary(state),
         state.lang,
         state
             .microphone_protection
@@ -1949,6 +2045,39 @@ fn append_disabled(menu: windows::Win32::UI::WindowsAndMessaging::HMENU, text: &
 fn show_status_toast(hwnd: HWND) {
     let Some(state) = state(hwnd) else { return };
     notify_async(state, "miccamwatch", &state.summary.clone());
+}
+
+fn context_menu_summary(state: &TrayAppState) -> &str {
+    if state
+        .camera_observation
+        .as_ref()
+        .is_some_and(|camera| camera.desired_blocked && !camera.helper_active)
+    {
+        return match state.lang {
+            Language::En => "Camera: protection owner stopped",
+            Language::Fr => "Caméra : garde arrêtée",
+            Language::De => "Kamera: Schutzdienst gestoppt",
+            Language::Es => "Cámara: protección detenida",
+            Language::Ja => "カメラ：保護サービス停止",
+            Language::Zh => "摄像头：保护服务已停止",
+            Language::Ru => "Камера: защита остановлена",
+        };
+    }
+    if let Some(error) = state.operation_errors.messages().next() {
+        return error;
+    }
+    if state.visual == TrayVisual::Error {
+        return match state.lang {
+            Language::En => "Status incomplete — details",
+            Language::Fr => "État incomplet — détails",
+            Language::De => "Status unvollständig — Details",
+            Language::Es => "Estado incompleto — detalles",
+            Language::Ja => "状態不完全 — 詳細",
+            Language::Zh => "状态不完整 — 详情",
+            Language::Ru => "Неполный статус — сведения",
+        };
+    }
+    &state.summary
 }
 
 fn idle_text(lang: Language) -> &'static str {
@@ -2126,13 +2255,14 @@ mod tests {
         let (sender, receiver) = mpsc::sync_channel(NOTIFICATION_QUEUE_CAPACITY);
         let worker = NotificationWorker {
             sender,
-            overloaded: Arc::new(AtomicU64::new(0)),
+            health: Arc::new(NotificationHealth::default()),
         };
         for value in 0..NOTIFICATION_QUEUE_CAPACITY {
             assert!(worker.submit("title", &value.to_string()));
         }
         assert!(!worker.submit("title", "overflow"));
-        assert_eq!(worker.overloaded.load(Ordering::Relaxed), 1);
+        assert_eq!(worker.health.undelivered.load(Ordering::Relaxed), 1);
+        assert!(worker.health.unavailable.load(Ordering::Relaxed));
         for value in 0..NOTIFICATION_QUEUE_CAPACITY {
             assert_eq!(
                 receiver.try_recv().unwrap(),
@@ -2141,6 +2271,23 @@ mod tests {
         }
         assert!(worker.submit("title", "next"));
         assert_eq!(receiver.try_recv().unwrap().1, "next");
+        // Queue admission alone is not evidence that native toast delivery recovered.
+        assert!(worker.health.unavailable.load(Ordering::Relaxed));
+        assert_eq!(worker.health.undelivered.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn notification_delivery_recovery_retains_loss_history() {
+        let health = NotificationHealth::default();
+        health.failed();
+        health.failed();
+        assert!(health.unavailable.load(Ordering::Relaxed));
+        health.delivered();
+        assert!(!health.unavailable.load(Ordering::Relaxed));
+        assert_eq!(health.undelivered.load(Ordering::Relaxed), 2);
+        health.failed();
+        assert!(health.unavailable.load(Ordering::Relaxed));
+        assert_eq!(health.undelivered.load(Ordering::Relaxed), 3);
     }
 
     #[test]
@@ -2258,6 +2405,27 @@ mod tests {
     }
 
     #[test]
+    fn privacy_error_recovery_keeps_other_resources_and_manual_failures() {
+        let mut errors = PrivacyOperationErrors::default();
+        errors.failed(Resource::Microphone, true, "microphone failure".into());
+        errors.failed(Resource::Camera, true, "manual camera failure".into());
+        errors.failed(Resource::Camera, false, "automatic camera failure".into());
+
+        errors.completed(Resource::Camera, false);
+        assert_eq!(
+            errors.messages().collect::<Vec<_>>(),
+            ["microphone failure", "manual camera failure"]
+        );
+        errors.completed(Resource::Microphone, true);
+        assert_eq!(
+            errors.messages().collect::<Vec<_>>(),
+            ["manual camera failure"]
+        );
+        errors.completed(Resource::Camera, true);
+        assert!(errors.messages().next().is_none());
+    }
+
+    #[test]
     fn native_menu_consumer_bounds_unicode_and_preserves_actions() {
         let owner = native_test_owner();
         for requested in [Some(true), Some(false), None] {
@@ -2280,8 +2448,6 @@ mod tests {
                 .unwrap();
                 assert_native_menu(menu, owner);
                 let _ = unsafe { DestroyMenu(menu) };
-                // The bounded consumer must not mutate the original diagnostic.
-                assert!(summary.len() > 16 * 1024);
             }
         }
         let _ = unsafe { DestroyWindow(owner) };
@@ -2309,6 +2475,15 @@ mod tests {
                 format!(
                     "miccamwatch: degraded: {}",
                     "界🛡️\t&Exit\n\r\u{202e}\0".repeat(1000)
+                ),
+            ),
+            (
+                "idle-protected",
+                format!(
+                    "{}\n{}\n{}",
+                    idle_text(Language::Fr),
+                    "Protection micro demandée; garde active; SDK coupé",
+                    "Protection caméra demandée; garde active; aucune capture observée"
                 ),
             ),
         ] {

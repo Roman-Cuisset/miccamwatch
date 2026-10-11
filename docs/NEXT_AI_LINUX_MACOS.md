@@ -196,10 +196,7 @@ Les notes et travaux utilisateur précédant ce footer restent préservés.
   Zéro état original retenu et zéro restauration en attente ; source retirée.
   Cela ne prouve pas un mute physique, ni un déni global ALSA.
 
-### Correction macOS et crédit public
-
-**Thank you [@repentandliveholy](https://github.com/repentandliveholy) for the
-real-device diagnosis, public CoreMediaIO fix and local validation.**
+### Correction macOS : preuves et limites
 
 - Telegram/macOS 27 : AVFoundation restait false, CoreMediaIO 0→1→0 et
   FaceTime HD Camera START/STOP dans le build corrigé de l'ami : preuve rapportée
