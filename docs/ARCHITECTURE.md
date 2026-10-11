@@ -897,3 +897,69 @@ had no document-wide horizontal overflow, and the exact published PowerShell
 curl example downloaded the ZIP with matching digest/manifest without executing
 it. RAM/physical/exclusive/ASIO and signing limits above are unchanged.
 
+## Corrective 0.17.1 candidate qualification
+
+The public release remains 0.17.0 until a new immutable tag, native release
+artifacts and provenance have been verified. Candidate source
+`6ce11366b326e50144eb8d04256b36a9d92d24ec` has archive SHA-256
+`78dd6cfa7cdb9e53d3bf37a9e609607f52a88a51a15c4852638a280d283f7c5c`.
+
+Windows status rows now keep only a compact summary; complete native details
+remain available. A requested camera Block with no active approved owner stays
+a warning. Privacy-operation failures are scoped by resource and origin:
+automatic success cannot acknowledge a failed manual request or another
+resource's failure. Successful native notification API calls clear current
+unavailability but retain failure history; this does not prove visible delivery.
+
+Local Windows strict Clippy, 162 library tests, one CLI test and release build
+passed. Real Win32 popup widths at 125% DPI were 327/350/359 pixels for idle,
+long failure and Unicode/control cases; complete native edit text was preserved.
+The local details screenshots were occluded and are not visual proof.
+[Candidate CI](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38150000607)
+passed Windows native guards, resource scenarios, tray/details and per-user MSI,
+and both macOS native lifecycles. Its Linux job passed compile/tests and the C/Rust
+SPA regression, then failed an obsolete installer-wording assertion. That
+assertion is removed, not re-pinned to the new message; strict lifecycle refusal,
+file/receipt preservation and no-network checks remain. The overall run is failed,
+not a green release gate.
+
+The actual HTTPS `curl | sh` path installed the independently checksum-verified
+public 0.17.0 native executable on Linux and macOS ARM/Intel, preserved shell
+configuration and did not register autostart. Progress includes platform,
+destination, verification and an executable next command with quoted paths.
+[Unix installation](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38150000375)
+passed both complete macOS jobs; Linux's successful public smoke was followed by
+the same obsolete wording assertion in controlled fixtures. No DNS script change
+or new public binary is claimed by that source-only proof.
+
+Clang 22+ returns forward declarations differently to libclang clients. Bindgen
+0.69.5 consequently generated an opaque SPA pod builder; the native layout itself
+did not change. The vendored published libspa-sys 0.8.0 build now selects the
+upstream [bindgen complete-declaration fix](https://github.com/rust-lang/rust-bindgen/pull/3278)
+in 0.72.1. Native size/alignment and a nested POD roundtrip with buffer growth are
+checked independently by C and Rust, not by handwritten FFI offsets.
+[Arch qualification](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38150267283)
+built the real package and passed that regression (one test), then failed strict
+pacman integrity before native CLI probes: the official slim image excludes
+`usr/share/doc/*`. Its [exact rootfs source configuration](https://gitlab.archlinux.org/archlinux/archlinux-docker/-/raw/34b87485162b028c8d957bdcd2674359d883cd21/pacman-conf.d-noextract.conf)
+explains the missing directory. Qualification now records the extraction policy
+and restores documentation extraction only inside the disposable container;
+integrity checks, signatures and sandbox rules are not relaxed.
+
+Homebrew registration resolves and validates the physical executable on macOS.
+An owned registration is refreshed to the new Cellar target before old-keg
+cleanup; dormant/disabled intent is preserved and a current registration is a
+no-op. Historical 0.16.1 is invoked through its authentic physical executable,
+without patching it or changing filesystem permissions. Native Intel prerequisites
+are genuine Homebrew source packages, not rustup pretending to own a keg.
+Six ARM/Intel × loaded/dormant/disabled lifecycle jobs must pass before tap
+publication. AUR SSH host identity was verified against its official published
+Ed25519 fingerprint using isolated known_hosts; current authentication returns
+`Permission denied (publickey)`. Maintainer-authorized SSH access is required
+for actual AUR submission; no global SSH trust or package publication was changed.
+
+The user's protected Windows installation remains untouched. Corrective
+replacement must not stop its guards or release requested protection implicitly.
+SITE-PAGES is recorded as an urgent complete static site deliverable for Cloudflare
+Pages; this is not a deployed site. Deferred ASUS root/page redesign stays separate.
+

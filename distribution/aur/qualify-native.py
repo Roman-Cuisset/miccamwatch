@@ -200,6 +200,14 @@ def qualify(args):
         record(proof, "spa-version", ["pkg-config", "--modversion", "libspa-0.2", "libpipewire-0.3"])
         record(proof, "pw-dump-owner", ["pacman", "-Qo", "/usr/bin/pw-dump"])
         record(proof, "create-build-user", ["useradd", "--create-home", USER])
+        # The official slim image excludes documentation. Qualify an ordinary
+        # complete package extraction instead; retain all signature/sandbox rules
+        # and keep pacman's integrity check strict. This is container-only setup.
+        record(proof, "container-noextract-before", ["pacman-conf", "NoExtract"])
+        with Path("/etc/pacman.conf").open("a") as config:
+            config.write("\n# Native MCW qualification: extract packaged documentation.\n"
+                         "[options]\nNoExtract = !usr/share/doc !usr/share/doc/*\n")
+        record(proof, "container-noextract-after", ["pacman-conf", "NoExtract"])
         account = pwd.getpwnam(USER)
         build = Path(account.pw_dir) / "package"
         build.mkdir()
