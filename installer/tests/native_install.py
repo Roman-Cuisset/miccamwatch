@@ -391,6 +391,31 @@ def native_cli(script, sandbox, version):
     print(f"  {sandbox.shell}: native status/doctor/devices and watch SIGINT exercised")
 
 
+def curl_pipeline(curl, source_url, root, shell_path, version, binary):
+    sandbox = Sandbox(root, "public-real-curl-pipe", "bash", shell_path)
+    producer = [curl, "--proto", "=https", "--proto-redir", "=https", "--tlsv1.2",
+                "-fsSL", "--connect-timeout", "20", "--max-time", "180", source_url]
+    consumer = ["/bin/sh", "-s", "--", "--version", version,
+                "--prefix", str(sandbox.prefix), "--no-modify-path"]
+    # pipefail observes transport failure too, unlike sh's ordinary pipeline
+    # status. Bash is only the existing native verification dependency.
+    command = shlex.join(producer) + " | " + shlex.join(consumer)
+    result = run([shell_path, "-o", "pipefail", "-c", command],
+                 env=sandbox.env, cwd=sandbox.cwd, timeout=300)
+    print(result.stdout, end="")
+    require(sandbox.binary.read_bytes() == binary,
+            "curl pipeline did not install the verified native release")
+    require(run([sandbox.binary, "--version"], env=sandbox.env).stdout.strip() == f"mcw {version[1:]}",
+            "curl pipeline installed the wrong native version")
+    sandbox.unchanged_configs()
+    sandbox.check_installer_cleanup()
+    for path in (Path(sandbox.env["XDG_CONFIG_HOME"]) / "autostart",
+                 sandbox.home / "Library/LaunchAgents"):
+        require(not path.exists(), "curl pipeline implicitly registered autostart")
+    sandbox.invoke(root / "public-install.sh", "--uninstall", "--no-modify-path", version=version)
+    print("PASS real HTTPS curl | sh: verified native executable, preserved shell configuration and no autostart registration")
+
+
 def smoke(script, root, shells, version, binary):
     for shell, shell_path in shells.items():
         sandbox = Sandbox(root, f"public-{shell}", shell, shell_path)
@@ -1011,6 +1036,7 @@ def main():
         else:
             asset, binary, camera = released_binary(curl, root, args.version)
             if args.mode in ("all", "smoke"):
+                curl_pipeline(curl, args.source_url, root, shells["bash"], args.version, binary)
                 smoke(script, root, shells, args.version, binary)
                 if args.upgrade_from:
                     cross_version_upgrade(script, root, shells, args.upgrade_from, args.version, binary)

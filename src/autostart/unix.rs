@@ -240,6 +240,12 @@ fn enable_in(store: &Store, version: &str, activate: bool) -> Result<()> {
         bail!("autostart refresh must be performed by the matching mcw {version} executable");
     }
     let executable = std::env::current_exe().context("cannot locate mcw executable")?;
+    // Darwin may report the invocation alias, including Homebrew's writable
+    // prefix/bin link. Validate and register the physical executable instead;
+    // package post_install refreshes owned Cellar targets before old-keg cleanup.
+    #[cfg(target_os = "macos")]
+    let executable = std::fs::canonicalize(executable)
+        .context("cannot resolve the current executable; registration preserved")?;
     let executable_dir = Directory::open(
         executable.parent().context("mcw has no parent directory")?,
         false,
@@ -253,7 +259,7 @@ fn enable_in(store: &Store, version: &str, activate: bool) -> Result<()> {
         bail!("mcw executable is not executable");
     }
     let new = Registration {
-        executable: registration_executable(executable)?,
+        executable,
         version: version.to_owned(),
     };
     let new_bytes = registration_bytes(&new)?;
@@ -349,33 +355,6 @@ fn enable_in(store: &Store, version: &str, activate: bool) -> Result<()> {
         };
     }
     Ok(())
-}
-
-fn registration_executable(current: PathBuf) -> Result<PathBuf> {
-    #[cfg(target_os = "macos")]
-    {
-        // Homebrew owns versioned Cellar files. Only its verified opt alias is
-        // stable across upgrade/cleanup; never infer a target from environment.
-        let version = current.parent().and_then(Path::parent);
-        if let Some(package) = version.and_then(Path::parent)
-            && package.file_name() == Some(OsStr::new("miccamwatch"))
-            && let Some(cellar) = package.parent()
-            && cellar.file_name() == Some(OsStr::new("Cellar"))
-            && let Some(prefix) = cellar.parent()
-        {
-            let opt = prefix.join("opt");
-            let _directory = Directory::open(&opt, false)?;
-            let target = opt.join("miccamwatch/bin/mcw");
-            if std::fs::canonicalize(&target)
-                .context("Homebrew opt target is unavailable; registration preserved")?
-                != current
-            {
-                bail!("Homebrew opt target does not match this executable; registration preserved");
-            }
-            return Ok(target);
-        }
-    }
-    Ok(current)
 }
 
 pub fn disable() -> Result<()> {

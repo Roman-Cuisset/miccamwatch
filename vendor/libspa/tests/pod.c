@@ -2,6 +2,7 @@
 #include <stdarg.h>
 
 #include <spa/pod/builder.h>
+#include <spa/pod/parser.h>
 #include <spa/debug/pod.h>
 #include <spa/param/audio/format-utils.h>
 
@@ -98,6 +99,53 @@ struct spa_pod *build_test_struct(
 
 	spa_pod_builder_pop(&b, &inner);
 	return spa_pod_builder_pop(&b, &outer);
+}
+
+/* Independent native-header checks for the Rust builder's generated ABI. */
+size_t native_pod_builder_size(void)
+{
+	return sizeof(struct spa_pod_builder);
+}
+
+size_t native_pod_builder_alignment(void)
+{
+	return _Alignof(struct spa_pod_builder);
+}
+
+bool native_pod_builder_buffer_matches(const struct spa_pod_builder *builder,
+		const void *data, uint32_t size)
+{
+	return builder->data == data && builder->size == size &&
+		builder->state.offset == size && builder->state.frame == NULL;
+}
+
+int parse_test_struct(const uint8_t *buffer, uint32_t len, int32_t expected_num,
+		const char *expected_string, uint32_t expected_width, uint32_t expected_height)
+{
+	struct spa_pod_parser parser;
+	struct spa_pod_frame outer, inner;
+	struct spa_rectangle rect;
+	const char *string;
+	int32_t num;
+	int res;
+
+	spa_pod_parser_init(&parser, buffer, len);
+	if ((res = spa_pod_parser_push_struct(&parser, &outer)) < 0)
+		return res;
+	if ((res = spa_pod_parser_get_int(&parser, &num)) < 0)
+		return res;
+	if ((res = spa_pod_parser_get_string(&parser, &string)) < 0)
+		return res;
+	if ((res = spa_pod_parser_push_struct(&parser, &inner)) < 0)
+		return res;
+	if ((res = spa_pod_parser_get_rectangle(&parser, &rect)) < 0)
+		return res;
+	if ((res = spa_pod_parser_pop(&parser, &inner)) < 0)
+		return res;
+	if ((res = spa_pod_parser_pop(&parser, &outer)) < 0)
+		return res;
+	return num == expected_num && strcmp(string, expected_string) == 0 &&
+		rect.width == expected_width && rect.height == expected_height ? 0 : -EINVAL;
 }
 
 struct spa_pod *build_test_object(uint8_t *buffer, size_t len)

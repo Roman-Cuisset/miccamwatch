@@ -114,3 +114,9 @@ zip = { version = "8", default-features = false }
 # (the header layout's introduction), preserving stock Ubuntu 22.04 PipeWire 0.3.48.
 # Revisit this patch against upstream when upgrading bindings; no ABI substitution.
 libspa = { path = "vendor/libspa" }
+# Exact libspa-sys 0.8.0 published source (MIT), same upstream commit as above;
+# crate SHA-256: bf0d9716420364790e85cbb9d3ac2c950bde16a7dd36f3209b7dfdfc4a24d01f.
+# Only generator change: bindgen 0.72.1 follows complete type definitions on Clang
+# 22+ (upstream rust-bindgen PR #3278), rather than emitting opaque SPA builders.
+# Bindings and inline C wrappers still come from the installed native headers.
+libspa-sys = { path = "vendor/libspa/sys" }

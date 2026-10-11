@@ -54,7 +54,7 @@ jobs:
             architecture: x86_64
             intent: disabled
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 120
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Qualify genuine brew packages and native AppKit lifecycle

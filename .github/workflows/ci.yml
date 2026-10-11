@@ -164,6 +164,9 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --all-targets --locked ${{ matrix.platform == 'linux' && '--features linux-camera-helper' || '' }} -- -D warnings
       - run: cargo test --all-targets --locked ${{ matrix.platform == 'linux' && '--features linux-camera-helper' || '' }}
+      - name: Exercise Rust builder against native C SPA headers
+        if: matrix.platform == 'linux'
+        run: cargo test --locked -p libspa --lib native_headers_builder_roundtrip_after_growth -- --nocapture
       - run: cargo build --locked ${{ matrix.platform == 'linux' && '--features linux-camera-helper' || '' }}
       - run: cargo build --release --locked ${{ matrix.platform == 'linux' && '--features linux-camera-helper' || '' }}
       - name: Prepare isolated native TUI proof dependencies

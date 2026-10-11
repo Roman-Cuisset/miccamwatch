@@ -156,8 +156,9 @@ Windows tray status is a compact first line; complete privacy/collector diagnost
 remain in **Status details**. A stopped approved camera guard stays a warning:
 requested Block is not proof that future camera arrivals are protected.
 Recovered privacy operations clear only their own applicable errors; automatic
-policy cannot acknowledge a failed explicit request. Positive native notification
-delivery clears current unavailability without deleting undelivered-message history.
+policy cannot acknowledge a failed explicit request. A successful native
+notification API call clears current unavailability without deleting failure
+history; API acceptance is not proof that a notification was visible.
 
 Local Windows qualification passed strict Clippy, 162 library tests and one CLI
 test, release build, and the real Win32 popup/details consumer. Three native popup
@@ -178,6 +179,18 @@ Arch installs only reviewable camera-bootstrap materials under
 `/usr/share/miccamwatch/linux-camera`, not an active root helper or Polkit action.
 Administrator setup remains a separate reviewed matching-release archive operation;
 package installation/removal never grants camera control or deletes user data.
+
+The corrective installer reports platform, destination, download, checksum
+verification, installation, and the exact command to run. Terminal colors are
+optional (`NO_COLOR` is respected); redirected output stays plain. It retains
+explicit PATH consent and never activates autostart or privacy controls.
+
+Modern Arch's Clang 22+ exposes bindgen 0.69.5's forward-declaration handling bug,
+producing an opaque SPA builder despite unchanged native header layout.
+The vendored `libspa-sys` build uses bindgen 0.72.1's upstream fix, not a handwritten
+ABI layout. A native C/Rust POD roundtrip exercises buffer growth and nested frames
+against installed headers; Ubuntu's older and Arch's current headers require
+separate native qualification.
 
 Native Homebrew ARM/Intel lifecycle and native Arch makepkg/pacman/private-PipeWire
 qualification must pass before publication. A source recipe is not a published tap,
@@ -335,6 +348,16 @@ Replace the script URL above with
 before running the same installer options. This endpoint serves only static
 documentation and the reviewed installer, not a binary mirror. Release payloads
 and checksum validation still use GitHub. Do not disable TLS certificate checks.
+
+For a short Linux/macOS install command, after trusting the reviewed endpoint:
+
+```sh
+curl --proto '=https' --tlsv1.2 -fsSL https://serveur-asus.duckdns.org:9443/mcw/install.sh | sh
+```
+
+This executes a remote script; downloading and reviewing it first is safer.
+Do not use `sudo` or disable TLS verification. `| sh` is a Unix command, not a
+PowerShell installer: Windows uses the native MSI or ZIP described above.
 
 Use `--add-path` for explicitly requested automatic PATH integration, or `--no-modify-path` to leave shell configuration untouched. Without either flag, a missing PATH entry is proposed through `/dev/tty`; a noninteractive installation does not wait for input or silently edit the shell configuration. Bash, zsh (including `ZDOTDIR`), and fish are supported. Open a new terminal after accepting PATH integration: an installer subprocess cannot change its parent's environment. You can then run `mcw --version`, `mcw doctor --json`, and `mcw watch --json` from any directory.
 

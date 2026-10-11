@@ -32,6 +32,16 @@ PORTABLE_STAGE_ID=
 PORTABLE_STAGE_QUARANTINE=
 
 say() { printf '%s\n' "$*"; }
+COLOR=no
+if [ -t 1 ] && [ "${TERM:-dumb}" != dumb ] && [ -z "${NO_COLOR+x}" ]; then COLOR=yes; fi
+step() {
+    if [ "$COLOR" = yes ]; then printf '\033[1;32m==>\033[0m \033[1m%s\033[0m\n' "$*"
+    else printf '==> %s\n' "$*"; fi
+}
+detail() {
+    if [ "$COLOR" = yes ]; then printf '\033[36m-->\033[0m %s\n' "$*"
+    else printf '%s\n' "--> $*"; fi
+}
 warn() { printf 'mcw installer: %s\n' "$*" >&2; }
 die() { warn "$*"; exit 1; }
 cleanup() {
@@ -160,6 +170,7 @@ else
     command -v shasum >/dev/null 2>&1 || die 'shasum is required.'
     command -v lsof >/dev/null 2>&1 || die 'lsof is required to check whether the installed macOS executable is in use.'
 fi
+step "Platform: $OS ($ASSET_ARCH)"
 sha_file() {
     if [ "$OS" = Linux ]; then DIGEST_OUTPUT=$(sha256sum < "$1"); else DIGEST_OUTPUT=$(shasum -a 256 < "$1"); fi || return 1
     printf '%s\n' "${DIGEST_OUTPUT%% *}"
@@ -573,15 +584,19 @@ fetch() {
     curl --proto '=https' --proto-redir '=https' --tlsv1.2 --fail --location --silent --show-error --connect-timeout 30 --max-time 300 --output "$2" "$1"
 }
 if [ "$VERSION" = latest ]; then
+    step 'Resolving the latest stable release'
     RESOLVED=$(curl --proto '=https' --proto-redir '=https' --tlsv1.2 --fail --location --silent --show-error --connect-timeout 30 --max-time 300 --head --output /dev/null --write-out '%{url_effective}' "$REPOSITORY/releases/latest") || die 'Cannot resolve the latest GitHub release.'
     case "$RESOLVED" in "$REPOSITORY/releases/tag/"*) VERSION=${RESOLVED#"$REPOSITORY/releases/tag/"} ;; *) die "Latest did not resolve to a concrete release: $RESOLVED." ;; esac
     valid_tag "$VERSION" || die "Unsupported resolved release tag: $VERSION."
 fi
 ASSET=miccamwatch-$PLATFORM-$ASSET_ARCH.tar.gz
 BASE=$REPOSITORY/releases/download/$VERSION
-say "Downloading $ASSET from $VERSION."
+detail "Release: $VERSION"
+detail "Destination: $TARGET"
+step "Downloading $ASSET"
 fetch "$BASE/$ASSET" "$WORK/package.tar.gz" || die 'Archive download failed; installed executable was not changed.'
 fetch "$BASE/SHA256SUMS" "$WORK/SHA256SUMS" || die 'Checksum manifest download failed; installed executable was not changed.'
+step 'Verifying SHA-256 and native package contents'
 EXPECTED=$(awk -v asset="$ASSET" '$2==asset || $2=="*" asset { count++; hash=$1; if(NF!=2 || length(hash)!=64 || hash ~ /[^0-9a-fA-F]/) bad=1 } END { if(count!=1 || bad) exit 1; print tolower(hash) }' "$WORK/SHA256SUMS") || die "Manifest must contain exactly one valid checksum for $ASSET."
 ACTUAL=$(sha_file "$WORK/package.tar.gz") || die 'Cannot checksum downloaded archive.'
 [ "$ACTUAL" = "$EXPECTED" ] || die 'Archive SHA-256 mismatch; installed executable was not changed.'
@@ -605,6 +620,7 @@ awk -v camera="$CAMERA_REQUIRED" '
     }' "$WORK/members" || die 'Unsafe archive: missing, duplicate or unexpected release members.'
 tar -tvzf "$WORK/package.tar.gz" > "$WORK/types" || die 'Cannot inspect archive member types.'
 awk -v count="$MEMBER_COUNT" 'substr($0,1,1)!="-" { bad=1 } END { exit bad || NR!=count }' "$WORK/types" || die 'Unsafe archive: symlinks, hardlinks and nonregular entries are not allowed.'
+step 'Installing the matching native executable'
 mkdir -p "$BIN" || die "Cannot create $BIN."
 STAGE=$(mktemp "$BIN/.mcw-stage.XXXXXXXX") || die 'Cannot create same-directory executable staging file.'
 tar -xOzf "$WORK/package.tar.gz" mcw > "$STAGE" || die 'Cannot stream the executable from the archive.'
@@ -766,17 +782,10 @@ mv -f "$WORK/binary.sha256" "$STATE/binary.sha256" || die 'Installed executable 
 printf '%s\n' "$VERSION" > "$WORK/version"
 mv -f "$WORK/version" "$STATE/version" || die 'Installed executable is valid, but version receipt could not be saved.'
 fi
-say "Installed $REPORTED at $TARGET."
+detail "Native executable verified: $TARGET"
 if [ "$OS" = Linux ] && [ "$CAMERA_REQUIRED" = yes ]; then
-    say "Matching camera administration payload installed at $CAMERA."
-    say 'The root camera helper was NOT installed or refreshed. An administrator must explicitly install/update it before USB camera controls work:'
-    printf '  sudo sh '
-    printf "'"; printf '%s' "$CAMERA/install-camera-helper.sh" | sed "s/'/'\\\\''/g"; printf "' --archive "
-    printf "'"; printf '%s' "$PREFIX/$ASSET" | sed "s/'/'\\\\''/g"; printf "' --sha256 '%s'\n" "$EXPECTED"
-    say "First download the verified release archive to $PREFIX/$ASSET:"
-    printf '  curl --proto =https --proto-redir =https --fail --location --output '
-    printf "'"; printf '%s' "$PREFIX/$ASSET" | sed "s/'/'\\\\''/g"; printf "' '%s/%s'\n" "$BASE" "$ASSET"
-    say 'Use an independently trusted archive hash if publisher authenticity is required; SHA256SUMS alone provides integrity, not independent authentication.'
+    detail "Optional camera administration files: $CAMERA"
+    detail 'No root camera helper or Polkit authorization was installed; administrator setup is separate.'
 fi
 
 # Quote literal paths, not expressions evaluated by the user's shell.
@@ -789,9 +798,28 @@ SHELL_NAME=${SHELL:-}
 SHELL_NAME=${SHELL_NAME##*/}
 SHELL_NAME=${SHELL_NAME:-unknown}
 case "$SHELL_NAME" in
-    fish) QUOTED_BIN=$(fish_quote "$BIN"); MANUAL="set -gx PATH $QUOTED_BIN \$PATH" ;;
-    *) QUOTED_BIN=$(posix_quote "$BIN"); MANUAL="export PATH=$QUOTED_BIN:\"\$PATH\"" ;;
+    fish) QUOTED_BIN=$(fish_quote "$BIN"); QUOTED_TARGET=$(fish_quote "$TARGET"); MANUAL="set -gx PATH $QUOTED_BIN \$PATH" ;;
+    *) QUOTED_BIN=$(posix_quote "$BIN"); QUOTED_TARGET=$(posix_quote "$TARGET"); MANUAL="export PATH=$QUOTED_BIN:\"\$PATH\"" ;;
 esac
+finish_install() {
+    say ''
+    step "Installation completed: $REPORTED"
+    say ''
+    say 'To open the dashboard, run:'
+    if [ "$IN_PATH" = yes ]; then say '  mcw top'
+    else say "  $QUOTED_TARGET top"; fi
+    if [ "$IN_PATH" != yes ]; then
+        say ''
+        say "If 'mcw' is not found in this terminal, run:"
+        say "  $MANUAL"
+        if [ "$PATH_MODE" = add ]; then
+            detail 'Managed PATH changes also apply to new shell sessions.'
+        fi
+    fi
+    say ''
+    say 'Documentation: https://serveur-asus.duckdns.org:9443/mcw/'
+    detail 'Autostart and microphone/camera controls were not activated.'
+}
 IN_PATH=no
 OLD_IFS=$IFS; IFS=:
 # Disable filename expansion when splitting PATH components.
@@ -809,7 +837,8 @@ done
 set +f
 IFS=$OLD_IFS
 if [ "$IN_PATH" = yes ]; then
-    say 'The installation directory is already on PATH; no shell files were changed.'
+    detail 'Executable directory already on PATH; shell startup files unchanged.'
+    finish_install
     exit 0
 fi
 if [ "$PATH_MODE" = ask ]; then
@@ -824,8 +853,8 @@ if [ "$PATH_MODE" = ask ]; then
     fi
 fi
 if [ "$PATH_MODE" != add ]; then
-    say "PATH was not changed. Run $TARGET directly, or add this to your shell configuration:"
-    say "$MANUAL"
+    detail 'PATH unchanged; shell startup files preserved.'
+    finish_install
     exit 0
 fi
 
@@ -897,7 +926,6 @@ case "$SHELL_NAME" in
         ZSH_HOME=${ZDOTDIR:-$HOME}
         valid_path "$ZSH_HOME" || die 'ZDOTDIR must be absolute and contain no colon/control characters.'
         add_block "$ZSH_HOME/.zshrc"
-        say "Open a new interactive zsh terminal, or run: $MANUAL"
         say 'The block is in .zshrc (interactive terminals), not noninteractive .zshenv.' ;;
     bash)
         add_block "$HOME/.bashrc"
@@ -906,18 +934,15 @@ case "$SHELL_NAME" in
         elif [ -e "$HOME/.bash_login" ] || [ -L "$HOME/.bash_login" ]; then LOGIN_CONFIG=$HOME/.bash_login
         elif [ -e "$HOME/.profile" ] || [ -L "$HOME/.profile" ]; then LOGIN_CONFIG=$HOME/.profile
         fi
-        add_block "$LOGIN_CONFIG"
-        say "Open a new bash terminal, or run: $MANUAL"
-        say 'Managed blocks cover both interactive non-login .bashrc and the active login profile.' ;;
+        add_block "$LOGIN_CONFIG" ;;
     fish)
         FISH_HOME=${XDG_CONFIG_HOME:-$HOME/.config}
         valid_path "$FISH_HOME" || die 'XDG_CONFIG_HOME must be absolute and contain no colon/control characters.'
-        add_block "$FISH_HOME/fish/config.fish"
-        say "Open a new fish terminal, or run: $MANUAL" ;;
+        add_block "$FISH_HOME/fish/config.fish" ;;
     *)
         warn "Unknown shell ($SHELL_NAME): no shell configuration was changed."
         say "Add $BIN to PATH using your shell's syntax. POSIX shell example:"
         say "$MANUAL"
         exit 1 ;;
 esac
-say 'The installer cannot modify this terminal process; its PATH changes apply to new shell sessions.'
+finish_install

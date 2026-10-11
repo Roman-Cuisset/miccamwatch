@@ -174,6 +174,15 @@ class Qualification:
         require(not self.binary.exists() and not self.binary.is_symlink(), "An existing mcw must remain untouched")
         require(not (self.prefix / "Cellar/miccamwatch").exists(), "An existing Homebrew rack must remain untouched")
         source_dir = Path(__file__).resolve().parent
+        if actual == "x86_64":
+            # New Intel bottles are unavailable on this native Homebrew tier.
+            # Provision genuine package-owned prerequisites from source rather
+            # than substituting rustup or inventing Homebrew ownership metadata.
+            missing = self.brew("intel-missing-rust-dependencies", "deps", "--include-build",
+                                "--missing", "--topological", "rust").stdout.decode().splitlines()
+            self.run("intel-native-rust-source-install",
+                     ["brew", "install", "--build-from-source", "--formula", *missing, "rust"],
+                     timeout=18000)
         formula_text, version = candidate_formula(source_dir / "Formula/miccamwatch.rb", self.args)
         self.brew("create-native-tap", "tap-new", "--no-git", self.tap)
         repository = Path(self.brew("brew-repository", "--repository").stdout.decode().strip())
@@ -201,7 +210,13 @@ class Qualification:
             directory = Path(self.mcw("login-state-prerequisite", *command, env=self.login_env).stdout.decode().strip()).parent
             require(not directory.exists(), "Existing login-session app state must remain untouched")
             self.login_state.append(directory)
-        self.mcw("baseline-explicit-autostart-enable", "autostart", "enable")
+        baseline = self.binary.resolve(strict=True)
+        self.run("baseline-physical-executable-ancestry", ["stat", "-f", "%N uid=%u gid=%g mode=%Lp",
+                 *reversed(baseline.parent.parents), baseline.parent, baseline])
+        # Historical Darwin current_exe retains invocation aliases. Invoke the
+        # authentic physical keg, not writable prefix/bin; never patch its source
+        # or loosen filesystem permissions to satisfy this prerequisite.
+        self.run("baseline-explicit-autostart-enable", [baseline, "autostart", "enable"])
         self.run("baseline-launchagent-loaded", ["launchctl", "print", self.service])
         self.until(lambda: subprocess.run([str(self.binary), "tray", "status"], env=self.login_env,
                                          capture_output=True, timeout=15).returncode == 0,
@@ -223,17 +238,17 @@ class Qualification:
         for name, command in (("cli-help", ("--lang", "en", "--help")), ("tray-help", ("tray", "--help")),
                               ("autostart-help", ("autostart", "--help"))):
             self.mcw(name, *command)
-        stable = self.prefix / "opt/miccamwatch/bin/mcw"
+        selected = self.binary.resolve(strict=True)
         updated = plistlib.loads(self.entry.read_bytes())
-        require(updated["ProgramArguments"] == [str(stable), "tray", "run"],
-                "Upgrade did not migrate owned autostart to the verified stable opt target; upstream compatible release is required")
+        require(updated["ProgramArguments"] == [str(selected), "tray", "run"],
+                "Upgrade did not refresh owned autostart to the validated physical keg")
         require(updated["MicCamWatchVersion"] == version, "Registration version was not refreshed")
-        require(stable.resolve() == self.binary.resolve(), "Stable opt link does not select the installed executable")
+        require(selected != Path(original["ProgramArguments"][0]), "Upgrade kept the historical executable target")
         require(self.disabled("disabled-state-after-upgrade") == (self.args.autostart_intent == "disabled"),
                 "Upgrade changed the user's launchctl disabled intent")
         if self.args.autostart_intent == "loaded":
             loaded = self.run("upgraded-loaded-service", ["launchctl", "print", self.service]).stdout
-            require(str(stable).encode() in loaded, "Loaded LaunchAgent did not select the refreshed stable target")
+            require(str(selected).encode() in loaded, "Loaded LaunchAgent did not select the refreshed physical target")
         else:
             self.absent_service("upgrade-did-not-activate")
         self.retained(snapshot)
@@ -255,7 +270,7 @@ class Qualification:
             self.absent_service("repeat-did-not-activate")
         self.brew("remove-old-keg", "cleanup", self.formula)
         require(not Path(original["ProgramArguments"][0]).exists(), "Old Cellar target remained; cleanup scenario was not exercised")
-        require(stable.is_file(), "Stable LaunchAgent target broke after old-keg cleanup")
+        require(selected.is_file(), "Refreshed LaunchAgent target broke after old-keg cleanup")
         self.brew("formula-native-test", "test", self.formula)
         if self.args.autostart_intent == "loaded":
             self.run("explicit-bootout-before-menu-test", ["launchctl", "bootout", self.domain, self.entry])
@@ -265,7 +280,7 @@ class Qualification:
         preserved = self.registration()
         self.brew("native-uninstall", "uninstall", self.formula)
         self.installed = False
-        require(not self.binary.exists() and not stable.exists(), "Package-owned executable/link remained after uninstall")
+        require(not self.binary.exists() and not selected.exists(), "Package-owned executable/link remained after uninstall")
         require(self.registration() == preserved, "Uninstall deleted/changed user's autostart intent")
         require(self.disabled("disabled-state-after-uninstall") == (self.args.autostart_intent == "disabled"),
                 "Uninstall changed retained launchctl disabled intent")

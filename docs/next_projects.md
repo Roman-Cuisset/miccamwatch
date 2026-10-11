@@ -36,6 +36,7 @@ Les identifiants sont stables. À chaque livraison, remplacer l'état par **En c
 
 | Lot | Décision / état actuel | Complexité | Dépendance principale |
 | --- | --- | --- | --- |
+| SITE-PAGES | **Priorité urgente, à réaliser au plus vite** : site MCW complet et soigné, prêt à déployer sur Cloudflare Pages ; demande consignée, site non réalisé | Moyenne | Contenu fidèle au produit publié, livrable statique autonome et preuve réelle desktop/mobile |
 | P1-RAM | Publié 0.17.0, validé logiciel/natif : bornes et mesures complètes, 15 Mo non atteints, scénario composé Windows ~43 Mo | Moyenne | Maintien des preuves/limites canoniques ; 30 Mo reste une référence |
 | P1-RESTORE | Publié 0.17.0, validé logiciel/natif : propriétaire Windows, états opposés/hotplug/partiel simulés, release natif réel sans devices | Élevée | Pas de certification matérielle ou déni exclusif/ASIO |
 | P1-HB | En cours : formule native ARM/Intel et qualification brew ; correction amont d'autostart 0.17.1, preuves et tap public requis avant disponibilité | Moyenne | Propriété installation/autostart, validation macOS |
@@ -54,6 +55,7 @@ Les identifiants sont stables. À chaque livraison, remplacer l'état par **En c
 | SITE-ROOT | Demandé, à faire plus tard : ne plus servir l'ancienne page à la racine HTTPS `/` | Faible | Routage Caddy exact ; préserver `/mcw` et les autres services |
 | SITE-MCW | Demandé, à faire plus tard : améliorer la présentation et la lisibilité du site `/mcw` | Moyenne | Page statique, parcours Windows/Linux/macOS et vérification desktop/mobile |
 | TRAY-WIN | Correctif 0.17.1 en cours : statut compact, erreurs récupérées sans redémarrage ; avertissements de garde absente conservés | Moyenne | Preuve Win32 locale, CI native et publication |
+| INSTALL-CURL | En cours : commande courte `/mcw/install.sh`, étapes lisibles, résultat et conseils PATH ; même installateur natif, sans activation implicite | Faible | Flux HTTPS curl → sh réellement exercé sur Linux/macOS ; Windows MSI/ZIP, pas de Bash imposé |
 
 ## Phase 1 — Packaging et écosystème de distribution (immédiat)
 
@@ -151,8 +153,9 @@ fixture publique 0.16.1 et `native_qualification.py` ; workflow
 `homebrew-native.yml`, ARM/Intel × loaded/dormant/disabled. Vrais
 install/upgrade/cleanup/test/uninstall/reinstall, menu AppKit, conservation des
 préférences/historique et refus des inscriptions externes ; postinstall absent
-sans activation ni receipt. L'amont 0.17.1 vérifie la cible `opt` et préserve
-le chargement/disabled lors d'un refresh ; no-op déjà courant sans redémarrage.
+sans activation ni receipt. L'amont 0.17.1 résout et valide l'exécutable physique
+du Cellar ; refresh possédé avant nettoyage de l'ancien keg, préservation
+loaded/dormant/disabled et no-op courant sans redémarrage.
 Source 0.17.0 historique immuable, pas de patch de formule pour masquer le défaut.
 Publication exige le digest observé du correctif et le tap maintenu
 `Roman-Cuisset/homebrew-miccamwatch`, puis un vrai install depuis ce tap ;
@@ -344,6 +347,51 @@ Windows : `RegisterHotKey` seul n'offre pas un protocole PTT key-up complet ; va
 | Productivité/temps de parole | Aucun score de productivité ni métrique de durée de parole | Ne pas détourner `history`/`model` vers l'analytique ; timestamps = observations, pas parole mesurée | Moyenne si entreprise ; exclue |
 | Clients réseau lourds | Aucun SDK Slack/Discord/Telegram/IoT, client de réputation ou webhook intégré | Intégrations uniquement scripts/hooks et JSON standard ; updater/trust natifs existants restent des besoins distincts, pas un prétexte à étendre la surveillance réseau | Moyenne à Élevée si entreprise ; exclue |
 
+## SITE-PAGES — Site MCW complet sur Cloudflare Pages, priorité urgente
+
+**Demande utilisateur :** réaliser au plus vite un vrai site de présentation de
+MCW, complet et bien fini, que l'utilisateur puisse mettre sur **Cloudflare
+Pages**. Priorité du prochain chantier web ; ne pas attendre la fin de toutes
+les phases de packaging pour le commencer. **État : consigné, à réaliser** :
+aucun site Cloudflare Pages livré ni déploiement revendiqué ici.
+
+**Livrable :** un site statique autonome prêt à publier sur Pages, avec fichiers
+et instructions de déploiement exactes (dossier de sortie, commande de build si
+nécessaire, variables réellement requises). Pas de serveur applicatif, runtime
+Node côté visiteur, dépendance obligatoire au serveur ASUS ou secret dans le
+contenu public. Domaine `pages.dev` fonctionnel ; domaine personnalisé facultatif,
+avec instructions DNS adaptées sans modifier les autres services.
+
+**Contenu attendu :** présentation claire de miccamwatch, bénéfices concrets,
+captures réelles du tray/TUI, fonctionnement et fonctions effectivement publiées ;
+parcours Windows/Linux/macOS distincts, prérequis, téléchargement et installation,
+commande curl Unix copiable avec résultat et conseils PATH, méthode Windows
+native ; démarrage, usage quotidien, désinstallation, mises à jour et dépannage ;
+FAQ, limites de protection/attribution, confidentialité, signature et permissions
+UAC/Polkit/TCC ; liens dépôt, documentation et releases. Ne pas présenter les lots
+de roadmap ou recettes non publiées comme disponibles ni promettre un blocage
+universel. Pas de remerciement répétitif dans la présentation.
+
+**Présentation et qualité :** hiérarchie lisible, identité visuelle cohérente,
+navigation simple, boutons d'action alignés et adaptatifs, captures utiles plutôt
+que décoratives, contenu lisible sur téléphone et desktop. Accessibilité clavier,
+contrastes, focus visible, texte alternatif, respect du mouvement réduit ; pages
+légères, sans trackers ajoutés par défaut, métadonnées SEO/social et page 404
+propres. Downloads et exemples suivent la release réellement publiée.
+
+**Validation :** déployer réellement sur un projet Pages autorisé ou, sans accès
+au compte Cloudflare, livrer et servir le dossier statique puis consigner le
+prérequis exact de publication. Vérifier le vrai rendu desktop/mobile, navigation
+clavier, liens/téléchargements, copie des commandes, HTTPS et routes/404. Exécuter
+le flux curl Unix annoncé dans un environnement isolé ; aucune activation
+implicite des protections, de l'autostart ou du tray. Ne pas annoncer le site
+déployé sur la seule base d'une compilation.
+
+**Articulation :** ce site Pages est une demande distincte. SITE-ROOT/SITE-MCW
+ci-dessous restent différés ; ne pas supprimer la racine ASUS ou refondre `/mcw`
+implicitement. Le contenu et l'installateur revus peuvent être réutilisés sans
+dupliquer leur contrat ou imposer le port ASUS à la navigation Pages.
+
 ## Site HTTPS — demandes différées
 
 **État : demandé par l'utilisateur, à faire plus tard.** Cette inscription au
@@ -416,3 +464,5 @@ Ne pas déployer cette refonte dans le cadre de la seule mise à jour du MD.
 | 2026-10-10 | Requalification après correction arrêt AppKit | Validé logiciel/natif avant tag ; source `29db092` | [CI native complète](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38055262096) Windows/Linux/macOS ARM/Intel verte. Arrêts tray réels Linux/macOS : contrôle stop 0 et sortie processus 0, cleanup sans échec. Quatre comparaisons baseline/candidat complètes et qualifiées ; garde + top/tray Windows requalifiés, rôles présents, protections conservées et cleanup réussi. L'échec candidat précédent est conservé, non accepté | Commit de validation avant tag puis publication/provenance/migrations publiques ; 15/30 Mo composés et qualification physique toujours non acquis ; aucune modification de l'installation/tray utilisateur |
 | 2026-10-10 | Livraison P1-RAM/P1-RESTORE 0.17.0 | [Publié stable/latest](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.17.0), tag annoté immuable source `d1b8557f827e102df20c33dbac4ec99badba7d1a` | [CI exacte pré-tag](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38056837640), [release native](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38058344725), sept assets/digests et six attestations exactes vérifiés ; Windows public 0.16.1→0.17.0, paire ZIP/préférences/no-op et tray utilisateur étranger préservés ; [migrations publiques Unix](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38059262974) Linux/macOS ARM/Intel, managed 0.16.1→0.17.0 et bootstrap Mac depuis public 0.16.0, limites de fixture explicitement conservées ; DNS page/script/TLS/desktop/mobile/curl réel vérifiés ; source utilisateur inchangée | 15 Mo non acquis, scénario composé ~43 Mo et pics explicites ; physique/exclusif/ASIO non certifiés, EXE/MSI NotSigned, aucune nouvelle clearance AV/Apple ; Homebrew/AUR/Winget/Linux ARM64 et autres lots ouverts. Preuves post-publication dans commit ultérieur sans déplacer le tag |
 | Demande utilisateur après livraison 0.17.0 | SITE-ROOT / SITE-MCW | Consigné, différé ; aucune modification du site | Racine HTTPS à ne plus servir ; `/mcw` à conserver fonctionnel et à améliorer visuellement ; critères et limites dans la section Site HTTPS | Réaliser ultérieurement les deux demandes, puis vérifier HTTPS/routes/script et vrai rendu desktop/mobile |
+| 2026-10-11 | SITE-PAGES | **Priorité urgente consignée, à réaliser au plus vite** ; aucun déploiement effectué | Demande utilisateur : site MCW complet, soigné et publiable sur Cloudflare Pages ; contenu, livrable, accessibilité et critères de validation décrits ci-dessus | Réaliser le prochain chantier web sans attendre tout le packaging ; prouver le rendu et les parcours ; accès Cloudflare requis uniquement pour revendiquer un déploiement réel |
+| 2026-10-11 | TRAY-WIN / P1-HB / P1-AUR / INSTALL-CURL | Correctifs en cours, non publiés ; stable reste 0.17.0 | Local Windows : Clippy/tests/build et popup Win32 compact prouvés. Première qualification : [CI](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38146600418) refuse le nouveau numéro dans le gate caméra ; [Homebrew](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38146994580) bloque avant candidat sur alias historique group-writable ARM et bouteilles Intel manquantes ; [Arch](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38146600485) expose bindgen/Clang 23, pas un changement de layout SPA | Gate version revu, cible physique validée sans relâcher permissions, prérequis Homebrew Intel réellement construits, bindgen amont corrigé et roundtrip C/Rust ; requalification native nécessaire. Installer curl : afficher étapes et commande sans runtime supplémentaire ou activation ; vrais flux HTTPS par OS requis avant livraison |

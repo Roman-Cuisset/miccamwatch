@@ -634,6 +634,117 @@ pub use __builder_add__ as builder_add;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pod::{deserialize::PodDeserializer, Value};
+
+    extern "C" {
+        fn native_pod_builder_size() -> usize;
+        fn native_pod_builder_alignment() -> usize;
+        fn native_pod_builder_buffer_matches(
+            builder: *const spa_sys::spa_pod_builder,
+            data: *const c_void,
+            size: u32,
+        ) -> bool;
+        fn build_test_struct(
+            buffer: *mut u8,
+            len: usize,
+            num: i32,
+            string: *const std::ffi::c_char,
+            width: u32,
+            height: u32,
+        ) -> *mut spa_sys::spa_pod;
+        fn parse_test_struct(
+            buffer: *const u8,
+            len: u32,
+            num: i32,
+            string: *const std::ffi::c_char,
+            width: u32,
+            height: u32,
+        ) -> c_int;
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)]
+    fn native_headers_builder_roundtrip_after_growth() {
+        unsafe {
+            assert_eq!(
+                std::mem::size_of::<spa_sys::spa_pod_builder>(),
+                native_pod_builder_size()
+            );
+            assert_eq!(
+                std::mem::align_of::<spa_sys::spa_pod_builder>(),
+                native_pod_builder_alignment()
+            );
+        }
+
+        let text = "native SPA header roundtrip ".repeat(256);
+        let c_text = CString::new(text.as_str()).unwrap();
+        let rectangle = Rectangle {
+            width: 1920,
+            height: 1080,
+        };
+        // Empty length invokes overflow immediately; the long string forces
+        // reallocation while the outer frame is live, exercising data and size.
+        let mut data = Vec::with_capacity(1);
+        {
+            let mut builder = Builder::new(&mut data);
+            builder_add!(
+                &mut builder,
+                Struct {
+                    Int(42),
+                    String(text.as_str()),
+                    Struct {
+                        Rectangle(rectangle),
+                    },
+                }
+            )
+            .unwrap();
+            unsafe {
+                assert!(native_pod_builder_buffer_matches(
+                    builder.as_raw_ptr(),
+                    builder.inner.data.as_ptr().cast(),
+                    builder.inner.data.len().try_into().unwrap(),
+                ));
+            }
+        }
+
+        // C builds the same POD independently using the installed headers.
+        let mut native = vec![0u64; data.len() / 8];
+        unsafe {
+            let pod = build_test_struct(
+                native.as_mut_ptr().cast(),
+                data.len(),
+                42,
+                c_text.as_ptr(),
+                rectangle.width,
+                rectangle.height,
+            );
+            assert!(!pod.is_null());
+            let native_bytes = std::slice::from_raw_parts(native.as_ptr().cast::<u8>(), data.len());
+            assert_eq!(data.as_slice(), native_bytes);
+            // Decode the Rust-built POD with the real C parser, not just Rust.
+            assert_eq!(
+                parse_test_struct(
+                    data.as_ptr(),
+                    data.len().try_into().unwrap(),
+                    42,
+                    c_text.as_ptr(),
+                    rectangle.width,
+                    rectangle.height,
+                ),
+                0
+            );
+        }
+        let (remaining, decoded) = PodDeserializer::deserialize_any_from(&data).unwrap();
+        assert!(remaining.is_empty());
+        assert_eq!(
+            decoded,
+            Value::Struct(vec![
+                Value::Int(42),
+                Value::String(text),
+                Value::Struct(vec![Value::Rectangle(rectangle)]),
+            ])
+        );
+    }
 
     #[test]
     #[cfg_attr(miri, ignore)]
