@@ -35,7 +35,7 @@ PRIVILEGED = (
     Path("/usr/.miccamwatch-install"),
 )
 PAYLOAD = Path("/usr/share/miccamwatch/linux-camera")
-VERSION = "0.17.0"
+VERSION = "0.17.1"
 
 
 def require(condition, message):
@@ -218,6 +218,15 @@ def qualify(args):
         record(proof, "clean-native-build", as_user(["makepkg", "--cleanbuild", "--noconfirm"]),
                cwd=build, timeout=3600)
         report["completed"].append("clean_native_locked_source_build_and_srcinfo")
+        commit = re.search(r"^_commit=([0-9a-f]{40})$", (build / "PKGBUILD").read_text(), re.MULTILINE)
+        require(commit is not None, "Native ABI regression needs the recipe's immutable source commit")
+        source = build / "src" / ("miccamwatch-" + commit[1])
+        record(proof, "native-spa-builder-c-roundtrip",
+               as_user(["env", "CARGO_HOME=" + str(build / "src/cargo-home"),
+                        "CARGO_TARGET_DIR=" + str(build / "src/target"),
+                        "cargo", "test", "--locked", "-p", "libspa", "--lib",
+                        "native_headers_builder_roundtrip_after_growth", "--", "--nocapture"]),
+               cwd=source, timeout=600)
 
         def package_path(label):
             paths = record(proof, label, as_user(["makepkg", "--packagelist"]), cwd=build).stdout.decode().splitlines()

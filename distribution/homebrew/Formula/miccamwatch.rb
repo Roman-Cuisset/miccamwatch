@@ -1,9 +1,9 @@
 class Miccamwatch < Formula
   desc "Observe microphone and camera access with a CLI and native menu bar"
   homepage "https://github.com/Roman-Cuisset/miccamwatch"
-  url "https://codeload.github.com/Roman-Cuisset/miccamwatch/tar.gz/d1b8557f827e102df20c33dbac4ec99badba7d1a"
-  version "0.17.0"
-  sha256 "82bab62b58bd3fa1f78f671fbf8131bf620b779f93106ca2b84ad3aeb318ecec"
+  url "https://codeload.github.com/Roman-Cuisset/miccamwatch/tar.gz/6ce11366b326e50144eb8d04256b36a9d92d24ec"
+  version "0.17.1"
+  sha256 "78dd6cfa7cdb9e53d3bf37a9e609607f52a88a51a15c4852638a280d283f7c5c"
   license "MIT"
 
   depends_on "rust" => :build
@@ -18,10 +18,6 @@ class Miccamwatch < Formula
   end
 
   def post_install
-    # 0.17.0 refresh bootstraps dormant registrations; never invoke that API.
-    # The compatible upstream lifecycle contract begins with 0.17.1.
-    return if version < Version.new("0.17.1")
-
     unless quiet_system(opt_bin/"mcw", "autostart", "refresh")
       opoo "Autostart was not refreshed; existing registration was preserved."
       opoo "Run `mcw autostart refresh` to inspect the ownership/session refusal."

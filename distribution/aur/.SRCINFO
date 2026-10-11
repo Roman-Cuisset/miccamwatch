@@ -1,6 +1,6 @@
 pkgbase = miccamwatch
 	pkgdesc = Monitor microphone and camera access from the command line
-	pkgver = 0.17.0
+	pkgver = 0.17.1
 	pkgrel = 1
 	url = https://github.com/Roman-Cuisset/miccamwatch
 	arch = x86_64
@@ -20,7 +20,7 @@ pkgbase = miccamwatch
 	optdepends = python: separately reviewed administrator camera-helper bootstrap
 	optdepends = polkit: separately approved administrator camera-helper authorization
 	options = !debug
-	source = miccamwatch-0.17.0-d1b8557f827e102df20c33dbac4ec99badba7d1a.tar.gz::https://codeload.github.com/Roman-Cuisset/miccamwatch/tar.gz/d1b8557f827e102df20c33dbac4ec99badba7d1a
-	sha256sums = 82bab62b58bd3fa1f78f671fbf8131bf620b779f93106ca2b84ad3aeb318ecec
+	source = miccamwatch-0.17.1-6ce11366b326e50144eb8d04256b36a9d92d24ec.tar.gz::https://codeload.github.com/Roman-Cuisset/miccamwatch/tar.gz/6ce11366b326e50144eb8d04256b36a9d92d24ec
+	sha256sums = 78dd6cfa7cdb9e53d3bf37a9e609607f52a88a51a15c4852638a280d283f7c5c
 
 pkgname = miccamwatch

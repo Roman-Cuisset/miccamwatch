@@ -1,6 +1,6 @@
 # Maintainer: Roman Cuisset <rcuisset69@gmail.com>
 pkgname=miccamwatch
-pkgver=0.17.0
+pkgver=0.17.1
 pkgrel=1
 pkgdesc='Monitor microphone and camera access from the command line'
 arch=('x86_64')
@@ -18,17 +18,17 @@ optdepends=(
   'python: separately reviewed administrator camera-helper bootstrap'
   'polkit: separately approved administrator camera-helper authorization'
 )
-# v0.17.0 annotated tag f710752e9e0d9393ebcd312b40e2d1ea023a56b7
-# resolves to this commit. Pin the commit, not the movable tag archive URL.
-_commit=d1b8557f827e102df20c33dbac4ec99badba7d1a
+# Corrective 0.17.1 source, awaiting qualified release publication.
+# Pin the immutable commit archive, not a movable tag archive URL.
+_commit=6ce11366b326e50144eb8d04256b36a9d92d24ec
 source=("${pkgname}-${pkgver}-${_commit}.tar.gz::https://codeload.github.com/Roman-Cuisset/miccamwatch/tar.gz/${_commit}")
-sha256sums=('82bab62b58bd3fa1f78f671fbf8131bf620b779f93106ca2b84ad3aeb318ecec')
+sha256sums=('78dd6cfa7cdb9e53d3bf37a9e609607f52a88a51a15c4852638a280d283f7c5c')
 
 prepare() {
   cd "$srcdir/$pkgname-$_commit"
   export CARGO_HOME="$srcdir/cargo-home"
-  # Keep Cargo.toml's vendor/libspa patch unchanged: it gates only the
-  # VideoInfoRaw ABI introduced in PipeWire 0.3.65, not native SPA headers.
+  # Preserve the upstream libspa/libspa-sys patches: legacy VideoInfoRaw gating
+  # and bindgen's complete-definition fix for modern Clang native headers.
   # libpipewire supplies both libpipewire-0.3 and libspa-0.2 headers/pkg-config;
   # pipewire supplies the real pw-dump runtime command.
   cargo fetch --locked --target x86_64-unknown-linux-gnu
