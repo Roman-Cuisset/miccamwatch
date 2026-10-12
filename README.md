@@ -222,6 +222,13 @@ and standalone bootstrap boundaries. The [Arch recipe pinned to the actual
 release source](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38212488566)
 also passed its complete native package lifecycle. Neither test publishes an
 external package-manager entry or certifies physical capture.
+After explicit permission for the UI restart, the workstation's installed
+CLI/companion pair was updated to the public 0.17.1 bytes. Its legacy main-executable
+tray initially remained 0.17.0; a PID-bound native cooperative close, not process
+termination or privacy commands, completed the approved handoff. The new companion
+menu was visibly 0.17.1 and compact; the grey error cross was gone. Existing mute/
+camera intent was preserved. This is software/UI evidence, not physical protection
+certification or reproduction of the user's earlier notification failure.
 
 ## Commands
 

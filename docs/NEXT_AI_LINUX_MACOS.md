@@ -442,7 +442,7 @@ restent ouverts.
   composé Windows ~43 Mo, aucune certification physique/exclusif/ASIO nouvelle.
   Homebrew/AUR/Winget/Linux ARM64 et les autres lots restent ouverts.
 
-## Correctif 0.17.1 — publié stable/latest, installation PC intacte
+## Correctif 0.17.1 — publié stable/latest et installé sur PC avec accord
 
 - Source finale `dd35f7ddc1bb36c079017f235703175c52d77da5`, tag annoté sans
   réécriture d'une ancienne release. [CI native quatre OS](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38152020817)
@@ -485,4 +485,18 @@ restent ouverts.
   non attribuée ; aucune mutation de notre part. Ne pas redémarrer le tray pendant
   la capture sans accord ; l'updater doit revalider la readiness native à l'instant
   du remplacement. Ne jamais libérer une protection implicitement.
+
+- L'utilisateur a ensuite choisi **Maintenant** pour le redémarrage UI. Updater
+  natif terminé, paire installée exacte du ZIP public 0.17.1. L'ancien tray lancé
+  dans le CLI restait 0.17.0 et tenait son image de backup ; stop CLI signalait
+  absent malgré son menu réel. Handoff autorisé via message natif coopératif,
+  identité/PID et ack validés, jamais de kill ou de commande de protection.
+- Nouveau compagnon réellement 0.17.1, menu compact et croix grise absente
+  observés sur ce PC ; cinq collecteurs healthy, mute/caméra inchangés. Snapshot
+  final sans accès actif, pipeline prêt visible ; origine de ce changement non
+  attribuée. Backup retiré normalement après sortie ancienne UI, aucun bypass
+  ACL/antivirus ni restauration de quarantaine. Scaffolds privés retirés.
+- P1-UPGRADE conserve l'identification sûre du tray legacy main-exe comme travail
+  restant ; ne pas faire croire qu'un swap de fichiers prouve la version GUI
+  active. SITE-PAGES est le prochain chantier web urgent demandé dans la roadmap.
 

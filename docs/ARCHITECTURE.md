@@ -1037,3 +1037,35 @@ permission. A later update must revalidate native readiness at transaction time
 and refuse any resumed/pending/unknown protection, never release it implicitly.
 No physical media was read, saved or certified by any of these checks.
 
+### Authorized workstation deployment
+
+The user explicitly chose to update **now**, authorizing the brief MCW UI restart,
+not a microphone/camera mutation. The installed 0.17.0 native updater verified
+and replaced both files with exact public 0.17.1 ZIP bytes. A remaining tray
+launched through the old main executable still displayed 0.17.0; CLI stop returned
+not-running while its actual Win32 menu remained present. File replacement alone
+was therefore not sufficient GUI-version evidence.
+
+The identified old MCW tray accepted its native PID-bound cooperative stop message
+and exited normally. No forced termination, Ktalk stop or privacy command was used.
+The new companion started with caller handles closed and no console attachment.
+Its real menu reports 0.17.1; the grey error cross is absent.
+
+| Workstation surface | Observed value |
+| --- | --- |
+| Native menu dimensions | 356 × 262 px |
+| Native DPI | 120 (125%) |
+| Current icon | Orange readiness indicator, not grey error cross |
+| Collector health | All five healthy |
+| Microphone intent/state | Not requested, unmuted; unchanged |
+| Camera intent | Allow; unchanged |
+| Clipboard/privacy action | Neither invoked by visual proof |
+
+The final snapshot reports no active access and the menu still shows a ready
+camera pipeline. That change is not attributed to the update and is not evidence
+of capture denial. The obsolete mapped-main backup could not be deleted before
+that process exited; ordinary removal succeeded afterward, without ACL changes,
+antivirus bypass or quarantine recovery. Proof helpers were removed.
+P1-UPGRADE retains safe legacy-main-tray identity/handoff consolidation as open;
+current delivery does not claim universal historical updater behavior.
+
