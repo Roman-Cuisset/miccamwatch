@@ -500,3 +500,10 @@ restent ouverts.
   restant ; ne pas faire croire qu'un swap de fichiers prouve la version GUI
   active. SITE-PAGES est le prochain chantier web urgent demandé dans la roadmap.
 
+## Priorité utilisateur du 2026-10-12 — diagnostic actuel seulement
+
+- SITE-PAGES temporairement suspendu ; ne pas reprendre le site avant la demande de l'utilisateur. Le correctif urgent à préparer est **P0-CAM-TRAY**, consigné avec preuves et critères dans `docs/next_projects.md`.
+- MCW installé/menu natif 0.17.1 : croix grise réellement observée, `État incomplet — détails`, panneau générique `telemetry degraded`. Micro Zoom détecté actif ; caméra détectée active mais non attribuée, report FILETIME `Some(0)`, `sensor_activity:degraded`. L'utilisateur confirme que Zoom utilise aussi la caméra ; cela ne constitue pas une identité native autorisant attribution ou kill.
+- Cause MCW vérifiée : gate `created_at <= reported_at` refuse le zéro ; perte d'attribution puis promotion Strict ; le tray priorise tout collector dégradé sur les captures et les masque dans son résumé. Origine du zéro et PID/HRESULT bruts restent à qualifier, pas de faute du pilote inventée. Ne pas supprimer les garanties anti-réutilisation de PID, les avertissements ou les règles pour cacher le défaut.
+- Diagnostic effectué en lecture seule, menu/panneau ouverts puis refermés sans commande de contrôle : aucun mute, blocage, permission, redémarrage ou arrêt Zoom. Micro non protégé et caméra Allow au relevé : pas de preuve d'un démutage automatique par Zoom, Ktalk ou Audition. **Aucun correctif appliqué à ce stade.**
+
