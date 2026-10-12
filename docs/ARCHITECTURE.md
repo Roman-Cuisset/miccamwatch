@@ -963,3 +963,39 @@ replacement must not stop its guards or release requested protection implicitly.
 SITE-PAGES is recorded as an urgent complete static site deliverable for Cloudflare
 Pages; this is not a deployed site. Deferred ASUS root/page redesign stays separate.
 
+### Final source and delivered installer evidence
+
+Source `dd35f7ddc1bb36c079017f235703175c52d77da5` passed
+[complete native CI](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38152020817)
+and [all three Unix installer jobs](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38152020898).
+Its source archive SHA-256 is
+`cb6da0697df60e4f5a5ff3286154b29b9eee6ab994c5710a04726fbbe64c2575`.
+The tag is annotated and immutable; distributable publication is recorded
+separately only after public verification.
+
+Hosted Win32 idle status is compact and complete native details are visibly
+separate; copied text exactly matches the diagnostics. Local screenshot occlusion
+does not invalidate the separately observed hosted surface.
+Arch's [complete native package run](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38152020811)
+passed source build, C/Rust regression, pacman integrity, install/reinstall,
+pkgrel upgrade/removal, private PipeWire, real PTY and user-state preservation.
+This is not a physical capture test or AUR submission.
+
+The DNS installer was replaced without modifying Caddy, `/`, `/mcw/` page content
+or other routes. Strict TLS GET returns 200, text/plain and nosniff; all 51,249
+bytes match tag-source SHA-256
+`b7348c9a6f37a3d4f89faa2b767fd4880162d90c8f5d7c151185e0823384d1bb`.
+A real remote terminal curl pipeline selected public stable 0.17.0, showed native
+progress and colors, preserved shell files/autostart and uninstalled its owned
+temporary prefix. Closing an SSH PTY needs explicit exit, not pipe EOF; the corrected
+verification wrapper exited successfully and its exact temporary directory is absent.
+
+Homebrew's [second qualification](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38150267717)
+remains failed before candidate migration. Recorded ARM ancestry identifies
+`/opt/homebrew/Cellar` UID 501/GID 80/mode 0775; direct physical invocation cannot
+make that ancestry safe. Intel source provisioning fails in upstream z3
+(`undefined local variable or method 'python3'`), then LLVM/Rust prerequisites.
+No permission change, fabricated keg/receipt or patch to an unrelated formula is
+used as a workaround. A safe native prefix and functioning upstream prerequisites
+are still required before tap publication; AUR additionally needs authorized SSH.
+

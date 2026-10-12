@@ -189,12 +189,26 @@ Modern Arch's Clang 22+ exposes bindgen 0.69.5's forward-declaration handling bu
 producing an opaque SPA builder despite unchanged native header layout.
 The vendored `libspa-sys` build uses bindgen 0.72.1's upstream fix, not a handwritten
 ABI layout. A native C/Rust POD roundtrip exercises buffer growth and nested frames
-against installed headers; Ubuntu's older and Arch's current headers require
-separate native qualification.
+against installed headers; the Ubuntu legacy-header and current Arch native
+roundtrips both passed.
 
-Native Homebrew ARM/Intel lifecycle and native Arch makepkg/pacman/private-PipeWire
-qualification must pass before publication. A source recipe is not a published tap,
-Homebrew/core acceptance, AUR submission or official Arch repository inclusion.
+[Exact native CI](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38152020817)
+passed Windows/Linux/macOS ARM/Intel, including real tray/details and MSI consumers.
+[Unix installation](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38152020898)
+passed all three platforms, including the real HTTPS curl pipeline.
+The DNS endpoint serves the reviewed installer with verified SHA-256
+`b7348c9a6f37a3d4f89faa2b767fd4880162d90c8f5d7c151185e0823384d1bb`;
+its colored terminal install and owned uninstall were exercised on the server
+inside an isolated HOME/prefix, without altering the site's page or Caddy routes.
+
+[Native Arch qualification](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38152020811)
+passed makepkg/pacman install/reinstall/pkgrel-upgrade/removal, private PipeWire,
+real PTY and preservation of user state. AUR publication remains blocked by
+missing maintainer-authorized SSH access. Homebrew publication is blocked:
+the ARM runner's Cellar is group-writable (0775), and Intel's current upstream
+z3 source formula fails before Rust provisioning. No permissions, checksums or
+upstream formulas were weakened to manufacture acceptance. A source recipe is
+not a published tap, Homebrew/core acceptance or AUR submission.
 Current public release remains `v0.17.0` until corrective publication is verified.
 
 ## Commands

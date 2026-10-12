@@ -442,3 +442,31 @@ restent ouverts.
   composé Windows ~43 Mo, aucune certification physique/exclusif/ASIO nouvelle.
   Homebrew/AUR/Winget/Linux ARM64 et les autres lots restent ouverts.
 
+## Correctif 0.17.1 — source validée, publication en cours
+
+- Source finale `dd35f7ddc1bb36c079017f235703175c52d77da5`, tag annoté sans
+  réécriture d'une ancienne release. [CI native quatre OS](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38152020817)
+  et [installer Unix trois OS](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38152020898)
+  verts ; preuves et limites dans Architecture. Ne pas annoncer les assets avant
+  disponibilité, digests et six attestations exactes.
+- Tray Windows : résumé compact et détails natifs complets ; erreurs récupérées
+  par ressource/origine, acceptation notification native distincte de visibilité.
+  Aucun remplacement/arrêt du tray installé ni release implicite de ses gardes.
+- Script DNS revu livré seul : SHA-256
+  `b7348c9a6f37a3d4f89faa2b767fd4880162d90c8f5d7c151185e0823384d1bb`.
+  Vrai curl/terminal Linux coloré avec HOME/préfixe isolés, version native et
+  uninstall possédé réussis ; Caddy, racine et page `/mcw/` inchangés.
+- Bindgen amont 0.72.1 résout les définitions complètes avec Clang 22+ ; ne pas
+  coder les offsets SPA à la main. Roundtrip C/Rust Ubuntu ancien et Arch courant
+  réussi ; [paquet Arch natif](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38152020811)
+  install/reinstall/pkgrel-upgrade/remove, PipeWire/PTY et user-state validés.
+- Homebrew non publié : Cellar ARM 0775 inscriptible par groupe, formule source
+  z3 Intel défaillante avant LLVM/Rust. Ne pas relâcher la vérification d'ancêtres,
+  chmod le préfixe, fabriquer un keg ou patcher ces dépendances externes.
+  AUR non soumis : empreinte ED25519 officielle vérifiée, authentification
+  `Permission denied (publickey)` ; accès SSH mainteneur requis.
+- SITE-PAGES : priorité urgente consignée pour un site MCW complet et soigné,
+  statique prêt pour Cloudflare Pages ; pas de site réalisé/déployé ici.
+  SITE-ROOT/SITE-MCW restent différés. Aucun remerciement récurrent ajouté aux
+  nouvelles notes ; attribution technique historique inchangée.
+
