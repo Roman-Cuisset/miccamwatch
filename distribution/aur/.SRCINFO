@@ -20,7 +20,7 @@ pkgbase = miccamwatch
 	optdepends = python: separately reviewed administrator camera-helper bootstrap
 	optdepends = polkit: separately approved administrator camera-helper authorization
 	options = !debug
-	source = miccamwatch-0.17.1-6ce11366b326e50144eb8d04256b36a9d92d24ec.tar.gz::https://codeload.github.com/Roman-Cuisset/miccamwatch/tar.gz/6ce11366b326e50144eb8d04256b36a9d92d24ec
-	sha256sums = 78dd6cfa7cdb9e53d3bf37a9e609607f52a88a51a15c4852638a280d283f7c5c
+	source = miccamwatch-0.17.1-dd35f7ddc1bb36c079017f235703175c52d77da5.tar.gz::https://codeload.github.com/Roman-Cuisset/miccamwatch/tar.gz/dd35f7ddc1bb36c079017f235703175c52d77da5
+	sha256sums = cb6da0697df60e4f5a5ff3286154b29b9eee6ab994c5710a04726fbbe64c2575
 
 pkgname = miccamwatch

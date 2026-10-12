@@ -16,7 +16,7 @@ import time
 import uuid
 
 LABEL = "com.roman-cuisset.miccamwatch.tray"
-RELEASE_COMMIT = "6ce11366b326e50144eb8d04256b36a9d92d24ec"
+RELEASE_COMMIT = "dd35f7ddc1bb36c079017f235703175c52d77da5"
 
 
 def require(condition, message):
