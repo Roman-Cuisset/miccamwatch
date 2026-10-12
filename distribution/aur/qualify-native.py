@@ -4,7 +4,7 @@
 Root runs only package-manager/build orchestration. All mcw/PipeWire probes run as
 an ordinary user. No hardware session manager, capture, camera mutation, helper
 bootstrap, Polkit registration, autostart enable or curl installer is executed.
-See README.md and docs/next_projects.md for package ownership/publication gates.
+See README.md and docs/ROADMAP.md for package ownership/publication gates.
 """
 import argparse
 import errno
