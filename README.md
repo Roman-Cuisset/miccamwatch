@@ -216,6 +216,12 @@ were verified against annotated tag/source
 `dd35f7ddc1bb36c079017f235703175c52d77da5`. The public Windows CLI was executed
 from a private directory; the companion version was inspected without launching
 it. The installed user pair and protections were not replaced or stopped.
+Public [0.17.0→0.17.1 Unix migrations](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38212488807)
+passed Linux and both macOS architectures, including PATH/user-state preservation
+and standalone bootstrap boundaries. The [Arch recipe pinned to the actual
+release source](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38212488566)
+also passed its complete native package lifecycle. Neither test publishes an
+external package-manager entry or certifies physical capture.
 
 ## Commands
 

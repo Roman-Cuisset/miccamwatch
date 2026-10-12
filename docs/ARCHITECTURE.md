@@ -999,3 +999,41 @@ No permission change, fabricated keg/receipt or patch to an unrelated formula is
 used as a workaround. A safe native prefix and functioning upstream prerequisites
 are still required before tap publication; AUR additionally needs authorized SSH.
 
+### Post-publication v0.17.1
+
+[Stable/latest v0.17.1](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.17.1)
+was published by the [successful native release](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38210407613)
+from source `dd35f7ddc1bb36c079017f235703175c52d77da5`.
+Annotated tag object `32f8e1398238e8ec7b6fde4c072efaa3516b8dc1` is unsigned,
+not moved after publication. All seven public assets were downloaded; API digests,
+sizes and six exact SHA256SUMS entries matched. All six provenance statements
+were verified against this repository, release workflow, tag ref and full source
+digest with self-hosted runners denied.
+
+The real public Windows CLI returned 0.17.1 from a private directory. The GUI
+companion ignores command-line version flags, so its embedded version marker was
+read without launching it. Both public executables and the MSI remain NotSigned.
+Source-archive SHA-256 is
+`cb6da0697df60e4f5a5ff3286154b29b9eee6ab994c5710a04726fbbe64c2575`;
+recipes, current installer examples and workflow defaults now pin that release.
+Frozen tagged README/proof snapshots remain historical; main documentation holds
+post-publication results. Provenance is not signing identity or antivirus clearance.
+
+[Actual public Unix migrations](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38212488807)
+passed Linux/macOS ARM/Intel for 0.17.0→0.17.1, PATH/user-state preservation,
+owned removal and separately bounded macOS standalone bootstrap/updater fixtures.
+The [Arch source-release recipe](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38212488566)
+passed the full native makepkg/pacman/PipeWire/PTY lifecycle with exact source
+digest; AUR authentication and Homebrew prerequisites remain external blockers.
+DNS curl latest independently selected and executed public 0.17.1 in an isolated
+prefix and uninstalled it, without starting a tray, control or autostart.
+
+A later read-only workstation snapshot still reports installed 0.17.0,
+five healthy collectors and active microphone/camera accesses. Protection intent
+is currently absent and camera Allow, unlike the earlier protected snapshot;
+the change's origin is not attributed and we performed no SDK mutation.
+The installed UI is not stopped/replaced during the active capture without
+permission. A later update must revalidate native readiness at transaction time
+and refuse any resumed/pending/unknown protection, never release it implicitly.
+No physical media was read, saved or certified by any of these checks.
+

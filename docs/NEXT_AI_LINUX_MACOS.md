@@ -442,13 +442,16 @@ restent ouverts.
   composé Windows ~43 Mo, aucune certification physique/exclusif/ASIO nouvelle.
   Homebrew/AUR/Winget/Linux ARM64 et les autres lots restent ouverts.
 
-## Correctif 0.17.1 — source validée, publication en cours
+## Correctif 0.17.1 — publié stable/latest, installation PC intacte
 
 - Source finale `dd35f7ddc1bb36c079017f235703175c52d77da5`, tag annoté sans
   réécriture d'une ancienne release. [CI native quatre OS](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38152020817)
   et [installer Unix trois OS](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38152020898)
-  verts ; preuves et limites dans Architecture. Ne pas annoncer les assets avant
-  disponibilité, digests et six attestations exactes.
+  verts ; [release native](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38210407613)
+  verte. Sept assets/digests et six attestations du workflow/ref/source exacts
+  vérifiés après publication ; CLI publique Windows réellement 0.17.1, compagnon
+  inspecté sans lancement. Tag annoté non signé, EXE/MSI non signés ; ni antivirus
+  ni permission/capture physique certifiés.
 - Tray Windows : résumé compact et détails natifs complets ; erreurs récupérées
   par ressource/origine, acceptation notification native distincte de visibilité.
   Aucun remplacement/arrêt du tray installé ni release implicite de ses gardes.
@@ -469,4 +472,17 @@ restent ouverts.
   statique prêt pour Cloudflare Pages ; pas de site réalisé/déployé ici.
   SITE-ROOT/SITE-MCW restent différés. Aucun remerciement récurrent ajouté aux
   nouvelles notes ; attribution technique historique inchangée.
+
+- DNS curl latest requalifié sur la vraie 0.17.1 publique dans un HOME/préfixe
+  isolé ; terminal coloré, version native et uninstall possédé réussis. Recettes
+  épinglées sur archive release SHA-256
+  `cb6da0697df60e4f5a5ff3286154b29b9eee6ab994c5710a04726fbbe64c2575`.
+  [Migrations Unix 0.17.0→0.17.1](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38212488807)
+  trois OS et [Arch source release exacte](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38212488566)
+  entièrement validés ; publication externe toujours distincte.
+- Lecture readonly PC après publication : version installée 0.17.0, capture
+  active, intention micro non demandée et caméra Allow. Origine du changement
+  non attribuée ; aucune mutation de notre part. Ne pas redémarrer le tray pendant
+  la capture sans accord ; l'updater doit revalider la readiness native à l'instant
+  du remplacement. Ne jamais libérer une protection implicitement.
 
