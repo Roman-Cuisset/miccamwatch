@@ -40,6 +40,7 @@ Les identifiants sont stables. À chaque livraison, remplacer l'état par **En c
 | SITE-PAGES | **Livraison statique 0.17.2 historique ; incident placeholders signalé, correction urgente ouverte**. Export/ZIP et smokes précédents conservés comme preuves datées, pas comme réfutation du défaut actuel ; voir SITE-TOKENS et SITE-L10N | Moyenne | Corriger livraison réellement consultée ; projet Pages autorisé et HTTPS production après upload |
 | SITE-TOKENS | **Urgent, demandé : à corriger avant nouvelle livraison web**. L'utilisateur voit `__MCW_VERSION__`, `__MCW_SOURCE__`, `__MCW_INSTALLER_SHA256__` à la place des valeurs ; identifier et réparer le chemin source/build/archive/publication concerné | Faible à Moyenne | Valeurs de release publiées uniques, aucun token visible ou URL/commande/checksum invalide |
 | SITE-L10N | **Urgent, demandé : site complet dans les sept langues MCW** : anglais, français, allemand, espagnol, japonais, chinois simplifié, russe ; pas seulement navigation ou page d'accueil | Moyenne | SITE-TOKENS ; contenu/limites identiques, export statique et validation réelle de chaque langue |
+| SITE-INSTALL-404 | **Urgent, signalé : installateur Pages inaccessible**. `https://miccamwatch.pages.dev/install.sh` retourne HTTP 404 lors du vrai curl utilisateur sur serveur ASUS ; commande d'installation annoncée inutilisable | Faible à Moyenne | Vérifier payload publié et routage exact `/install.sh`, puis vrai curl HTTPS et intégrité du script |
 | P1-RAM | Publié 0.17.0, validé logiciel/natif : bornes et mesures complètes, 15 Mo non atteints, scénario composé Windows ~43 Mo | Moyenne | Maintien des preuves/limites canoniques ; 30 Mo reste une référence |
 | P1-RESTORE | Publié 0.17.0, validé logiciel/natif : propriétaire Windows, états opposés/hotplug/partiel simulés, release natif réel sans devices | Élevée | Pas de certification matérielle ou déni exclusif/ASIO |
 | P1-HB | Bloqué en qualification : Cellar ARM group-writable 0775, chaîne source Intel z3 défaillante ; aucune publication du tap | Moyenne | Préfixe sûr sans relâcher contrôles et prérequis Homebrew amont fonctionnels |
@@ -479,6 +480,36 @@ de marqueur `__MCW_*__` dans les ressources destinées aux visiteurs. Vérifier 
 ZIP effectivement livré et, si déployé, les vrais bytes/URLs HTTPS publics.
 Le checksum doit correspondre aux bytes du script, non à une archive.
 
+### SITE-INSTALL-404 — Commande curl Pages en échec HTTP 404
+
+**Signalement utilisateur réel sur le serveur ASUS ; non corrigé :**
+
+```console
+serveur@serveur-asus:~/test$ curl --proto '=https' --tlsv1.2 -fsSL https://miccamwatch.pages.dev/install.sh | sh
+curl: (22) The requested URL returned error: 404
+```
+
+Ce résultat est établi par l'utilisateur ; ne pas relancer le curl uniquement
+pour confirmer son erreur. L'origine Pages concernée est maintenant connue.
+Les anciens smokes locaux et le curl ASUS `/mcw/install.sh` ne prouvent pas
+que cette URL Pages fonctionne ; aucune installation réussie n'est annoncée.
+
+**Correction urgente attendue :** identifier le contenu effectivement publié
+et le routage de `/install.sh`, garantir que le script revu est inclus à la
+racine du payload Pages et que la commande affichée cible une URL réellement
+servie. Examiner le build/export, le dossier ou ZIP déposé et les règles de
+routes sans supposer quel élément est fautif. Ne pas contourner par une page
+HTML 200, un miroir de binaire ou une désactivation de la vérification TLS.
+
+**Acceptation :** après correction, cette URL HTTPS exacte retourne 200 et le
+script shell attendu, pas la 404 HTML ; SHA-256 concordant avec la source
+immuable et les faits de release. Exécuter le parcours annoncé sur Linux dans
+un HOME/préfixe temporaire, observer la version native installée et le retrait
+possédé sans activer autostart/tray/protection ni helper root. Un échec curl
+doit rester explicite : le succès éventuel de `sh` recevant une entrée vide
+ne doit jamais être présenté comme un succès d'installation.
+
+
 ### SITE-L10N — Site complet dans toutes les langues MCW
 
 **Demande utilisateur urgente :** couvrir exactement les langues déclarées par
@@ -620,3 +651,4 @@ Ne pas déployer cette refonte dans le cadre de la seule mise à jour du MD.
 | 2026-10-13 | Dossier projet principal | **Synchronisé dans `C:\Users\stcui\Documents\miccamwatch`**, branche existante conservée | Ancien HEAD `fc17aa7` → livraison `aeb8742` par fast-forward, 81 fichiers actualisés ; vrai `node site/build.mjs` dans ce dossier exporte 0.17.2. Seule note locale bloquante `docs/NEXT_AI_LINUX_MACOS.md` sauvegardée intégralement en preuve privée et stash nommé `mcw-local-handoff-preserved-before-0.17.2-sync-20261013` ; aucun reset/force ni perte du contenu local | Les fichiers livrés sont committés, donc absence de marque « modifié » ne signifie pas absence des corrections. Ne pas supprimer/appliquer aveuglément le stash historique ; comparer avant éventuelle réintégration |
 | 2026-10-13 | SITE-TOKENS | **Demande urgente inscrite, non corrigée** : version/source/checksum remplacés par marqueurs visibles | Signalement utilisateur ; templates et substitution/garde du builder relus. Page/artefact actuellement consulté non établi, aucune cause de déploiement inventée | Réparer vrai parcours preview/build/ZIP/publication ; accueil/404/SEO/URLs/curl/provenance sans tokens et checksum script exact |
 | 2026-10-13 | SITE-L10N | **Demande urgente inscrite, non implémentée** : site intégral en sept langues MCW | Enum/parser `Language` : en/fr/de/es/ja/zh/ru ; chinois simplifié confirmé par `zh-hans` | Traduction complète, sélection accessible/no-JS, SEO localisé et smokes réels par langue ; valeurs techniques invariantes, SITE-TOKENS prioritaire |
+| 2026-10-13 | SITE-INSTALL-404 | **Incident urgent inscrit, non corrigé** : vrai curl utilisateur Pages retourne 404 | Commande depuis `serveur@serveur-asus:~/test` vers `https://miccamwatch.pages.dev/install.sh`, erreur curl 22/HTTP 404 ; pas de nouvelle requête de confirmation | Qualifier payload/routage Pages, servir vrai script vérifié à cette URL, puis smoke HTTPS install/version/uninstall isolé ; les preuves du DNS ASUS ne couvrent pas Pages |
