@@ -13,6 +13,7 @@
   },
   "social.png": {
     "kind": "product share card with actual tray menu",
-    "scope": "Typographic artwork, not a separate application screenshot"
+    "productRelease": "0.17.2",
+    "scope": "Typographic artwork for product release 0.17.2 with an explicitly historical 0.17.1 tray screenshot, not a separate application screenshot"
   }
 }

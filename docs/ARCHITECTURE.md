@@ -1113,3 +1113,48 @@ popup/details/Copy all on a disposable clipboard, zero-device owner/IPC checks,
 and genuine MSI install/uninstall. No new tag/release or workstation swap was
 performed; CI does not change attribution freshness or physical-enforcement limits.
 
+## Coordinated public 0.17.2 and authorized workstation handoff (2026-10-13)
+
+Stable/latest 0.17.2 uses immutable source
+`a58c8b9f3a967589a576879d6d27bfdbc40f9dff` and annotated tag object
+`02442ba59b0bc49e5c838e18266096c69b876cfa`.
+[Exact pre-tag CI](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38361454701)
+and [native publication](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38364052525)
+passed four targets. Seven downloaded public assets match API digests; the six
+payload/SBOM files also match exact named checksum entries and attestations
+constrained to workflow/tag/source/signer digests. EXEs/MSI are NotSigned.
+
+Genuine private Windows 0.17.1→0.17.2 updater and same-version no-op passed;
+private native preferences/copied history and foreign user tray were preserved.
+A mapped-old-CLI cleanup warning remains explicit.
+[Unix native qualification](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38366922327)
+passed nine managed installer upgrades across bash/zsh/fish and three targets,
+plus public historical Mac bootstrap and production no-op; corrected-source
+in-place fixtures are not historical-public-client self-update support.
+[Arch qualification](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38362707189)
+passed the reviewed immutable archive; AUR/Homebrew external publication remains
+blocked without weakening ancestry, dependencies or maintainer authorization.
+
+After explicit “Maintenant” consent, the workstation pair matches the public
+0.17.2 ZIP. The new companion's real native menu is 319×262, with two Ktalk
+captures and one distinct Edge Ready pipeline; full diagnostic text was read
+without clipboard mutation. An owned popup PrintWindow render and a UIA-identified
+real shell icon crop show version 0.17.2 and the red activity glyph. An initial
+screen crop displayed foreground WPS, not the menu, and is excluded from proof.
+Five collectors are healthy; the entire protection JSON is identical before/after.
+No conference app was stopped and no SDK device/permission mutation was issued.
+
+The updater's captured exit/stdout was unavailable after a tool timeout; the
+update was not rerun. Source restart spawns the companion with inherited standard
+streams; [INFERENCE] its live inherited pipe prevented captured EOF after updater
+exit. This and the real shell tooltip's contradictory localized idle prefix
+remain prioritized in ROADMAP, not declared fixed by the successful pair swap.
+The current user capture is Ktalk with valid timestamps, not a newly reproduced
+Zoom-zero or physical protection proof.
+
+The static Pages export now describes published 0.17.2; genuine screenshots stay
+historical 0.17.1 and labeled accordingly. Desktop/mobile/FAQ/HTTP/404 smokes and
+real ASUS HTTPS latest172 install/native-version/owned-uninstall passed in a
+private Linux HOME. ASUS HTML pins alone changed; root bytes/routing are unchanged.
+The new Pages ZIP is ready for authorized upload, not deployed Cloudflare HTTPS.
+

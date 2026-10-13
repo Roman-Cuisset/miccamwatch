@@ -1,6 +1,6 @@
 # miccamwatch
 
-`mcw` monitors microphone and camera access using platform-specific evidence. Windows uses native capture and privacy APIs; Linux and macOS 15+ provide native monitoring, desktop frontends and scoped controls with narrower evidence. It supports high-contrast terminal colors, seven display languages, policy-driven trust validation, JSONL history and native event notifications. Detailed evidence remains in English for stable machine-readable diagnostics. The coordinated `v0.17.1` distribution includes Windows ZIP/MSI, Linux x64 and macOS Apple Silicon/Intel packages; previous release tags and assets remain unchanged.
+`mcw` monitors microphone and camera access using platform-specific evidence. Windows uses native capture and privacy APIs; Linux and macOS 15+ provide native monitoring, desktop frontends and scoped controls with narrower evidence. It supports high-contrast terminal colors, seven display languages, policy-driven trust validation, JSONL history and native event notifications. Detailed evidence remains in English for stable machine-readable diagnostics. The coordinated `v0.17.2` distribution includes Windows ZIP/MSI, Linux x64 and macOS Apple Silicon/Intel packages; previous release tags and assets remain unchanged.
 
 ## macOS camera activity
 
@@ -243,13 +243,41 @@ Windows sensor reports with a missing/zero report time remain **unattributed**.
 Native PID/report-time query errors and raw metadata are now explained in the
 existing evidence fields; raw PID metadata is never kill authorization. The
 process-instance and report-freshness checks are not relaxed to guess Zoom.
-This source change is not part of the public `v0.17.1` binaries or an automatic
-replacement of the workstation installation. Local SDK/CLI and native menu,
+Published as [stable v0.17.2](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.17.2),
+source `a58c8b9f3a967589a576879d6d27bfdbc40f9dff`; the historical v0.17.1 release
+is unchanged. After the user's explicit **“Maintenant”** permission, the workstation
+CLI/companion now match the verified public 0.17.2 ZIP. Its actual native menu is
+319×262 pixels, with Ktalk microphone/camera accesses and the red activity icon
+visible; the full protection snapshot is unchanged. Local SDK/CLI and native menu,
 window-rendering and icon checks passed. During a real user-started Zoom session,
 the candidate and native C++ SDK probe observed microphone/camera activity, a
 matching Zoom client PID, and successful but zero report time. Ktalk later had a
 valid camera timestamp and verified attribution. No physical enforcement or
 automatic unmute prevention is certified. See [ROADMAP](docs/ROADMAP.md#p0-cam-tray--caméra-zoom-non-attribuée-et-croix-grise-pendant-une-capture).
+
+The [exact pre-tag CI](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38361454701)
+and [native release](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38364052525)
+passed all four targets. Seven public assets match API digests; the six
+payload/SBOM files also match their exact named checksum entries and attestations,
+constrained to the exact workflow, tag and source. Windows EXEs/MSI are **NotSigned**.
+The genuine private Windows updater migration 0.17.1→0.17.2 and same-version
+no-op passed. [Public Unix installer migrations](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38366922327)
+passed bash/zsh/fish on Linux and both macOS architectures; these nine managed
+migrations are installer paths, not cross-version managed CLI updater proofs.
+Native [Arch qualification](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38362707189)
+passed with the reviewed immutable release archive; AUR submission and Homebrew
+tap publication remain blocked as documented.
+
+Two observed Windows issues remain prioritized in [ROADMAP](docs/ROADMAP.md):
+the shell tooltip still prefixes active accesses with localized idle text, and
+restarting an owned tray inherits updater standard streams. Scripted output
+capture hung during the actual handoff; [INFERENCE] the live companion retained EOF.
+The authorized workstation update's captured exit/stdout
+was unavailable after its tool timeout; the installed pair, new native tray and
+unchanged protections were verified read-only instead, without rerunning update.
+The private migration also retained a mapped-old-CLI cleanup warning; no security
+protection or quarantine was bypassed.
+
 
 ## Commands
 
@@ -325,7 +353,7 @@ Status JSON is an object with an explicit schema version:
 ```json
 {
   "schema_version": 3,
-  "tool_version": "0.17.1",
+  "tool_version": "0.17.2",
   "collectors": [],
   "accesses": []
 }
@@ -352,7 +380,7 @@ The output is suitable for diagnostics and monitoring. It is not a forensic proo
 
 Download `miccamwatch-windows-x86_64.msi` from the [latest release](https://github.com/Roman-Cuisset/miccamwatch/releases/latest) for a per-user installation with `mcw` on `PATH` and a Start Menu entry. The portable `miccamwatch-windows-x86_64.zip` remains available.
 
-The following installer/update description applies to public `v0.17.1`.
+The following installer/update description applies to public `v0.17.2`.
 Explicit protection release and completed restoration are prerequisites for
 replacement; older binaries do not acquire the new readiness checks retroactively.
 
@@ -360,7 +388,7 @@ For MSI installations, upgrade with the latest MSI from [GitHub Releases](https:
 
 The Windows updater downloads one exact release ZIP and checks its SHA-256 against both the selected GitHub API asset digest and its exact named `SHA256SUMS` entry, then validates both staged executable versions before shutdown. These share a release channel and are not an independent publisher signature. Signing is conditional on a real release certificate. If Defender quarantines `mcw.exe`, a `PATH` change is not a remedy: preserve Protection History details and follow [signing, provenance and safe incident handling](docs/SIGNING.md). No exclusion, disabled protection or quarantine restoration is recommended.
 
-### v0.17.1 coordinated native packages
+### v0.17.2 coordinated native packages
 
 | Platform | Release asset | Requirements |
 | --- | --- | --- |
@@ -377,16 +405,16 @@ Download the matching archive and `SHA256SUMS` from the release. On Linux use `s
 
 ### Unix installer (macOS and Linux)
 
-By default the installer selects the latest **stable** release into `$HOME/.local/bin`, without sudo. Use `--version v0.17.1` to pin this release, or omit `--version` to follow stable latest. The installer chooses the native macOS Apple Silicon/Intel or Linux x64 package, resolves a concrete release, and verifies the exact archive entry in that release's `SHA256SUMS`. Supported systems are macOS 15+ and Linux x64 with glibc 2.35+. Unsupported architectures are rejected, never substituted.
+By default the installer selects the latest **stable** release into `$HOME/.local/bin`, without sudo. Use `--version v0.17.2` to pin this release, or omit `--version` to follow stable latest. The installer chooses the native macOS Apple Silicon/Intel or Linux x64 package, resolves a concrete release, and verifies the exact archive entry in that release's `SHA256SUMS`. Supported systems are macOS 15+ and Linux x64 with glibc 2.35+. Unsupported architectures are rejected, never substituted.
 
 Download and inspect the installer before running it:
 
 ```sh
 curl --proto '=https' --tlsv1.2 -fsSL \
-  https://raw.githubusercontent.com/Roman-Cuisset/miccamwatch/dd35f7ddc1bb36c079017f235703175c52d77da5/installer/install.sh \
+  https://raw.githubusercontent.com/Roman-Cuisset/miccamwatch/a58c8b9f3a967589a576879d6d27bfdbc40f9dff/installer/install.sh \
   -o mcw-install.sh
 less mcw-install.sh
-sh mcw-install.sh --version v0.17.1 --add-path
+sh mcw-install.sh --version v0.17.2 --add-path
 ```
 
 Or follow stable latest after the same download and review:
@@ -415,7 +443,7 @@ PowerShell installer: Windows uses the native MSI or ZIP described above.
 
 Use `--add-path` for explicitly requested automatic PATH integration, or `--no-modify-path` to leave shell configuration untouched. Without either flag, a missing PATH entry is proposed through `/dev/tty`; a noninteractive installation does not wait for input or silently edit the shell configuration. Bash, zsh (including `ZDOTDIR`), and fish are supported. Open a new terminal after accepting PATH integration: an installer subprocess cannot change its parent's environment. You can then run `mcw --version`, `mcw doctor --json`, and `mcw watch --json` from any directory.
 
-`--prefix "$HOME/Applications/MicCamWatch"` installs into that prefix's `bin` directory. Repeat the installer with `--version v0.17.1` to upgrade an older managed Unix installation, or omit the version to follow stable latest. Stop its active watcher/tray first. Failed downloads, integrity checks, or executable validation preserve an existing working installation. The script URL above pins the immutable release source; the `main` installer URL follows source updates. Archives and checksums share a release channel and are not an independent publisher signature.
+`--prefix "$HOME/Applications/MicCamWatch"` installs into that prefix's `bin` directory. Repeat the installer with `--version v0.17.2` to upgrade an older managed Unix installation, or omit the version to follow stable latest. Stop its active watcher/tray first. Failed downloads, integrity checks, or executable validation preserve an existing working installation. The script URL above pins the immutable release source; the `main` installer URL follows source updates. Archives and checksums share a release channel and are not an independent publisher signature.
 
 **Linux v0.15.1 migration:** its `mcw update` embeds the old three-file archive installer and safely refuses the six-file v0.16.0 package. Download the current public installer above and rerun it with the same `--prefix` (omit `--version` to follow stable latest). This migration installs the matching user camera payload without root setup or changes to preferences/history. After migration, v0.16.0 `mcw update` understands the new package format.
 
@@ -424,7 +452,7 @@ Use `--add-path` for explicitly requested automatic PATH integration, or `--no-m
 ```sh
 target="$(pwd -P)/mcw"
 digest="$(/usr/bin/shasum -a 256 "$target")"
-sh mcw-install.sh --version v0.17.1 --no-modify-path \
+sh mcw-install.sh --version v0.17.2 --no-modify-path \
   --update-portable "$target" --current-sha256 "${digest%% *}"
 ./mcw --version
 ./mcw update
