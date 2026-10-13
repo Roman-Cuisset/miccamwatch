@@ -1,0 +1,2 @@
+# Cloudflare Pages serves index.html at / and 404.html for missing paths.
+# Deliberately no catch-all or SPA fallback: unknown paths retain status 404.

@@ -1,0 +1,18 @@
+{
+  "release": "0.17.1",
+  "tray-windows.png": {
+    "kind": "actual installed native Windows tray menu",
+    "date": "2026-10-12",
+    "scope": "Windows 125% DPI; requested microphone protection inactive and camera Allow; ready pipeline metadata, not capture proof; no private media or user identifiers"
+  },
+  "top-windows.png": {
+    "kind": "rendered actual native ConPTY terminal cells",
+    "source": "https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38152020817",
+    "frame": "fr-150x40-resized.json",
+    "scope": "Actual release mcw top, French, 150 columns; disposable zero-device Windows runner, SDK mute unknown; renderer preserves captured cell text/color using local fonts; not physical capture/blocking proof"
+  },
+  "social.png": {
+    "kind": "product share card with actual tray menu",
+    "scope": "Typographic artwork, not a separate application screenshot"
+  }
+}

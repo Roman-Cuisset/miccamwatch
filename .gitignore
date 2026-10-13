@@ -1,2 +1,5 @@
 /target
 /secrets.env
+/site-dist/
+/.mcw-site-export-*/
+/.mcw-site-export-lock

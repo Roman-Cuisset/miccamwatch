@@ -245,6 +245,19 @@ impl PlatformMonitor {
             match self.sensor_camera_accesses() {
                 Ok((native, reported_instances)) => {
                     let incomplete_attribution = native.iter().any(|access| access.pid.is_none());
+                    let attribution_detail = native
+                        .iter()
+                        .find(|access| access.pid.is_none())
+                        .and_then(|access| {
+                            access.evidence.iter().find(|evidence| {
+                                evidence.source == "IMFSensorProcessActivity::GetProcessId"
+                            })
+                        })
+                        .map(|evidence| evidence.detail.as_str());
+                    let collector_detail = match attribution_detail {
+                        Some(reason) => format!("Camera streaming observed with incomplete client attribution: {reason} Other camera paths may rely on privacy intervals. No camera media is opened."),
+                        None => "Windows sensor streaming reports; cameras or capture paths not exposed by this API still rely on privacy intervals. No camera media is opened.".to_owned(),
+                    };
                     // Replace a fallback only when the actual process instance
                     // is reported streaming; keep residual pipelines Ready
                     // after an explicit non-streaming report.
@@ -274,8 +287,12 @@ impl PlatformMonitor {
                     accesses.extend(native);
                     collectors.push(CollectorHealth {
                         collector: "sensor_activity",
-                        state: if incomplete_attribution { CollectorState::Degraded } else { CollectorState::Healthy },
-                        detail: Some("Windows sensor streaming reports; cameras or capture paths not exposed by this API still rely on privacy intervals. No camera media is opened.".to_owned()),
+                        state: if incomplete_attribution {
+                            CollectorState::Degraded
+                        } else {
+                            CollectorState::Healthy
+                        },
+                        detail: Some(collector_detail),
                     });
                 }
                 Err(error) => collectors.push(unhealthy(
@@ -691,7 +708,10 @@ impl PlatformMonitor {
                 continue;
             };
             for (index, activity) in activities.iter().enumerate() {
-                let mut pid = activity.attributed_pid(process_creation_time(activity.pid));
+                let current_creation = (activity.pid != 0)
+                    .then(|| process_creation_time(activity.pid))
+                    .flatten();
+                let mut pid = activity.attributed_pid(current_creation);
                 // A non-streaming sensor session is not frame flow. Do not
                 // retain a native Active row after an explicit stop report.
                 if !activity.streaming {
@@ -708,8 +728,13 @@ impl PlatformMonitor {
                     .map(|path| self.signature_for_path(path));
                 // Identity queries and signature verification can outlast the
                 // client. Never attach a report to a later occupant of its PID.
+                let verified_creation = if pid.is_some() {
+                    process_creation_time(activity.pid)
+                } else {
+                    current_creation
+                };
                 let stable_instance = pid.is_some_and(|pid| {
-                    activity.attributed_pid(process_creation_time(pid)) == Some(pid)
+                    activity.attributed_pid(verified_creation) == Some(pid)
                         && context.as_ref().is_some_and(|context| {
                             context.instance_id == format!("{pid}:{}", activity.created_at.unwrap())
                         })
@@ -756,7 +781,7 @@ impl PlatformMonitor {
                     evidence.push(Evidence::new(
                         EvidenceKind::LiveApi,
                         "IMFSensorProcessActivity::GetProcessId",
-                        "The stream could not be correlated with a verifiable current process instance; no client PID or kill authorization is inferred.",
+                        activity.unattributed_detail(verified_creation),
                     ));
                     (Risk::Unexplained, EnforcementDecision::Unknown)
                 };

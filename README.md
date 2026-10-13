@@ -230,6 +230,27 @@ menu was visibly 0.17.1 and compact; the grey error cross was gone. Existing mut
 camera intent was preserved. This is software/UI evidence, not physical protection
 certification or reproduction of the user's earlier notification failure.
 
+## Unreleased — Windows camera attribution and partial tray coverage
+
+The next-source correction keeps detected microphone/camera accesses visible when
+a collector has only partial coverage. An amber exclamation indicates incomplete
+coverage, distinct from the camera-ready pause glyph; actual collection/control
+failures retain error precedence. Status details name active/ready accesses,
+unknown client identities, unhealthy collectors and their reasons. A subsequent
+healthy refresh recovers normally without clearing unrelated operation failures.
+
+Windows sensor reports with a missing/zero report time remain **unattributed**.
+Native PID/report-time query errors and raw metadata are now explained in the
+existing evidence fields; raw PID metadata is never kill authorization. The
+process-instance and report-freshness checks are not relaxed to guess Zoom.
+This source change is not part of the public `v0.17.1` binaries or an automatic
+replacement of the workstation installation. Local SDK/CLI and native menu,
+window-rendering and icon checks passed. During a real user-started Zoom session,
+the candidate and native C++ SDK probe observed microphone/camera activity, a
+matching Zoom client PID, and successful but zero report time. Ktalk later had a
+valid camera timestamp and verified attribution. No physical enforcement or
+automatic unmute prevention is certified. See [ROADMAP](docs/ROADMAP.md#p0-cam-tray--caméra-zoom-non-attribuée-et-croix-grise-pendant-une-capture).
+
 ## Commands
 
 ```console
@@ -439,6 +460,55 @@ does not prove ownership evidence is empty or exclude a concurrent camera action
 Explicitly restore and remove the privileged installation first; the installer
 never does that for you.
 For root setup/update/removal, see [Linux USB camera administrator setup](#linux-usb-camera-administrator-setup).
+
+## Static product website — Cloudflare Pages
+
+`site/` contains the complete French product site: native screenshots with their
+scope, platform-specific installs/downloads, usage, permissions, privacy,
+troubleshooting, signing/provenance and a real 404. No framework, package install,
+analytics, visitor-side Node runtime, ASUS dependency or executable mirror.
+Release facts in `site/release.json` describe the **published** release, not an
+unreleased source build.
+
+Build from the repository root with Node.js (qualified here under Node 24):
+
+```console
+node site/build.mjs
+```
+
+Output: **`site-dist/`**, with `index.html` at its root. The exporter verifies the
+canonical `installer/install.sh` SHA-256, substitutes release facts, refuses an
+unowned/symlinked output and preserves unrelated files in an owned output. It
+requires no account, token or npm dependency. Upload the output, not `site/`.
+
+### Publish by direct upload
+
+In Cloudflare **Workers & Pages → Create application → Get started → Drag and
+drop your files**, upload the contents of `site-dist/`, or a ZIP with `index.html`
+at its root; choose **Deploy site**. Use the real `pages.dev` address assigned to
+your project. No Worker/Functions are required. [Official Direct Upload guide](https://developers.cloudflare.com/pages/get-started/direct-upload/).
+Direct Upload projects cannot later switch to Git integration; create a separate
+Git-integrated project if automatic deployments are preferred.
+
+### Publish from Git
+
+Connect this repository through Pages Git integration. Framework: none; repository
+root: default; build command: **`node site/build.mjs`**; output: **`site-dist`**.
+For reproducible builds, `NODE_VERSION=24` selects the qualified Node major.
+Once the production address is known, set **`MCW_SITE_URL`** to that exact HTTPS
+root origin, without a path/query/fragment. Otherwise `CF_PAGES_URL`, when supplied
+by Pages, is used. Without either, canonical/absolute social URLs and sitemap are
+omitted rather than invented; the site still works. A custom domain is optional
+and should be configured through Pages, not by replacing the ASUS services.
+
+Local verification used the real Wrangler Pages runtime: desktop/mobile,
+keyboard OS tabs and focus, no-JS content, MIME/404/security headers, exact
+installer bytes, and actual advertised HTTPS curl installation/native version/
+owned uninstall in a disposable Linux HOME. Clipboard denial/manual selection
+was exercised without replacing the user's clipboard; successful system
+clipboard writing was intentionally not exercised. Production HTTPS/same-origin
+curl and canonical metadata must be checked after an authorized Pages deployment;
+no deployed Pages address is claimed.
 
 ## Policy configuration
 

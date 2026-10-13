@@ -14,6 +14,7 @@ public static class McwNativeProof {
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hwnd, out RECT rect);
     [DllImport("user32.dll")] public static extern bool GetMenuItemRect(IntPtr hwnd, IntPtr menu, uint item, out RECT rect);
+    [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr hwnd, IntPtr hdc, uint flags);
     [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr hwnd, uint msg, IntPtr wparam, IntPtr lparam);
     [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr hwnd, uint msg, IntPtr wparam, IntPtr lparam);
     [DllImport("user32.dll")] public static extern IntPtr OpenInputDesktop(uint flags, bool inherit, uint access);
@@ -47,7 +48,7 @@ function Wait-ProofFile([string]$name) {
         catch { if ((Get-Date) -gt $deadline) { throw }; Start-Sleep -Milliseconds 20 }
     }
 }
-function Capture-NativeWindow([IntPtr]$window, [string]$name) {
+function Capture-NativeWindow([IntPtr]$window, [string]$name, [switch]$RenderWindow) {
     $rect = New-Object McwNativeProof+RECT
     if (-not [McwNativeProof]::GetWindowRect($window, [ref]$rect)) { throw "Cannot measure $name" }
     $width = $rect.Right - $rect.Left
@@ -56,7 +57,14 @@ function Capture-NativeWindow([IntPtr]$window, [string]$name) {
     $bitmap = New-Object System.Drawing.Bitmap -ArgumentList $width, $height
     $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
     try {
-        $graphics.CopyFromScreen($rect.Left, $rect.Top, 0, 0, $bitmap.Size)
+        if ($RenderWindow) {
+            $dc = $graphics.GetHdc()
+            try {
+                if (-not [McwNativeProof]::PrintWindow($window, $dc, 2)) { throw "Native PrintWindow failed for $name" }
+            } finally { $graphics.ReleaseHdc($dc) }
+        } else {
+            $graphics.CopyFromScreen($rect.Left, $rect.Top, 0, 0, $bitmap.Size)
+        }
         $bitmap.Save((Join-Path $directory "$name.png"), [System.Drawing.Imaging.ImageFormat]::Png)
         $first = $bitmap.GetPixel(0, 0).ToArgb()
         $different = $false
@@ -80,12 +88,19 @@ try {
     # otherwise can report a null ExitCode for a completed Start-Process.
     $null = $process.Handle
     $measurements = @()
-    foreach ($name in @('long-error', 'unicode-controls', 'idle-protected')) {
+    foreach ($name in @('partial-active', 'recovered-active', 'long-error', 'unicode-controls', 'idle-protected')) {
         $menu = Wait-ProofFile "$name-menu.json"
         $owner = [IntPtr][long]$menu.owner
         [uint32]$ownerPid = 0
         $ownerThread = [McwNativeProof]::GetWindowThreadProcessId($owner, [ref]$ownerPid)
         $fixturePid = $ownerPid
+        # Explorer may return the overflow-chevron rectangle for a hidden icon.
+        # Rasterize the actual native HICON; do not mislabel the chevron as our glyph.
+        $nativeIcon = [System.Drawing.Icon]::FromHandle([IntPtr][long]$menu.icon)
+        $icon = $nativeIcon.ToBitmap()
+        try {
+            $icon.Save((Join-Path $directory "$name-native-icon.png"), [System.Drawing.Imaging.ImageFormat]::Png)
+        } finally { $icon.Dispose() }
         $deadline = (Get-Date).AddSeconds(30)
         $popup = [IntPtr]::Zero
         while ((Get-Date) -lt $deadline) {
@@ -105,7 +120,7 @@ try {
         [void][McwNativeProof]::PostMessage($owner, 0x001f, [IntPtr]::Zero, [IntPtr]::Zero) # WM_CANCELMODE; no privacy action
         $details = Wait-ProofFile "$name-details.json"
         Start-Sleep -Milliseconds 300
-        $detailsBounds = Capture-NativeWindow ([IntPtr][long]$details.window) "$name-details"
+        $detailsBounds = Capture-NativeWindow ([IntPtr][long]$details.window) "$name-details" -RenderWindow
         if ($detailsBounds.width -gt $menu.work_width -or $detailsBounds.height -gt $menu.work_height) {
             throw 'Native details window exceeds the monitor work area.'
         }

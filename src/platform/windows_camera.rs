@@ -15,7 +15,7 @@ use windows::{
         IMFSensorActivitiesReportCallback_Impl, IMFSensorActivityMonitor, IMFShutdown,
         MF_E_NOT_FOUND, MFCreateSensorActivityMonitor,
     },
-    core::{Interface, PCWSTR, Ref},
+    core::{HRESULT, Interface, PCWSTR, Ref},
 };
 
 #[derive(Clone, Debug)]
@@ -24,17 +24,67 @@ pub(super) struct ProcessActivity {
     pub streaming: bool,
     pub reported_at: Option<u64>,
     pub created_at: Option<u64>,
+    pub pid_error: Option<HRESULT>,
+    pub report_time_error: Option<HRESULT>,
 }
 
 impl ProcessActivity {
     // A report predating the current process cannot authorize attribution to a
     // reused PID. Inaccessible identity remains device-level evidence instead.
     pub fn attributed_pid(&self, current_creation: Option<u64>) -> Option<u32> {
-        let created = self.created_at?;
-        (self.pid != 0
-            && current_creation == Some(created)
-            && self.reported_at.is_some_and(|reported| created <= reported))
-        .then_some(self.pid)
+        self.attribution_failure(current_creation)
+            .is_none()
+            .then_some(self.pid)
+    }
+
+    fn attribution_failure(&self, current_creation: Option<u64>) -> Option<&'static str> {
+        if self.pid_error.is_some() {
+            return Some("Windows could not return the camera client PID");
+        }
+        if self.pid == 0 {
+            return Some("Windows returned no camera client PID");
+        }
+        if self.report_time_error.is_some() {
+            return Some("Windows could not return the sensor report time");
+        }
+        let Some(reported) = self.reported_at.filter(|time| *time != 0) else {
+            return Some("The sensor report time is unavailable (missing or zero FILETIME)");
+        };
+        let Some(created) = self.created_at else {
+            return Some("The reported client's process identity was inaccessible");
+        };
+        if current_creation != Some(created) {
+            return Some("The reported client exited, became inaccessible, or its PID was reused");
+        }
+        if reported < created {
+            return Some("The sensor report predates the current process instance");
+        }
+        None
+    }
+
+    pub fn unattributed_detail(&self, current_creation: Option<u64>) -> String {
+        let reason = self.attribution_failure(current_creation).unwrap_or(
+            "The client identity changed or could not be verified during process context checks",
+        );
+        format!(
+            "{reason}. GetProcessId: {}, error={:?}, raw PID={}; GetReportTime: {}, error={:?}, raw FILETIME={:?}; callback process creation={:?}, current process creation={:?}. Raw metadata is not client attribution or kill authorization; no application is inferred.",
+            if self.pid_error.is_none() {
+                "succeeded"
+            } else {
+                "failed"
+            },
+            self.pid_error,
+            self.pid,
+            if self.report_time_error.is_none() {
+                "succeeded"
+            } else {
+                "failed"
+            },
+            self.report_time_error,
+            self.reported_at,
+            self.created_at,
+            current_creation,
+        )
     }
 }
 
@@ -88,13 +138,22 @@ impl IMFSensorActivitiesReportCallback_Impl for ActivityCallback_Impl {
                     let streaming = unsafe { process.GetStreamingState()? }.as_bool();
                     // Failure to identify a real stream must not erase it or
                     // guess the client from loaded DLLs, CPU, or app names.
-                    let pid = unsafe { process.GetProcessId() }.unwrap_or(0);
-                    let reported_at = unsafe { process.GetReportTime() }.ok().map(filetime_value);
+                    let (pid, pid_error) = match unsafe { process.GetProcessId() } {
+                        Ok(pid) => (pid, None),
+                        Err(error) => (0, Some(error.code())),
+                    };
+                    let (reported_at, report_time_error) = match unsafe { process.GetReportTime() }
+                    {
+                        Ok(time) => (Some(filetime_value(time)), None),
+                        Err(error) => (None, Some(error.code())),
+                    };
                     processes.push(ProcessActivity {
                         pid,
                         streaming,
                         reported_at,
                         created_at: (pid != 0).then(|| process_creation_time(pid)).flatten(),
+                        pid_error,
+                        report_time_error,
                     });
                 }
                 reports.replace_device(&camera.id, processes);
@@ -183,6 +242,8 @@ mod tests {
             streaming: true,
             reported_at: Some(200),
             created_at: Some(100),
+            pid_error: None,
+            report_time_error: None,
         };
         reports.replace_device("camera", vec![activity.clone()]);
         reports.replace_device(
@@ -204,6 +265,8 @@ mod tests {
             streaming: true,
             reported_at: Some(200),
             created_at: Some(100),
+            pid_error: None,
+            report_time_error: None,
         };
         assert_eq!(activity.attributed_pid(Some(100)), Some(12));
         assert_eq!(activity.attributed_pid(Some(300)), None);
@@ -213,10 +276,35 @@ mod tests {
             ..activity.clone()
         };
         assert_eq!(old_report.attributed_pid(Some(100)), None);
-        let unknown_time = ProcessActivity {
-            reported_at: None,
+        let no_client = ProcessActivity {
+            pid: 0,
+            ..activity.clone()
+        };
+        assert_eq!(no_client.attributed_pid(Some(100)), None);
+        for reported_at in [None, Some(0)] {
+            let unavailable_time = ProcessActivity {
+                reported_at,
+                ..activity.clone()
+            };
+            assert_eq!(unavailable_time.attributed_pid(Some(100)), None);
+        }
+        for pid in [0, 12] {
+            let inaccessible_pid = ProcessActivity {
+                pid,
+                pid_error: Some(HRESULT(0x80070005_u32 as i32)),
+                ..activity.clone()
+            };
+            assert_eq!(inaccessible_pid.attributed_pid(Some(100)), None);
+        }
+        let failed_time_query = ProcessActivity {
+            report_time_error: Some(HRESULT(0x80004005_u32 as i32)),
+            ..activity.clone()
+        };
+        assert_eq!(failed_time_query.attributed_pid(Some(100)), None);
+        let unknown_identity = ProcessActivity {
+            created_at: None,
             ..activity
         };
-        assert_eq!(unknown_time.attributed_pid(Some(100)), None);
+        assert_eq!(unknown_identity.attributed_pid(Some(100)), None);
     }
 }

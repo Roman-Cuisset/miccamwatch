@@ -119,6 +119,7 @@ enum TrayVisual {
     Idle,
     Ready,
     Active,
+    Partial,
     Error,
 }
 
@@ -246,6 +247,8 @@ struct TrayAppState {
     green_icon: HICON,
     yellow_icon: HICON,
     red_icon: HICON,
+    // Amber activity glyph distinguishes partial coverage from Ready pause bars.
+    partial_icon: HICON,
     gray_icon: HICON,
     refreshes: Receiver<TrayRefresh>,
     camera_dirty: Arc<AtomicBool>,
@@ -273,6 +276,7 @@ impl Drop for TrayAppState {
             let _ = DestroyIcon(self.green_icon);
             let _ = DestroyIcon(self.yellow_icon);
             let _ = DestroyIcon(self.red_icon);
+            let _ = DestroyIcon(self.partial_icon);
             let _ = DestroyIcon(self.gray_icon);
         }
     }
@@ -514,6 +518,7 @@ pub fn run_tray(
         green_icon: create_status_icon((34, 197, 94), IconGlyph::Check, icon_size)?,
         yellow_icon: create_status_icon((245, 158, 11), IconGlyph::Ready, icon_size)?,
         red_icon: create_status_icon((239, 68, 68), IconGlyph::Active, icon_size)?,
+        partial_icon: create_status_icon((245, 158, 11), IconGlyph::Active, icon_size)?,
         gray_icon: create_status_icon((107, 114, 128), IconGlyph::Error, icon_size)?,
     });
     let state_ptr = Box::into_raw(state);
@@ -977,102 +982,23 @@ fn apply_refresh(hwnd: HWND, state: &mut TrayAppState, refresh: TrayRefresh) {
         }
     }
     apply_lock_policy(state, refresh.lock_state);
-    let (mut visual, mut summary) = match refresh.snapshot {
-        Ok(snapshot) => {
-            let unhealthy = snapshot
-                .collectors
-                .iter()
-                .any(|collector| collector.state != CollectorState::Healthy);
-            record_history_changes(state, &snapshot);
-            let active = snapshot
-                .accesses
-                .iter()
-                .filter(|access| access.activity == Activity::Active)
-                .collect::<Vec<_>>();
-            let ready = snapshot
-                .accesses
-                .iter()
-                .filter(|access| access.activity == Activity::Ready)
-                .collect::<Vec<_>>();
-            if unhealthy {
-                (
-                    TrayVisual::Error,
-                    "miccamwatch: telemetry degraded".to_owned(),
-                )
-            } else if !active.is_empty() {
-                (TrayVisual::Active, summarize(&active))
-            } else if !ready.is_empty() {
-                (
-                    TrayVisual::Ready,
-                    format!(
-                        "miccamwatch: camera-ready pipeline: {}",
-                        ready[0].application
-                    ),
-                )
-            } else {
-                (TrayVisual::Idle, idle_text(state.lang).to_owned())
-            }
-        }
-        Err(error) => (
-            TrayVisual::Error,
-            format!("miccamwatch: telemetry error: {error}"),
-        ),
-    };
-    if let Some(status) = &state.microphone_protection {
-        summary.push_str(&format!(
-            "\n{}",
-            crate::output::microphone_protection_summary(state.lang, status)
-        ));
-        if status.requested
-            && (!status.service_active || status.mute_state != MicrophoneMuteState::Muted)
-        {
-            visual = TrayVisual::Error;
-        }
-    } else {
-        summary.push_str(&format!("\n{}", state.lang.unknown_protection(true)));
+    if let Ok(snapshot) = &refresh.snapshot {
+        record_history_changes(state, snapshot);
     }
-    if let Some(status) = &state.camera_observation {
-        summary.push_str(&format!(
-            "\n{}",
-            crate::output::camera_protection_summary(state.lang, status)
-        ));
-        if (status.desired_blocked && !status.helper_active) || status.unknown_devices != 0 {
-            visual = TrayVisual::Error;
-        }
-    } else {
-        summary.push_str(&format!("\n{}", state.lang.unknown_protection(false)));
-    }
-    summary.push_str(&format!("\n{}", state.lang.protection_limit()));
-    for error in [&state.microphone_status_error, &state.camera_status_error]
-        .into_iter()
-        .flatten()
-    {
-        visual = TrayVisual::Error;
-        summary.push_str(&format!("\nProtection observation failed: {error}"));
-    }
-    for error in state.operation_errors.messages() {
-        visual = TrayVisual::Error;
-        summary.push_str(&format!("\nPrivacy operation failed/partial: {error}"));
-    }
-    let undelivered = state
-        .notifications
-        .health
-        .undelivered
-        .load(Ordering::Relaxed);
-    if undelivered != 0 {
-        summary.push_str(&format!(
-            "\nNotification history: {undelivered} undelivered toasts"
-        ));
-    }
-    if state
-        .notifications
-        .health
-        .unavailable
-        .load(Ordering::Relaxed)
-    {
-        visual = TrayVisual::Error;
-        summary.push_str("\nNotification delivery currently overloaded/unavailable");
-    }
+    let (visual, summary) = refreshed_status(
+        refresh.snapshot.as_ref().map_err(String::as_str),
+        TrayStatus {
+            lang: state.lang,
+            microphone: state.microphone_protection.as_ref(),
+            camera: state.camera_observation.as_ref(),
+            observation_errors: [
+                state.microphone_status_error.as_deref(),
+                state.camera_status_error.as_deref(),
+            ],
+            operation_errors: &state.operation_errors,
+            notifications: &state.notifications.health,
+        },
+    );
     let mute_state = state.mute_state;
     if visual == state.visual
         && summary == state.summary
@@ -1089,12 +1015,15 @@ fn apply_refresh(hwnd: HWND, state: &mut TrayAppState, refresh: TrayRefresh) {
         TrayVisual::Idle => state.green_icon,
         TrayVisual::Ready => state.yellow_icon,
         TrayVisual::Active => state.red_icon,
+        TrayVisual::Partial => state.partial_icon,
         TrayVisual::Error => state.gray_icon,
     };
     let nid = notify_icon_data(hwnd, icon, &state.summary);
     if !unsafe { Shell_NotifyIconW(NIM_MODIFY, &nid) }.as_bool() {
         state.visual = TrayVisual::Error;
-        state.summary = "miccamwatch: failed to update tray icon".to_owned();
+        state
+            .summary
+            .insert_str(0, "miccamwatch: failed to update tray icon\n");
     }
 }
 
@@ -1165,18 +1094,180 @@ fn append_history_event(access: &Access, action: Action) {
     }
 }
 
-fn summarize(accesses: &[&crate::model::Access]) -> String {
-    let items = accesses
-        .iter()
-        .map(|access| {
-            let resource = match access.resource {
-                Resource::Microphone => "Mic",
-                Resource::Camera => "Cam",
+struct TrayStatus<'a> {
+    lang: Language,
+    microphone: Option<&'a MicrophoneProtectionStatus>,
+    camera: Option<&'a CameraControlObservation>,
+    observation_errors: [Option<&'a str>; 2],
+    operation_errors: &'a PrivacyOperationErrors,
+    notifications: &'a NotificationHealth,
+}
+
+fn refreshed_status(
+    snapshot: Result<&Snapshot, &str>,
+    status: TrayStatus<'_>,
+) -> (TrayVisual, String) {
+    use std::fmt::Write;
+
+    let notification_unavailable = status.notifications.unavailable.load(Ordering::Relaxed);
+    let protection_failed = status.microphone.is_none_or(|microphone| {
+        microphone.mute_state == MicrophoneMuteState::Unavailable
+            || (microphone.requested
+                && (!microphone.service_active
+                    || microphone.mute_state != MicrophoneMuteState::Muted))
+    }) || status.camera.is_none_or(|camera| {
+        (camera.desired_blocked && !camera.helper_active) || camera.unknown_devices != 0
+    }) || status.observation_errors.iter().any(Option::is_some)
+        || status.operation_errors.messages().next().is_some()
+        || notification_unavailable;
+    let (mut visual, mut summary) = match snapshot {
+        Ok(snapshot) => {
+            let mut active_mic = 0;
+            let mut active_camera = 0;
+            let mut ready = 0;
+            for access in &snapshot.accesses {
+                match (access.activity, access.resource) {
+                    (Activity::Active, Resource::Microphone) => active_mic += 1,
+                    (Activity::Active, Resource::Camera) => active_camera += 1,
+                    (Activity::Ready, _) => ready += 1,
+                }
+            }
+            let active = active_mic + active_camera;
+            let unavailable = snapshot
+                .collectors
+                .iter()
+                .any(|collector| collector.state == CollectorState::Unavailable);
+            let partial = !snapshot.observation_gaps.is_empty()
+                || snapshot
+                    .collectors
+                    .iter()
+                    .any(|collector| collector.state == CollectorState::Degraded);
+            let visual = if unavailable || protection_failed {
+                TrayVisual::Error
+            } else if partial {
+                TrayVisual::Partial
+            } else if active != 0 {
+                TrayVisual::Active
+            } else if ready != 0 {
+                TrayVisual::Ready
+            } else {
+                TrayVisual::Idle
             };
-            format!("{}: {resource}", access.application)
-        })
-        .collect::<Vec<_>>();
-    format!("miccamwatch: {}", items.join(", "))
+            // Keep the popup/tooltip first line independent of application name length.
+            // An incomplete scan reports observed counts, never a claim of global idle.
+            let mut summary =
+                if active != 0 || ready != 0 || unavailable || partial || protection_failed {
+                    format!(
+                        "{}{active} active ({active_mic} Mic, {active_camera} Cam); {ready} ready",
+                        if unavailable || protection_failed {
+                            "Status error — "
+                        } else if partial {
+                            "Partial — "
+                        } else {
+                            ""
+                        },
+                    )
+                } else {
+                    idle_text(status.lang).to_owned()
+                };
+            for access in &snapshot.accesses {
+                let activity = match access.activity {
+                    Activity::Active => "Active",
+                    Activity::Ready => "Ready (pipeline, not proven capture)",
+                };
+                let resource = match access.resource {
+                    Resource::Microphone => "Microphone",
+                    Resource::Camera => "Camera",
+                };
+                let _ = write!(summary, "\n{activity} {resource}: {}", access.application);
+                match access.pid {
+                    Some(pid) => {
+                        let _ = write!(summary, "; PID {pid}");
+                    }
+                    None => summary.push_str("; PID unknown"),
+                }
+            }
+            for collector in snapshot
+                .collectors
+                .iter()
+                .filter(|collector| collector.state != CollectorState::Healthy)
+            {
+                let health = match collector.state {
+                    CollectorState::Degraded => "degraded",
+                    CollectorState::Unavailable => "unavailable",
+                    CollectorState::Healthy => unreachable!(),
+                };
+                let _ = write!(
+                    summary,
+                    "\nCollector {} {health}: {}",
+                    collector.collector,
+                    collector.detail.as_deref().unwrap_or("reason not supplied"),
+                );
+            }
+            for resource in &snapshot.observation_gaps {
+                let _ = write!(
+                    summary,
+                    "\nObservation gap: {resource:?}; missing accesses cannot be confirmed stopped"
+                );
+            }
+            (visual, summary)
+        }
+        Err(error) => (
+            TrayVisual::Error,
+            format!("miccamwatch: telemetry unavailable\nTelemetry error: {error}"),
+        ),
+    };
+    if let Some(microphone) = status.microphone {
+        let _ = write!(
+            summary,
+            "\n{}",
+            crate::output::microphone_protection_summary(status.lang, microphone),
+        );
+        if microphone.mute_state == MicrophoneMuteState::Unavailable
+            || (microphone.requested
+                && (!microphone.service_active
+                    || microphone.mute_state != MicrophoneMuteState::Muted))
+        {
+            visual = TrayVisual::Error;
+        }
+    } else {
+        visual = TrayVisual::Error;
+        let _ = write!(summary, "\n{}", status.lang.unknown_protection(true));
+    }
+    if let Some(camera) = status.camera {
+        let _ = write!(
+            summary,
+            "\n{}",
+            crate::output::camera_protection_summary(status.lang, camera),
+        );
+        if (camera.desired_blocked && !camera.helper_active) || camera.unknown_devices != 0 {
+            visual = TrayVisual::Error;
+        }
+    } else {
+        visual = TrayVisual::Error;
+        let _ = write!(summary, "\n{}", status.lang.unknown_protection(false));
+    }
+    let _ = write!(summary, "\n{}", status.lang.protection_limit());
+    for error in status.observation_errors.into_iter().flatten() {
+        visual = TrayVisual::Error;
+        let _ = write!(summary, "\nProtection observation failed: {error}");
+    }
+    for error in status.operation_errors.messages() {
+        visual = TrayVisual::Error;
+        let _ = write!(summary, "\nPrivacy operation failed/partial: {error}");
+    }
+    let undelivered = status.notifications.undelivered.load(Ordering::Relaxed);
+    if undelivered != 0 {
+        let _ = write!(
+            summary,
+            "\nNotification history: {undelivered} undelivered toasts"
+        );
+    }
+    if notification_unavailable {
+        visual = TrayVisual::Error;
+        summary.push_str("\nNotification delivery currently overloaded/unavailable");
+    }
+    (visual, summary)
 }
 
 fn toggle_mute(hwnd: HWND) {
@@ -1995,7 +2086,7 @@ fn show_context_menu(hwnd: HWND) {
     }
     let Ok(menu) = build_context_menu(
         hwnd,
-        context_menu_summary(state),
+        &state.summary,
         state.lang,
         state
             .microphone_protection
@@ -2045,39 +2136,6 @@ fn append_disabled(menu: windows::Win32::UI::WindowsAndMessaging::HMENU, text: &
 fn show_status_toast(hwnd: HWND) {
     let Some(state) = state(hwnd) else { return };
     notify_async(state, "miccamwatch", &state.summary.clone());
-}
-
-fn context_menu_summary(state: &TrayAppState) -> &str {
-    if state
-        .camera_observation
-        .as_ref()
-        .is_some_and(|camera| camera.desired_blocked && !camera.helper_active)
-    {
-        return match state.lang {
-            Language::En => "Camera: protection owner stopped",
-            Language::Fr => "Caméra : garde arrêtée",
-            Language::De => "Kamera: Schutzdienst gestoppt",
-            Language::Es => "Cámara: protección detenida",
-            Language::Ja => "カメラ：保護サービス停止",
-            Language::Zh => "摄像头：保护服务已停止",
-            Language::Ru => "Камера: защита остановлена",
-        };
-    }
-    if let Some(error) = state.operation_errors.messages().next() {
-        return error;
-    }
-    if state.visual == TrayVisual::Error {
-        return match state.lang {
-            Language::En => "Status incomplete — details",
-            Language::Fr => "État incomplet — détails",
-            Language::De => "Status unvollständig — Details",
-            Language::Es => "Estado incompleto — detalles",
-            Language::Ja => "状態不完全 — 詳細",
-            Language::Zh => "状态不完整 — 详情",
-            Language::Ru => "Неполный статус — сведения",
-        };
-    }
-    &state.summary
 }
 
 fn idle_text(lang: Language) -> &'static str {
@@ -2208,6 +2266,234 @@ fn line_distance(x: f32, y: f32, x1: f32, y1: f32, x2: f32, y2: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct StatusFixture {
+        microphone: MicrophoneProtectionStatus,
+        camera: CameraControlObservation,
+        errors: PrivacyOperationErrors,
+        notifications: NotificationHealth,
+    }
+
+    impl StatusFixture {
+        fn healthy() -> Self {
+            Self {
+                microphone: MicrophoneProtectionStatus {
+                    requested: false,
+                    service_active: false,
+                    mute_state: MicrophoneMuteState::Unmuted,
+                    endpoint_count: 1,
+                    hardware_mute_count: 0,
+                    corrections: 0,
+                    detail: Some("SDK reports software mute only".into()),
+                },
+                camera: CameraControlObservation {
+                    desired_blocked: false,
+                    state: CameraPrivacyState::Allowed,
+                    present_total: 1,
+                    owned_blocked_present: 0,
+                    pending_restore: 0,
+                    absent_owned: 0,
+                    unknown_devices: 0,
+                    helper_active: false,
+                    detail: None,
+                },
+                errors: PrivacyOperationErrors::default(),
+                notifications: NotificationHealth::default(),
+            }
+        }
+
+        fn status(&self) -> TrayStatus<'_> {
+            TrayStatus {
+                lang: Language::En,
+                microphone: Some(&self.microphone),
+                camera: Some(&self.camera),
+                observation_errors: [None, None],
+                operation_errors: &self.errors,
+                notifications: &self.notifications,
+            }
+        }
+    }
+
+    fn partial_activity_snapshot() -> Snapshot {
+        let mut microphone = observed(Resource::Microphone, "microphone:zoom");
+        microphone.application = "Zoom.exe".into();
+        let mut camera = observed(Resource::Camera, "camera:unknown");
+        camera.application = "unknown camera client".into();
+        camera.pid = None;
+        let mut ready = observed(Resource::Camera, "camera:ready");
+        ready.application = "ready-only-client".repeat(100);
+        ready.activity = Activity::Ready;
+        Snapshot {
+            collectors: vec![crate::model::CollectorHealth {
+                collector: "sensor_activity",
+                state: CollectorState::Degraded,
+                detail: Some("streaming camera; native process identity unavailable".into()),
+            }],
+            accesses: vec![microphone, camera, ready],
+            observation_gaps: vec![Resource::Camera],
+        }
+    }
+
+    #[test]
+    fn partial_activity_details_keep_zoom_unknown_camera_ready_and_coverage() {
+        let fixture = StatusFixture::healthy();
+        let snapshot = partial_activity_snapshot();
+        let (visual, summary) = refreshed_status(Ok(&snapshot), fixture.status());
+        assert_eq!(visual, TrayVisual::Partial);
+        let first_line = summary.lines().next().unwrap();
+        assert!(first_line.len() < 128);
+        assert!(first_line.contains("2 active"));
+        assert!(first_line.contains("1 Mic, 1 Cam"));
+        assert!(first_line.contains("1 ready"));
+        let document = diagnostic_document(&summary);
+        assert!(document.contains("Active Microphone: Zoom.exe; PID 123"));
+        assert!(document.contains("Active Camera: unknown camera client; PID unknown"));
+        assert!(!document.contains("Active Camera: Zoom"));
+        assert!(document.contains("Ready (pipeline, not proven capture) Camera:"));
+        assert!(document.contains(&snapshot.accesses[2].application));
+        assert!(document.contains(snapshot.collectors[0].detail.as_deref().unwrap()));
+        assert!(document.contains("sensor_activity degraded"));
+        assert!(document.contains("Observation gap: Camera"));
+        assert!(document.contains(fixture.microphone.detail.as_deref().unwrap()));
+        assert!(document.contains(fixture.status().lang.protection_limit()));
+    }
+
+    #[test]
+    fn unavailable_telemetry_never_reports_idle_and_keeps_other_known_accesses() {
+        let fixture = StatusFixture::healthy();
+        let mut snapshot = partial_activity_snapshot();
+        snapshot.collectors.push(crate::model::CollectorHealth {
+            collector: "wasapi",
+            state: CollectorState::Unavailable,
+            detail: Some("audio session enumeration denied".into()),
+        });
+        let (visual, summary) = refreshed_status(Ok(&snapshot), fixture.status());
+        assert_eq!(visual, TrayVisual::Error);
+        assert!(summary.contains("Zoom.exe; PID 123"));
+        for collector in &snapshot.collectors {
+            assert!(summary.contains(collector.detail.as_deref().unwrap()));
+        }
+        snapshot.accesses.clear();
+        let (visual, summary) = refreshed_status(Ok(&snapshot), fixture.status());
+        assert_eq!(visual, TrayVisual::Error);
+        assert!(!summary.contains(idle_text(Language::En)));
+        let (visual, summary) =
+            refreshed_status(Err("snapshot worker disconnected"), fixture.status());
+        assert_eq!(visual, TrayVisual::Error);
+        assert!(summary.contains("snapshot worker disconnected"));
+        assert!(!summary.contains(idle_text(Language::En)));
+    }
+
+    #[test]
+    fn healthy_refresh_recovers_partial_warning_without_acknowledging_error_history() {
+        let mut fixture = StatusFixture::healthy();
+        fixture.notifications.failed();
+        fixture.notifications.delivered();
+        let mut snapshot = partial_activity_snapshot();
+        let (visual, _) = refreshed_status(Ok(&snapshot), fixture.status());
+        assert_eq!(visual, TrayVisual::Partial);
+        snapshot.collectors[0].state = CollectorState::Healthy;
+        let old_reason = snapshot.collectors[0].detail.as_deref().unwrap().to_owned();
+        snapshot.collectors[0].detail = None;
+        snapshot.observation_gaps.clear();
+        let (visual, summary) = refreshed_status(Ok(&snapshot), fixture.status());
+        assert_eq!(visual, TrayVisual::Active);
+        assert!(!summary.contains(&old_reason));
+        assert!(!summary.contains("sensor_activity degraded"));
+        assert!(summary.contains("1 undelivered toasts"));
+        fixture.errors.failed(
+            Resource::Camera,
+            true,
+            "explicit camera operation failed".into(),
+        );
+        let (visual, summary) = refreshed_status(Ok(&snapshot), fixture.status());
+        assert_eq!(visual, TrayVisual::Error);
+        assert!(summary.contains("explicit camera operation failed"));
+        assert_eq!(fixture.errors.messages().count(), 1);
+        fixture.errors.completed(Resource::Camera, true);
+        snapshot
+            .accesses
+            .retain(|access| access.activity == Activity::Ready);
+        assert_eq!(
+            refreshed_status(Ok(&snapshot), fixture.status()).0,
+            TrayVisual::Ready
+        );
+        snapshot.accesses.clear();
+        assert_eq!(
+            refreshed_status(Ok(&snapshot), fixture.status()).0,
+            TrayVisual::Idle
+        );
+        assert_eq!(fixture.notifications.undelivered.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn control_and_notification_failures_outrank_partial_activity_without_erasing_details() {
+        let mut fixture = StatusFixture::healthy();
+        let snapshot = partial_activity_snapshot();
+        for failure in 0..6 {
+            if failure == 4 {
+                fixture
+                    .errors
+                    .failed(Resource::Microphone, true, "mute command denied".into());
+            }
+            if failure == 5 {
+                fixture.errors.completed(Resource::Microphone, true);
+                fixture.notifications.failed();
+            }
+            let mut status = fixture.status();
+            if failure == 0 {
+                status.microphone = None;
+            }
+            if failure == 1 {
+                status.camera = None;
+            }
+            if failure == 2 {
+                status.observation_errors[0] = Some("microphone observation failed");
+            }
+            if failure == 3 {
+                status.observation_errors[1] = Some("camera observation failed");
+            }
+            let (visual, summary) = refreshed_status(Ok(&snapshot), status);
+            assert_eq!(visual, TrayVisual::Error);
+            assert!(summary.lines().next().unwrap().starts_with("Status error"));
+            assert!(summary.lines().next().unwrap().contains("2 active"));
+            assert!(summary.contains("Zoom.exe; PID 123"));
+            assert!(summary.contains("unknown camera client; PID unknown"));
+            assert!(summary.contains(snapshot.collectors[0].detail.as_deref().unwrap()));
+            let reason = match failure {
+                0 => Language::En.unknown_protection(true),
+                1 => Language::En.unknown_protection(false),
+                2 => "microphone observation failed",
+                3 => "camera observation failed",
+                4 => "mute command denied",
+                _ => "Notification delivery currently overloaded/unavailable",
+            };
+            assert!(summary.contains(reason));
+        }
+        fixture.notifications.delivered();
+        fixture.microphone.requested = true;
+        let (visual, summary) = refreshed_status(Ok(&snapshot), fixture.status());
+        assert_eq!(visual, TrayVisual::Error);
+        assert!(summary.contains(fixture.microphone.detail.as_deref().unwrap()));
+        fixture.microphone.requested = false;
+        fixture.camera.desired_blocked = true;
+        assert_eq!(
+            refreshed_status(Ok(&snapshot), fixture.status()).0,
+            TrayVisual::Error
+        );
+        fixture.camera.desired_blocked = false;
+        fixture.camera.unknown_devices = 1;
+        assert_eq!(
+            refreshed_status(Ok(&snapshot), fixture.status()).0,
+            TrayVisual::Error
+        );
+        fixture.camera.unknown_devices = 0;
+        fixture.microphone.mute_state = MicrophoneMuteState::Unavailable;
+        assert_eq!(
+            refreshed_status(Ok(&snapshot), fixture.status()).0,
+            TrayVisual::Error
+        );
+    }
 
     #[test]
     fn bounded_refresh_consumes_lock_edges_then_latest_snapshot() {
@@ -2428,6 +2714,9 @@ mod tests {
     #[test]
     fn native_menu_consumer_bounds_unicode_and_preserves_actions() {
         let owner = native_test_owner();
+        let fixture = StatusFixture::healthy();
+        let snapshot = partial_activity_snapshot();
+        let (_, partial_summary) = refreshed_status(Ok(&snapshot), fixture.status());
         for requested in [Some(true), Some(false), None] {
             for summary in [
                 format!("miccamwatch: collection failed: {}", "W".repeat(16 * 1024)),
@@ -2435,6 +2724,7 @@ mod tests {
                     "miccamwatch: degraded: {}",
                     "界🛡️\t&Exit\n\r\u{202e}\0".repeat(1000)
                 ),
+                partial_summary.clone(),
             ] {
                 let menu = build_context_menu(
                     owner,
@@ -2465,13 +2755,24 @@ mod tests {
         );
         std::fs::create_dir_all(&directory).unwrap();
         let owner = native_test_owner();
-        for (name, summary) in [
+        let fixture = StatusFixture::healthy();
+        let mut partial = partial_activity_snapshot();
+        let partial_summary = refreshed_status(Ok(&partial), fixture.status()).1;
+        partial.collectors[0].state = CollectorState::Healthy;
+        partial.collectors[0].detail = None;
+        partial.observation_gaps.clear();
+        let recovered_summary = refreshed_status(Ok(&partial), fixture.status()).1;
+        for (name, visual, summary) in [
+            ("partial-active", TrayVisual::Partial, partial_summary),
+            ("recovered-active", TrayVisual::Active, recovered_summary),
             (
                 "long-error",
+                TrayVisual::Error,
                 format!("miccamwatch: collection failed: {}", "W".repeat(16 * 1024)),
             ),
             (
                 "unicode-controls",
+                TrayVisual::Partial,
                 format!(
                     "miccamwatch: degraded: {}",
                     "界🛡️\t&Exit\n\r\u{202e}\0".repeat(1000)
@@ -2479,6 +2780,7 @@ mod tests {
             ),
             (
                 "idle-protected",
+                TrayVisual::Idle,
                 format!(
                     "{}\n{}\n{}",
                     idle_text(Language::Fr),
@@ -2487,6 +2789,15 @@ mod tests {
                 ),
             ),
         ] {
+            let (color, glyph) = match visual {
+                TrayVisual::Idle => ((34, 197, 94), IconGlyph::Check),
+                TrayVisual::Ready => ((245, 158, 11), IconGlyph::Ready),
+                TrayVisual::Active => ((239, 68, 68), IconGlyph::Active),
+                TrayVisual::Partial => ((245, 158, 11), IconGlyph::Active),
+                TrayVisual::Error => ((107, 114, 128), IconGlyph::Error),
+            };
+            let icon =
+                create_status_icon(color, glyph, unsafe { GetSystemMetrics(SM_CXSMICON) }).unwrap();
             let menu = build_context_menu(
                 owner,
                 &summary,
@@ -2507,6 +2818,7 @@ mod tests {
                     "work_width": work.right - work.left,
                     "work_height": work.bottom - work.top,
                     "dpi": unsafe { GetDpiForWindow(owner) },
+                    "icon": icon.0 as usize,
                 }))
                 .unwrap(),
             )
@@ -2574,6 +2886,7 @@ mod tests {
                     }
                 }
             }
+            let _ = unsafe { DestroyIcon(icon) };
         }
         let _ = unsafe { DestroyWindow(owner) };
         std::fs::write(

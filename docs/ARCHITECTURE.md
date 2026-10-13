@@ -1069,3 +1069,40 @@ antivirus bypass or quarantine recovery. Proof helpers were removed.
 P1-UPGRADE retains safe legacy-main-tray identity/handoff consolidation as open;
 current delivery does not claim universal historical updater behavior.
 
+### P0-CAM-TRAY source correction and native Zoom qualification (2026-10-13)
+
+This correction is in source, not in the immutable public/installed 0.17.1
+binaries. JSON schema remains 3. Sensor client PID and report-time query errors
+are retained as HRESULT failure evidence; a successful zero FILETIME remains
+unavailable for attribution, never a fabricated current report timestamp.
+Creation identity and report-freshness checks remain enforced. Degraded sensor
+health now includes the concrete attribution reason instead of generic coverage.
+
+The tray separates Partial from Active/Ready/Error: amber exclamation for
+incomplete coverage, amber pause for readiness, red for observed activity, grey
+error for true unavailability/control failure. Known active/ready accesses and
+unknown PID identities remain in diagnostics even with partial/unavailable
+collectors; collector reasons, observation gaps, protection states and error/
+notification histories are preserved. Normal refresh recovers coverage without
+acknowledging unrelated manual errors.
+
+Local strict Clippy, 167 tests, release build and metadata-only native CLI passed.
+Win32 popup geometry, full EDIT wrapping and transition/error precedence passed.
+Initial desktop crops of details/hidden icon were wallpaper/Explorer's chevron,
+not valid visual proof. The corrected harness captures the real popup, asks
+PrintWindow to render the owned diagnostic HWND, and rasterizes its genuine
+HICON. These native component fixtures are not claimed as a live user-tray swap
+or as physical capture enforcement; the user's clipboard is never replaced.
+
+During the user's explicitly started Zoom microphone/camera session, the
+candidate reports both accesses and the native C++ SDK probe independently
+reports streaming=1, GetProcessId S_OK with Zoom's matching process creation, but
+GetReportTime S_OK with FILETIME=0. This excludes a Rust binding conversion as
+the cause of the zero; its provider/capture-path origin is not established.
+Without guaranteed report freshness, no authoritative camera client/kill target
+is inferred. Subsequent no-kill watch observed Ktalk microphone/camera STARTs
+with a valid report timestamp and verified camera instance; no Zoom STOP was
+observed by that later watcher. Intent remained microphone not requested and
+camera Allow. No media, privacy mutation, application stop, implicit elevation
+or installed UI replacement was performed.
+
