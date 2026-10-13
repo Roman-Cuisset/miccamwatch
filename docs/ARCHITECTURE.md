@@ -1106,3 +1106,10 @@ observed by that later watcher. Intent remained microphone not requested and
 camera Allow. No media, privacy mutation, application stop, implicit elevation
 or installed UI replacement was performed.
 
+The exact integrated source `233398024fa822b6ed99748971bd272d60e3d7d2` passed
+[full native CI 38355075760](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38355075760):
+Windows/Linux/macOS ARM/Intel, native desktop/package smokes, compact Windows
+popup/details/Copy all on a disposable clipboard, zero-device owner/IPC checks,
+and genuine MSI install/uninstall. No new tag/release or workstation swap was
+performed; CI does not change attribution freshness or physical-enforcement limits.
+
