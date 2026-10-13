@@ -209,7 +209,7 @@ the ARM runner's Cellar is group-writable (0775), and Intel's current upstream
 z3 source formula fails before Rust provisioning. No permissions, checksums or
 upstream formulas were weakened to manufacture acceptance. A source recipe is
 not a published tap, Homebrew/core acceptance or AUR submission.
-**[Current public stable is `v0.17.1`](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.17.1).**
+**[Published corrective baseline `v0.17.1`](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.17.1).**
 The [native release workflow](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38210407613)
 passed, and all seven assets/digests plus six constrained provenance attestations
 were verified against annotated tag/source
@@ -230,9 +230,9 @@ menu was visibly 0.17.1 and compact; the grey error cross was gone. Existing mut
 camera intent was preserved. This is software/UI evidence, not physical protection
 certification or reproduction of the user's earlier notification failure.
 
-## Unreleased — Windows camera attribution and partial tray coverage
+## v0.17.2 — Windows camera attribution and partial tray coverage
 
-The next-source correction keeps detected microphone/camera accesses visible when
+The 0.17.2 correction keeps detected microphone/camera accesses visible when
 a collector has only partial coverage. An amber exclamation indicates incomplete
 coverage, distinct from the camera-ready pause glyph; actual collection/control
 failures retain error precedence. Status details name active/ready accesses,
