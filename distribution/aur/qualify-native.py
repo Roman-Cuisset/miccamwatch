@@ -35,7 +35,7 @@ PRIVILEGED = (
     Path("/usr/.miccamwatch-install"),
 )
 PAYLOAD = Path("/usr/share/miccamwatch/linux-camera")
-VERSION = "0.17.1"
+VERSION = "0.17.2"
 
 
 def require(condition, message):

@@ -1,6 +1,6 @@
 # Maintainer: Roman Cuisset <rcuisset69@gmail.com>
 pkgname=miccamwatch
-pkgver=0.17.1
+pkgver=0.17.2
 pkgrel=1
 pkgdesc='Monitor microphone and camera access from the command line'
 arch=('x86_64')
@@ -18,11 +18,11 @@ optdepends=(
   'python: separately reviewed administrator camera-helper bootstrap'
   'polkit: separately approved administrator camera-helper authorization'
 )
-# Published v0.17.1 annotated tag resolves to this immutable source commit.
+# Immutable 0.17.2 source commit, reviewed before coordinated publication.
 # Pin the commit archive, not a movable tag archive URL.
-_commit=dd35f7ddc1bb36c079017f235703175c52d77da5
+_commit=a58c8b9f3a967589a576879d6d27bfdbc40f9dff
 source=("${pkgname}-${pkgver}-${_commit}.tar.gz::https://codeload.github.com/Roman-Cuisset/miccamwatch/tar.gz/${_commit}")
-sha256sums=('cb6da0697df60e4f5a5ff3286154b29b9eee6ab994c5710a04726fbbe64c2575')
+sha256sums=('bda453c43ae9cc98c34757eecec615f287365ca7b6ec785d9aeb638b91626dc1')
 
 prepare() {
   cd "$srcdir/$pkgname-$_commit"

@@ -1,9 +1,9 @@
 class Miccamwatch < Formula
   desc "Observe microphone and camera access with a CLI and native menu bar"
   homepage "https://github.com/Roman-Cuisset/miccamwatch"
-  url "https://codeload.github.com/Roman-Cuisset/miccamwatch/tar.gz/dd35f7ddc1bb36c079017f235703175c52d77da5"
-  version "0.17.1"
-  sha256 "cb6da0697df60e4f5a5ff3286154b29b9eee6ab994c5710a04726fbbe64c2575"
+  url "https://codeload.github.com/Roman-Cuisset/miccamwatch/tar.gz/a58c8b9f3a967589a576879d6d27bfdbc40f9dff"
+  version "0.17.2"
+  sha256 "bda453c43ae9cc98c34757eecec615f287365ca7b6ec785d9aeb638b91626dc1"
   license "MIT"
 
   depends_on "rust" => :build
