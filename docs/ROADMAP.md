@@ -37,7 +37,9 @@ Les identifiants sont stables. À chaque livraison, remplacer l'état par **En c
 | Lot | Décision / état actuel | Complexité | Dépendance principale |
 | --- | --- | --- | --- |
 | P0-CAM-TRAY | **Publié 0.17.2 et installé sur PC**. Couverture partielle distincte, captures conservées, raisons natives détaillées ; Zoom PID brut valide/report FILETIME zéro, attribution prudente maintenue. Vrai tray PC avec Ktalk actif : menu compact, détails complets, icône rouge ; infobulle résiduelle suivie dans TRAY-WIN | Moyenne | Pas de certification matérielle ; timestamp nul reste Unknown, jamais autorité de kill |
-| SITE-PAGES | **Livré statique 0.17.2, prêt pour Cloudflare Pages ; non déployé** : source `site/`, export `site-dist/`, ZIP direct 137 898 octets ; desktop/mobile/HTTP/404/curl réels. Captures 0.17.1 restent explicitement historiques | Moyenne | Projet/compte Cloudflare autorisé et contrôle HTTPS de production après upload |
+| SITE-PAGES | **Livraison statique 0.17.2 historique ; incident placeholders signalé, correction urgente ouverte**. Export/ZIP et smokes précédents conservés comme preuves datées, pas comme réfutation du défaut actuel ; voir SITE-TOKENS et SITE-L10N | Moyenne | Corriger livraison réellement consultée ; projet Pages autorisé et HTTPS production après upload |
+| SITE-TOKENS | **Urgent, demandé : à corriger avant nouvelle livraison web**. L'utilisateur voit `__MCW_VERSION__`, `__MCW_SOURCE__`, `__MCW_INSTALLER_SHA256__` à la place des valeurs ; identifier et réparer le chemin source/build/archive/publication concerné | Faible à Moyenne | Valeurs de release publiées uniques, aucun token visible ou URL/commande/checksum invalide |
+| SITE-L10N | **Urgent, demandé : site complet dans les sept langues MCW** : anglais, français, allemand, espagnol, japonais, chinois simplifié, russe ; pas seulement navigation ou page d'accueil | Moyenne | SITE-TOKENS ; contenu/limites identiques, export statique et validation réelle de chaque langue |
 | P1-RAM | Publié 0.17.0, validé logiciel/natif : bornes et mesures complètes, 15 Mo non atteints, scénario composé Windows ~43 Mo | Moyenne | Maintien des preuves/limites canoniques ; 30 Mo reste une référence |
 | P1-RESTORE | Publié 0.17.0, validé logiciel/natif : propriétaire Windows, états opposés/hotplug/partiel simulés, release natif réel sans devices | Élevée | Pas de certification matérielle ou déni exclusif/ASIO |
 | P1-HB | Bloqué en qualification : Cellar ARM group-writable 0775, chaîne source Intel z3 défaillante ; aucune publication du tap | Moyenne | Préfixe sûr sans relâcher contrôles et prérequis Homebrew amont fonctionnels |
@@ -450,6 +452,64 @@ ci-dessous restent différés ; ne pas supprimer la racine ASUS ou refondre `/mc
 implicitement. Le contenu et l'installateur revus peuvent être réutilisés sans
 dupliquer leur contrat ou imposer le port ASUS à la navigation Pages.
 
+### SITE-TOKENS — Placeholders visibles, correction urgente
+
+**Signalement utilisateur :** `__MCW_VERSION__`, `__MCW_SOURCE__` et
+`__MCW_INSTALLER_SHA256__` apparaissent au lieu de la version, du commit source
+et de la somme du script. Défaut utilisateur établi ; **pas encore corrigé**.
+Les smokes antérieurs ne le réfutent pas.
+
+**Évidence source :** `site/index.html` et `site/404.html` sont des templates ;
+`site/build.mjs::renderText` substitue les valeurs de `site/release.json` et
+refuse les marqueurs non résolus. Le chemin exact actuellement consulté/servi
+n'est pas établi : ne pas accuser un upload utilisateur, un cache ou Cloudflare
+sans preuve. Examiner source HTML directe, export, ZIP livré et publication
+effective pour corriger le vrai parcours, pas seulement une copie locale.
+
+**Correction attendue :** version réellement publiée, source immuable exacte,
+SHA-256 de l'installateur effectivement servi ; source unique des valeurs,
+pas de remplacement arbitraire ou de duplication de pins. Garantir que le
+parcours de prévisualisation/publication ne présente pas les templates bruts
+comme un site prêt à utiliser. Faire échouer une livraison contenant des tokens
+dans ses pages, métadonnées, liens ou commandes.
+
+**Acceptation :** vrai rendu de la livraison concernée, accueil et 404, téléchargements,
+curl, source et provenance avec valeurs correctes ; aucune occurrence résiduelle
+de marqueur `__MCW_*__` dans les ressources destinées aux visiteurs. Vérifier le
+ZIP effectivement livré et, si déployé, les vrais bytes/URLs HTTPS publics.
+Le checksum doit correspondre aux bytes du script, non à une archive.
+
+### SITE-L10N — Site complet dans toutes les langues MCW
+
+**Demande utilisateur urgente :** couvrir exactement les langues déclarées par
+`src/i18n.rs::Language` : **anglais `en`, français `fr`, allemand `de`,
+espagnol `es`, japonais `ja`, chinois simplifié `zh`, russe `ru`**.
+État actuel : site français ; **traductions complètes non livrées**.
+
+**Périmètre :** toutes les sections, navigation, parcours Windows/Linux/macOS,
+installation/usage/mise à jour/désinstallation, FAQ, sécurité/confidentialité,
+limites d'attribution et de protection, légendes/texte alternatif, labels ARIA,
+retours de copie, 404 et métadonnées SEO/social. Traduire le sens sans embellir
+les capacités ; une limitation ne doit pas disparaître dans une langue.
+Ne pas traduire/altérer les hashes, commits, noms de fichiers, URLs ou syntaxe
+des commandes. Les screenshots réels gardent leur langue et leur portée
+historiques ; légendes traduites, aucune image maquillée comme capture localisée.
+
+**Présentation :** choix de langue visible, utilisable au clavier et sur mobile,
+liens directs par langue et navigation fonctionnelle sans JS ; aucune redirection
+forcée qui empêche le choix. `lang`, canonical/hreflang/sitemap cohérents lorsque
+la vraie origine de production est connue, sans domaine inventé. Réutiliser le
+layout/build statiques ; aucun framework ou service de traduction distant,
+tracker ou runtime supplémentaire côté visiteur.
+
+**Acceptation :** contenu complet et relu dans chacune des sept langues, sans
+section laissée silencieusement en français/anglais ni clé/token affiché.
+Exercer réellement chaque langue sur desktop/mobile, navigation clavier/sans JS,
+sélecteur, liens, 404 et commandes copiables ; vérifier textes longs et glyphes
+CJK/cyrilliques sans débordement. Les faits de release/source/checksum restent
+identiques et corrects dans tous les exports ; SITE-TOKENS doit être résolu.
+
+
 ### Livraison statique du 2026-10-13 et publication
 
 - Sources `site/` : site français complet, CSS/JS externes, captures Windows réelles avec portée, installations MSI/ZIP/Linux/macOS, curl et review-first, provenance/non-signature, usages/permissions/FAQ/confidentialité et vraie 404. Pas de framework/npm/Node côté visiteur, tracker, miroir de binaire ou dépendance ASUS.
@@ -558,3 +618,5 @@ Ne pas déployer cette refonte dans le cadre de la seule mise à jour du MD.
 | 2026-10-13 | PC 0.17.2 / P0-CAM-TRAY | **Paire publique installée, vrai tray observé après accord « Maintenant »** | Hashes exacts, nouveau compagnon, menu 319×262/version172/accès/détails et vrai glyphe shell rouge ; cinq collecteurs healthy, protection JSON égal avant/après, Ktalk jamais arrêté, aucun contrôle SDK | Timeout de capture updater, exit/stdout non observés ; priorité P1-UPGRADE flux hérités et TRAY-WIN préfixe idle contradictoire. Pas de nouvel essai Zoom ni démutage protégé revendiqué |
 | 2026-10-13 | SITE-PAGES / caller ASUS | **Livraison statique 0.17.2 prête, non déployée** | ZIP 137 898 octets/13 fichiers/SHA `570d96a6f1805753b36aa704af1d0283608cef7c6add4a89b686ab96eb2d4158`, rendu desktop/mobile/FAQ/HTTP/404 ; metadata ASUS HTTPS172, racine identique et vrai curl latest172/uninstall isolé | Upload Pages autorisé puis vrai HTTPS/canonical/clipboard ; captures171 historiques ; SITE-ROOT/SITE-MCW différés |
 | 2026-10-13 | Dossier projet principal | **Synchronisé dans `C:\Users\stcui\Documents\miccamwatch`**, branche existante conservée | Ancien HEAD `fc17aa7` → livraison `aeb8742` par fast-forward, 81 fichiers actualisés ; vrai `node site/build.mjs` dans ce dossier exporte 0.17.2. Seule note locale bloquante `docs/NEXT_AI_LINUX_MACOS.md` sauvegardée intégralement en preuve privée et stash nommé `mcw-local-handoff-preserved-before-0.17.2-sync-20261013` ; aucun reset/force ni perte du contenu local | Les fichiers livrés sont committés, donc absence de marque « modifié » ne signifie pas absence des corrections. Ne pas supprimer/appliquer aveuglément le stash historique ; comparer avant éventuelle réintégration |
+| 2026-10-13 | SITE-TOKENS | **Demande urgente inscrite, non corrigée** : version/source/checksum remplacés par marqueurs visibles | Signalement utilisateur ; templates et substitution/garde du builder relus. Page/artefact actuellement consulté non établi, aucune cause de déploiement inventée | Réparer vrai parcours preview/build/ZIP/publication ; accueil/404/SEO/URLs/curl/provenance sans tokens et checksum script exact |
+| 2026-10-13 | SITE-L10N | **Demande urgente inscrite, non implémentée** : site intégral en sept langues MCW | Enum/parser `Language` : en/fr/de/es/ja/zh/ru ; chinois simplifié confirmé par `zh-hans` | Traduction complète, sélection accessible/no-JS, SEO localisé et smokes réels par langue ; valeurs techniques invariantes, SITE-TOKENS prioritaire |
