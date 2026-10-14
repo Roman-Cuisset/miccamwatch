@@ -1181,8 +1181,14 @@ produce stable production canonical/hreflang/sitemap. Four Node regressions pass
 
 Replacing the existing primary Windows site-dist failed EPERM; it was preserved
 without permission/AV bypass. Exact-source fresh exports passed and produced the
-complete34-file490598-byte multilingual ZIP. Public multilingual Git deployment
-must be observed separately after publication, not inferred from these local runs.
+complete34-file490598-byte multilingual ZIP.
+Public source `07eb1734dd177a5319969da5645983a6b94097d5` passed static-site
+CI38530338888 and Cloudflare deployment4653ef80. Real HTTPS navigation verified
+all seven locales, stable production canonical/hreflang, localized deep-path404,
+loaded images, same-origin install command and exact51249-byte script/SHA.
+Cloudflare's injected Web Analytics beacon was blocked by our CSP; no whitelist
+or tracker was added. Removing the injection requires authorized project settings,
+not a permissive CSP or a false claim of account access.
 
 The newly reported grey MCW tray represented actual incomplete camera protection:
 Block intent existed but elevated helper was inactive, while mic guard/mute were

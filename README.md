@@ -552,8 +552,13 @@ The exporter preserved it; no ACL/antivirus bypass or forced replacement was use
 Fresh exact-source exports passed. The complete direct-upload bundle is
 `Downloads/miccamwatch-pages-0.17.2-multilingual.zip` (34 files, 490,598 bytes),
 SHA-256 `1747056b969ea5ca017895743af6d6b05eeb6f925c391af4eba8b6caa720bf65`.
-Public multilingual deployment is verified separately after the Git push;
-local screenshots alone are not production evidence.
+The multilingual site is **published at https://miccamwatch.pages.dev/**.
+Source `07eb1734dd177a5319969da5645983a6b94097d5` passed
+[static-site CI](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38530338888)
+and Cloudflare deployment. Every public locale, stable canonical, localized
+deep-path 404, same-origin command and the exact51249-byte installer were verified.
+Cloudflare currently injects its Web Analytics beacon, blocked by our restrictive
+CSP; disable that project setting to remove the injection, not relax CSP.
 
 ## Policy configuration
 
