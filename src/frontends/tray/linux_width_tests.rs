@@ -10,15 +10,21 @@ fn fixture_view(lang: Language) -> View {
     };
     let diagnostic = format!(
         "{}: BEGIN-LINUX-DIAGNOSTIC {payload} END-LINUX-DIAGNOSTIC",
-        text.failed
+        text.degraded
     );
     make_view(
-        (diagnostic.clone(), "error"),
+        (
+            format!(
+                "capture-client: MIC ACTIVE — {}\n\n{diagnostic}",
+                text.degraded
+            ),
+            "partial",
+        ),
         MicrophoneMuteState::Unmuted,
         (false, Some(&diagnostic)),
         &Settings::default(),
         lang,
-        &Some(diagnostic.clone()),
+        &None,
         SessionLockState::Unknown,
     )
 }

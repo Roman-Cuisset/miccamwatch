@@ -7,7 +7,7 @@ import os
 import Darwin
 
 // Desktop protocol v1: UTF-8 newline-delimited JSON, maximum frame 65536 bytes.
-// Rust -> Swift: {"kind":"state","summary":String,"visual":"idle"|"ready"|"active"|"error",
+// Rust -> Swift: {"kind":"state","summary":String,"visual":"idle"|"ready"|"active"|"partial"|"error",
 // "details_label":String,"items":[{"action":String,"label":String,"detail":String?,"enabled":Bool}]}
 // or {"kind":"stop"}. Labels are compact; optional detail retains the original.
 // Swift -> Rust: {"kind":"ready","protocol":1}, {"kind":"action","action":String},
@@ -232,7 +232,7 @@ private final class DesktopDelegate: NSObject, NSApplicationDelegate {
     }
     private func apply(_ frame: DesktopFrame) {
         guard frame.kind == "state", let summary = frame.summary, let visual = frame.visual,
-              ["idle", "ready", "active", "error"].contains(visual), let entries = frame.items,
+              ["idle", "ready", "active", "partial", "error"].contains(visual), let entries = frame.items,
               let detailsLabel = frame.details_label, detailsLabel.utf8.count <= 128,
               entries.count <= 16, summary.utf8.count <= 16384 else {
             desktopEmit(DesktopEvent(kind: "error", error: "invalid desktop state frame")); stop(); return
@@ -254,12 +254,12 @@ private final class DesktopDelegate: NSObject, NSApplicationDelegate {
         let image = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { rect in
             let color: NSColor
             switch visual { case "idle": color = .systemGreen; case "ready": color = .systemYellow;
-            case "active": color = .systemRed; default: color = .systemGray }
+            case "active": color = .systemRed; case "partial": color = .systemOrange; default: color = .systemGray }
             color.setFill()
             NSBezierPath(ovalIn: rect.insetBy(dx: 2, dy: 2)).fill()
             NSColor.white.setStroke()
             let path = NSBezierPath(); path.lineWidth = 2
-            if visual == "error" {
+            if visual == "error" || visual == "partial" {
                 path.move(to: NSPoint(x: 9, y: 6)); path.line(to: NSPoint(x: 9, y: 13)); path.stroke()
                 NSColor.white.setFill(); NSBezierPath(ovalIn: NSRect(x: 8, y: 3, width: 2, height: 2)).fill()
             } else if visual == "active" {

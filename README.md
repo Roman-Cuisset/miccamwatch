@@ -278,6 +278,26 @@ unchanged protections were verified read-only instead, without rerunning update.
 The private migration also retained a mapped-old-CLI cleanup warning; no security
 protection or quarantine was bypassed.
 
+## Unreleased — Linux/macOS observation and control diagnostics
+
+The Unix tray now keeps observed active/ready clients visible during incomplete
+observation, with an orange warning and full collector reasons in Details.
+An unknown camera restriction read is not labeled as a failed action, nor
+treated as permission to use the camera. Actual action failures stay separate.
+macOS manual profile approval remains available even when global absence of
+restrictions cannot be established.
+
+CoreMediaIO still does not identify camera clients or prove frame flow.
+Non-root macOS profile queries cannot establish a system-wide inventory; the
+diagnostic names the administrator requirement without requesting elevation.
+Administrator access is not camera TCC permission and does not resolve missing
+public API information. Public Quartz console metadata does not prove current
+screen-lock state; automatic lock controls remain unavailable.
+
+These are source changes, not a replacement of the published 0.17.2 binaries.
+Collector repair and explicit, narrowly scoped permission proposals are tracked
+in [ROADMAP](docs/ROADMAP.md#p0-unix-obs--causes-réelles-permissions-et-autorisations-utiles).
+
 
 ## Commands
 

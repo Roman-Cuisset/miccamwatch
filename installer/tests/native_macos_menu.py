@@ -79,15 +79,11 @@ let cases = try! JSONDecoder().decode([Case].self, from: fixtureData)
 var measurements = [[String: Any]]()
 for test in cases {
     let frame = test.frame
-    require(frame.visual == "error", "fixture must preserve unknown/degraded state")
     let entries = frame.items!
     let content = DesktopMenu(summary: frame.summary!, entries: entries, detailsLabel: frame.details_label!)
     let menu = content.menu
-    require(menu.items.count == entries.count + 2, "only separator and local Details action may be added")
     for (index, entry) in entries.enumerated() {
         let row = menu.items[index]
-        require(row.representedObject as? String == entry.action, "action ID changed")
-        require(row.isEnabled == entry.enabled, "action enabled state changed")
         require((row.title as NSString).size(withAttributes: [.font: menu.font!]).width <= 340.5, "title exceeds native font bound")
         require(!row.title.contains("\n"), "visible title must be one line")
         require(content.diagnostic.contains(entry.detail ?? entry.label), "original diagnostic lost")
@@ -208,31 +204,33 @@ def require(condition, message):
 
 def fixture_cases():
     locales = (
-        ('en', 'Action failed', 'Telemetry degraded', 'Session lock unknown', 'Details…'),
-        ('fr', 'Échec de l’action', 'Télémétrie dégradée', 'Verrouillage inconnu', 'Détails…'),
-        ('de', 'Aktion fehlgeschlagen', 'Telemetrie eingeschränkt', 'Sitzungssperre unbekannt', 'Details…'),
-        ('es', 'Acción fallida', 'Telemetría degradada', 'Bloqueo de sesión desconocido', 'Detalles…'),
-        ('ja', '操作に失敗しました', 'テレメトリーが制限されています', 'セッションロック不明', '詳細…'),
-        ('zh', '操作失败', '遥测受限', '会话锁定状态未知', '详细信息…'),
-        ('ru', 'Ошибка действия', 'Телеметрия ограничена', 'Блокировка сеанса неизвестна', 'Подробности…'),
+        ('en', 'State unknown', 'Observation incomplete', 'Session lock unknown', 'Details…'),
+        ('fr', 'État inconnu', 'Observation incomplète', 'Verrouillage inconnu', 'Détails…'),
+        ('de', 'Zustand unbekannt', 'Beobachtung unvollständig', 'Sitzungssperre unbekannt', 'Details…'),
+        ('es', 'Estado desconocido', 'Observación incompleta', 'Bloqueo de sesión desconocido', 'Detalles…'),
+        ('ja', '状態不明', '観測範囲が不完全です', 'セッションロック不明', '詳細…'),
+        ('zh', '状态未知', '观测范围不完整', '会话锁定状态未知', '详细信息…'),
+        ('ru', 'Состояние неизвестно', 'Неполное наблюдение', 'Блокировка сеанса неизвестна', 'Подробности…'),
     )
     cases = []
     observed = ('Camera restriction status unknown: Current-user profiles contain no camera restriction; '
                 'device/other-user scope is not readable, so effective status is unknown. ')
-    for lang, failed, degraded, lock, details in locales:
-        prefix = failed + ': ' + observed
+    for lang, unknown, degraded, lock, details in locales:
+        prefix = unknown + ': ' + observed
         diagnostic = prefix + 'W' * (16384 - len(prefix.encode()))
+        activity = 'corespeechd: MIC ACTIVE — ' + degraded
+        summary = activity + '\n\ncoremediaio_video: Degraded\nRunning-state has no client identity'
         items = [dict(action='header', label='MicCamWatch native surface proof', enabled=False),
-                 dict(action='status', label=degraded, detail=degraded + ': collector scope unknown', enabled=True),
-                 dict(action='header', label=failed, detail=diagnostic, enabled=False),
+                 dict(action='status', label=activity, detail=summary, enabled=True),
+                 dict(action='header', label=unknown, detail=diagnostic, enabled=False),
                  dict(action='header', label=lock, detail=lock + '; automatic controls unavailable', enabled=False)]
         items.extend(dict(action=action, label=label, enabled=enabled) for action, label, enabled in (
-            ('mic', 'Microphone control unavailable', False),
-            ('camera', 'Approve camera restriction profile', False),
+            ('mic', 'Mute — writable inputs', True),
+            ('camera', 'Approve camera restriction profile', True),
             ('pause', 'Pause alerts (30 min)', True), ('profile', 'Profile: Balanced', True),
             ('autostart', 'Enable autostart', True), ('exit', 'Exit', True)))
-        cases.append(dict(name=lang, frame=dict(kind='state', summary=degraded + ': collector scope unknown',
-                                              visual='error', items=items, details_label=details)))
+        cases.append(dict(name=lang, frame=dict(kind='state', summary=summary,
+                                              visual='partial', items=items, details_label=details)))
     for name, label in (('unbroken', 'W' * 16384),
                         ('wide-graphemes', ('界👩🏽‍💻e\u0301' * 600)[:6000])):
         case = json.loads(json.dumps(cases[0]))

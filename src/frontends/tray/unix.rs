@@ -2,13 +2,14 @@ use crate::{
     config::Policy,
     frontends::cli::Filter,
     i18n::Language,
-    model::{Activity, CollectorState, MicrophoneMuteState},
+    model::{Activity, CollectorState, MicrophoneMuteState, Snapshot},
     platform::{PlatformMonitor, SessionLockState},
     settings::{PrivacyProfile, Settings},
     watcher::{EventDispatcher, TransitionTracker},
 };
 use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
+use std::fmt::Write as _;
 #[cfg(target_os = "macos")]
 use std::sync::mpsc::Receiver;
 use std::{
@@ -336,6 +337,7 @@ struct Words {
     idle: &'static str,
     degraded: &'static str,
     failed: &'static str,
+    state_unknown: &'static str,
     mute: &'static str,
     unmute: &'static str,
     unavailable: &'static str,
@@ -360,8 +362,9 @@ fn words(lang: Language) -> Words {
     match lang {
         Language::En => Words {
             idle: "No observed capture",
-            degraded: "Telemetry degraded",
+            degraded: "Observation incomplete",
             failed: "Action failed",
+            state_unknown: "State unknown",
             mute: "Mute",
             unmute: "Restore",
             unavailable: "Microphone control unavailable",
@@ -384,8 +387,9 @@ fn words(lang: Language) -> Words {
         },
         Language::Fr => Words {
             idle: "Aucune capture observée",
-            degraded: "Télémétrie dégradée",
+            degraded: "Observation incomplète",
             failed: "Échec de l’action",
+            state_unknown: "État inconnu",
             mute: "Couper",
             unmute: "Restaurer",
             unavailable: "Contrôle du microphone indisponible",
@@ -408,8 +412,9 @@ fn words(lang: Language) -> Words {
         },
         Language::De => Words {
             idle: "Keine Erfassung beobachtet",
-            degraded: "Telemetrie eingeschränkt",
+            degraded: "Beobachtung unvollständig",
             failed: "Aktion fehlgeschlagen",
+            state_unknown: "Zustand unbekannt",
             mute: "Stummschalten",
             unmute: "Wiederherstellen",
             unavailable: "Mikrofonsteuerung nicht verfügbar",
@@ -432,8 +437,9 @@ fn words(lang: Language) -> Words {
         },
         Language::Es => Words {
             idle: "No se observa captura",
-            degraded: "Telemetría degradada",
+            degraded: "Observación incompleta",
             failed: "Acción fallida",
+            state_unknown: "Estado desconocido",
             mute: "Silenciar",
             unmute: "Restaurar",
             unavailable: "Control del micrófono no disponible",
@@ -456,8 +462,9 @@ fn words(lang: Language) -> Words {
         },
         Language::Ja => Words {
             idle: "キャプチャは観測されていません",
-            degraded: "テレメトリーが制限されています",
+            degraded: "観測範囲が不完全です",
             failed: "操作に失敗しました",
+            state_unknown: "状態不明",
             mute: "ミュート",
             unmute: "復元",
             unavailable: "マイク制御は利用できません",
@@ -480,8 +487,9 @@ fn words(lang: Language) -> Words {
         },
         Language::Zh => Words {
             idle: "未观察到采集",
-            degraded: "遥测受限",
+            degraded: "观测范围不完整",
             failed: "操作失败",
+            state_unknown: "状态未知",
             mute: "静音",
             unmute: "恢复",
             unavailable: "麦克风控制不可用",
@@ -504,8 +512,9 @@ fn words(lang: Language) -> Words {
         },
         Language::Ru => Words {
             idle: "Захват не наблюдается",
-            degraded: "Телеметрия ограничена",
+            degraded: "Неполное наблюдение",
             failed: "Ошибка действия",
+            state_unknown: "Состояние неизвестно",
             mute: "Выключить звук",
             unmute: "Восстановить",
             unavailable: "Управление микрофоном недоступно",
@@ -553,10 +562,18 @@ fn compact_entry(
     text: &Words,
 ) -> MenuEntry {
     let label = label.into();
+    if let Some((first_line, _)) = label.split_once('\n') {
+        return MenuEntry {
+            action,
+            label: first_line.to_owned(),
+            detail: Some(label),
+            enabled,
+        };
+    }
     let short = if label == text.lock_unknown {
         Some(text.lock_status)
     } else {
-        [text.failed, text.degraded, text.done]
+        [text.failed, text.degraded, text.done, text.state_unknown]
             .into_iter()
             .find(|status| {
                 label != *status
@@ -575,6 +592,82 @@ fn compact_entry(
         None => entry(action, label, enabled),
     }
 }
+
+fn observation_status(snapshot: &Snapshot, lang: Language) -> (String, &'static str) {
+    let unavailable = snapshot.collectors.is_empty()
+        || snapshot
+            .collectors
+            .iter()
+            .any(|health| health.state == CollectorState::Unavailable);
+    let partial = !snapshot.observation_gaps.is_empty()
+        || snapshot
+            .collectors
+            .iter()
+            .any(|health| health.state == CollectorState::Degraded);
+    let active = snapshot
+        .accesses
+        .iter()
+        .any(|access| access.activity == Activity::Active);
+    let ready = snapshot
+        .accesses
+        .iter()
+        .any(|access| access.activity == Activity::Ready);
+    let visual = if unavailable {
+        "error"
+    } else if partial {
+        "partial"
+    } else if active {
+        "active"
+    } else if ready {
+        "ready"
+    } else {
+        "idle"
+    };
+    let mut summary = String::new();
+    // Show both active captures and ready pipelines, including during partial observation.
+    for access in &snapshot.accesses {
+        if !summary.is_empty() {
+            summary.push_str(", ");
+        }
+        let _ = write!(
+            summary,
+            "{}: {} {}",
+            access.application,
+            lang.resource(access.resource),
+            lang.state_str(None, access.activity)
+        );
+    }
+    if unavailable || partial {
+        if !summary.is_empty() {
+            summary.push_str(" — ");
+        }
+        summary.push_str(words(lang).degraded);
+    } else if summary.is_empty() {
+        summary.push_str(words(lang).idle);
+    }
+    for health in &snapshot.collectors {
+        if health.state != CollectorState::Healthy {
+            let _ = write!(
+                summary,
+                "\n\n{}: {:?}\n{}",
+                health.collector,
+                health.state,
+                health
+                    .detail
+                    .as_deref()
+                    .unwrap_or("No diagnostic detail supplied")
+            );
+        }
+    }
+    for resource in &snapshot.observation_gaps {
+        let _ = write!(
+            summary,
+            "\n\n{}: current observation unavailable; absence does not prove capture stopped",
+            lang.resource(*resource)
+        );
+    }
+    (summary, visual)
+}
 fn make_view(
     status: (String, &'static str),
     mute: MicrophoneMuteState,
@@ -587,6 +680,11 @@ fn make_view(
     let (summary, visual) = status;
     let (camera_blocked, camera_error) = camera;
     let text = words(lang);
+    let visual = if camera_error.is_some() && visual != "error" {
+        "partial"
+    } else {
+        visual
+    };
     let scope = if cfg!(target_os = "macos") {
         text.scope.split(" / ").next().unwrap_or(text.scope)
     } else {
@@ -617,9 +715,18 @@ fn make_view(
     #[cfg(target_os = "linux")]
     {
         items.push(entry("header", crate::privacy::camera_capability(), false));
-        if let Some(error) = camera_error {
-            items.push(entry("header", error, false));
-        }
+    }
+    if let Some(error) = camera_error {
+        items.push(MenuEntry {
+            action: "header",
+            label: format!(
+                "{}: {}",
+                lang.resource(crate::model::Resource::Camera),
+                text.state_unknown
+            ),
+            detail: Some(error.to_owned()),
+            enabled: false,
+        });
     }
     items.push(entry(
         "camera",
@@ -634,7 +741,7 @@ fn make_view(
         } else {
             text.camera
         },
-        camera_error.is_none(),
+        cfg!(target_os = "macos") || camera_error.is_none(),
     ));
     items.push(entry(
         "pause",
@@ -660,7 +767,7 @@ fn make_view(
         match &autostart {
             Ok(crate::autostart::AutostartState::Enabled) => text.autostart_on.to_owned(),
             Ok(crate::autostart::AutostartState::Disabled) => text.autostart_off.to_owned(),
-            Err(error) => format!("{}: {error:#}", text.failed),
+            Err(error) => format!("{}: {error:#}", text.state_unknown),
         },
         autostart.is_ok(),
         &text,
@@ -728,10 +835,7 @@ pub fn run_tray(
     let mut camera_blocked = false;
     #[cfg(target_os = "macos")]
     let mut camera_pending_target = None;
-    #[cfg(target_os = "linux")]
     let mut camera_error: Option<String> = None;
-    #[cfg(target_os = "macos")]
-    let camera_error: Option<String> = None;
     let mut lock = SessionLockState::Unknown;
     let outcome = (|| -> Result<()> {
         loop {
@@ -740,13 +844,13 @@ pub fn run_tray(
             }
             host.check()?;
             if Instant::now() >= next_poll {
-                match Settings::load() {
-                    Ok(current) => settings = current,
-                    Err(error) => {
-                        feedback = Some(format!("{}: {error:#}", words(lang).failed));
-                        action_error = true;
+                let settings_error = match Settings::load() {
+                    Ok(current) => {
+                        settings = current;
+                        None
                     }
-                }
+                    Err(error) => Some(format!("{error:#}")),
+                };
                 dispatcher.preferences(settings.sound_enabled, settings.history_enabled);
                 if !explicit_policy && settings.profile != applied_profile {
                     // An explicit --config remains authoritative across preference changes.
@@ -801,56 +905,7 @@ pub fn run_tray(
                         tracker.reconcile(&snapshot, |access, action| {
                             dispatcher.dispatch(access, action)
                         })?;
-                        let unhealthy = snapshot.collectors.is_empty()
-                            || snapshot
-                                .collectors
-                                .iter()
-                                .any(|health| health.state != CollectorState::Healthy)
-                            || !snapshot.observation_gaps.is_empty();
-                        let active = snapshot
-                            .accesses
-                            .iter()
-                            .filter(|access| access.activity == Activity::Active)
-                            .collect::<Vec<_>>();
-                        let ready = snapshot
-                            .accesses
-                            .iter()
-                            .filter(|access| access.activity == Activity::Ready)
-                            .collect::<Vec<_>>();
-                        visual = if unhealthy {
-                            "error"
-                        } else if !active.is_empty() {
-                            "active"
-                        } else if !ready.is_empty() {
-                            "ready"
-                        } else {
-                            "idle"
-                        };
-                        let accesses = if active.is_empty() { &ready } else { &active };
-                        let details = accesses
-                            .iter()
-                            .map(|access| {
-                                format!(
-                                    "{}: {} {}",
-                                    access.application,
-                                    lang.resource(access.resource),
-                                    lang.state_str(None, access.activity)
-                                )
-                            })
-                            .collect::<Vec<_>>()
-                            .join(", ");
-                        summary = if unhealthy {
-                            format!(
-                                "{}{}{}",
-                                words(lang).degraded,
-                                if details.is_empty() { "" } else { ": " },
-                                details
-                            )
-                        } else if details.is_empty() {
-                            words(lang).idle.to_owned()
-                        } else {
-                            details
-                        };
+                        (summary, visual) = observation_status(&snapshot, lang);
                     }
                     Err(error) => {
                         tracker.observation_gap();
@@ -858,9 +913,24 @@ pub fn run_tray(
                         summary = format!("{}: {error:#}", words(lang).degraded);
                     }
                 }
-                mute = monitor
-                    .microphone_mute_state()
-                    .unwrap_or(MicrophoneMuteState::Unavailable);
+                match monitor.microphone_mute_state() {
+                    Ok(state) => mute = state,
+                    Err(error) => {
+                        mute = MicrophoneMuteState::Unavailable;
+                        let _ = write!(summary, "\n\n{}: {error:#}", words(lang).unavailable);
+                        if visual != "error" {
+                            visual = "partial";
+                        }
+                    }
+                }
+                if let Some(error) = settings_error {
+                    let _ = write!(
+                        summary,
+                        "\n\nSettings — {}: {error}",
+                        words(lang).state_unknown
+                    );
+                    visual = "error";
+                }
                 #[cfg(target_os = "linux")]
                 match crate::privacy::camera_state() {
                     Ok(state) => {
@@ -876,6 +946,7 @@ pub fn run_tray(
                 match crate::privacy::camera_state() {
                     Ok(state) => {
                         camera_blocked = state == crate::privacy::CameraPrivacyState::Blocked;
+                        camera_error = None;
                         if camera_pending_target == Some(camera_blocked) {
                             camera_pending_target = None;
                             feedback = Some(words(lang).done.to_owned());
@@ -883,8 +954,7 @@ pub fn run_tray(
                         }
                     }
                     Err(error) => {
-                        feedback = Some(format!("{}: {error:#}", words(lang).failed));
-                        action_error = true;
+                        camera_error = Some(format!("{error:#}"));
                     }
                 }
                 next_poll = Instant::now() + INTERVAL;
@@ -1105,6 +1175,7 @@ impl ksni::Tray for LinuxTray {
             "idle" => [35, 180, 90],
             "ready" => [235, 185, 25],
             "active" => [230, 55, 65],
+            "partial" => [235, 145, 25],
             _ => [110, 110, 110],
         };
         let mut pixels = Vec::with_capacity(32 * 32 * 4);
@@ -1112,7 +1183,7 @@ impl ksni::Tray for LinuxTray {
             for x in 0i32..32 {
                 let inside = (x - 16).pow(2) + (y - 16).pow(2) <= 13 * 13;
                 let glyph = match self.view.visual {
-                    "error" => {
+                    "error" | "partial" => {
                         (14..=17).contains(&x) && ((8..=19).contains(&y) || (23..=25).contains(&y))
                     }
                     "ready" => {
@@ -1142,7 +1213,7 @@ impl ksni::Tray for LinuxTray {
         self.icon_pixmap()
     }
     fn status(&self) -> ksni::Status {
-        if self.view.visual == "error" {
+        if matches!(self.view.visual, "error" | "partial") {
             ksni::Status::NeedsAttention
         } else {
             ksni::Status::Active
@@ -1390,40 +1461,63 @@ impl Drop for DesktopHost {
 #[cfg(test)]
 mod menu_tests {
     use super::*;
+    use crate::model::{Access, CollectorHealth, Confidence, EnforcementDecision, Resource, Risk};
+
+    fn observed() -> Snapshot {
+        Snapshot {
+            collectors: vec![CollectorHealth {
+                collector: "coremediaio_video",
+                state: CollectorState::Degraded,
+                detail: Some("running-state does not identify the client".into()),
+            }],
+            accesses: vec![Access {
+                key: "input-client".into(),
+                resource: Resource::Microphone,
+                activity: Activity::Active,
+                application: "corespeechd".into(),
+                pid: Some(42),
+                parent_pid: None,
+                parent_name: None,
+                risk: Risk::Unexplained,
+                confidence: Confidence::High,
+                enforcement: EnforcementDecision::Unknown,
+                executable: None,
+                signature: None,
+                device: None,
+                started_at: None,
+                modules: vec![],
+                evidence: vec![],
+                process: None,
+            }],
+            observation_gaps: vec![],
+        }
+    }
 
     #[test]
-    fn compact_status_frames_retain_localized_diagnostics_and_actions() {
-        for lang in [
-            Language::En,
-            Language::Fr,
-            Language::De,
-            Language::Es,
-            Language::Ja,
-            Language::Zh,
-            Language::Ru,
-        ] {
-            let text = words(lang);
-            for status in [text.failed, text.degraded] {
-                let diagnostic =
-                    format!("{status}: {}", "camera restriction unknown; ".repeat(500));
-                let row = compact_entry("status", &diagnostic, true, &text);
-                let frame = serde_json::to_value(&row).unwrap();
-                assert_eq!(frame["label"], status);
-                assert_eq!(frame["detail"], diagnostic);
-                assert_eq!(frame["action"], "status");
-                assert_eq!(frame["enabled"], true);
-            }
-            let lock = compact_entry("header", text.lock_unknown, false, &text);
-            assert_eq!(lock.label, text.lock_status);
-            assert_eq!(lock.detail.as_deref(), Some(text.lock_unknown));
-            assert!(!lock.enabled);
-            let control = compact_entry("camera", text.camera, false, &text);
-            assert_eq!(control.label, text.camera);
-            assert!(control.detail.is_none());
-            assert_eq!(control.action, "camera");
-            assert!(!control.enabled);
-            assert!(!text.details.is_empty());
-        }
+    fn partial_observation_preserves_activity_and_explains_collector_then_recovers() {
+        let mut snapshot = observed();
+        let (summary, visual) = observation_status(&snapshot, Language::En);
+        assert_eq!(visual, "partial");
+        let (first, detail) = summary.split_once('\n').unwrap();
+        assert!(first.contains("corespeechd"));
+        assert!(detail.contains("coremediaio_video"));
+        assert!(detail.contains(snapshot.collectors[0].detail.as_deref().unwrap()));
+        snapshot.collectors[0].state = CollectorState::Healthy;
+        assert_eq!(observation_status(&snapshot, Language::En).1, "active");
+        snapshot.accesses.clear();
+        snapshot.observation_gaps.push(Resource::Camera);
+        assert_eq!(observation_status(&snapshot, Language::En).1, "partial");
+        snapshot.collectors[0].state = CollectorState::Unavailable;
+        assert_eq!(observation_status(&snapshot, Language::En).1, "error");
+    }
+
+    #[test]
+    fn unavailable_collector_does_not_erase_observed_capture() {
+        let mut snapshot = observed();
+        snapshot.collectors[0].state = CollectorState::Unavailable;
+        let (summary, visual) = observation_status(&snapshot, Language::En);
+        assert_eq!(visual, "error");
+        assert!(summary.lines().next().unwrap().contains("corespeechd"));
     }
 }
 

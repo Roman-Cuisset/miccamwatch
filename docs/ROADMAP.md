@@ -37,6 +37,9 @@ Les identifiants sont stables. À chaque livraison, remplacer l'état par **En c
 | Lot | Décision / état actuel | Complexité | Dépendance principale |
 | --- | --- | --- | --- |
 | P0-CAM-TRAY | **Publié 0.17.2 et installé sur PC**. Couverture partielle distincte, captures conservées, raisons natives détaillées ; Zoom PID brut valide/report FILETIME zéro, attribution prudente maintenue. Vrai tray PC avec Ktalk actif : menu compact, détails complets, icône rouge ; infobulle résiduelle suivie dans TRAY-WIN | Moyenne | Pas de certification matérielle ; timestamp nul reste Unknown, jamais autorité de kill |
+| P0-UNIX-DIAG | **Priorité corrective Linux/macOS**, source en qualification : capture conservée pendant observation partielle ; collecteur/raison dans Details ; état caméra inconnu distinct d'une action échouée | Moyenne | Smoke natif Linux/macOS ARM/Intel ; aucune limite API masquée ni mutation de protection |
+| P0-UNIX-OBS | **À traiter ensuite, priorité explicite** : réparer les causes réelles de lecture/identité indisponibles, pas seulement changer le libellé ; nommer les droits manquants prouvés et proposer une autorisation ciblée utile | Élevée | Distinguer permission refusée, périmètre incomplet, API sans information et absence de périphérique ; UAC/admin/Polkit explicites, pas d'élévation globale de MCW |
+| P1-MAC-MENU | **Retours inscrits** : sous-menu de profil avec choix direct, icône MCW identifiable et Details au-dessus de Exit | Moyenne | Après diagnostics/collecteurs ; AppKit réel, sept langues, configurations explicites prioritaires |
 | SITE-PAGES | **Publié et vérifié sur HTTPS Pages**, source web `07eb173` : sept langues complètes, installateur exact, ZIP complet 34 fichiers ; aucune nouvelle version binaire MCW | Moyenne | Maintenir CI/bornes/permissions ; ancien export local Windows refusé EPERM, préservé |
 | SITE-TOKENS | **Corrigé sur Pages, vérifié après déploiement `f1344bf`**. Build Git exécuté depuis racine dépôt, output `site-dist`, version/source/checksum réels ; source HTML brute n'est plus un entrypoint | Faible à Moyenne | Gardes build, source unique des faits, aucun token résiduel |
 | SITE-L10N | **Publié et exercé en production** : en/fr/de/es/ja/zh/ru, 223 messages chacun, SEO/ARIA/copie/404/social ; desktop/mobile/clavier/no-JS locaux et sept préfixes HTTPS/404/canonical réels | Moyenne | CI site38530338888 réussie ; images171 restent historiques, CSP reste restrictive |
@@ -266,6 +269,13 @@ d'un terminal. Couvrir Apple Silicon et Intel sur la baseline macOS supportée ;
 deux artefacts natifs cohérents suffisent, ne pas promettre un universal non qualifié.
 Réutiliser le cœur Rust et le bridge AppKit existants ; aucun Electron, serveur
 ou runtime supplémentaire. Garder les archives CLI et leur contrat d'installation.
+
+**Logo autorisé par l'utilisateur :** réutiliser celui du site, source
+`site/assets/mark.svg`. L'icône Finder/application et le logo de l'alerte
+Details appartiennent à `.app` ; `.dmg` distribue cette application, il ne crée
+pas lui-même son identité visuelle. Prévoir les ressources `.icns` et l'icône
+de barre de menus adaptées à macOS, lisibles en thèmes clair/sombre et sur Retina.
+Ne pas confondre le logo avec le badge d'état actif/partiel/erreur.
 
 **Comportement :** ouvrir `.app` démarre le menu MCW natif immédiatement, sans
 fenêtre terminal parasite ; état, diagnostics, commandes et Quit accessibles.
@@ -732,6 +742,74 @@ clavier et contraste lisibles, sans débordement horizontal global ; essayer les
 liens, le téléchargement du script et les instructions propres à chaque OS.
 Ne pas déployer cette refonte dans le cadre de la seule mise à jour du MD.
 
+## P0-UNIX-DIAG — Observation partielle et faux échec d'action
+
+**Relevé utilisateur macOS 0.17.2 reçu :** `Telemetry degraded: corespeechd:
+MIC ACTIVE`, puis `Action failed: Camera restriction status unknown:
+Current-user profiles contain no visible camera restriction; device/other-user
+scope is not readable, so effective status is unknown.` Le verrouillage est
+également inconnu, les contrôles automatiques indisponibles. Ce relevé est une
+observation utilisateur, pas un nouveau smoke sur son Mac.
+
+**Causes établies dans la source :** `coremediaio_video` reste Degraded car
+CoreMediaIO donne l'état de fonctionnement du périphérique, sans identité client
+ni preuve de flux. Une erreur de lecture de `camera_state` était placée dans le
+feedback d'action et rendait l'icône Error, même sans action caméra. La vue compacte
+réduisait aussi les détails de l'observation à un libellé générique. Le probe de
+verrouillage public macOS retourne volontairement Unknown : les clés publiques
+Quartz établissent le contexte console, pas un état de verrouillage actuel.
+
+**Correction source :** activité active/ready au premier plan, observation
+partielle orange distincte d'une indisponibilité réelle, collecteur et raison
+complets dans Details. Lecture caméra inconnue séparée du feedback d'action ;
+elle ne devient ni Allowed ni Blocked. Garder l'approbation manuelle macOS
+accessible : `toggle_camera` sait préparer un profil possédé même si l'absence
+de restrictions globales n'est pas établie. Une lecture saine suivante récupère
+son propre état sans acquitter une action échouée. Aucun changement de permission,
+profil installé, mute, contrôle matériel, autostart ou application capturante.
+
+## P0-UNIX-OBS — Causes réelles, permissions et autorisations utiles
+
+**Priorité demandée après le diagnostic :** réparer ce qui empêche réellement
+l'observation, pas seulement remplacer « Telemetry degraded ». Examiner les
+erreurs natives CoreAudio/CoreMediaIO, identité/birth/exécutable, visibilité des
+profils macOS et collecteurs PipeWire/V4L2/proc Linux. Conserver les captures
+établies pendant une lacune et distinguer absence d'information d'absence d'accès.
+
+**Diagnostic actionnable demandé :** pour chaque ressource, nommer le collecteur,
+ce qui est observé, ce qui manque, la cause native et le remède réellement utile.
+Ne dire « droits manquants » qu'avec preuve de permission/périmètre insuffisant.
+Ici, la requête `profiles` non-root n'emploie pas `-all` et ne peut établir un
+inventaire global ; les détails indiquent désormais qu'une lecture globale
+nécessite une autorisation administrateur. Ce n'est pas une autorisation TCC.
+
+**Parcours à implémenter :** proposer Windows UAC, autorisation administrateur
+macOS ou Polkit Linux selon la cause et l'OS, après consentement explicite,
+uniquement pour l'opération nécessaire. Garder le frontend et l'observation dans
+la session de l'utilisateur ; helper ciblé et vérifié, lecture seule quand
+seul un diagnostic est demandé, refus/annulation visibles, aucune boucle de
+prompts. Préserver identité, SID/UID, ownership et protections. Ne pas lancer
+tout MCW en root/admin, ne pas demander l'accès audio/vidéo pour espionner les
+autres apps, ni contourner TCC/SIP/quarantaine. L'élévation ne résout pas une API
+sans PID caméra, preuve de flux ou propriété publique de verrouillage.
+
+**Validation future :** cas erreur réparée, droit refusé/accepté/annulé,
+périmètre toujours incomplet et limitation API ; vrais parcours natifs dans
+un environnement jetable, puis relevé sur le Mac concerné. Ne revendiquer une
+correction du collecteur ou une acquisition de droits qu'après résultat observé.
+
+## P1-MAC-MENU — Retours AppKit à traiter
+
+- **Profil :** sous-menu avec choix direct Balanced/Private/Meeting/Development,
+  état sélectionné visible ; ne plus imposer le cycle successif. Un `--config`
+  explicite reste prioritaire sur le profil de préférence.
+- **Icône :** identité MCW reconnaissable avec le logo autorisé du site ; expliquer
+  les badges d'état, sans remplacer une activité par un symbole générique.
+- **Ordre :** placer Details au-dessus de Exit ; vérifier navigation clavier,
+  diagnostic complet, lisibilité des sept langues et menu réellement affiché.
+- **Distribution :** `.app`/`.dmg`, logo Finder et barre de menus relèvent de
+  P1-MAC-APP-DMG ; demandes inscrites, pas encore des artefacts publiés.
+
 ## Livraison Git, releases et suivi à chaque lot majeur
 
 1. **Avant modification :** fixer le lot, ses critères ci-dessus, la matrice OS touchée, les limites de preuve et le budget ressources. Ne pas attendre la fin d'une phase entière pour corriger un défaut de sécurité indépendant.
@@ -786,3 +864,4 @@ Ne pas déployer cette refonte dans le cadre de la seule mise à jour du MD.
 | 2026-10-14 | SITE-L10N / SITE-PAGES | **Publié HTTPS et smoke production réussi**, source `07eb173` | Cloudflare deploy4653ef80 success ; [CI38530338888](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38530338888) success ; sept langues/404/canonical stable/images/commandes/valeurs réelles, script20051249SHA b734. Locale source/code ne change pas les binaires172 ni gardes PC | Windows export préexistant EPERM préservé, ZIP complet livré ; beacon injecté par Cloudflare bloqué CSP, retirer l'injection via réglage Web Analytics plutôt que permissivité CSP |
 | 2026-10-14 | SITE-HERO | **Petit défaut UI inscrit, non corrigé** : titre russe masqué par carte desktop | Capture utilisateur1568×658 : fin de « осведомлённость » derrière la carte ; viewport CSS/zoom inconnus, aucune nouvelle mesure de confirmation | Grille/typo/retours à la ligne pour textes longs ; vrai contrôle collision et lisibilité toutes langues/largeurs/zoom, sans troncature |
 | 2026-10-14 | SITE-DEFAULT-EN | **Demande inscrite, non appliquée** : anglais sur URL racine Pages sans préfixe | Utilisateur demande `https://miccamwatch.pages.dev/` anglais, pas seulement `/en/` ; actuel défaut français identifié dans contrat export | Accueil/404 root en anglais, lang/SEO/nav cohérents ; conserver toutes langues et URL racine, pas de choix automatique imposé |
+| 2026-10-14 | P0-UNIX-DIAG / P0-UNIX-OBS / P1-MAC-MENU | Diagnostic exact macOS reçu ; correction source en qualification, pas de nouvelle release | Micro corespeechd observé ; CoreMediaIO sans identité/flux, profiles non-root sans périmètre global et Quartz sans propriété publique de verrouillage. Erreur de lecture caméra faussement classée Action failed dans la boucle Unix. Activité/raisons/état caméra séparés dans la source ; aucun contrôle ou droit modifié | Smoke Linux/macOS avant qualification ; traiter ensuite les causes réelles et proposer les droits ciblés prouvés utiles. Profil direct, identité MCW, ordre Details/Exit et logo site pour app/dmg inscrits, non livrés |

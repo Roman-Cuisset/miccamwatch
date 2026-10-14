@@ -237,7 +237,7 @@ private func installedCameraProfile(_ identifier: String?, _ uuid: String?) thro
         result.state = "allowed"
         result.detail = "Complete installed-profile inventory contains no allowCamera=false restriction; per-app TCC permission and physical camera availability are not asserted."
     } else {
-        result.detail = "Current-user profiles contain no visible camera restriction; device/other-user scope is not readable, so effective status is unknown."
+        result.detail = "Current-user profiles contain no visible camera restriction; device/other-user scope is not readable, so effective status is unknown. A complete profile inventory requires administrator approval for a read-only system-wide profiles query; no elevation is requested automatically. This does not grant camera TCC permission or identify camera clients."
     }
     return result
 }
