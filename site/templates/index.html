@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="__MCW_LANG__">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#112a29">
+  <meta name="description" content="{{@ home.meta-description.miccamwatch-surveillez-les-acces-au-micro-et-a }}">
+  <meta property="og:type" content="website">
+  <meta property="og:locale" content="__MCW_OG_LOCALE__">
+  <meta property="og:site_name" content="MicCamWatch">
+  <meta property="og:title" content="{{@ home.meta-og:title.miccamwatch-votre-micro-votre-camera-votre-visibilite }}">
+  <meta property="og:description" content="{{@ home.meta-og:description.un-moniteur-natif-et-local-pour-comprendre-les }}">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="{{@ home.meta-twitter:title.miccamwatch-gardez-un-il-sur-les-acces }}">
+  <meta name="twitter:description" content="{{@ home.meta-twitter:description.surveillance-locale-interfaces-natives-et-controles-a-portee }}">
+  <title>{{ home.title.miccamwatch-surveillez-votre-micro-et-votre-camera }}</title>
+  <!-- MCW_ORIGIN_META -->
+  <link rel="icon" href="/assets/mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/main.css">
+  <script src="/main.js" defer></script>
+</head>
+<body data-copy-success="{{@ ui.copy-success }}" data-copy-failure="{{@ ui.copy-failure }}" data-installer-origin-note="{{@ ui.installer-origin-note }}">
+  <a class="skip-link" href="#contenu">{{ home.a.skip-link }}</a>
+  <header class="site-header">
+    <div class="shell header-inner">
+      <a class="brand" href="./" aria-label="{{@ home.aria-label.brand }}"><img src="/assets/mark.svg" width="36" height="36" alt=""><span>MicCam<span class="brand-accent">Watch</span></span></a>
+      <nav aria-label="{{@ home.aria-label.navigation-principale }}"><a href="#fonctions">{{ home.a.fonctions }}</a><a href="#compatibilite">{{ home.a.compatibilite }}</a><a href="#guide">{{ home.a.guide }}</a><a href="#faq">{{ home.a.faq }}</a></nav>
+      <a class="button button-small" href="#installer">{{ home.a.button-button-small }}</a>
+    </div>
+  </header>
+  <nav class="language-switch shell" aria-label="{{@ ui.language-navigation }}">__MCW_LANGUAGE_LINKS__</nav>
+  <main id="contenu">
+    <section class="hero shell" aria-labelledby="hero-title">
+      <div class="hero-copy">
+        <a class="release-chip" href="https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v__MCW_VERSION__">{{ home.a.release-chip }}</a>
+        <p class="eyebrow">{{ home.p.eyebrow }}</p>
+        <h1 id="hero-title">{{ home.h1.hero-title }}</h1>
+        <p class="hero-lead">{{ home.p.hero-lead }}</p>
+        <div class="button-row"><a class="button" href="#installer">{{ home.a.button }}</a><a class="button button-secondary" href="#apercu">{{ home.a.button-button-secondary }}</a></div>
+        <p class="hero-platforms">{{ home.p.hero-platforms }}</p>
+      </div>
+      <figure class="hero-visual" id="apercu">
+        <div class="visual-header"><span class="window-dots" aria-hidden="true"><i></i><i></i><i></i></span><span>{{ home.text.le-controle-a-portee-de-clic }}</span><span class="visual-tag">Windows</span></div>
+        <div class="tray-stage"><a href="/assets/tray-windows.png" aria-label="{{@ home.aria-label.ouvrir-la-capture-complete-du-menu-windows }}"><img class="tray-shot" src="/assets/tray-windows.png" width="356" height="262" alt="{{@ home.alt.tray-shot }}" fetchpriority="high"></a></div>
+        <figcaption>{{ home.figcaption.le-vrai-menu-windows-capture-v0-17-1 }}</figcaption>
+      </figure>
+    </section>
+    <div class="principles-band"><div class="shell principles"><p>{{ home.p.01-observer-sans-enregistrer }}</p><p>{{ home.p.02-comprendre-avant-dagir }}</p><p>{{ home.p.03-garder-le-controle-local }}</p></div></div>
+    <section class="section shell" id="fonctions" aria-labelledby="features-title">
+      <div class="section-heading"><div><p class="eyebrow">{{ home.p.eyebrow-2 }}</p><h2 id="features-title">{{ home.h2.features-title }}</h2></div><p>{{ home.p.mcw-distingue-lactivite-observee-le-niveau-de-confiance }}</p></div>
+      <div class="feature-grid">
+        <article class="feature-card"><span class="feature-number">{{ home.text.feature-number }}</span><h3>{{ home.h3.voyez-les-acces }}</h3><p>{{ home.p.etat-instantane-suivi-en-direct-et-tableau-de }}</p><code>mcw status --lang __MCW_LANG__</code></article>
+        <article class="feature-card"><span class="feature-number">{{ home.text.feature-number-2 }}</span><h3>{{ home.h3.remontez-aux-indices }}</h3><p>{{ home.p.processus-chemin-origine-et-validation-de-confiance-selon }}</p><code>mcw doctor</code></article>
+        <article class="feature-card"><span class="feature-number">{{ home.text.feature-number-3 }}</span><h3>{{ home.h3.choisissez-vos-controles }}</h3><p>{{ home.p.mute-commandes-camera-et-demarrage-a-la-connexion }}</p><code>mcw tray</code></article>
+      </div>
+      <aside class="callout">{{ home.aside.callout }}</aside>
+      <figure class="dashboard-figure"><div class="dashboard-header"><div><span class="eyebrow">{{ home.text.eyebrow }}</span><h3>{{ home.h3.un-tableau-de-bord-sans-navigateur }}</h3></div><span class="badge">mcw top</span></div><a href="/assets/top-windows.png" aria-label="{{@ home.aria-label.ouvrir-la-capture-complete-du-tableau-de-bord }}"><img src="/assets/top-windows.png" width="1232" height="752" alt="{{@ home.alt.sortie-reelle-du-tableau-de-bord-mcw-top }}" loading="lazy"></a><figcaption>{{ home.figcaption.sortie-reelle-de-mcw-top-v0-17-1 }}</figcaption></figure>
+    </section>
+    <section class="section scope-section" id="compatibilite" aria-labelledby="scope-title"><div class="shell">
+      <div class="section-heading"><div><p class="eyebrow">{{ home.p.eyebrow-3 }}</p><h2 id="scope-title">{{ home.h2.scope-title }}</h2></div><p>{{ home.p.la-surveillance-fonctionne-sans-droits-administrateur-les-actions }}</p></div>
+      <div class="table-scroll" tabindex="0" role="region" aria-label="{{@ home.aria-label.table-scroll }}"><table class="scope-table"><caption>{{ home.caption.portee-de-la-version-mcw-version }}</caption><thead><tr><th scope="col">{{ home.th.systeme }}</th><th scope="col">{{ home.th.microphone }}</th><th scope="col">{{ home.th.camera }}</th><th scope="col">{{ home.th.controles-et-limites }}</th></tr></thead><tbody>
+        <tr><th scope="row">{{ home.th.windows-10-11-x64 }}</th><td>{{ home.td.sessions-wasapi-actives-processus-valide-lorsque-accessible }}</td><td>{{ home.td.indices-natifs-de-capture-attribution-au-processus-lorsquelle }}</td><td>{{ home.td.mute-des-endpoints-et-controle-des-peripheriques-camera }}</td></tr>
+        <tr><th scope="row">{{ home.th.linux-x64-pipewire }}</th><td>{{ home.td.source-et-flux-en-cours-avec-lien-actif }}</td><td>{{ home.td.meme-exigence-de-lien-actif-pipewire-un-handle }}</td><td>{{ home.td.mute-des-sources-de-la-session-pas-dinterdiction }}</td></tr>
+        <tr><th scope="row">{{ home.th.macos-15-apple-silicon-intel }}</th><td>{{ home.td.activite-dentree-coreaudio-pid-valide-si-lidentite-du }}</td><td>{{ home.td.etat-dexecution-du-peripherique-via-coremediaio-confiance-moyenne }}</td><td>{{ home.td.mute-uniquement-si-la-propriete-dentree-est-modifiable }}</td></tr>
+      </tbody></table></div>
+      <div class="scope-notes"><p>{{ home.p.pas-de-coupe-circuit-universel-mcw-nest-ni }}</p><p>{{ home.p.ressources-objectif-15-mo-non-atteint-les-mesures }}</p></div>
+    </div></section>
+    <section class="section shell" id="installer" aria-labelledby="install-title">
+      <div class="section-heading"><div><p class="eyebrow">{{ home.p.eyebrow-4 }}</p><h2 id="install-title">{{ home.h2.install-title }}</h2></div><p>{{ home.p.version-stable-mcw-version-les-executables-restent-heberges }}</p></div>
+      <div class="quick-install"><div class="quick-install-heading"><div><span class="eyebrow">{{ home.text.eyebrow-2 }}</span><h3>{{ home.h3.une-ligne-pour-suivre-la-version-stable }}</h3></div><span class="badge">{{ home.text.badge }}</span></div><div class="code-block"><pre><code id="quick-command" data-installer-command>curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/Roman-Cuisset/miccamwatch/__MCW_SOURCE__/installer/install.sh | sh</code></pre><button type="button" class="copy-button" data-copy="quick-command" hidden>{{ home.button.copy-button }}</button></div><p class="code-note">{{ home.p.code-note }}</p><p class="small-text" id="installer-origin-note">{{ home.p.installer-origin-note }}</p></div>
+      <p class="small-text">{{ home.p.small-text }}</p>
+      <nav class="os-tabs" aria-label="{{@ home.aria-label.os-tabs }}"><a href="#windows" data-os="windows">{{ home.a.windows-x64 }}</a><a href="#linux" data-os="linux">{{ home.a.linux-x64 }}</a><a href="#macos" data-os="macos">{{ home.a.macos-arm-intel }}</a></nav>
+      <div class="os-panels">
+        <section class="os-panel" id="windows" aria-labelledby="windows-title"><div class="panel-heading"><h3 id="windows-title">{{ home.h3.windows-title }}</h3><span class="badge">{{ home.text.badge-2 }}</span></div><p>{{ home.p.le-msi-par-utilisateur-ajoute-mcw-au-path }}</p><div class="button-row"><a class="button" href="https://github.com/Roman-Cuisset/miccamwatch/releases/download/v__MCW_VERSION__/miccamwatch-windows-x86_64.msi">{{ home.a.button-2 }}</a><a class="button button-secondary" href="https://github.com/Roman-Cuisset/miccamwatch/releases/download/v__MCW_VERSION__/miccamwatch-windows-x86_64.zip">{{ home.a.button-button-secondary-2 }}</a></div><p class="small-text">{{ home.p.small-text-2 }}</p><div class="code-block"><pre><code id="windows-check">mcw --version
+mcw doctor
+mcw status --lang __MCW_LANG__
+mcw top</code></pre><button type="button" class="copy-button" data-copy="windows-check" hidden>{{ home.button.copy-button-2 }}</button></div><aside class="inline-warning">{{ home.aside.inline-warning }}</aside></section>
+        <section class="os-panel" id="linux" aria-labelledby="linux-title"><div class="panel-heading"><h3 id="linux-title">{{ home.h3.linux-title }}</h3><span class="badge">{{ home.text.badge-3 }}</span></div><p>{{ home.p.requiert-les-bibliotheques-pipewire-spa-pw-dump-et }}</p><div class="button-row"><a class="button" href="#review-first">{{ home.a.button-3 }}</a><a class="button button-secondary" href="https://github.com/Roman-Cuisset/miccamwatch/releases/download/v__MCW_VERSION__/miccamwatch-linux-x86_64.tar.gz">{{ home.a.button-button-secondary-3 }}</a></div><p>{{ home.p.linstallateur-gere-lexecutable-sous-home-local-bin-par }}</p><aside class="inline-warning">{{ home.aside.inline-warning-2 }}</aside></section>
+        <section class="os-panel" id="macos" aria-labelledby="macos-title"><div class="panel-heading"><h3 id="macos-title">{{ home.h3.macos-title }}</h3><span class="badge">{{ home.text.badge-4 }}</span></div><p>{{ home.p.linstallateur-selectionne-votre-architecture-native-la-barre-de }}</p><div class="button-row"><a class="button" href="#review-first">{{ home.a.button-4 }}</a><a class="button button-secondary" href="https://github.com/Roman-Cuisset/miccamwatch/releases/download/v__MCW_VERSION__/miccamwatch-macos-aarch64.tar.gz">{{ home.a.button-button-secondary-4 }}</a><a class="button button-secondary" href="https://github.com/Roman-Cuisset/miccamwatch/releases/download/v__MCW_VERSION__/miccamwatch-macos-x86_64.tar.gz">{{ home.a.button-button-secondary-5 }}</a></div><aside class="inline-warning">{{ home.aside.inline-warning-3 }}</aside></section>
+      </div>
+      <section class="review-install" id="review-first" aria-labelledby="review-title"><div><p class="eyebrow">{{ home.p.eyebrow-5 }}</p><h3 id="review-title">{{ home.h3.review-title }}</h3><p>{{ home.p.linux-et-macos-ce-script-est-epingle-au }}</p></div><div class="code-block"><pre><code id="review-command">curl --proto '=https' --tlsv1.2 -fsSL \
+  https://raw.githubusercontent.com/Roman-Cuisset/miccamwatch/__MCW_SOURCE__/installer/install.sh \
+  -o mcw-install.sh
+less mcw-install.sh</code></pre><button type="button" class="copy-button" data-copy="review-command" hidden>{{ home.button.copy-button-3 }}</button></div><p>{{ home.p.avant-execution-comparez-la-somme-du-fichier-sha256sum }}</p><div class="code-block hash-block"><pre><code id="installer-sha">__MCW_INSTALLER_SHA256__</code></pre><button type="button" class="copy-button" data-copy="installer-sha" hidden>{{ home.button.copy-button-4 }}</button></div><p class="small-text">{{ home.p.small-text-3 }}</p><p>{{ home.p.apres-lecture-et-verification-installez-la-version-mcw }}</p><div class="code-block"><pre><code id="review-run">sh mcw-install.sh --version v__MCW_VERSION__ --add-path</code></pre><button type="button" class="copy-button" data-copy="review-run" hidden>{{ home.button.copy-button-5 }}</button></div><p class="small-text">{{ home.p.small-text-4 }}</p></section>
+      <p class="small-text">{{ home.p.small-text-5 }}</p>
+      <details class="install-details"><summary>{{ home.summary.archives-sommes-sha-256-et-provenance }}</summary><div class="details-body"><p>{{ home.p.telechargez-votre-archive-et-sha256sums-depuis-la-meme }}</p><p>{{ home.p.les-attestations-github-renseignent-la-provenance-de-build }}</p><div class="code-block"><pre><code id="attest-command">gh attestation verify ./miccamwatch-linux-x86_64.tar.gz \
+  --repo Roman-Cuisset/miccamwatch \
+  --signer-workflow Roman-Cuisset/miccamwatch/.github/workflows/release.yml \
+  --source-ref refs/tags/v__MCW_VERSION__ \
+  --source-digest __MCW_SOURCE__ \
+  --deny-self-hosted-runners</code></pre><button type="button" class="copy-button" data-copy="attest-command" hidden>{{ home.button.copy-button-6 }}</button></div><p>{{ home.p.sommes-et-archives-partagent-le-canal-de-publication }}</p></div></details>
+      <p class="availability-note">{{ home.p.availability-note }}</p>
+    </section>
+    <section class="section guide-section" id="guide" aria-labelledby="guide-title"><div class="shell"><div class="section-heading"><div><p class="eyebrow">{{ home.p.eyebrow-6 }}</p><h2 id="guide-title">{{ home.h2.guide-title }}</h2></div><p>{{ home.p.linstallation-seule-nactive-aucune-protection-aucun-autostart-et }}</p></div><div class="guide-grid">
+      <article class="guide-card"><span class="step">01</span><h3>{{ home.h3.verifiez-votre-session }}</h3><p>{{ home.p.affichez-la-version-letat-des-collecteurs-et-les }}</p><div class="code-block"><pre><code id="usage-status">mcw --version
+mcw doctor
+mcw status --lang __MCW_LANG__</code></pre><button type="button" class="copy-button" data-copy="usage-status" hidden>{{ home.button.copy-button-7 }}</button></div></article>
+      <article class="guide-card"><span class="step">02</span><h3>{{ home.h3.choisissez-votre-interface }}</h3><p>{{ home.p.top-ouvre-le-tableau-de-bord-tray-ouvre }}</p><div class="code-block"><pre><code id="usage-watch">mcw top
+{{ home.command-comment.usage-watch }}
+mcw watch --notify</code></pre><button type="button" class="copy-button" data-copy="usage-watch" hidden>{{ home.button.copy-button-8 }}</button></div></article>
+      <article class="guide-card"><span class="step">03</span><h3>{{ home.h3.demarrage-votre-accord }}</h3><p>{{ home.p.seulement-si-vous-le-souhaitez-enregistrez-le-tray }}</p><div class="code-block"><pre><code id="usage-start">mcw autostart enable
+mcw autostart status
+{{ home.command-comment.usage-start }}
+mcw autostart disable</code></pre><button type="button" class="copy-button" data-copy="usage-start" hidden>{{ home.button.copy-button-9 }}</button></div></article>
+    </div><aside class="callout">{{ home.aside.callout-2 }}</aside><p class="guide-footnote">{{ home.p.guide-footnote }}</p></div></section>
+    <section class="section shell" id="maintenance" aria-labelledby="maintenance-title"><div class="section-heading"><div><p class="eyebrow">{{ home.p.eyebrow-7 }}</p><h2 id="maintenance-title">{{ home.h2.maintenance-title }}</h2></div><p>{{ home.p.ne-melangez-pas-msi-installateur-gere-archive-manuelle }}</p></div><aside class="inline-warning important-warning">{{ home.aside.inline-warning-important-warning }}</aside><div class="maintenance-grid"><article><h3>{{ home.h3.mettre-a-jour }}</h3><ul class="text-list"><li>{{ home.li.windows-msi-installez-le-msi-de-la-nouvelle }}</li><li>{{ home.li.windows-portable-cargo-mcw-update-verifie-et-remplace }}</li><li>{{ home.li.unix-gere-mcw-update-ou-le-script-public }}</li><li>{{ home.li.archive-manuelle-linux-necessite-un-remplacement-manuel-macos }}</li><li>{{ home.li.gestionnaire-de-paquets-mettez-a-jour-avec-ce }}</li></ul><p class="small-text">{{ home.p.small-text-6 }}</p></article><article><h3>{{ home.h3.desinstaller }}</h3><ul class="text-list"><li>{{ home.li.windows-msi-desactivez-lautostart-souhaite-puis-utilisez-applications }}</li><li>{{ home.li.zip-portable-desactivez-lautostart-possede-arretez-les-processus }}</li><li>{{ home.li.unix-gere-apres-telechargement-et-lecture-du-script }}</li><li>{{ home.li.composant-camera-linux-restaurez-les-liaisons-possedees-et }}</li></ul><div class="code-block"><pre><code id="uninstall-command">mcw autostart disable
+mcw tray stop
+sh mcw-install.sh --uninstall</code></pre><button type="button" class="copy-button" data-copy="uninstall-command" hidden>{{ home.button.copy-button-10 }}</button></div><p class="small-text">{{ home.p.small-text-7 }}</p></article></div></section>
+    <section class="section privacy-section" id="confidentialite" aria-labelledby="privacy-title"><div class="shell privacy-grid"><div><p class="eyebrow">{{ home.p.eyebrow-8 }}</p><h2 id="privacy-title">{{ home.h2.privacy-title }}</h2><p class="privacy-lead">{{ home.p.privacy-lead }}</p><a class="button button-light" href="https://github.com/Roman-Cuisset/miccamwatch/blob/main/PRIVACY.md">{{ home.a.button-button-light }}</a></div><div class="privacy-points"><article><h3>{{ home.h3.des-metadonnees-pas-des-medias }}</h3><p>{{ home.p.mcw-lit-les-signaux-du-systeme-et-les }}</p></article><article><h3>{{ home.h3.les-exceptions-reseau-sont-explicites }}</h3><p>{{ home.p.installation-et-mise-a-jour-contactent-github-une }}</p></article><article><h3>{{ home.h3.cette-page-reste-legere-en-dependances }}</h3><p>{{ home.p.pas-de-tracker-pas-de-bibliotheque-tierce-ni }}</p></article></div></div></section>
+    <section class="section shell faq-section" id="faq" aria-labelledby="faq-title"><div class="section-heading"><div><p class="eyebrow">{{ home.p.eyebrow-9 }}</p><h2 id="faq-title">{{ home.h2.faq-title }}</h2></div><p>{{ home.p.commencez-par-mcw-doctor-un-collecteur-indisponible-nest }}</p></div><div class="faq-list">
+      <details><summary>{{ home.summary.mcw-nest-pas-reconnu-apres-installation }}</summary><div class="details-body"><p>{{ home.p.ouvrez-un-nouveau-terminal-apres-une-modification-du }}</p><p>{{ home.p.si-defender-a-mis-lexecutable-en-quarantaine-le }}</p></div></details>
+      <details id="windows-incomplete"><summary>{{ home.summary.windows-camera-utilisee-pid-inconnu-ou-couverture-partielle }}</summary><div class="details-body"><p>{{ home.p.une-activite-camera-peut-rester-sans-pid-attribue }}</p><p>{{ home.p.consultez-status-details-mcw-status-lang-fr-mcw }}</p></div></details>
+      <details><summary>{{ home.summary.quels-droits-et-permissions-sont-necessaires }}</summary><div class="details-body"><p>{{ home.p.observer-lancez-mcw-dans-votre-session-utilisateur-sans }}</p><p>{{ home.p.windows-les-changements-de-peripheriques-camera-demandent-une }}</p></div></details>
+      <details><summary>{{ home.summary.linux-pipewire-indisponible-aucune-camera-ou-aucun-tray }}</summary><div class="details-body"><p>{{ home.p.lancez-mcw-dans-votre-session-utilisateur-de-bureau }}</p><p>{{ home.p.le-tray-requiert-un-hote-statusnotifieritem-les-notifications }}</p></div></details>
+      <details><summary>{{ home.summary.macos-pourquoi-la-camera-na-t-elle-pas }}</summary><div class="details-body"><p>{{ home.p.lapi-publique-coremediaio-indique-letat-dexecution-du-peripherique }}</p></div></details>
+      <details id="signing"><summary>{{ home.summary.smartscreen-defender-ou-gatekeeper-faut-il-passer-outre }}</summary><div class="details-body"><p>{{ home.p.non-ne-desactivez-pas-les-protections-et-najoutez }}</p><p>{{ home.p.en-cas-de-detection-defender-notez-le-nom }}</p></div></details>
+      <details><summary>{{ home.summary.jai-ferme-le-tray-mes-protections-sont-elles }}</summary><div class="details-body"><p>{{ home.p.pas-necessairement-sous-windows-une-protection-manuelle-appartient }}</p><p>{{ home.p.verifiez-le-statut-reel-une-garde-camera-windows }}</p></div></details>
+      <details><summary>{{ home.summary.pourquoi-une-mise-a-jour-ou-une-desinstallation }}</summary><div class="details-body"><p>{{ home.p.un-executable-actif-une-protection-demandee-une-restauration }}</p><p>{{ home.p.un-ancien-tray-peut-necessiter-une-sortie-manuelle }}</p></div></details>
+      <details><summary>{{ home.summary.comment-partager-un-diagnostic-sans-exposer-ma-vie }}</summary><div class="details-body"><p>{{ home.p.mcw-doctor-json-et-mcw-status-json-aident }}</p></div></details>
+    </div></section>
+    <section class="closing-section"><div class="shell closing-inner"><div><p class="eyebrow">{{ home.p.eyebrow-10 }}</p><h2>{{ home.h2.la-confiance-commence-par-ce-que-lon-peut }}</h2></div><div class="button-row"><a class="button" href="https://github.com/Roman-Cuisset/miccamwatch">{{ home.a.button-5 }}</a><a class="button button-secondary" href="https://github.com/Roman-Cuisset/miccamwatch/issues">{{ home.a.button-button-secondary-6 }}</a></div></div></section>
+  </main>
+  <footer class="site-footer shell"><div><a class="brand" href="./"><img src="/assets/mark.svg" width="32" height="32" alt=""><span>MicCamWatch</span></a><p>{{ home.p.surveillance-locale-limites-explicites-logiciel-libre-sous-licence }}</p></div><nav aria-label="{{@ home.aria-label.ressources }}"><a href="https://github.com/Roman-Cuisset/miccamwatch#readme">{{ home.a.documentation }}</a><a href="https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v__MCW_VERSION__">{{ home.a.release-mcw-version }}</a><a href="https://github.com/Roman-Cuisset/miccamwatch/blob/main/PRIVACY.md">{{ home.a.confidentialite }}</a><a href="https://github.com/Roman-Cuisset/miccamwatch/blob/main/docs/SIGNING.md">{{ home.a.signature-et-securite }}</a><a href="https://github.com/Roman-Cuisset/miccamwatch/blob/main/docs/ARCHITECTURE.md">{{ home.a.architecture-et-preuves }}</a></nav><p class="source-note">{{ home.p.source-note }}</p></footer>
+  <p class="copy-status" id="copy-status" role="status" aria-live="polite" aria-atomic="true"></p>
+</body>
+</html>

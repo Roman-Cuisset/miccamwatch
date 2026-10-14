@@ -14,6 +14,7 @@
   "social.png": {
     "kind": "product share card with actual tray menu",
     "productRelease": "0.17.2",
-    "scope": "Typographic artwork for product release 0.17.2 with an explicitly historical 0.17.1 tray screenshot, not a separate application screenshot"
+    "variants": ["social.png", "social-en.png", "social-de.png", "social-es.png", "social-ja.png", "social-zh.png", "social-ru.png"],
+    "scope": "Localized typographic artwork for product release 0.17.2 with an unchanged explicitly historical 0.17.1 Windows tray screenshot; not separate or localized application screenshots"
   }
 }

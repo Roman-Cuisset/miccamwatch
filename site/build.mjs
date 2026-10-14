@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { constants, promises as fs } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { languages, languageLinks, localizedPage, pageMetadata, sitemap, validateCatalog } from './localization.mjs';
 
 // Run from any working directory. Node is needed only for this local export.
 const root = await fs.realpath(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'));
@@ -11,7 +12,7 @@ const markerName = '.mcw-site-export.json';
 const owner = 'miccamwatch-static-site';
 const originMarker = '<!-- MCW_ORIGIN_META -->';
 const textExtensions = new Set(['.html', '.css', '.js', '.json', '.svg', '.txt', '.xml']);
-const entryFiles = ['index.html', '404.html', 'main.css', 'main.js', '_headers', '_redirects', 'robots.txt'];
+const entryFiles = ['main.css', 'main.js', '_headers', '_redirects', 'robots.txt'];
 
 async function statIfPresent(filename) {
   try {
@@ -53,10 +54,9 @@ function validateRelease(value) {
   return value;
 }
 
-function configuredOrigin() {
-  const name = process.env.MCW_SITE_URL !== undefined ? 'MCW_SITE_URL' : 'CF_PAGES_URL';
-  const value = process.env[name];
-  if (value === undefined) return null;
+function configuredOrigin(productionOrigin) {
+  const name = process.env.MCW_SITE_URL !== undefined ? 'MCW_SITE_URL' : 'site/origin.json productionOrigin';
+  const value = process.env.MCW_SITE_URL !== undefined ? process.env.MCW_SITE_URL : productionOrigin;
   let url;
   try {
     url = new URL(value);
@@ -70,35 +70,24 @@ function configuredOrigin() {
   return url.origin;
 }
 
-function escapeMarkup(value) {
-  return value.replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
-}
-
-function originMetadata(origin) {
-  if (!origin) return '';
-  const canonical = escapeMarkup(`${origin}/`);
-  const image = escapeMarkup(`${origin}/assets/social.png`);
-  return [
-    `<link rel="canonical" href="${canonical}">`,
-    `<meta property="og:url" content="${canonical}">`,
-    `<meta property="og:image" content="${image}">`,
-    `<meta name="twitter:image" content="${image}">`,
-  ].join('\n  ');
-}
-
-function renderText(content, filename, release, origin) {
+function renderText(content, filename, release, origin, catalog = null) {
   const tokens = {
     __MCW_VERSION__: release.version,
     __MCW_SOURCE__: release.source,
     __MCW_INSTALLER_SHA256__: release.installerSha256,
   };
+  if (catalog) Object.assign(tokens, {
+    __MCW_LANG__: catalog.language,
+    __MCW_OG_LOCALE__: catalog.ogLocale,
+    __MCW_LANGUAGE_LINKS__: languageLinks(catalog.language, filename),
+  });
   let rendered = content.replace(/__MCW_[A-Z0-9_]+__/g, (token) => {
     if (!Object.hasOwn(tokens, token)) throw new Error(`Unknown template token ${token} in ${filename}.`);
     return tokens[token];
   });
   if (filename === 'index.html') {
     if (rendered.split(originMarker).length !== 2) throw new Error('index.html must have exactly one MCW_ORIGIN_META comment.');
-    rendered = rendered.replace(originMarker, originMetadata(origin));
+    rendered = rendered.replace(originMarker, pageMetadata(origin, catalog.language));
   } else if (filename === '404.html') {
     rendered = rendered.replaceAll(originMarker, '');
   }
@@ -107,6 +96,17 @@ function renderText(content, filename, release, origin) {
   }
   if (filename === 'robots.txt' && origin) rendered = `${rendered.trimEnd()}\n\nSitemap: ${origin}/sitemap.xml\n`;
   return rendered;
+}
+
+async function readCatalogs() {
+  await requireDirectory(path.join(sourceDirectory, 'locales'));
+  const french = JSON.parse((await readRegularFile(path.join(sourceDirectory, 'locales', 'fr.json'))).toString('utf8'));
+  validateCatalog(french, languages.find(({ code }) => code === 'fr'), french);
+  return Promise.all(languages.map(async (language) => {
+    const catalog = language.code === 'fr' ? french :
+      JSON.parse((await readRegularFile(path.join(sourceDirectory, 'locales', `${language.code}.json`))).toString('utf8'));
+    return validateCatalog(catalog, language, french);
+  }));
 }
 
 function safeRelative(filename) {
@@ -198,13 +198,23 @@ async function build() {
   await requireDirectory(sourceDirectory);
   await requireDirectory(path.join(root, 'installer'));
   const release = validateRelease(JSON.parse((await readRegularFile(path.join(sourceDirectory, 'release.json'))).toString('utf8')));
-  const origin = configuredOrigin();
+  const publication = JSON.parse((await readRegularFile(path.join(sourceDirectory, 'origin.json'))).toString('utf8'));
+  if (!publication || Array.isArray(publication) || Object.keys(publication).length !== 1 || typeof publication.productionOrigin !== 'string') {
+    throw new Error('site/origin.json must contain only a productionOrigin HTTPS string.');
+  }
+  const origin = configuredOrigin(publication.productionOrigin);
   const installer = await readRegularFile(path.join(root, 'installer', 'install.sh'));
   const actualDigest = createHash('sha256').update(installer).digest('hex');
   if (actualDigest !== release.installerSha256) {
     throw new Error(`Canonical installer SHA256 mismatch: expected ${release.installerSha256}, found ${actualDigest}. Output was not modified.`);
   }
   if (/__MCW_[A-Z0-9_]+__/.test(installer.toString('utf8'))) throw new Error('Canonical installer contains unresolved template tokens.');
+  const catalogs = await readCatalogs();
+  await requireDirectory(path.join(sourceDirectory, 'templates'));
+  const templates = new Map();
+  for (const filename of ['index.html', '404.html']) {
+    templates.set(filename, (await readRegularFile(path.join(sourceDirectory, 'templates', filename))).toString('utf8'));
+  }
   await requireDirectory(path.join(sourceDirectory, 'assets'));
   const assets = await walk(path.join(sourceDirectory, 'assets'));
   for (const required of ['tray-windows.png', 'top-windows.png', 'social.png']) {
@@ -233,6 +243,14 @@ async function build() {
       const bytes = await readRegularFile(path.join(sourceDirectory, filename));
       await writeGenerated(stage, filename, renderText(bytes.toString('utf8'), filename, release, origin), generated);
     }
+    for (const catalog of catalogs) {
+      for (const [filename, template] of templates) {
+        const localized = localizedPage(template, catalog, filename);
+        const rendered = renderText(localized, filename, release, origin, catalog);
+        await writeGenerated(stage, `${catalog.language}/${filename}`, rendered, generated);
+        if (catalog.language === 'fr') await writeGenerated(stage, filename, rendered, generated);
+      }
+    }
     for (const asset of assets) {
       if (asset.directory) continue;
       const filename = `assets/${asset.relative}`;
@@ -244,8 +262,7 @@ async function build() {
     }
     await writeGenerated(stage, 'install.sh', installer, generated);
     if (origin) {
-      const sitemap = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>${escapeMarkup(`${origin}/`)}</loc></url></urlset>\n`;
-      await writeGenerated(stage, 'sitemap.xml', sitemap, generated);
+      await writeGenerated(stage, 'sitemap.xml', sitemap(origin), generated);
     }
     await writeGenerated(stage, markerName, `${JSON.stringify({ owner, schema: 1, files: [...generated].sort() }, null, 2)}\n`, []);
     await preserveUnrelated(stage, previous);

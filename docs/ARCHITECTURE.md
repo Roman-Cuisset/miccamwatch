@@ -1158,3 +1158,35 @@ real ASUS HTTPS latest172 install/native-version/owned-uninstall passed in a
 private Linux HOME. ASUS HTML pins alone changed; root bytes/routing are unchanged.
 The new Pages ZIP is ready for authorized upload, not deployed Cloudflare HTTPS.
 
+## Static multilingual site and production repair (2026-10-14)
+
+The Git-connected Pages project had root `site` with empty build/output fields,
+publishing raw templates and omitting generated install.sh. After the user's
+approved configuration correction, deployment f1344bf succeeded. Real HTTPS
+has release values, and the exact reviewed script was used for native Linux
+install/version172/owned-uninstall in a temporary HOME with no privileged actions.
+
+The website now uses shared templates and seven complete 223-message catalogs.
+Build rejects missing/extra/empty keys, changed technical HTML/code/tokens and
+unbalanced markup; no runtime framework or translation service is introduced.
+All seven locales passed actual desktop/mobile, keyboard, no-JS and localized
+404 checks. Native denied Clipboard API feedback is localized; no system clipboard
+write was performed. CJK/Russian typography and localized social artwork were
+visually inspected, retaining unchanged historical Windows screenshot171.
+
+Production origin is explicit in site/origin.json, overridable by MCW_SITE_URL.
+CF_PAGES_URL was observed to be an ephemeral preview hostname and is no longer
+used for canonical URLs. Fresh exports with that preview environment still
+produce stable production canonical/hreflang/sitemap. Four Node regressions pass.
+
+Replacing the existing primary Windows site-dist failed EPERM; it was preserved
+without permission/AV bypass. Exact-source fresh exports passed and produced the
+complete34-file490598-byte multilingual ZIP. Public multilingual Git deployment
+must be observed separately after publication, not inferred from these local runs.
+
+The newly reported grey MCW tray represented actual incomplete camera protection:
+Block intent existed but elevated helper was inactive, while mic guard/mute were
+active. After explicit user “Réactiver avec UAC” consent, camera block renewed its
+owner; same native tray PID recovered without restart and mic remained protected.
+No Allow/unmute was issued. Cause of the previous helper exit is not established.
+

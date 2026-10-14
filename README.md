@@ -491,9 +491,11 @@ For root setup/update/removal, see [Linux USB camera administrator setup](#linux
 
 ## Static product website — Cloudflare Pages
 
-`site/` contains the complete French product site: native screenshots with their
-scope, platform-specific installs/downloads, usage, permissions, privacy,
-troubleshooting, signing/provenance and a real 404. No framework, package install,
+`site/` contains shared templates and complete catalogs for English, French,
+German, Spanish, Japanese, Simplified Chinese and Russian. Each language covers
+the product, all platform instructions, maintenance, privacy, FAQ, accessibility,
+metadata and 404. Native screenshots remain explicitly historical Windows
+captures; only their captions and share-card artwork are localized. No framework,
 analytics, visitor-side Node runtime, ASUS dependency or executable mirror.
 Release facts in `site/release.json` describe the **published** release, not an
 unreleased source build.
@@ -504,10 +506,13 @@ Build from the repository root with Node.js (qualified here under Node 24):
 node site/build.mjs
 ```
 
-Output: **`site-dist/`**, with `index.html` at its root. The exporter verifies the
-canonical `installer/install.sh` SHA-256, substitutes release facts, refuses an
-unowned/symlinked output and preserves unrelated files in an owned output. It
-requires no account, token or npm dependency. Upload the output, not `site/`.
+Output: **`site-dist/`**, with a French default `index.html`, `/en/`, `/fr/`,
+`/de/`, `/es/`, `/ja/`, `/zh/`, `/ru/`, localized 404 pages and root `install.sh`.
+The exporter verifies the canonical installer SHA-256 and every catalog,
+substitutes release facts, and rejects missing translations or modified technical
+markup/code/tokens rather than silently falling back. It refuses unowned/symlinked
+output and preserves unrelated files. Upload the output, **never `site/`**;
+the latter contains build inputs, not a deployable website.
 
 ### Publish by direct upload
 
@@ -520,23 +525,35 @@ Git-integrated project if automatic deployments are preferred.
 
 ### Publish from Git
 
-Connect this repository through Pages Git integration. Framework: none; repository
-root: default; build command: **`node site/build.mjs`**; output: **`site-dist`**.
-For reproducible builds, `NODE_VERSION=24` selects the qualified Node major.
-Once the production address is known, set **`MCW_SITE_URL`** to that exact HTTPS
-root origin, without a path/query/fragment. Otherwise `CF_PAGES_URL`, when supplied
-by Pages, is used. Without either, canonical/absolute social URLs and sitemap are
-omitted rather than invented; the site still works. A custom domain is optional
-and should be configured through Pages, not by replacing the ASUS services.
+Cloudflare Git integration: framework **none**, repository root **empty/default**
+(not `site`), build **`node site/build.mjs`**, output **`site-dist`**.
+An empty build with root `site` previously published unresolved templates and
+omitted the generated installer. Saving these fields and redeploying repaired
+the actual Pages URL. `NODE_VERSION=24` reproduces the qualified major.
 
-Local verification used the real Wrangler Pages runtime: desktop/mobile,
-keyboard OS tabs and focus, no-JS content, MIME/404/security headers, exact
-installer bytes, and actual advertised HTTPS curl installation/native version/
-owned uninstall in a disposable Linux HOME. Clipboard denial/manual selection
-was exercised without replacing the user's clipboard; successful system
-clipboard writing was intentionally not exercised. Production HTTPS/same-origin
-curl and canonical metadata must be checked after an authorized Pages deployment;
-no deployed Pages address is claimed.
+`site/origin.json` records the real production origin
+**`https://miccamwatch.pages.dev`**. Set `MCW_SITE_URL` to another actual HTTPS
+root origin when needed. Canonical/hreflang/sitemap and localized social images
+use that stable origin, **not** an ephemeral `CF_PAGES_URL` preview hostname.
+A custom domain is optional; do not replace the ASUS routing.
+
+All seven languages were exercised in the real Wrangler Pages runtime on
+desktop/mobile, with keyboard OS tabs, direct language links, no-JS content,
+localized nearest-path 404s and secure headers. Actual native clipboard denial
+and manual selection feedback passed without changing the user's clipboard;
+successful system clipboard writing was intentionally not exercised.
+The repaired **production** `/install.sh` was checksum-verified and used through
+HTTPS curl to install/version/uninstall 0.17.2 in a disposable Linux HOME.
+
+Regression tests: **`node --test site/localization.test.mjs`**; the static-site CI
+runs them and exports all languages plus the verified installer.
+On this PC, replacing the pre-existing `site-dist/` returned Windows EPERM.
+The exporter preserved it; no ACL/antivirus bypass or forced replacement was used.
+Fresh exact-source exports passed. The complete direct-upload bundle is
+`Downloads/miccamwatch-pages-0.17.2-multilingual.zip` (34 files, 490,598 bytes),
+SHA-256 `1747056b969ea5ca017895743af6d6b05eeb6f925c391af4eba8b6caa720bf65`.
+Public multilingual deployment is verified separately after the Git push;
+local screenshots alone are not production evidence.
 
 ## Policy configuration
 

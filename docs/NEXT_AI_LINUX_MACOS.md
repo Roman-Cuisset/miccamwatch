@@ -530,3 +530,14 @@ restent ouverts.
 - ASUS page metadata seule alignée172/a58, script51 249/SHA b734 inchangé et HTTPS strict ; racine byte-identique. Vrai curl latest172/nativeLinux/uninstall dans HOME privé réussi sans tray/autostart/protection/root-helper. **SITE-ROOT/SITE-MCW toujours différés**, aucune route/Caddy/refonte changée.
 - Preuves privées `release-0172-20261013-090127/` ; snapshots user/PIDs/historique non publics. Clone utilisateur dirty intact ; toutes modifications dans clone de travail propre. Les sections précédentes consignent leur moment historique, pas l'état courant.
 
+
+## Reprise prioritaire du 2026-10-14
+
+- Projet principal `C:\Users\stcui\Documents\miccamwatch` utilisé ; note locale ancienne conservée en stash nommé, jamais appliquée/effacée implicitement.
+- Nouvelle croix grise : cinq collecteurs healthy, micro protégé/muted, caméra Block possédée/helper élevé inactif ; vrai panneau confirme Status error. Après choix explicite « Réactiver avec UAC », `mcw camera block` réussit, helper actif et même tray récupère sans restart ; aucun Allow/unmute. Origine de l'arrêt du helper inconnue, ne pas masquer ce défaut réel de protection ou promettre persistance après reboot.
+- Cloudflare Git : source-root site + build/output vides causaient les templates/404installer. Utilisateur a choisi le réglage root vide/build `node site/build.mjs`/output `site-dist` ; check f1344bf success, vraie page172 sans tokens et curl HTTPS Pages depuis ASUS installe/versionne/désinstalle172 sous HOME privé. Aucun compte/token/bypass inventé.
+- Site sept langues intégralement implémenté : templates partagés, catalogues223 en/fr/de/es/ja/zh/ru, main.js feedback localized, `--lang` commandes, 404/SEO/social. Quatre tests Node et vrai runtime desktop/mobile/clavier/no-JS/refus clipboard/404 par langue passent ; JP/RU typo ajustée visuellement. Pas de clipboard système écrit ni screenshots natifs réécrits.
+- `site/origin.json` définit vraie production miccamwatch.pages.dev, overrideMCW_SITE_URL ; CF_PAGES_URL preview observé ne sert plus de canonical. Export default avec preview en env qualifié stable production. CI site ajoutée, publication des sept langues encore à observer après push.
+- ZIP prêt `Téléchargements/miccamwatch-pages-0.17.2-multilingual.zip`,490598octets/34fichiers/SHA `1747056b969ea5ca017895743af6d6b05eeb6f925c391af4eba8b6caa720bf65`. Ancien site-dist primaire refusé EPERM et préservé, sorties neuves exactes passent ; ne pas remplacer en force ni désactiver AV.
+- Demandes supplémentaires inscrites, non implémentées : P1-MAC-APP-DMG (.dmg/.app ouverte directement en barre de menus), P1-UNINSTALL (`mcw uninstall` adapté ownership/protection/gestionnaire, données conservées). Priorités Windows tooltip/stdout hérités restent ouvertes ; pas de swap du PC encore protégé.
+

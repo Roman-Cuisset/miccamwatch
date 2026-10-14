@@ -310,3 +310,13 @@ details[open] summary { color: var(--green); }
   .faq-list details, .install-details { content-visibility: visible; }
   .closing-section { display: none; }
 }
+
+.language-switch { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px 14px; padding-block: 12px; font-size: .82rem; }
+.language-switch a { padding: 4px 6px; border-radius: 6px; text-decoration: none; }
+.language-switch a[aria-current="page"] { color: var(--green-dark); background: var(--mint); font-weight: 700; }
+.language-switch a:hover { text-decoration: underline; }
+html[lang="ja"] h1, html[lang="zh-Hans"] h1 { line-height: 1.3; letter-spacing: 0; }
+@media (max-width: 480px) {
+  .language-switch { justify-content: flex-start; gap: 4px 8px; }
+  html[lang="ja"] .hero h1, html[lang="ru"] .hero h1 { font-size: 2rem; }
+}

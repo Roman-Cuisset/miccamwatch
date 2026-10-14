@@ -1,7 +1,7 @@
 # Roadmap technique MicCamWatch
 
-Dernière mise à jour : **2026-10-13**. Responsable : lead architecture/développement.
-Base publiée : [v0.17.2 stable/latest](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.17.2), source `a58c8b9f3a967589a576879d6d27bfdbc40f9dff` ; [CI exacte avant tag](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38361454701) et [release native](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38364052525) vertes ; sept assets/digests et six attestations exactes vérifiés. Paire PC publique 0.17.2 et vrai tray vérifiés après accord « Maintenant » ; aucune mutation de protection.
+Dernière mise à jour : **2026-10-14**. Responsable : lead architecture/développement.
+Base publiée : [v0.17.2 stable/latest](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.17.2), source `a58c8b9f3a967589a576879d6d27bfdbc40f9dff` ; [CI exacte avant tag](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38361454701) et [release native](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38364052525) vertes ; sept assets/digests et six attestations exactes vérifiés. Paire PC publique 0.17.2 conservée ; le 14/10 seule garde caméra réactivée après accord UAC explicite, micro toujours protégé/coupé. Site Pages corrigé, traduction complète en publication indépendante, aucun nouveau tag/binaire MCW.
 
 Ce document planifie les prochains travaux et consigne les lots livrés. Les fonctionnalités encore proposées ne sont pas annoncées comme disponibles ; les livraisons sont explicitement marquées dans le tableau et le journal. Les complexités sont des estimations de conception, pas des délais ni des mesures.
 
@@ -37,10 +37,10 @@ Les identifiants sont stables. À chaque livraison, remplacer l'état par **En c
 | Lot | Décision / état actuel | Complexité | Dépendance principale |
 | --- | --- | --- | --- |
 | P0-CAM-TRAY | **Publié 0.17.2 et installé sur PC**. Couverture partielle distincte, captures conservées, raisons natives détaillées ; Zoom PID brut valide/report FILETIME zéro, attribution prudente maintenue. Vrai tray PC avec Ktalk actif : menu compact, détails complets, icône rouge ; infobulle résiduelle suivie dans TRAY-WIN | Moyenne | Pas de certification matérielle ; timestamp nul reste Unknown, jamais autorité de kill |
-| SITE-PAGES | **Livraison statique 0.17.2 historique ; incident placeholders signalé, correction urgente ouverte**. Export/ZIP et smokes précédents conservés comme preuves datées, pas comme réfutation du défaut actuel ; voir SITE-TOKENS et SITE-L10N | Moyenne | Corriger livraison réellement consultée ; projet Pages autorisé et HTTPS production après upload |
-| SITE-TOKENS | **Urgent, demandé : à corriger avant nouvelle livraison web**. L'utilisateur voit `__MCW_VERSION__`, `__MCW_SOURCE__`, `__MCW_INSTALLER_SHA256__` à la place des valeurs ; identifier et réparer le chemin source/build/archive/publication concerné | Faible à Moyenne | Valeurs de release publiées uniques, aucun token visible ou URL/commande/checksum invalide |
-| SITE-L10N | **Urgent, demandé : site complet dans les sept langues MCW** : anglais, français, allemand, espagnol, japonais, chinois simplifié, russe ; pas seulement navigation ou page d'accueil | Moyenne | SITE-TOKENS ; contenu/limites identiques, export statique et validation réelle de chaque langue |
-| SITE-INSTALL-404 | **Urgent, signalé : installateur Pages inaccessible**. `https://miccamwatch.pages.dev/install.sh` retourne HTTP 404 lors du vrai curl utilisateur sur serveur ASUS ; commande d'installation annoncée inutilisable | Faible à Moyenne | Vérifier payload publié et routage exact `/install.sh`, puis vrai curl HTTPS et intégrité du script |
+| SITE-PAGES | **Publication Git corrigée et installateur public exercé ; site multilingue qualifié, publication en cours**. Templates/catalogues partagés, ZIP complet 34 fichiers ; preuves du 13/10 conservées historiques | Moyenne | Vérifier déploiement des sept langues et métadonnées HTTPS après push |
+| SITE-TOKENS | **Corrigé sur Pages, vérifié après déploiement `f1344bf`**. Build Git exécuté depuis racine dépôt, output `site-dist`, version/source/checksum réels ; source HTML brute n'est plus un entrypoint | Faible à Moyenne | Gardes build, source unique des faits, aucun token résiduel |
+| SITE-L10N | **Implémenté, qualifié localement, publication Git en cours**. Sept langues complètes, 223 messages par catalogue, SEO/ARIA/retours copie/404/cartes sociales ; desktop/mobile/clavier/no-JS réels | Moyenne | Vérification publique des sept préfixes et canonical stable après déploiement |
+| SITE-INSTALL-404 | **Corrigé et exercé en production**. `/install.sh` Pages sert le script exact ; vrai curl serveur ASUS, installation native 0.17.2 puis uninstall possédé sous HOME temporaire | Faible à Moyenne | Maintenir payload/routage et digest ; aucun autostart/tray/protection/root-helper activé |
 | P1-RAM | Publié 0.17.0, validé logiciel/natif : bornes et mesures complètes, 15 Mo non atteints, scénario composé Windows ~43 Mo | Moyenne | Maintien des preuves/limites canoniques ; 30 Mo reste une référence |
 | P1-RESTORE | Publié 0.17.0, validé logiciel/natif : propriétaire Windows, états opposés/hotplug/partiel simulés, release natif réel sans devices | Élevée | Pas de certification matérielle ou déni exclusif/ASIO |
 | P1-HB | Bloqué en qualification : Cellar ARM group-writable 0775, chaîne source Intel z3 défaillante ; aucune publication du tap | Moyenne | Préfixe sûr sans relâcher contrôles et prérequis Homebrew amont fonctionnels |
@@ -49,6 +49,7 @@ Les identifiants sont stables. À chaque livraison, remplacer l'état par **En c
 | P1-MAC-APP-DMG | **Demandé, à faire après les correctifs prioritaires en cours** : `.dmg` macOS contenant une `.app` native prête à ouvrir, lancement direct dans la barre de menus | Moyenne | Packaging ARM/Intel et vrai smoke Finder/menu ; pas de nouveau runtime ni autostart/protection implicites |
 | P1-ARM | Linux ARM64 : à faire | Élevée | ABI/sysroot, installation et tests natifs |
 | P1-UPGRADE | **Partiel, priorité corrective** : migration privée Windows 0.17.1→0.17.2 + no-op et neuf migrations installer Unix validés ; handoff legacy à consolider. Nouveau défaut réel : redémarrage du tray hérite des flux standard et bloque capture stdout de l'updater ; ancien CLI mappé laisse warning backup | Moyenne | Handoff natif/stdio bornés, receipts/PATH/root/package manager ; pas de kill ni release implicite |
+| P1-UNINSTALL | **Demandé, à faire** : désinstallation rapide par `mcw uninstall` ou point d'entrée équivalent, adapté à la provenance réelle de l'installation | Moyenne | Refus si protection/restauration active, identité/ownership exacts, délégation au gestionnaire MSI/Homebrew/AUR et conservation des données |
 | P2-HOOKS | Retenu, à faire | Élevée | Transitions actives cohérentes, effets bornés |
 | P2-NET | Reformulé en métadonnées locales, à faire | Élevée | PID authentifié ; macOS conditionnel |
 | P2-LOCK | Reformulé en protection coordonnée, à faire | Élevée | P1-RESTORE et arbitrage des intentions |
@@ -321,6 +322,40 @@ permission refusée et retrait ; pas de preuve de capture matérielle déduite d
 
 **Complexité : Moyenne.**
 
+### P1-UNINSTALL — Désinstallation rapide depuis MCW
+
+**Demande utilisateur :** pouvoir retirer MCW rapidement avec **`mcw uninstall`**
+ou une commande native équivalente, sans devoir retrouver manuellement le script
+ou la paire d'exécutables. État : demandé, **non implémenté**.
+
+**Contrat :** identifier l'installation exacte de l'exécutable courant et sa
+provenance : installateur Unix géré, Windows portable/Cargo, MSI, gestionnaire
+Homebrew/AUR, future `.app` macOS. Réutiliser les contrats de receipt/ownership
+et de lifecycle existants ; ne jamais supprimer un autre MCW trouvé sur PATH.
+Si un gestionnaire possède l'installation, utiliser sa procédure appropriée
+ou afficher la commande exacte lorsque sa délégation n'est pas sûre/autorisée,
+sans inventer un succès. Une inscription autostart externe reste intouchable.
+
+**Sécurité :** ne pas libérer silencieusement le micro, autoriser les caméras,
+annuler une restauration ou interrompre une opération UAC pour désinstaller.
+Protection demandée/active, dettes pending/unknown ou helper privilégié installé
+= refus explicite avec la procédure de restauration/retrait appropriée.
+Après disponibilité établie, arrêter uniquement le frontend possédé de cette
+installation, retirer seulement ses payloads/receipts/blocs PATH/autostart
+inchangés, et gérer le retrait de l'exécutable Windows encore mappé sans kill
+forcé ni contournement antivirus/ACL/quarantaine.
+
+**Données :** conserver par défaut politiques, préférences et historique.
+Une suppression de données, si proposée, exige une option et un consentement
+explicites ; aucune suppression récursive d'un dossier utilisateur arbitraire.
+
+**Acceptation :** vrai parcours natif de chaque provenance prise en charge,
+dans un environnement jetable : succès/retrait vérifiable, no-op déjà retiré
+lorsque représentable, cible étrangère/modifiée/liée refusée, protection active
+préservée et gestionnaire respecté. Mettre à jour aide CLI, site dans les sept
+langues, documentation et procédures de retrait. Ne pas essayer de désinstaller
+le MCW réellement protégé du PC utilisateur pour ce smoke.
+
 ## Phase 2 — Défense active et extensibilité légère (moyen terme)
 
 ### P2-HOOKS — Hooks locaux de transitions de capture
@@ -491,15 +526,15 @@ dupliquer leur contrat ou imposer le port ASUS à la navigation Pages.
 
 **Signalement utilisateur :** `__MCW_VERSION__`, `__MCW_SOURCE__` et
 `__MCW_INSTALLER_SHA256__` apparaissent au lieu de la version, du commit source
-et de la somme du script. Défaut utilisateur établi ; **pas encore corrigé**.
+et de la somme du script. Défaut utilisateur établi, **désormais corrigé en production**.
 Les smokes antérieurs ne le réfutent pas.
 
-**Évidence source :** `site/index.html` et `site/404.html` sont des templates ;
-`site/build.mjs::renderText` substitue les valeurs de `site/release.json` et
-refuse les marqueurs non résolus. Le chemin exact actuellement consulté/servi
-n'est pas établi : ne pas accuser un upload utilisateur, un cache ou Cloudflare
-sans preuve. Examiner source HTML directe, export, ZIP livré et publication
-effective pour corriger le vrai parcours, pas seulement une copie locale.
+**Cause établie :** configuration Git Cloudflare fournie par l'utilisateur :
+racine `site`, build et sortie vides, donc publication des templates bruts.
+Après réglage racine dépôt vide/build `node site/build.mjs`/sortie `site-dist`,
+déploiement `f1344bf` réussi et vrai HTTPS sans marqueurs, version 0.17.2.
+Cutover source : templates sous `site/templates/`, texte dans `site/locales/`,
+export seul destiné aux visiteurs ; aucun remplacement JS qui masquerait le défaut.
 
 **Correction attendue :** version réellement publiée, source immuable exacte,
 SHA-256 de l'installateur effectivement servi ; source unique des valeurs,
@@ -516,17 +551,17 @@ Le checksum doit correspondre aux bytes du script, non à une archive.
 
 ### SITE-INSTALL-404 — Commande curl Pages en échec HTTP 404
 
-**Signalement utilisateur réel sur le serveur ASUS ; non corrigé :**
+**Signalement utilisateur historique sur le serveur ASUS ; corrigé après réglage Git :**
 
 ```console
 serveur@serveur-asus:~/test$ curl --proto '=https' --tlsv1.2 -fsSL https://miccamwatch.pages.dev/install.sh | sh
 curl: (22) The requested URL returned error: 404
 ```
 
-Ce résultat est établi par l'utilisateur ; ne pas relancer le curl uniquement
-pour confirmer son erreur. L'origine Pages concernée est maintenant connue.
-Les anciens smokes locaux et le curl ASUS `/mcw/install.sh` ne prouvent pas
-que cette URL Pages fonctionne ; aucune installation réussie n'est annoncée.
+Le signalement initial est établi ; aucune requête de simple confirmation.
+Après correction/déploiement Git réussi, cette URL sert réellement le script
+text/plain et le digest exact. Vrai curl HTTPS depuis ASUS : install/version
+0.17.2/uninstall possédé réussis dans HOME/XDG temporaires, sans activation.
 
 **Correction urgente attendue :** identifier le contenu effectivement publié
 et le routage de `/install.sh`, garantir que le script revu est inclus à la
@@ -549,7 +584,7 @@ ne doit jamais être présenté comme un succès d'installation.
 **Demande utilisateur urgente :** couvrir exactement les langues déclarées par
 `src/i18n.rs::Language` : **anglais `en`, français `fr`, allemand `de`,
 espagnol `es`, japonais `ja`, chinois simplifié `zh`, russe `ru`**.
-État actuel : site français ; **traductions complètes non livrées**.
+État actuel : **sept langues intégralement implémentées et qualifiées ; publication Git en cours**.
 
 **Périmètre :** toutes les sections, navigation, parcours Windows/Linux/macOS,
 installation/usage/mise à jour/désinstallation, FAQ, sécurité/confidentialité,
@@ -573,6 +608,18 @@ Exercer réellement chaque langue sur desktop/mobile, navigation clavier/sans JS
 sélecteur, liens, 404 et commandes copiables ; vérifier textes longs et glyphes
 CJK/cyrilliques sans débordement. Les faits de release/source/checksum restent
 identiques et corrects dans tous les exports ; SITE-TOKENS doit être résolu.
+
+### Résultat web du 2026-10-14
+
+- **Source :** layout partagé `site/templates/`, sept catalogues `site/locales/` de 223 messages chacun ; `localization.mjs` refuse clé manquante/extra/vide, markup/code/URL/token technique modifié ou HTML déséquilibré. Aucun fallback silencieux. Quatre régressions Node passent, dont le vrai défaut initial des clés metadata avec `:` ; CI statique ajoutée.
+- **Vrai runtime Pages :** chaque langue desktop 1366×900 et mobile 390×844, sans overflow, images chargées ; navigation de langue directe, onglets OS ArrowRight/End, feedback d'échec de copie réellement localisé avec permission native refusée et texte sélectionné. Aucun clipboard utilisateur écrit. Sans JS, sept langues navigables et toutes les sections OS visibles ; commandes `--lang` cohérentes.
+- **HTTP :** accueil par langue 200, vraie route profonde inconnue 404 dans la langue du préfixe, pages/commandes/liens sans marqueurs. Canonical/hreflang/sitemap et cartes sociales par langue, CJK/cyrillique vus réellement ; typo mobile JP/RU ajustée après observation. Screenshots Windows 0.17.1 inchangés et explicitement historiques.
+- **Origine :** canonical du premier déploiement observé sur le hostname preview `827b9da7.miccamwatch.pages.dev`. Source corrigée : `site/origin.json` = vraie origine production `https://miccamwatch.pages.dev`, override explicite `MCW_SITE_URL` ; ne plus prendre `CF_PAGES_URL` éphémère comme canonical. Export sans override avec cette vraie URL preview en environnement garde bien l'origine production.
+- **Production française réparée :** check Cloudflare Git `f1344bf` success ; HTTPS placeholders absents, script servi. Vrai curl `/install.sh` depuis serveur ASUS, SHA `b7348c9a6f37a3d4f89faa2b767fd4880162d90c8f5d7c151185e0823384d1bb`, version native 0.17.2 et retrait possédé réussis, sans root/helper/tray/autostart/contrôle.
+- **ZIP multilingue complet :** `Téléchargements/miccamwatch-pages-0.17.2-multilingual.zip`, 490 598 octets, 34 fichiers, index et install.sh à la racine ; SHA-256 `1747056b969ea5ca017895743af6d6b05eeb6f925c391af4eba8b6caa720bf65`. Pas de catalogues/templates/manifestes de preuve privés dans le payload.
+- **Limite Windows explicite :** remplacement du `site-dist/` existant refusé par EPERM au rename. Cause de verrou/permissions non établie, ancien export préservé, pas de suppression forcée/ACL/exclusion AV. Sources exactes exportées avec succès dans sorties neuves ; ne pas confondre le vieux dossier local et la nouvelle archive complète.
+- Preuves privées `mcw-site-l10n-yj3keepa/` : exports, UI/no-JS/routes/typographie, curl production et livraison. Publication multilingue à vérifier après push ; les résultats locaux ne sont pas annoncés comme HTTPS public.
+
 
 
 ### Livraison statique du 2026-10-13 et publication
@@ -689,3 +736,6 @@ Ne pas déployer cette refonte dans le cadre de la seule mise à jour du MD.
 | 2026-10-14 | P1-MAC-APP-DMG | **Demande inscrite, non implémentée** : `.dmg`, `.app` prête à ouvrir et lancement direct dans la barre de menus | Capture utilisateur en russe : image disque macOS, application préparée, démarrage dans le tray/menu ; trois attentes distinctes conservées | Packaging natif ARM/Intel, Finder/menu/Quit/upgrade réels ; aucune permission, protection ou activation autostart implicite |
 | 2026-10-14 | TRAY-WIN / garde caméra | **Nouvelle croix grise diagnostiquée puis garde réactivée avec accord UAC explicite** | Vrai tray 0.17.2 : micro demandé/garde active/muted, caméra Block possédée mais helper élevé inactif ; branche `refreshed_status` traite ce trou de protection comme Error. Après choix « Réactiver avec UAC », `mcw camera block` rapporte garde active ; même PID tray, panneau natif quitte Status error, micro reste demandé/muted, caméra blocked/owned1/pending0/unknown0 | Ce n'était pas un collector dégradé ni une caméra absente inventée. Origine de l'arrêt du helper non établie ; persistance après session/reboot à diagnostiquer sans élévation implicite ni masquer l'avertissement. Aucune commande Allow, unmute ou restart tray |
 | 2026-10-14 | SITE-TOKENS / SITE-INSTALL-404 | **Cause de publication établie par configuration Git Cloudflare fournie** | Racine `site`, build et sortie vides : templates bruts publiés, pas d'installateur généré. Réglage attendu : racine dépôt vide, `node site/build.mjs`, sortie `site-dist` ; utilisateur choisit de régler les trois champs | Vérifier vrai déploiement Git et HTTPS après réglage, pas déclarer réparé avant preuve. Relay navigateur non connecté, aucun token CF en environnement ; pas de modification de compte/cloudflare inventée |
+| 2026-10-14 | P1-UNINSTALL | **Demande inscrite, non implémentée** : `mcw uninstall` ou commande équivalente pour retrait rapide | Point d'entrée unique souhaité, sans confusion MSI/portable/installer/package manager ni perte des données | Ownership exact, gardes/refus/restauration et frontend possédés, vrai smoke jetable par provenance ; aucune désinstallation du PC actuel |
+| 2026-10-14 | SITE-TOKENS / SITE-INSTALL-404 | **Réparés en production et exercés**, déploiement Git `f1344bf` | Configuration corrigée, vrai HTTPS version/source sans tokens, script exact51249/SHA b734 ; curl Pages natif ASUS install/version172/uninstall isolé réussi | Maintenir root/build/output corrects, origine canonical stable ; aucun privilège/app/privacy implicite |
+| 2026-10-14 | SITE-L10N | **Implémenté et qualifié ; publication en cours** | Sept catalogues223/templates/JS feedback/SEO/404/social ; quatre tests Node, vrai desktop/mobile/clavier/permission clipboard refusée/no-JS et 404 localisées ; ZIP490598/34 fichiers/SHA1747056b | Vérifier nouveau déploiement public ; EPERM ancien export Windows préservé, frais exports passent sans bypass |

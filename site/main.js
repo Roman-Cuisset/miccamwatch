@@ -9,7 +9,7 @@ if (installerCommand && window.location.protocol === "https:") {
   installerUrl.hash = "";
   installerCommand.textContent = `curl --proto '=https' --tlsv1.2 -fsSL ${installerUrl.href} | sh`;
   if (installerNote) {
-    installerNote.textContent = "Cette commande utilise l’endpoint HTTPS install.sh de ce site, qui sert le script revu. Les exécutables et leurs sommes sont téléchargés depuis GitHub. L’alternative ci-dessous reste épinglée à la source immuable de la release.";
+    installerNote.textContent = document.body.dataset.installerOriginNote;
   }
 }
 
@@ -26,7 +26,7 @@ if (window.isSecureContext && navigator.clipboard && typeof navigator.clipboard.
       if (copyStatus) copyStatus.textContent = "";
       try {
         await navigator.clipboard.writeText(code.textContent.trim());
-        if (copyStatus) copyStatus.textContent = "Le contenu de ce bloc a été copié dans le presse-papiers.";
+        if (copyStatus) copyStatus.textContent = document.body.dataset.copySuccess;
       } catch {
         const selection = window.getSelection();
         if (selection) {
@@ -35,7 +35,7 @@ if (window.isSecureContext && navigator.clipboard && typeof navigator.clipboard.
           selection.removeAllRanges();
           selection.addRange(range);
         }
-        if (copyStatus) copyStatus.textContent = "La copie a échoué. Le texte du bloc est sélectionné si le navigateur le permet ; copiez-le manuellement avec Ctrl+C, Cmd+C ou le menu de sélection.";
+        if (copyStatus) copyStatus.textContent = document.body.dataset.copyFailure;
       } finally {
         button.disabled = false;
       }
