@@ -37,7 +37,7 @@ Les identifiants sont stables. À chaque livraison, remplacer l'état par **En c
 | Lot | Décision / état actuel | Complexité | Dépendance principale |
 | --- | --- | --- | --- |
 | P0-CAM-TRAY | **Publié 0.17.2 et installé sur PC**. Couverture partielle distincte, captures conservées, raisons natives détaillées ; Zoom PID brut valide/report FILETIME zéro, attribution prudente maintenue. Vrai tray PC avec Ktalk actif : menu compact, détails complets, icône rouge ; infobulle résiduelle suivie dans TRAY-WIN | Moyenne | Pas de certification matérielle ; timestamp nul reste Unknown, jamais autorité de kill |
-| P0-UNIX-DIAG | **Priorité corrective Linux/macOS**, source en qualification : capture conservée pendant observation partielle ; collecteur/raison dans Details ; état caméra inconnu distinct d'une action échouée | Moyenne | Smoke natif Linux/macOS ARM/Intel ; aucune limite API masquée ni mutation de protection |
+| P0-UNIX-DIAG | **Correctif source poussé sur main `0522733`, non publié** : captures conservées, observation partielle orange, collecteur/raison dans Details, lecture caméra inconnue distincte d'une action échouée ; diagnostic administrateur ciblé ajouté | Moyenne | CI native [38613211447](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38613211447) en cours au dernier relevé ; smoke Linux/macOS et résultats à examiner à la reprise, aucune qualification native revendiquée |
 | P0-UNIX-OBS | **À traiter ensuite, priorité explicite** : réparer les causes réelles de lecture/identité indisponibles, pas seulement changer le libellé ; nommer les droits manquants prouvés et proposer une autorisation ciblée utile | Élevée | Distinguer permission refusée, périmètre incomplet, API sans information et absence de périphérique ; UAC/admin/Polkit explicites, pas d'élévation globale de MCW |
 | P1-MAC-MENU | **Retours inscrits** : sous-menu de profil avec choix direct, icône MCW identifiable et Details au-dessus de Exit | Moyenne | Après diagnostics/collecteurs ; AppKit réel, sept langues, configurations explicites prioritaires |
 | SITE-PAGES | **Publié et vérifié sur HTTPS Pages**, source web `07eb173` : sept langues complètes, installateur exact, ZIP complet 34 fichiers ; aucune nouvelle version binaire MCW | Moyenne | Maintenir CI/bornes/permissions ; ancien export local Windows refusé EPERM, préservé |
@@ -768,6 +768,30 @@ de restrictions globales n'est pas établie. Une lecture saine suivante récupè
 son propre état sans acquitter une action échouée. Aucun changement de permission,
 profil installé, mute, contrôle matériel, autostart ou application capturante.
 
+**Point d'arrêt demandé le 2026-10-14 :** source
+`0522733c3254131f357f4c9b878a6ff376e14ea1` committée et poussée sur `main`,
+sans tag ni nouvelle release. Local Windows : `cargo fmt --all`, Clippy
+`--all-targets --features windows-tray --locked -- -D warnings`, **167 tests
+réussis**, puis build release réussi. Le contrôle de syntaxe Python de la
+fixture macOS a réussi ; il ne prouve pas son exécution AppKit.
+Ces vérifications Windows ne compilent/exercent pas le frontend Unix conditionnel.
+
+La [CI source exacte 38613211447](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38613211447)
+était **en cours** au dernier relevé. Ses résultats natifs Linux et macOS
+ARM/Intel, le vrai rendu de menus/Details et les régressions partiel→sain restent
+à examiner à la reprise. Aucun résultat final ni smoke sur le Mac de l'utilisateur
+revendiqué ; aucune attente active ou nouvelle opération de qualification lancée
+après la demande d'arrêt pour aujourd'hui.
+
+**Ordre de reprise :** lire le résultat de cette CI et ses preuves, corriger
+un éventuel échec sans le masquer ; terminer la qualification du diagnostic.
+Ensuite traiter P0-UNIX-OBS (causes réelles et propositions de droits nécessaires),
+puis P1-MAC-MENU et P1-MAC-APP-DMG. Le parcours d'élévation ciblée, le sélecteur de
+profil direct et `.app`/`.dmg` ne sont **pas implémentés**. Le logo du site est
+autorisé et inscrit. La version publique/installation PC reste **0.17.2** ;
+aucun restart, mute/unmute, Block/Allow, profil, autostart, permission ou app
+capturante modifié pendant ce lot.
+
 ## P0-UNIX-OBS — Causes réelles, permissions et autorisations utiles
 
 **Priorité demandée après le diagnostic :** réparer ce qui empêche réellement
@@ -864,4 +888,4 @@ correction du collecteur ou une acquisition de droits qu'après résultat observ
 | 2026-10-14 | SITE-L10N / SITE-PAGES | **Publié HTTPS et smoke production réussi**, source `07eb173` | Cloudflare deploy4653ef80 success ; [CI38530338888](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38530338888) success ; sept langues/404/canonical stable/images/commandes/valeurs réelles, script20051249SHA b734. Locale source/code ne change pas les binaires172 ni gardes PC | Windows export préexistant EPERM préservé, ZIP complet livré ; beacon injecté par Cloudflare bloqué CSP, retirer l'injection via réglage Web Analytics plutôt que permissivité CSP |
 | 2026-10-14 | SITE-HERO | **Petit défaut UI inscrit, non corrigé** : titre russe masqué par carte desktop | Capture utilisateur1568×658 : fin de « осведомлённость » derrière la carte ; viewport CSS/zoom inconnus, aucune nouvelle mesure de confirmation | Grille/typo/retours à la ligne pour textes longs ; vrai contrôle collision et lisibilité toutes langues/largeurs/zoom, sans troncature |
 | 2026-10-14 | SITE-DEFAULT-EN | **Demande inscrite, non appliquée** : anglais sur URL racine Pages sans préfixe | Utilisateur demande `https://miccamwatch.pages.dev/` anglais, pas seulement `/en/` ; actuel défaut français identifié dans contrat export | Accueil/404 root en anglais, lang/SEO/nav cohérents ; conserver toutes langues et URL racine, pas de choix automatique imposé |
-| 2026-10-14 | P0-UNIX-DIAG / P0-UNIX-OBS / P1-MAC-MENU | Diagnostic exact macOS reçu ; correction source en qualification, pas de nouvelle release | Micro corespeechd observé ; CoreMediaIO sans identité/flux, profiles non-root sans périmètre global et Quartz sans propriété publique de verrouillage. Erreur de lecture caméra faussement classée Action failed dans la boucle Unix. Activité/raisons/état caméra séparés dans la source ; aucun contrôle ou droit modifié | Smoke Linux/macOS avant qualification ; traiter ensuite les causes réelles et proposer les droits ciblés prouvés utiles. Profil direct, identité MCW, ordre Details/Exit et logo site pour app/dmg inscrits, non livrés |
+| 2026-10-14 | P0-UNIX-DIAG / P0-UNIX-OBS / P1-MAC-MENU — arrêt demandé | **Source `0522733` poussée, qualification Unix non terminée ; arrêt pour aujourd'hui** | Local Windows : fmt/Clippy/167 tests/build release réussis ; cause macOS établie par relevé utilisateur et source. CI exacte [38613211447](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38613211447) en cours au dernier relevé, aucun succès natif revendiqué. Aucun nouveau tag/release, aucune installation ou protection changée | À la reprise : résultat/preuves CI Linux/macOS, puis causes réelles d'observation et élévation ciblée explicite utile. Sous-menu de profils, identité MCW, Details au-dessus d'Exit et logo site pour app/dmg inscrits, non livrés |
