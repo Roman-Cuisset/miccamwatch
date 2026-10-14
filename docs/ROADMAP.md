@@ -40,6 +40,8 @@ Les identifiants sont stables. À chaque livraison, remplacer l'état par **En c
 | SITE-PAGES | **Publié et vérifié sur HTTPS Pages**, source web `07eb173` : sept langues complètes, installateur exact, ZIP complet 34 fichiers ; aucune nouvelle version binaire MCW | Moyenne | Maintenir CI/bornes/permissions ; ancien export local Windows refusé EPERM, préservé |
 | SITE-TOKENS | **Corrigé sur Pages, vérifié après déploiement `f1344bf`**. Build Git exécuté depuis racine dépôt, output `site-dist`, version/source/checksum réels ; source HTML brute n'est plus un entrypoint | Faible à Moyenne | Gardes build, source unique des faits, aucun token résiduel |
 | SITE-L10N | **Publié et exercé en production** : en/fr/de/es/ja/zh/ru, 223 messages chacun, SEO/ARIA/copie/404/social ; desktop/mobile/clavier/no-JS locaux et sept préfixes HTTPS/404/canonical réels | Moyenne | CI site38530338888 réussie ; images171 restent historiques, CSP reste restrictive |
+| SITE-HERO | **Signalé, à corriger** : titre russe desktop trop large, mot « осведомлённость » masqué derrière la carte de capture ; chevauchement des colonnes malgré absence possible de scrollbar globale | Faible | Typographie/grille responsive, toutes langues et zoom ; aucun texte tronqué pour cacher le défaut |
+| SITE-DEFAULT-EN | **Demandé, à faire** : `https://miccamwatch.pages.dev/` sans préfixe doit présenter le site anglais, et non français ; conserver les sept routes explicites et le sélecteur | Faible | Export accueil/404 par défaut anglais, lang/SEO et liens cohérents ; pas de redirection forcée vers une autre langue |
 | SITE-INSTALL-404 | **Corrigé et exercé en production**. `/install.sh` Pages sert le script exact ; vrai curl serveur ASUS, installation native 0.17.2 puis uninstall possédé sous HOME temporaire | Faible à Moyenne | Maintenir payload/routage et digest ; aucun autostart/tray/protection/root-helper activé |
 | P1-RAM | Publié 0.17.0, validé logiciel/natif : bornes et mesures complètes, 15 Mo non atteints, scénario composé Windows ~43 Mo | Moyenne | Maintien des preuves/limites canoniques ; 30 Mo reste une référence |
 | P1-RESTORE | Publié 0.17.0, validé logiciel/natif : propriétaire Windows, états opposés/hotplug/partiel simulés, release natif réel sans devices | Élevée | Pas de certification matérielle ou déni exclusif/ASIO |
@@ -609,6 +611,47 @@ sélecteur, liens, 404 et commandes copiables ; vérifier textes longs et glyphe
 CJK/cyrilliques sans débordement. Les faits de release/source/checksum restent
 identiques et corrects dans tous les exports ; SITE-TOKENS doit être résolu.
 
+### SITE-HERO — Titre long masqué par la carte sur desktop
+
+**Signalement utilisateur, capture 1568×658 :** sur la page russe, le titre
+« Ваша осведомлённость » dépasse sa colonne ; la fin du mot passe derrière la
+carte de capture Windows et devient illisible. Dimension de l'image connue,
+viewport CSS/zoom exacts non établis. Défaut visuel établi par la capture,
+**non corrigé** ; ne pas refaire un contrôle uniquement pour confirmer le signalement.
+
+**Correction attendue :** adapter la grille et la typographie du hero aux
+traductions longues, avec largeur de colonne, taille de titre et retours à la
+ligne cohérents. Vérifier les contraintes de largeur intrinsèque/min-width et
+les breakpoints avant de choisir le correctif ; ne pas attribuer une cause CSS
+exacte sans inspection. Ne pas cacher/tronquer le texte, déplacer simplement le
+problème ou remplacer la traduction par une formulation artificiellement courte.
+
+**Acceptation :** titre russe intégralement lisible, aucune collision entre
+texte et carte ; même qualité pour les sept langues en desktop/tablette/mobile,
+aux largeurs voisines des breakpoints et avec zoom 100/125/150 %. Contrôler le
+chevauchement réel des éléments, pas seulement `scrollWidth > innerWidth`.
+Les smokes précédents restent datés et ne prouvent pas cette absence de collision.
+
+### SITE-DEFAULT-EN — Anglais à la racine sans préfixe
+
+**Demande utilisateur :** ouvrir **`https://miccamwatch.pages.dev/`** sans
+`/en/`, `/fr/` ou autre préfixe doit afficher le site **en anglais**, pas en
+français. L'export actuel conserve le français à la racine ; **changement non
+appliqué**. Ne pas présenter la présence de `/en/` comme une réponse suffisante.
+
+**Correction attendue :** générer l'accueil par défaut en anglais à `/`, avec
+`lang="en"` et textes/metadata/feedback cohérents. Conserver `/en/`, `/fr/`,
+`/de/`, `/es/`, `/ja/`, `/zh/`, `/ru/` et le choix manuel de langue ; ne pas
+forcer une autre langue selon le navigateur ni imposer une redirection vers
+un préfixe pour obtenir l'accueil anglais demandé. Harmoniser la 404 de racine
+et la navigation sans préfixe ; les 404 sous un préfixe restent localisées.
+
+**Acceptation :** vrai HTTPS `/` anglais, URL racine conservée, avec et sans
+JavaScript, même si le navigateur est en français/russe. Liens d'installation,
+sélecteur et sept routes fonctionnels ; canonical/hreflang/x-default/sitemap
+cohérents, sans contradiction entre langue déclarée et contenu. Documentation,
+instructions de publication et nouvelle archive reflètent le défaut anglais.
+
 ### Résultat web du 2026-10-14
 
 - **Source :** layout partagé `site/templates/`, sept catalogues `site/locales/` de 223 messages chacun ; `localization.mjs` refuse clé manquante/extra/vide, markup/code/URL/token technique modifié ou HTML déséquilibré. Aucun fallback silencieux. Quatre régressions Node passent, dont le vrai défaut initial des clés metadata avec `:` ; CI statique ajoutée.
@@ -741,3 +784,5 @@ Ne pas déployer cette refonte dans le cadre de la seule mise à jour du MD.
 | 2026-10-14 | SITE-TOKENS / SITE-INSTALL-404 | **Réparés en production et exercés**, déploiement Git `f1344bf` | Configuration corrigée, vrai HTTPS version/source sans tokens, script exact51249/SHA b734 ; curl Pages natif ASUS install/version172/uninstall isolé réussi | Maintenir root/build/output corrects, origine canonical stable ; aucun privilège/app/privacy implicite |
 | 2026-10-14 | SITE-L10N | **Implémenté et qualifié ; publication en cours** | Sept catalogues223/templates/JS feedback/SEO/404/social ; quatre tests Node, vrai desktop/mobile/clavier/permission clipboard refusée/no-JS et 404 localisées ; ZIP490598/34 fichiers/SHA1747056b | Vérifier nouveau déploiement public ; EPERM ancien export Windows préservé, frais exports passent sans bypass |
 | 2026-10-14 | SITE-L10N / SITE-PAGES | **Publié HTTPS et smoke production réussi**, source `07eb173` | Cloudflare deploy4653ef80 success ; [CI38530338888](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38530338888) success ; sept langues/404/canonical stable/images/commandes/valeurs réelles, script20051249SHA b734. Locale source/code ne change pas les binaires172 ni gardes PC | Windows export préexistant EPERM préservé, ZIP complet livré ; beacon injecté par Cloudflare bloqué CSP, retirer l'injection via réglage Web Analytics plutôt que permissivité CSP |
+| 2026-10-14 | SITE-HERO | **Petit défaut UI inscrit, non corrigé** : titre russe masqué par carte desktop | Capture utilisateur1568×658 : fin de « осведомлённость » derrière la carte ; viewport CSS/zoom inconnus, aucune nouvelle mesure de confirmation | Grille/typo/retours à la ligne pour textes longs ; vrai contrôle collision et lisibilité toutes langues/largeurs/zoom, sans troncature |
+| 2026-10-14 | SITE-DEFAULT-EN | **Demande inscrite, non appliquée** : anglais sur URL racine Pages sans préfixe | Utilisateur demande `https://miccamwatch.pages.dev/` anglais, pas seulement `/en/` ; actuel défaut français identifié dans contrat export | Accueil/404 root en anglais, lang/SEO/nav cohérents ; conserver toutes langues et URL racine, pas de choix automatique imposé |
