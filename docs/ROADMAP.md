@@ -46,6 +46,7 @@ Les identifiants sont stables. À chaque livraison, remplacer l'état par **En c
 | P1-HB | Bloqué en qualification : Cellar ARM group-writable 0775, chaîne source Intel z3 défaillante ; aucune publication du tap | Moyenne | Préfixe sûr sans relâcher contrôles et prérequis Homebrew amont fonctionnels |
 | P1-AUR | Validé natif : makepkg/pacman/PipeWire/PTY ; publication AUR bloquée, accès SSH mainteneur non autorisé | Moyenne | Publication du correctif/source épinglée et clé SSH mainteneur AUR autorisée |
 | P1-WG | Winget : à faire | Moyenne | Identité MSI et upgrades contrôlés |
+| P1-MAC-APP-DMG | **Demandé, à faire après les correctifs prioritaires en cours** : `.dmg` macOS contenant une `.app` native prête à ouvrir, lancement direct dans la barre de menus | Moyenne | Packaging ARM/Intel et vrai smoke Finder/menu ; pas de nouveau runtime ni autostart/protection implicites |
 | P1-ARM | Linux ARM64 : à faire | Élevée | ABI/sysroot, installation et tests natifs |
 | P1-UPGRADE | **Partiel, priorité corrective** : migration privée Windows 0.17.1→0.17.2 + no-op et neuf migrations installer Unix validés ; handoff legacy à consolider. Nouveau défaut réel : redémarrage du tray hérite des flux standard et bloque capture stdout de l'updater ; ancien CLI mappé laisse warning backup | Moyenne | Handoff natif/stdio bornés, receipts/PATH/root/package manager ; pas de kill ni release implicite |
 | P2-HOOKS | Retenu, à faire | Élevée | Transitions actives cohérentes, effets bornés |
@@ -248,6 +249,39 @@ ou package pacman substitué. AUR nécessite un accès SSH mainteneur vérifié 
 nom libre au RPC du 2026-10-11, aucune soumission ou acceptation officielle.
 
 **Complexité : Moyenne.**
+
+### P1-MAC-APP-DMG — Application macOS prête à ouvrir et image disque
+
+**Demande utilisateur, capture jointe :** ajouter un **`.dmg` pour macOS**,
+une **`.app` prête à utiliser**, et démarrer directement dans la **barre de menus**
+à l'ouverture de cette application. État : demandé, **non livré** ; les archives
+CLI actuelles ne constituent pas ce livrable.
+
+**Livrable :** image disque contenant `MicCamWatch.app`, installation par Finder
+vers Applications et ouverture normale sans compilation ni lancement préalable
+d'un terminal. Couvrir Apple Silicon et Intel sur la baseline macOS supportée ;
+deux artefacts natifs cohérents suffisent, ne pas promettre un universal non qualifié.
+Réutiliser le cœur Rust et le bridge AppKit existants ; aucun Electron, serveur
+ou runtime supplémentaire. Garder les archives CLI et leur contrat d'installation.
+
+**Comportement :** ouvrir `.app` démarre le menu MCW natif immédiatement, sans
+fenêtre terminal parasite ; état, diagnostics, commandes et Quit accessibles.
+Refuser les doublons de la même instance par identité correcte. L'ouverture
+ne vaut ni consentement au démarrage à la connexion, ni activation du mute,
+du blocage caméra ou de la terminaison automatique. Quit respecte les intentions
+et les restaurations possédées ; aucun release implicite.
+
+**Distribution :** bundle, identifiant/version/icône et exécutables/helpers
+cohérents ; `.dmg` versionné dans GitHub Releases, sommes/provenance/SBOM adaptés,
+instructions site et documentation à jour. Signature Developer ID et notarisation
+seulement avec identité/certificat réels ; sinon annoncer honnêtement les limites
+Gatekeeper, sans suppression de quarantaine, bypass TCC/SIP ni certificat fictif.
+
+**Acceptation :** vrais smokes Finder sur macOS ARM et Intel : monter `.dmg`,
+copier `.app`, ouvrir, observer la barre de menus, diagnostics/langues et Quit ;
+mise à jour/remplacement avec conservation des préférences/historique et de
+l'autostart explicitement possédé. Tester bundle déplacé, réouverture/doublon,
+permission refusée et retrait ; pas de preuve de capture matérielle déduite du menu.
 
 ### P1-WG — Manifeste Winget Windows
 
@@ -652,3 +686,6 @@ Ne pas déployer cette refonte dans le cadre de la seule mise à jour du MD.
 | 2026-10-13 | SITE-TOKENS | **Demande urgente inscrite, non corrigée** : version/source/checksum remplacés par marqueurs visibles | Signalement utilisateur ; templates et substitution/garde du builder relus. Page/artefact actuellement consulté non établi, aucune cause de déploiement inventée | Réparer vrai parcours preview/build/ZIP/publication ; accueil/404/SEO/URLs/curl/provenance sans tokens et checksum script exact |
 | 2026-10-13 | SITE-L10N | **Demande urgente inscrite, non implémentée** : site intégral en sept langues MCW | Enum/parser `Language` : en/fr/de/es/ja/zh/ru ; chinois simplifié confirmé par `zh-hans` | Traduction complète, sélection accessible/no-JS, SEO localisé et smokes réels par langue ; valeurs techniques invariantes, SITE-TOKENS prioritaire |
 | 2026-10-13 | SITE-INSTALL-404 | **Incident urgent inscrit, non corrigé** : vrai curl utilisateur Pages retourne 404 | Commande depuis `serveur@serveur-asus:~/test` vers `https://miccamwatch.pages.dev/install.sh`, erreur curl 22/HTTP 404 ; pas de nouvelle requête de confirmation | Qualifier payload/routage Pages, servir vrai script vérifié à cette URL, puis smoke HTTPS install/version/uninstall isolé ; les preuves du DNS ASUS ne couvrent pas Pages |
+| 2026-10-14 | P1-MAC-APP-DMG | **Demande inscrite, non implémentée** : `.dmg`, `.app` prête à ouvrir et lancement direct dans la barre de menus | Capture utilisateur en russe : image disque macOS, application préparée, démarrage dans le tray/menu ; trois attentes distinctes conservées | Packaging natif ARM/Intel, Finder/menu/Quit/upgrade réels ; aucune permission, protection ou activation autostart implicite |
+| 2026-10-14 | TRAY-WIN / garde caméra | **Nouvelle croix grise diagnostiquée puis garde réactivée avec accord UAC explicite** | Vrai tray 0.17.2 : micro demandé/garde active/muted, caméra Block possédée mais helper élevé inactif ; branche `refreshed_status` traite ce trou de protection comme Error. Après choix « Réactiver avec UAC », `mcw camera block` rapporte garde active ; même PID tray, panneau natif quitte Status error, micro reste demandé/muted, caméra blocked/owned1/pending0/unknown0 | Ce n'était pas un collector dégradé ni une caméra absente inventée. Origine de l'arrêt du helper non établie ; persistance après session/reboot à diagnostiquer sans élévation implicite ni masquer l'avertissement. Aucune commande Allow, unmute ou restart tray |
+| 2026-10-14 | SITE-TOKENS / SITE-INSTALL-404 | **Cause de publication établie par configuration Git Cloudflare fournie** | Racine `site`, build et sortie vides : templates bruts publiés, pas d'installateur généré. Réglage attendu : racine dépôt vide, `node site/build.mjs`, sortie `site-dist` ; utilisateur choisit de régler les trois champs | Vérifier vrai déploiement Git et HTTPS après réglage, pas déclarer réparé avant preuve. Relay navigateur non connecté, aucun token CF en environnement ; pas de modification de compte/cloudflare inventée |
