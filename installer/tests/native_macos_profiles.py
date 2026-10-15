@@ -54,11 +54,11 @@ if CommandLine.arguments.contains("--system-scope") {
                        "LC_ALL=C", "/usr/bin/perl", "-T", "-e", profileInventoryProgram, "all"]
     let pipe = Pipe()
     query.standardOutput = pipe
-    query.standardError = FileHandle.nullDevice
+    query.standardError = FileHandle.standardError
     try query.run()
     let data = pipe.fileHandleForReading.readDataToEndOfFile()
     query.waitUntilExit()
-    demand(query.terminationStatus == 0, "explicit runner-authorized read-only system inventory failed")
+    demand(query.terminationStatus == 0, "fixed system inventory failed (supervisor exit \(query.terminationStatus))")
     let profile = try decodeCameraProfileInventory(data, completeInventory: true)
     demand(profile.completeInventory && profile.state != "unknown" && !profile.ownedInstalled,
            "successful global query remained unknown or adopted profile ownership")
@@ -67,7 +67,16 @@ if CommandLine.arguments.contains("--system-scope") {
 if CommandLine.arguments.contains("--cancel") {
     _ = NSApplication.shared
     NSApp.setActivationPolicy(.accessory)
-    let timer = Timer(timeInterval: 0.2, repeats: false) { _ in NSApp.abortModal() }
+    let timer = Timer(timeInterval: 0.2, repeats: false) { _ in
+        guard let view = NSApp.modalWindow?.contentView,
+              let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else {
+            fatalError("native inspection confirmation did not render")
+        }
+        view.cacheDisplay(in: view.bounds, to: bitmap)
+        let image = bitmap.representation(using: .png, properties: [:])!
+        try! image.write(to: URL(fileURLWithPath: CommandLine.arguments.last!))
+        NSApp.abortModal()
+    }
     RunLoop.main.add(timer, forMode: .modalPanel)
     let result = microphoneControl("{\"operation\":\"camera_status_admin\"}")
     demand(result.ok && result.camera?.authorization == "cancelled", "native pre-authorization Cancel was not preserved")
@@ -159,10 +168,10 @@ def main():
             raise RuntimeError('Incomplete profile scope has no explicit administrator proposal')
         if baseline != sorted(str(path.relative_to(home)) for path in home.rglob('*')):
             raise RuntimeError('Read-only inspection created user state')
-        run('native-cancel', [driver, '--cancel'], env=env)
-        run('runner-authorized-system-inventory', [driver, '--system-scope'], env=env)
+        run('native-cancel', [driver, '--cancel', args.proof.resolve() / 'inspection-confirmation.png'], env=env)
         orphaned_confirmation(args.binary.resolve(), env)
         results.append(dict(name='owner-exit-retires-native-confirmation', exit=0))
+        run('runner-authorized-system-inventory', [driver, '--system-scope'], env=env)
     (args.proof / 'results.json').write_text(json.dumps(results, indent=2) + '\n')
     (args.proof / 'scope.txt').write_text(
         'Real AppKit cancellation before OS authorization, genuine passive CLI and production profile parser. '

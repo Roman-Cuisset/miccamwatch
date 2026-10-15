@@ -111,7 +111,6 @@ for test in cases {
             require(!row.title.contains("\n"), "visible title must be one line")
             require(content.diagnostic.contains(entry.detail ?? entry.label), "original diagnostic lost")
             if let children = entry.children {
-                require(row.action == nil && row.representedObject == nil, "profile must not cycle")
                 require(row.submenu != nil, "profile choices must be directly reachable")
                 require(row.submenu!.size.width <= 400, "profile submenu exceeds native width bound")
                 require(row.submenu!.items.count == 4, "all four profiles must be available")

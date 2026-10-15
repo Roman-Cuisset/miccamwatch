@@ -226,7 +226,10 @@ while (1) {
     my $done = waitpid($pid, WNOHANG);
     if ($done == $pid) {
         my $status = $?;
-        exit 126 if $status != 0;
+        if ($status != 0) {
+            warn("profiles utility failed (exit " . ($status >> 8) . ", signal " . ($status & 127) . ")\n");
+            exit 126;
+        }
         print STDOUT $output;
         exit 0;
     }
