@@ -37,6 +37,7 @@ struct MacCameraProfile: Codable {
     var ownedInstalled: Bool = false
     var completeInventory: Bool = false
     var detail: String = "Camera restriction status is unknown."
+    var authorization: String = "not_requested"
 }
 struct MacControlReply: Codable {
     var ok: Bool = true
@@ -182,6 +183,59 @@ private func setInputMute(_ change: MacControlChange) -> MacControlResult {
 
 // profiles(1) documents stdout-xml and ProfileIdentifier/ProfileUUID metadata.
 // A non-root query cannot prove absence of device/other-user restrictions.
+// Stock macOS tools only. The child stays unreaped until completion or cleanup,
+// so deadline/size rejection cannot target a recycled PID.
+private let profileInventoryProgram = #"""
+use strict;
+use IO::Select;
+use POSIX qw(WNOHANG);
+use Time::HiRes qw(clock_gettime CLOCK_MONOTONIC sleep);
+$SIG{CHLD} = "DEFAULT";
+@ARGV == 1 && ($ARGV[0] eq "all" || $ARGV[0] eq "user") or exit 126;
+pipe(my $reader, my $writer) or exit 126;
+my $pid = fork();
+defined($pid) or exit 126;
+if ($pid == 0) {
+    close($reader);
+    open(STDOUT, ">&", $writer) or exit 126;
+    close($writer);
+    open(STDERR, ">", "/dev/null") or exit 126;
+    my @args = ("show", "-type", "configuration", "-output", "stdout-xml");
+    push(@args, "-all") if $ARGV[0] eq "all";
+    exec("/usr/bin/profiles", @args);
+    exit 126;
+}
+close($writer);
+my $abort = sub { my ($status) = @_; kill(9, $pid); waitpid($pid, 0); exit $status; };
+my $end = clock_gettime(CLOCK_MONOTONIC) + 15;
+my $selector = IO::Select->new($reader);
+my $output = "";
+while (1) {
+    my $left = $end - clock_gettime(CLOCK_MONOTONIC);
+    $abort->(124) if $left <= 0;
+    my @ready = $selector->can_read($left);
+    $abort->(124) unless @ready;
+    my $count = sysread($reader, my $chunk, 65536);
+    $abort->(126) unless defined($count);
+    last if $count == 0;
+    $abort->(125) if length($output) + $count > 1048576;
+    $output .= $chunk;
+}
+close($reader);
+while (1) {
+    my $done = waitpid($pid, WNOHANG);
+    if ($done == $pid) {
+        my $status = $?;
+        exit 126 if $status != 0;
+        print STDOUT $output;
+        exit 0;
+    }
+    exit 126 if $done == -1;
+    $abort->(124) if clock_gettime(CLOCK_MONOTONIC) >= $end;
+    sleep(0.01);
+}
+"""#
+
 private func installedCameraProfile(_ identifier: String?, _ uuid: String?) throws -> MacCameraProfile {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/profiles")
@@ -191,17 +245,37 @@ private func installedCameraProfile(_ identifier: String?, _ uuid: String?) thro
     process.standardOutput = pipe
     process.standardError = FileHandle.nullDevice
     try process.run()
-    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+    defer {
+        if process.isRunning { process.terminate() }
+        process.waitUntilExit()
+    }
+    var data = Data()
+    while let chunk = try pipe.fileHandleForReading.read(upToCount: 65536), !chunk.isEmpty {
+        guard data.count + chunk.count <= 1024 * 1024 else {
+            throw MacControlError.failed("Installed profile metadata exceeds the 1 MiB limit")
+        }
+        data.append(chunk)
+    }
     process.waitUntilExit()
-    guard process.terminationStatus == 0, data.count <= 1024 * 1024 else {
+    guard process.terminationStatus == 0 else {
         throw MacControlError.failed("Installed profile metadata could not be read (profiles exit \(process.terminationStatus))")
+    }
+    return try decodeCameraProfileInventory(data, completeInventory: geteuid() == 0,
+                                            identifier: identifier, uuid: uuid)
+}
+
+// The privileged operation passes no owner identity: a global match is not an ownership receipt.
+func decodeCameraProfileInventory(_ data: Data, completeInventory: Bool,
+                                  identifier: String? = nil, uuid: String? = nil) throws -> MacCameraProfile {
+    guard data.count <= 1024 * 1024 else {
+        throw MacControlError.failed("Installed profile metadata exceeds the 1 MiB limit")
     }
     let plist = try PropertyListSerialization.propertyList(from: data, options: [], format: nil)
     guard let scopes = plist as? [String: Any], scopes.values.allSatisfy({ $0 is [Any] }) else {
         throw MacControlError.failed("Unrecognized installed profile metadata schema")
     }
     var result = MacCameraProfile()
-    result.completeInventory = geteuid() == 0
+    result.completeInventory = completeInventory
     var restricted = false
     for list in scopes.values {
         for entry in list as! [Any] {
@@ -241,6 +315,56 @@ private func installedCameraProfile(_ identifier: String?, _ uuid: String?) thro
     }
     return result
 }
+
+private func administratorProfileScript() throws -> NSAppleScript {
+    // Only the immutable program is quoted; no request value is interpolated.
+    let quotedProgram = "'" + profileInventoryProgram.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    let command = "/usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C /usr/bin/perl -T -e " + quotedProgram + " all"
+    let appleScriptCommand = command.replacingOccurrences(of: "\\", with: "\\\\")
+        .replacingOccurrences(of: "\"", with: "\\\"").replacingOccurrences(of: "\n", with: "\\n")
+    let source = "with timeout of 110 seconds\n do shell script \"" + appleScriptCommand + "\" with administrator privileges\nend timeout"
+    guard let script = NSAppleScript(source: source) else {
+        throw MacControlError.failed("Could not prepare the fixed administrator inspection")
+    }
+    return script
+}
+
+private func administratorCameraProfile() throws -> MacCameraProfile {
+    guard FileManager.default.isExecutableFile(atPath: "/usr/bin/perl") else {
+        throw MacControlError.failed("The bounded administrator diagnostic requires the macOS system /usr/bin/perl; no interpreter is installed automatically")
+    }
+    _ = NSApplication.shared
+    NSApp.setActivationPolicy(.accessory)
+    NSApp.activate(ignoringOtherApps: true)
+    let alert = NSAlert()
+    alert.icon = mcwBrandImage(size: 64)
+    alert.messageText = "Inspect camera restrictions with administrator approval?"
+    alert.informativeText = "Only installed configuration-profile metadata will be read. No microphone, camera, TCC permission, profile or privacy setting will be changed. macOS will request administrator approval. This cannot identify camera clients or establish screen-lock state."
+    alert.addButton(withTitle: "Continue")
+    alert.addButton(withTitle: "Cancel")
+    guard alert.runModal() == .alertFirstButtonReturn else {
+        return MacCameraProfile(detail: "Administrator inspection cancelled; no rights or controls changed.",
+                                authorization: "cancelled")
+    }
+    let script = try administratorProfileScript()
+    var failure: NSDictionary?
+    let output = script.executeAndReturnError(&failure)
+    if let failure = failure {
+        let code = (failure[NSAppleScript.errorNumber] as? NSNumber)?.intValue ?? 0
+        if code == -128 || code == -60005 {
+            return MacCameraProfile(detail: "Administrator inspection \(code == -128 ? "cancelled" : "denied") (NSAppleScript error \(code)); effective state remains unknown, no controls changed.",
+                                    authorization: code == -128 ? "cancelled" : "denied")
+        }
+        throw MacControlError.failed("Read-only administrator inspection failed (NSAppleScript error \(code)); no controls changed")
+    }
+    guard let text = output.stringValue, text.utf8.count <= 1024 * 1024 else {
+        throw MacControlError.failed("Administrator profile metadata is missing or exceeds the 1 MiB limit")
+    }
+    var result = try decodeCameraProfileInventory(Data(text.utf8), completeInventory: true)
+    result.authorization = "granted"
+    result.detail += " Point-in-time administrator inspection only; no permission or control changed, and no ownership of another user's profile is inferred."
+    return result
+}
 private func approveCameraUI(_ detail: String) throws {
     // No documented public SDK predicate proves an unlocked console. A live
     // user response is required before opening any profile/action UI: a locked
@@ -261,6 +385,11 @@ private func cameraControl(_ request: MacControlRequest) throws -> MacControlRep
     var reply = MacControlReply()
     switch request.operation {
     case "camera_status": reply.camera = try installedCameraProfile(request.identifier, request.uuid)
+    case "camera_status_admin":
+        guard request.changes == nil, request.identifier == nil, request.uuid == nil, request.path == nil else {
+            throw MacControlError.failed("Administrator inspection accepts no target, command, profile identity or output path")
+        }
+        reply.camera = try administratorCameraProfile()
     case "camera_open":
         guard let path = request.path, path.hasSuffix(".mobileconfig"), FileManager.default.fileExists(atPath: path) else {
             throw MacControlError.failed("Camera restriction profile file is unavailable")

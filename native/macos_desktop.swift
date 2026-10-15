@@ -6,18 +6,34 @@ import UserNotifications
 import os
 import Darwin
 
-// Desktop protocol v1: UTF-8 newline-delimited JSON, maximum frame 65536 bytes.
-// Rust -> Swift: {"kind":"state","summary":String,"visual":"idle"|"ready"|"active"|"partial"|"error",
-// "details_label":String,"items":[{"action":String,"label":String,"detail":String?,"enabled":Bool}]}
-// or {"kind":"stop"}. Labels are compact; optional detail retains the original.
-// Swift -> Rust: {"kind":"ready","protocol":1}, {"kind":"action","action":String},
-// {"kind":"error","error":String}, {"kind":"stopped"}. Actions: status, mic,
-// camera, pause, profile, autostart, exit. This helper never collects capture data.
+// Desktop protocol v2: UTF-8 newline-delimited JSON, maximum frame 65536 bytes.
+// State frames carry summary, visual, details_label and at most 16 root items /
+// 20 total items. Only the profile root has children: exactly four checked
+// choices, with no grandchildren. Optional detail retains the original text.
+// Swift emits ready(protocol: 2), action, error and stopped events. Profile
+// choices dispatch profile_balanced/private/meeting/development, never cycling.
+// camera_inspect is an explicit read-only diagnostic request, never polling.
 struct DesktopItem: Decodable {
     let action: String
     let detail: String?
     let label: String
     let enabled: Bool
+    let checked: Bool?
+    let children: [DesktopItem]?
+
+    private enum CodingKeys: String, CodingKey { case action, detail, label, enabled, checked, children }
+    init(from decoder: Decoder) throws {
+        guard decoder.codingPath.filter({ $0.stringValue == "children" }).count <= 1 else {
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "desktop menu exceeds two levels"))
+        }
+        let fields = try decoder.container(keyedBy: CodingKeys.self)
+        action = try fields.decode(String.self, forKey: .action)
+        detail = try fields.decodeIfPresent(String.self, forKey: .detail)
+        label = try fields.decode(String.self, forKey: .label)
+        enabled = try fields.decode(Bool.self, forKey: .enabled)
+        checked = try fields.decodeIfPresent(Bool.self, forKey: .checked)
+        children = try fields.decodeIfPresent([DesktopItem].self, forKey: .children)
+    }
 }
 struct DesktopFrame: Decodable {
     let kind: String
@@ -25,6 +41,70 @@ struct DesktopFrame: Decodable {
     let visual: String?
     let items: [DesktopItem]?
     let details_label: String?
+}
+func validDesktopState(_ frame: DesktopFrame) -> Bool {
+    guard frame.kind == "state", let summary = frame.summary,
+          let visual = frame.visual, ["idle", "ready", "active", "partial", "error"].contains(visual),
+          let details = frame.details_label, !details.isEmpty, details.utf8.count <= 128,
+          let entries = frame.items, entries.count <= 16, summary.utf8.count <= 16384,
+          entries.last?.action == "exit", entries.filter({ $0.action == "exit" }).count == 1 else { return false }
+    let roots = ["status", "mic", "camera", "camera_inspect", "pause", "profile", "autostart", "exit", "header"]
+    let choices = Set(["profile_balanced", "profile_private", "profile_meeting", "profile_development"])
+    var count = entries.count
+    for entry in entries {
+        guard roots.contains(entry.action), entry.checked == nil,
+              entry.label.utf8.count <= 16384, (entry.detail?.utf8.count ?? 0) <= 16384 else { return false }
+        if entry.action == "profile" {
+            guard let children = entry.children, children.count == 4,
+                  Set(children.map { $0.action }) == choices,
+                  children.filter({ $0.checked == true }).count <= 1 else { return false }
+            count += children.count
+            for child in children {
+                guard child.children == nil, child.checked != nil,
+                      child.label.utf8.count <= 16384, (child.detail?.utf8.count ?? 0) <= 16384,
+                      entry.enabled || !child.enabled else { return false }
+            }
+        } else if entry.children != nil { return false }
+    }
+    return count <= 20
+}
+
+// Vector/template rendering is resolved by AppKit at the current backing scale
+// and appearance. Badge shape (not color alone) distinguishes each state.
+func desktopStatusImage(_ visual: String) -> NSImage {
+    let brand = mcwBrandImage(size: 16, menuBar: true)
+    let image = NSImage(size: NSSize(width: 22, height: 18), flipped: false) { _ in
+        brand.draw(in: NSRect(x: 0, y: 2, width: 16, height: 16))
+        guard visual != "idle" else { return true }
+        let badge = NSRect(x: 14, y: 0, width: 8, height: 8)
+        NSColor.clear.setFill()
+        badge.insetBy(dx: -1, dy: -1).fill(using: .copy)
+        NSColor.black.setFill()
+        NSColor.black.setStroke()
+        if visual == "active" {
+            NSBezierPath(ovalIn: badge.insetBy(dx: 0.5, dy: 0.5)).fill()
+        } else if visual == "ready" {
+            let ring = NSBezierPath(ovalIn: badge.insetBy(dx: 1, dy: 1))
+            ring.lineWidth = 1.5
+            ring.stroke()
+        } else if visual == "partial" {
+            let triangle = NSBezierPath()
+            triangle.move(to: NSPoint(x: 18, y: 8))
+            triangle.line(to: NSPoint(x: 14, y: 0))
+            triangle.line(to: NSPoint(x: 22, y: 0))
+            triangle.close()
+            triangle.fill()
+        } else {
+            let cross = NSBezierPath()
+            cross.lineWidth = 2
+            cross.move(to: NSPoint(x: 15, y: 1)); cross.line(to: NSPoint(x: 21, y: 7))
+            cross.move(to: NSPoint(x: 15, y: 7)); cross.line(to: NSPoint(x: 21, y: 1))
+            cross.stroke()
+        }
+        return true
+    }
+    image.isTemplate = true
+    return image
 }
 private struct DesktopEvent: Encodable {
     var kind: String
@@ -74,25 +154,45 @@ final class DesktopMenu: NSObject {
         self.detailsLabel = detailsLabel
         textWidth = min(340, max(80, (NSScreen.main?.visibleFrame.width ?? 400) - 60))
         var paragraphs = [summary]
-        for entry in entries {
-            let full = entry.detail ?? entry.label
-            if !paragraphs.contains(full) { paragraphs.append(full) }
+        func appendDetails(_ entries: [DesktopItem]) {
+            for entry in entries {
+                let full = entry.detail ?? entry.label
+                if !paragraphs.contains(full) { paragraphs.append(full) }
+                if let children = entry.children { appendDetails(children) }
+            }
         }
+        appendDetails(entries)
         diagnostic = paragraphs.joined(separator: "\n\n")
         super.init()
         menu.font = NSFont.menuFont(ofSize: 0)
         menu.autoenablesItems = false
         for entry in entries {
-            let row = NSMenuItem(title: boundedTitle(entry.label), action: #selector(selected(_:)), keyEquivalent: "")
+            if entry.action == "exit" {
+                menu.addItem(.separator())
+                let details = NSMenuItem(title: boundedTitle(detailsLabel), action: #selector(showDetails(_:)), keyEquivalent: "")
+                details.target = self
+                menu.addItem(details)
+            }
+            menu.addItem(makeRow(entry))
+        }
+    }
+
+    private func makeRow(_ entry: DesktopItem) -> NSMenuItem {
+        let row = NSMenuItem(title: boundedTitle(entry.label), action: nil, keyEquivalent: "")
+        row.isEnabled = entry.enabled
+        row.state = entry.checked == true ? .on : .off
+        if let children = entry.children {
+            let submenu = NSMenu(title: row.title)
+            submenu.font = menu.font
+            submenu.autoenablesItems = false
+            for child in children { submenu.addItem(makeRow(child)) }
+            row.submenu = submenu
+        } else {
+            row.action = #selector(selected(_:))
             row.target = self
             row.representedObject = entry.action
-            row.isEnabled = entry.enabled
-            menu.addItem(row)
         }
-        menu.addItem(.separator())
-        let details = NSMenuItem(title: boundedTitle(detailsLabel), action: #selector(showDetails(_:)), keyEquivalent: "")
-        details.target = self
-        menu.addItem(details)
+        return row
     }
 
     private func boundedTitle(_ original: String) -> String {
@@ -133,6 +233,7 @@ final class DesktopMenu: NSObject {
     func detailsAlert() -> NSAlert {
         let alert = NSAlert()
         alert.messageText = "MicCamWatch — \(detailsLabel)"
+        alert.icon = mcwBrandImage(size: 64)
         // The document is selectable/copyable, scrollable, and wraps even a
         // single unbroken 16 KB diagnostic. It never sets a menu's intrinsic width.
         let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 440, height: 260))
@@ -186,7 +287,7 @@ private final class DesktopDelegate: NSObject, NSApplicationDelegate {
         button.action = #selector(clicked(_:))
         button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         button.toolTip = "MicCamWatch"
-        button.image = icon("error")
+        button.image = desktopStatusImage("error")
         desktopDiagnostic("statusItem registered visible=\(item.isVisible) buttonWindow=\(button.window != nil)")
         DispatchQueue.global(qos: .utility).async { [weak self] in self?.readFrames() }
     }
@@ -231,49 +332,18 @@ private final class DesktopDelegate: NSObject, NSApplicationDelegate {
         CFRunLoopWakeUp(CFRunLoopGetMain())
     }
     private func apply(_ frame: DesktopFrame) {
-        guard frame.kind == "state", let summary = frame.summary, let visual = frame.visual,
-              ["idle", "ready", "active", "partial", "error"].contains(visual), let entries = frame.items,
-              let detailsLabel = frame.details_label, detailsLabel.utf8.count <= 128,
-              entries.count <= 16, summary.utf8.count <= 16384 else {
+        guard validDesktopState(frame), let summary = frame.summary, let visual = frame.visual,
+              let entries = frame.items, let detailsLabel = frame.details_label else {
             desktopEmit(DesktopEvent(kind: "error", error: "invalid desktop state frame")); stop(); return
         }
-        let allowed = ["status", "mic", "camera", "pause", "profile", "autostart", "exit", "header"]
-        guard entries.allSatisfy({ allowed.contains($0.action) && $0.label.utf8.count <= 16384 && ($0.detail?.utf8.count ?? 0) <= 16384 }) else {
-            desktopEmit(DesktopEvent(kind: "error", error: "invalid desktop menu item")); stop(); return
-        }
         item?.button?.toolTip = summary
-        item?.button?.image = icon(visual)
+        item?.button?.image = desktopStatusImage(visual)
         let content = DesktopMenu(summary: summary, entries: entries, detailsLabel: detailsLabel)
         menuContent = content
         if !initialized {
             initialized = true
-            desktopEmit(DesktopEvent(kind: "ready", protocol: 1))
+            desktopEmit(DesktopEvent(kind: "ready", protocol: 2))
         }
-    }
-    private func icon(_ visual: String) -> NSImage {
-        let image = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { rect in
-            let color: NSColor
-            switch visual { case "idle": color = .systemGreen; case "ready": color = .systemYellow;
-            case "active": color = .systemRed; case "partial": color = .systemOrange; default: color = .systemGray }
-            color.setFill()
-            NSBezierPath(ovalIn: rect.insetBy(dx: 2, dy: 2)).fill()
-            NSColor.white.setStroke()
-            let path = NSBezierPath(); path.lineWidth = 2
-            if visual == "error" || visual == "partial" {
-                path.move(to: NSPoint(x: 9, y: 6)); path.line(to: NSPoint(x: 9, y: 13)); path.stroke()
-                NSColor.white.setFill(); NSBezierPath(ovalIn: NSRect(x: 8, y: 3, width: 2, height: 2)).fill()
-            } else if visual == "active" {
-                NSColor.white.setFill(); NSBezierPath(ovalIn: NSRect(x: 6, y: 6, width: 6, height: 6)).fill()
-            } else if visual == "ready" {
-                path.move(to: NSPoint(x: 7, y: 5)); path.line(to: NSPoint(x: 7, y: 13))
-                path.move(to: NSPoint(x: 11, y: 5)); path.line(to: NSPoint(x: 11, y: 13)); path.stroke()
-            } else {
-                path.move(to: NSPoint(x: 5, y: 9)); path.line(to: NSPoint(x: 8, y: 6)); path.line(to: NSPoint(x: 13, y: 12)); path.stroke()
-            }
-            return true
-        }
-        image.isTemplate = false
-        return image
     }
     @objc private func clicked(_ sender: Any?) {
         guard initialized, !stopping else { return }

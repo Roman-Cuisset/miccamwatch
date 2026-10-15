@@ -12,7 +12,10 @@ use serde::{Deserialize, de::DeserializeOwned};
 use std::{
     fs::{self, File, OpenOptions},
     io::{Read, Seek, SeekFrom, Write},
-    os::unix::fs::{DirBuilderExt, OpenOptionsExt},
+    os::unix::{
+        fs::{DirBuilderExt, OpenOptionsExt},
+        process::CommandExt,
+    },
     path::{Component, Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{
@@ -175,7 +178,7 @@ impl PlatformMonitor {
     }
 
     pub fn doctor(&self) -> Vec<DiagnosticCheck> {
-        match self.snapshot(CaptureScope::all()) {
+        let mut checks: Vec<DiagnosticCheck> = match self.snapshot(CaptureScope::all()) {
             Ok(snapshot) => snapshot
                 .collectors
                 .into_iter()
@@ -196,7 +199,29 @@ impl PlatformMonitor {
                 status: DiagnosticStatus::Error,
                 detail: format!("cannot inspect macOS capture collectors: {error:#}"),
             }],
-        }
+        };
+        checks.push(match crate::privacy::camera_inspection(false) {
+            Ok(inspection) => DiagnosticCheck {
+                name: "camera_profile_inventory",
+                status: if inspection.state == "unknown" {
+                    DiagnosticStatus::Warning
+                } else { DiagnosticStatus::Ok },
+                detail: if inspection.administrator_required {
+                    format!("{} Explicit read-only proposal: mcw camera inspect --admin. No automatic elevation.", inspection.detail)
+                } else { inspection.detail },
+            },
+            Err(error) => DiagnosticCheck {
+                name: "camera_profile_inventory",
+                status: DiagnosticStatus::Error,
+                detail: format!("Cannot read camera profile metadata: {error:#}; no administrator requirement inferred"),
+            },
+        });
+        checks.push(DiagnosticCheck {
+            name: "session_lock_api",
+            status: DiagnosticStatus::Warning,
+            detail: "Public macOS session APIs do not establish current screen-lock state. Administrator rights do not supply this missing API; automatic lock controls remain unavailable.".into(),
+        });
+        checks
     }
 
     fn apply_policy(&self, access: &mut Access) {
@@ -554,6 +579,7 @@ impl Helper {
             child: Command::new(&self.binary)
                 .arg(mode)
                 .args(args)
+                .process_group(0)
                 .stdin(Stdio::null())
                 .stdout(Stdio::from(stdout.try_clone()?))
                 .stderr(Stdio::from(stderr.try_clone()?))
@@ -653,7 +679,9 @@ struct RunningChild {
 impl Drop for RunningChild {
     fn drop(&mut self) {
         if !self.reaped {
-            let _ = self.child.kill();
+            // The helper PID has not been reaped, so its private process group
+            // cannot be reused. Include nonprivileged utility descendants.
+            let _ = unsafe { libc::kill(-(self.child.id() as libc::pid_t), libc::SIGKILL) };
             let _ = self.child.wait();
         }
     }

@@ -265,6 +265,11 @@ def exercise(binary, proof, language):
         if language == "en":
             terminal.click(*terminal.locate("q"))
         else:
+            if not terminal.windows:
+                # Do not drain between resize and the sole Quit key: Unix
+                # readiness must preserve input when SIGWINCH is also pending.
+                # Sending another key would conceal an edge-triggered stall.
+                terminal.resize(80, 30)
             terminal.send("Q")
         terminal.drain(2)
         deadline = time.monotonic() + 15
@@ -288,7 +293,8 @@ def main():
         exercise(args.binary.resolve(), args.proof, language)
     (args.proof / "scope.txt").write_text(
         "Actual release top on native PTY/ConPTY; seven languages, terminal resize, "
-        "safe refresh by mouse/key, inert Quit gap, visible mouse/uppercase-key Quit. "
+        "safe refresh by mouse/key, inert Quit gap, visible mouse/uppercase-key Quit "
+        "(Unix keyboard Quit immediately follows resize, with no retry key). "
         "Rendered terminal frames retain cell colors for visual review. Linux camera "
         "controls are invoked only as disabled actions. No camera profile, microphone "
         "mute or process termination is authorized; no hardware activity claim.\n", encoding="utf-8")

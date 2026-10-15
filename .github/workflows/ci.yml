@@ -169,6 +169,10 @@ jobs:
         run: cargo test --locked -p libspa --lib native_headers_builder_roundtrip_after_growth -- --nocapture
       - run: cargo build --locked ${{ matrix.platform == 'linux' && '--features linux-camera-helper' || '' }}
       - run: cargo build --release --locked ${{ matrix.platform == 'linux' && '--features linux-camera-helper' || '' }}
+      - name: Build native macOS app and disk image
+        if: runner.os == 'macOS'
+        shell: bash
+        run: python3 -B installer/macos/package.py --binary target/release/mcw --arch "${{ matrix.arch }}" --output "$GITHUB_WORKSPACE"
       - name: Prepare isolated native TUI proof dependencies
         shell: bash
         run: |
@@ -711,6 +715,25 @@ jobs:
         if: runner.os == 'macOS'
         shell: bash
         run: python3 installer/tests/native_macos_menu.py --proof "$RUNNER_TEMP/native-proof/menu-width" --isolated-clipboard
+      - name: Exercise read-only macOS profile inspection and native cancellation
+        if: runner.os == 'macOS'
+        shell: bash
+        run: python3 -B installer/tests/native_macos_profiles.py --binary "$MCW_RELEASE_BINARY" --proof "$RUNNER_TEMP/native-proof/macos-profiles"
+      - name: Exercise copied macOS app from real disk image
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set +e
+          python3 -B installer/tests/native_macos_app.py \
+            --dmg "$GITHUB_WORKSPACE/miccamwatch-macos-${{ matrix.arch }}.dmg" \
+            --proof "$RUNNER_TEMP/native-proof/macos-app" --disposable-runner
+          result=$?
+          set -e
+          if [ "$result" -eq 77 ]; then
+            echo "::warning::Native app proof is partial/unavailable; read macos-app/app-smoke.json for exact Aqua/Accessibility limits. Not a full lifecycle PASS."
+          else
+            exit "$result"
+          fi
       - name: Exercise genuine macOS portable bootstrap and self-update
         if: runner.os == 'macOS'
         shell: bash
@@ -740,10 +763,19 @@ jobs:
           name: native-proof-${{ matrix.platform }}-${{ matrix.arch }}
           if-no-files-found: warn
           path: ${{ runner.temp }}/native-proof
+      - name: Upload native macOS disk image candidate
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: macos-app-${{ matrix.arch }}
+          if-no-files-found: error
+          path: miccamwatch-macos-${{ matrix.arch }}.dmg
       - name: Upload extracted and exercised release package
         if: inputs.release-packages
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-${{ matrix.platform }}-${{ matrix.arch }}
           if-no-files-found: error
-          path: miccamwatch-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz
+          path: |
+            miccamwatch-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz
+            ${{ matrix.platform == 'macos' && format('miccamwatch-macos-{0}.dmg', matrix.arch) || '' }}

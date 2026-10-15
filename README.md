@@ -278,25 +278,49 @@ unchanged protections were verified read-only instead, without rerunning update.
 The private migration also retained a mapped-old-CLI cleanup warning; no security
 protection or quarantine was bypassed.
 
-## Unreleased — Linux/macOS observation and control diagnostics
+## Unreleased 0.18.0 — Unix diagnostics and native macOS application
 
-The Unix tray now keeps observed active/ready clients visible during incomplete
+Source changes only; published binaries and installation recipes remain 0.17.2.
+The minor version covers the new macOS diagnostic command and desktop IPC v2;
+the Rust frontend and its embedded native helper must be built together.
+
+The Unix tray keeps observed active/ready clients visible during incomplete
 observation, with an orange warning and full collector reasons in Details.
-An unknown camera restriction read is not labeled as a failed action, nor
-treated as permission to use the camera. Actual action failures stay separate.
-macOS manual profile approval remains available even when global absence of
-restrictions cannot be established.
+An unknown camera restriction read is not a failed action or camera permission.
+Manual profile approval remains available; unrelated action failures stay visible.
 
-CoreMediaIO still does not identify camera clients or prove frame flow.
-Non-root macOS profile queries cannot establish a system-wide inventory; the
-diagnostic names the administrator requirement without requesting elevation.
-Administrator access is not camera TCC permission and does not resolve missing
-public API information. Public Quartz console metadata does not prove current
-screen-lock state; automatic lock controls remain unavailable.
+On macOS, `mcw camera inspect --json` reads current-user profile metadata without
+requesting rights or writing ownership state. If that scope is insufficient,
+`mcw camera inspect --admin` or the explicit read-only menu action offers a
+confirmation followed by macOS administrator authorization. Only a fixed,
+bounded system-wide `profiles` query is elevated, never the tray or observer.
+Results carry observation time, inventory completeness and authorization outcome;
+cancellation/refusal leaves the effective restriction unknown. Global matches
+are never adopted as MCW-owned profiles and inspection changes no controls.
 
-These are source changes, not a replacement of the published 0.17.2 binaries.
-Collector repair and explicit, narrowly scoped permission proposals are tracked
-in [ROADMAP](docs/ROADMAP.md#p0-unix-obs--causes-réelles-permissions-et-autorisations-utiles).
+Administrator access is not camera TCC permission. CoreMediaIO still cannot
+identify camera clients or prove frame flow; public Quartz console metadata
+does not prove screen-lock state. Neither limitation is repaired by elevation.
+Existing Windows UAC and Linux Polkit controls retain their own scoped protocols.
+
+The macOS menu has four direct, checked profile choices; an explicit `--config`
+overrides preferences and disables profile changes. The authorized MCW mark
+identifies the menu icon, with distinct activity/partial/error badges, and
+Details sits immediately above Exit.
+
+Native packaging produces `miccamwatch-macos-aarch64.dmg` and
+`miccamwatch-macos-x86_64.dmg`, each containing `MicCamWatch.app` and an
+Applications link. Opening the copied app launches directly into the menu bar
+without Terminal, implicit autostart, protection or permission grants. CLI
+tarballs remain available. `mcw update` inside an app refuses binary-only
+replacement: quit and replace the whole app using the matching DMG.
+Bundles are ad-hoc sealed, **not Developer ID signed or notarized**; no
+Gatekeeper/quarantine bypass is included.
+
+Native qualification and its GUI/authorization/hardware limits are recorded in
+[ROADMAP](docs/ROADMAP.md#p0-unix-obs--causes-réelles-permissions-et-autorisations-utiles).
+No interactive administrator approval or physical capture claim follows from
+compilation or a hosted runner without the required hardware/authorization.
 
 
 ## Commands

@@ -70,6 +70,7 @@ fn compile_macos_helper() {
         "native/macos_process.swift",
         "native/macos_trust.swift",
         "native/macos_desktop.swift",
+        "native/macos_brand.swift",
     ];
     for source in sources {
         println!("cargo:rerun-if-changed={source}");

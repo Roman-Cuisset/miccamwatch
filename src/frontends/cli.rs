@@ -145,6 +145,15 @@ pub enum TrayCommand {
 #[derive(Debug, Subcommand)]
 pub enum CameraCommand {
     Status,
+    /// Inspect profile metadata without changing camera control
+    #[cfg(target_os = "macos")]
+    Inspect {
+        /// Explicitly request administrator approval only for incomplete profile scope
+        #[arg(long)]
+        admin: bool,
+        #[command(flatten)]
+        output: OutputOptions,
+    },
     #[cfg(windows)]
     Allow {
         /// Explicitly authorize restoring one legacy camera; may override an independent disable
@@ -703,6 +712,15 @@ fn command_help(name: &str, root: bool, lang: Language) -> Option<&'static str> 
             "请求支持范围内的摄像头限制",
             "Запросить ограничение камеры в поддерживаемой области",
         ],
+        "inspect" => [
+            "Inspect camera restrictions without changing controls",
+            "Inspecter les restrictions caméra sans modifier les contrôles",
+            "Kamerabeschränkungen ohne Steuerungsänderung prüfen",
+            "Inspeccionar restricciones de cámara sin cambiar controles",
+            "制御を変更せずにカメラ制限を調べる",
+            "检查摄像头限制，不更改控制",
+            "Проверить ограничения камеры без изменения управления",
+        ],
         "toggle" => [
             "Toggle according to effective state",
             "Basculer selon l'état effectif",
@@ -794,6 +812,15 @@ fn argument_help(name: &str, lang: Language) -> Option<&'static str> {
         return command_help(name, false, lang);
     }
     let values = match name {
+        "admin" => [
+            "Request administrator approval only for a necessary read-only system-wide profile query",
+            "Demander une autorisation administrateur seulement pour une lecture globale des profils nécessaire",
+            "Administratorfreigabe nur für eine nötige systemweite Profilabfrage ohne Änderungen anfordern",
+            "Solicitar autorización administrativa solo para una consulta global de perfiles necesaria y de solo lectura",
+            "必要なシステム全体のプロファイル読み取りに限り管理者承認を求める",
+            "仅在确有必要只读查询全系统描述文件时请求管理员授权",
+            "Запрашивать права администратора только для необходимого чтения общесистемных профилей",
+        ],
         #[cfg(windows)]
         "restore_legacy" => [
             "Explicitly consent to restore this legacy camera ID; may override an independent disable; requires new UAC approval",

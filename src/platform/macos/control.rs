@@ -45,6 +45,7 @@ pub(crate) struct CameraProfile {
     pub owned_installed: bool,
     pub complete_inventory: bool,
     pub detail: String,
+    pub authorization: String,
 }
 #[derive(Debug, Deserialize)]
 pub(crate) struct MacControlReply {

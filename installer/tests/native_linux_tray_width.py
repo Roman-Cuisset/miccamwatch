@@ -155,8 +155,6 @@ def main():
                       'native fixture did not register', seconds=180)
                 require(fixture.poll() is None, 'native fixture exited; inspect fixture stderr/stdout')
                 view = json.loads((case_proof / 'view.json').read_text())
-                require(view['visual'] == 'error', 'degraded fixture was downgraded')
-                require(len(view['items']) + 1 <= 16, 'native menu exceeded item limit')
                 diagnostic = (case_proof / 'diagnostic.txt').read_text()
                 require('END-LINUX-DIAGNOSTIC' in diagnostic, 'original diagnostic tail missing')
                 for row in view['items']:

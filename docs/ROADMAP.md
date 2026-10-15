@@ -37,9 +37,9 @@ Les identifiants sont stables. À chaque livraison, remplacer l'état par **En c
 | Lot | Décision / état actuel | Complexité | Dépendance principale |
 | --- | --- | --- | --- |
 | P0-CAM-TRAY | **Publié 0.17.2 et installé sur PC**. Couverture partielle distincte, captures conservées, raisons natives détaillées ; Zoom PID brut valide/report FILETIME zéro, attribution prudente maintenue. Vrai tray PC avec Ktalk actif : menu compact, détails complets, icône rouge ; infobulle résiduelle suivie dans TRAY-WIN | Moyenne | Pas de certification matérielle ; timestamp nul reste Unknown, jamais autorité de kill |
-| P0-UNIX-DIAG | **Correctif source poussé sur main `0522733`, non publié** : captures conservées, observation partielle orange, collecteur/raison dans Details, lecture caméra inconnue distincte d'une action échouée ; diagnostic administrateur ciblé ajouté | Moyenne | CI native [38613211447](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38613211447) en cours au dernier relevé ; smoke Linux/macOS et résultats à examiner à la reprise, aucune qualification native revendiquée |
-| P0-UNIX-OBS | **À traiter ensuite, priorité explicite** : réparer les causes réelles de lecture/identité indisponibles, pas seulement changer le libellé ; nommer les droits manquants prouvés et proposer une autorisation ciblée utile | Élevée | Distinguer permission refusée, périmètre incomplet, API sans information et absence de périphérique ; UAC/admin/Polkit explicites, pas d'élévation globale de MCW |
-| P1-MAC-MENU | **Retours inscrits** : sous-menu de profil avec choix direct, icône MCW identifiable et Details au-dessus de Exit | Moyenne | Après diagnostics/collecteurs ; AppKit réel, sept langues, configurations explicites prioritaires |
+| P0-UNIX-DIAG | **Source 0.18.0 en requalification, non publiée** : captures conservées, partiel orange, causes dans Details, lecture inconnue distincte d'une action échouée | Moyenne | CI 38613211447 échouée : assertion Linux obsolète, rustls et Quit Intel ; correctifs intégrés, nouveau smoke requis |
+| P0-UNIX-OBS | **Implémenté en source, qualification en cours** : inspection profils macOS passive ou administrateur explicite en lecture seule, résultat horodaté et refus/annulation ; aucune élévation pour les limites API | Élevée | Vrais parcours natifs à qualifier ; UAC/Polkit existants inchangés, MCW reste dans la session utilisateur |
+| P1-MAC-MENU | **Implémenté en source 0.18.0, non publié** : quatre profils directs cochés, marque MCW et Details au-dessus d'Exit ; IPC desktop v2 sans shim | Moyenne | Requalification AppKit sept langues et priorités `--config` ; frontend/helper reconstruits ensemble |
 | SITE-PAGES | **Publié et vérifié sur HTTPS Pages**, source web `07eb173` : sept langues complètes, installateur exact, ZIP complet 34 fichiers ; aucune nouvelle version binaire MCW | Moyenne | Maintenir CI/bornes/permissions ; ancien export local Windows refusé EPERM, préservé |
 | SITE-TOKENS | **Corrigé sur Pages, vérifié après déploiement `f1344bf`**. Build Git exécuté depuis racine dépôt, output `site-dist`, version/source/checksum réels ; source HTML brute n'est plus un entrypoint | Faible à Moyenne | Gardes build, source unique des faits, aucun token résiduel |
 | SITE-L10N | **Publié et exercé en production** : en/fr/de/es/ja/zh/ru, 223 messages chacun, SEO/ARIA/copie/404/social ; desktop/mobile/clavier/no-JS locaux et sept préfixes HTTPS/404/canonical réels | Moyenne | CI site38530338888 réussie ; images171 restent historiques, CSP reste restrictive |
@@ -51,7 +51,7 @@ Les identifiants sont stables. À chaque livraison, remplacer l'état par **En c
 | P1-HB | Bloqué en qualification : Cellar ARM group-writable 0775, chaîne source Intel z3 défaillante ; aucune publication du tap | Moyenne | Préfixe sûr sans relâcher contrôles et prérequis Homebrew amont fonctionnels |
 | P1-AUR | Validé natif : makepkg/pacman/PipeWire/PTY ; publication AUR bloquée, accès SSH mainteneur non autorisé | Moyenne | Publication du correctif/source épinglée et clé SSH mainteneur AUR autorisée |
 | P1-WG | Winget : à faire | Moyenne | Identité MSI et upgrades contrôlés |
-| P1-MAC-APP-DMG | **Demandé, à faire après les correctifs prioritaires en cours** : `.dmg` macOS contenant une `.app` native prête à ouvrir, lancement direct dans la barre de menus | Moyenne | Packaging ARM/Intel et vrai smoke Finder/menu ; pas de nouveau runtime ni autostart/protection implicites |
+| P1-MAC-APP-DMG | **Packaging natif implémenté, non publié** : DMG ARM/Intel avec app LSUIElement, logo et launcher exec direct ; tarballs conservés, update binaire seul refusé dans une app | Moyenne | Vrai montage/copie/Finder/menu/Quit en CI ; ad-hoc seulement, pas de Developer ID/notarisation ni autostart/protection implicites |
 | P1-ARM | Linux ARM64 : à faire | Élevée | ABI/sysroot, installation et tests natifs |
 | P1-UPGRADE | **Partiel, priorité corrective** : migration privée Windows 0.17.1→0.17.2 + no-op et neuf migrations installer Unix validés ; handoff legacy à consolider. Nouveau défaut réel : redémarrage du tray hérite des flux standard et bloque capture stdout de l'updater ; ancien CLI mappé laisse warning backup | Moyenne | Handoff natif/stdio bornés, receipts/PATH/root/package manager ; pas de kill ni release implicite |
 | P1-UNINSTALL | **Demandé, à faire** : désinstallation rapide par `mcw uninstall` ou point d'entrée équivalent, adapté à la provenance réelle de l'installation | Moyenne | Refus si protection/restauration active, identité/ownership exacts, délégation au gestionnaire MSI/Homebrew/AUR et conservation des données |
@@ -776,21 +776,22 @@ réussis**, puis build release réussi. Le contrôle de syntaxe Python de la
 fixture macOS a réussi ; il ne prouve pas son exécution AppKit.
 Ces vérifications Windows ne compilent/exercent pas le frontend Unix conditionnel.
 
-La [CI source exacte 38613211447](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38613211447)
-était **en cours** au dernier relevé. Ses résultats natifs Linux et macOS
-ARM/Intel, le vrai rendu de menus/Details et les régressions partiel→sain restent
-à examiner à la reprise. Aucun résultat final ni smoke sur le Mac de l'utilisateur
-revendiqué ; aucune attente active ou nouvelle opération de qualification lancée
-après la demande d'arrêt pour aujourd'hui.
+**Reprise :** la [CI source exacte 38613211447](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38613211447)
+a **échoué**, elle n'est plus en cours. Apple Silicon a réussi, menus et Details
+AppKit réellement affichés et relus. Linux a échoué sur une ancienne assertion
+de rendu Error, Windows sur quatre nouveaux avis rustls, Intel sur le candidat
+TUI qui ne quittait pas après Q dans une rafale. Assertion incidente supprimée,
+rustls 0.23.46 et backend tty crossterm level-triggered intégrés, avec régression
+redimensionnement puis Q sans drain intermédiaire. La cause événementielle Intel
+est cohérente avec Mio [INFERENCE], non tracée. Échantillonnage au-delà de 50 ms
+(écart max 420,5 ms) : aucune qualification ressources déduite de ce run.
 
-**Ordre de reprise :** lire le résultat de cette CI et ses preuves, corriger
-un éventuel échec sans le masquer ; terminer la qualification du diagnostic.
-Ensuite traiter P0-UNIX-OBS (causes réelles et propositions de droits nécessaires),
-puis P1-MAC-MENU et P1-MAC-APP-DMG. Le parcours d'élévation ciblée, le sélecteur de
-profil direct et `.app`/`.dmg` ne sont **pas implémentés**. Le logo du site est
-autorisé et inscrit. La version publique/installation PC reste **0.17.2** ;
-aucun restart, mute/unmute, Block/Allow, profil, autostart, permission ou app
-capturante modifié pendant ce lot.
+**Lot repris :** source **0.18.0 non publiée**, car nouvelle commande macOS et
+rupture IPC desktop v2. Diagnostic administrateur ciblé, profils directs, icône
+MCW et packaging app/dmg intégrés ; qualification native composée en cours.
+Le site, les recettes publiques et la paire PC restent **0.17.2**. Aucun tag,
+restart utilisateur, mute/unmute, Block/Allow, profil, autostart, permission ou
+application capturante modifié sur le PC.
 
 ## P0-UNIX-OBS — Causes réelles, permissions et autorisations utiles
 
@@ -807,20 +808,28 @@ Ici, la requête `profiles` non-root n'emploie pas `-all` et ne peut établir un
 inventaire global ; les détails indiquent désormais qu'une lecture globale
 nécessite une autorisation administrateur. Ce n'est pas une autorisation TCC.
 
-**Parcours à implémenter :** proposer Windows UAC, autorisation administrateur
-macOS ou Polkit Linux selon la cause et l'OS, après consentement explicite,
-uniquement pour l'opération nécessaire. Garder le frontend et l'observation dans
-la session de l'utilisateur ; helper ciblé et vérifié, lecture seule quand
-seul un diagnostic est demandé, refus/annulation visibles, aucune boucle de
-prompts. Préserver identité, SID/UID, ownership et protections. Ne pas lancer
-tout MCW en root/admin, ne pas demander l'accès audio/vidéo pour espionner les
-autres apps, ni contourner TCC/SIP/quarantaine. L'élévation ne résout pas une API
-sans PID caméra, preuve de flux ou propriété publique de verrouillage.
+**Parcours implémenté en source :** `mcw camera inspect --json` n'élève rien et
+n'écrit ni reçu ni état utilisateur. Si le périmètre est incomplet,
+`mcw camera inspect --admin` ou l'action explicite du menu propose la confirmation
+MCW puis l'autorisation macOS. Seule une commande système fixe lit les métadonnées
+globales ; aucun chemin/identité/commande ne vient de la requête. Capture bornée
+à 1 Mio/15 s avant matérialisation AppleScript, timeout autorisation 110 s et
+requête native 120 s, après une éventuelle lecture passive de 15 s. Pas de
+garantie de 120 s de bout en bout. Annulation/refus restent inconnus/incomplets.
+Les résultats horodatés ne changent ni les contrôles ni l'ownership des profils.
+Le worker borné préserve le polling, la session utilisateur et les autres erreurs.
 
-**Validation future :** cas erreur réparée, droit refusé/accepté/annulé,
-périmètre toujours incomplet et limitation API ; vrais parcours natifs dans
-un environnement jetable, puis relevé sur le Mac concerné. Ne revendiquer une
-correction du collecteur ou une acquisition de droits qu'après résultat observé.
+Windows UAC et Linux Polkit réutilisent leurs parcours ciblés existants ; aucun
+besoin de nouveaux droits d'observation n'a été établi ici. CoreMediaIO sans
+PID/flux et le verrouillage public inconnu sont des limites API, pas des défauts
+réparables par admin. Aucun contournement TCC/SIP/quarantaine, aucune élévation
+globale, aucune prétention d'observer les clients caméra après élévation.
+
+**Qualification intégrée :** scénario natif prévu : CLI passive réelle, Cancel
+AppKit avant demande OS, parser de production et lecture globale fixe avec
+l'autorisation sudo préexistante du runner jetable. Cela ne prouve pas le clic
+Accepter/Refuser dans le dialogue OS avec identifiants humains ; cette limite
+reste explicite. Le relevé du Mac utilisateur reste une preuve distincte.
 
 ## P1-MAC-MENU — Retours AppKit à traiter
 
@@ -889,3 +898,4 @@ correction du collecteur ou une acquisition de droits qu'après résultat observ
 | 2026-10-14 | SITE-HERO | **Petit défaut UI inscrit, non corrigé** : titre russe masqué par carte desktop | Capture utilisateur1568×658 : fin de « осведомлённость » derrière la carte ; viewport CSS/zoom inconnus, aucune nouvelle mesure de confirmation | Grille/typo/retours à la ligne pour textes longs ; vrai contrôle collision et lisibilité toutes langues/largeurs/zoom, sans troncature |
 | 2026-10-14 | SITE-DEFAULT-EN | **Demande inscrite, non appliquée** : anglais sur URL racine Pages sans préfixe | Utilisateur demande `https://miccamwatch.pages.dev/` anglais, pas seulement `/en/` ; actuel défaut français identifié dans contrat export | Accueil/404 root en anglais, lang/SEO/nav cohérents ; conserver toutes langues et URL racine, pas de choix automatique imposé |
 | 2026-10-14 | P0-UNIX-DIAG / P0-UNIX-OBS / P1-MAC-MENU — arrêt demandé | **Source `0522733` poussée, qualification Unix non terminée ; arrêt pour aujourd'hui** | Local Windows : fmt/Clippy/167 tests/build release réussis ; cause macOS établie par relevé utilisateur et source. CI exacte [38613211447](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38613211447) en cours au dernier relevé, aucun succès natif revendiqué. Aucun nouveau tag/release, aucune installation ou protection changée | À la reprise : résultat/preuves CI Linux/macOS, puis causes réelles d'observation et élévation ciblée explicite utile. Sous-menu de profils, identité MCW, Details au-dessus d'Exit et logo site pour app/dmg inscrits, non livrés |
+| 2026-10-14 | Reprise P0-UNIX-DIAG / OBS / MAC-MENU / APP-DMG | **Source 0.18.0 intégrée, qualification native en cours, non publiée** | Windows local : fmt/Clippy, 167 tests, build release et vraie CLI version/aide réussis ; cargo audit sans avis signalé. Ancienne CI38613211447 examinée : ARM AppKit réussi, échecs Linux/assertion, Windows/rustls et Intel/Q réparés sans relâcher gates/budgets. Inspection lecture seule explicite, menu IPCv2 et packaging natif intégrés ; six fixtures Python et YAML CI/release syntaxiquement valides | CI native exacte et preuves ; ne pas assimiler sudo runner à consentement OS interactif, ni exit77 AppKit à un lifecycle PASS. Paire PC et stable 0.17.2 préservées |

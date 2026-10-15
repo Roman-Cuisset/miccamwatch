@@ -25,7 +25,11 @@ fn fixture_view(lang: Language) -> View {
         &Settings::default(),
         lang,
         &None,
-        SessionLockState::Unknown,
+        MenuContext {
+            lock: SessionLockState::Unknown,
+            explicit_policy: false,
+            inspection: &CameraInspectionUi::default(),
+        },
     )
 }
 

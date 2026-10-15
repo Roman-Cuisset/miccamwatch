@@ -1196,3 +1196,80 @@ active. After explicit user “Réactiver avec UAC” consent, camera block rene
 owner; same native tray PID recovered without restart and mic remained protected.
 No Allow/unmute was issued. Cause of the previous helper exit is not established.
 
+## Unreleased 0.18.0: scoped macOS inspection, menu and app
+
+Desktop IPC moves to v2, with no compatibility shim: Rust and the embedded
+AppKit helper are one versioned build. Frames remain bounded to 65,536 bytes,
+text to 16,384 bytes, with at most 16 roots/20 total items and one profile
+submenu containing the four known choices. Explicit policy paths override
+saved profile preferences. Menu status uses the shared site mark as a template
+image with separate state badges; Details precedes Exit.
+
+`CameraInventoryIncomplete` distinguishes partial profile scope from a manual
+control failure. `CameraInspection` records UTC observation time, state,
+completeness, administrator requirement and explicit authorization outcome.
+It is point-in-time evidence, not control intent, an ownership receipt or a
+persistent permission. Cancelled/denied results cannot assert known/complete
+inventory; granted results must establish complete inventory. Details are
+bounded to 8,192 bytes. A single-flight worker keeps tray observation responsive
+and never clears unrelated manual errors or applies diagnostic state to controls.
+
+Passive inspection reads no receipt and writes no user state. Ordinary control
+receipt reads require an owned regular file, no symlink and at most 16,384 bytes;
+nonblocking open prevents FIFOs from stalling before validation. Each transient
+native request has a private process group; timeout cleanup kills and reaps the
+unreaped helper and terminates its nonprivileged utility descendants. Normal
+profile queries use the system utility directly rather than spawning an
+interpreter on every observation refresh.
+A transient Swift helper watches its Rust parent's exit through a native process
+dispatch source; an abandoned confirmation exits with its private request group
+instead of surviving a closed frontend. The persistent desktop helper keeps its
+existing authenticated lifecycle.
+
+Only explicit inspection consent can reach macOS administrator authorization.
+A branded confirmation describes the read-only operation. The authorization
+command is immutable: clean environment, absolute system executables and a
+fixed Perl supervisor invoking `/usr/bin/profiles show -type configuration
+-output stdout-xml -all`. No caller command, path, identity or output destination
+is accepted. The stock interpreter is checked, never installed automatically.
+The supervisor limits capture before AppleScript materialization to 1 MiB and
+15 seconds, kills/reaps its fixed utility on failure and emits only complete
+successful output. AppleScript authorization allows 110 seconds; the native
+request allows 120 seconds, plus the preceding passive query (up to 15 seconds).
+These are per-operation limits, not a 120-second total inspection guarantee.
+Global parsing receives no owner identity, so it cannot adopt another user's
+profile or authorize removal. No TCC, device, profile or autostart mutation is
+part of inspection. CoreMediaIO camera attribution/frame flow and public
+screen-lock limitations remain unaffected by admin access.
+
+The DMG contains an architecture-specific, LSUIElement app and Applications
+link. A native C launcher execs bundled `mcw tray run`, preserving environment;
+no shell, resident wrapper, Terminal or new runtime is installed. Build-only
+AppKit artwork shares the authorized vector mark. Nested binary/app seals are
+ad-hoc integrity, not Developer ID/notarization or Gatekeeper clearance.
+The updater refuses any `.app` path before download/mutation, including a
+symlink resolving into a bundle; whole-app replacement preserves bundle seals.
+Existing CLI archives and public 0.17.2 recipes stay unchanged.
+
+The prior [diagnostic CI 38613211447](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38613211447)
+failed overall: an obsolete Linux wording/visual assertion, newly published
+rustls advisories and an Intel candidate TUI failing to exit on a single Quit.
+Apple Silicon native AppKit menu/details evidence passed and was visually read,
+but does not make that CI green. The Linux incidental assertions were removed,
+rustls updated to 0.23.46, and Unix crossterm selects its level-triggered tty
+backend (`use-dev-tty`) with resize-then-Q regression. The observed Intel failure
+is consistent with upstream Mio readiness loss [INFERENCE], not a traced event
+diagnosis. Sampling missed its 50 ms interval (maximum gap 420.5 ms); its RSS
+figures do not constitute a qualified resource comparison. No sampler or
+candidate gate is relaxed.
+
+New native proof separates parser boundaries, actual passive CLI, branded
+preauthorization Cancel, and the fixed read-only root query using a disposable
+runner's existing sudo authorization. This is not interactive OS administrator
+approval/denial, TCC approval or hardware proof. DMG proof records actual
+mount/copy/seal/icon/version/update refusal and Finder launch/readiness/duplicate
+owner/quit. Native menu Exit clicking needs preexisting Accessibility; absent
+that, authenticated IPC Quit is exercised and the native-click gap is recorded
+as partial (exit 77), never full lifecycle PASS. No user authorization is granted
+by the harness. Exact integrated CI results belong in ROADMAP after execution.
+

@@ -80,6 +80,10 @@ fn run() -> Result<u8> {
         Command::Devices(opts) => opts.no_color,
         Command::Explain(opts) => opts.output.no_color,
         Command::Doctor(opts) => opts.no_color,
+        #[cfg(target_os = "macos")]
+        Command::Camera {
+            command: CameraCommand::Inspect { output, .. },
+        } => output.no_color,
         _ => false,
     };
     if no_color {
@@ -312,6 +316,21 @@ fn run() -> Result<u8> {
         Command::Camera { command } => {
             let state = match command {
                 CameraCommand::Status => privacy::camera_state()?,
+                CameraCommand::Inspect { admin, output } => {
+                    let inspection = privacy::camera_inspection(admin)?;
+                    if output.json {
+                        println!("{}", serde_json::to_string(&inspection)?);
+                    } else {
+                        println!("{} — {}", inspection.state, inspection.observed_at);
+                        println!("{}", inspection.detail);
+                        if inspection.administrator_required {
+                            println!(
+                                "Read-only administrator inspection: mcw camera inspect --admin"
+                            );
+                        }
+                    }
+                    return Ok(if inspection.state == "unknown" { 2 } else { 0 });
+                }
                 CameraCommand::Allow => {
                     privacy::set_camera_state(privacy::CameraPrivacyState::Allowed)?;
                     privacy::camera_state()?

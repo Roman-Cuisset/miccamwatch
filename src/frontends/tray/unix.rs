@@ -41,7 +41,23 @@ enum Command {
     Mic,
     Camera,
     Pause,
+    #[cfg(target_os = "linux")]
     Profile,
+    #[cfg(target_os = "macos")]
+    #[serde(rename = "profile_balanced")]
+    ProfileBalanced,
+    #[cfg(target_os = "macos")]
+    #[serde(rename = "profile_private")]
+    ProfilePrivate,
+    #[cfg(target_os = "macos")]
+    #[serde(rename = "profile_meeting")]
+    ProfileMeeting,
+    #[cfg(target_os = "macos")]
+    #[serde(rename = "profile_development")]
+    ProfileDevelopment,
+    #[cfg(target_os = "macos")]
+    #[serde(rename = "camera_inspect")]
+    CameraInspect,
     Autostart,
     Exit,
 }
@@ -67,6 +83,10 @@ struct MenuEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     detail: Option<String>,
     enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    checked: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    children: Option<Vec<MenuEntry>>,
 }
 #[derive(Clone, Serialize)]
 struct View {
@@ -357,6 +377,9 @@ struct Words {
     lock_unknown: &'static str,
     lock_status: &'static str,
     details: &'static str,
+    camera_inspect: &'static str,
+    inspecting: &'static str,
+    config_override: &'static str,
 }
 fn words(lang: Language) -> Words {
     match lang {
@@ -384,6 +407,9 @@ fn words(lang: Language) -> Words {
             lock_unknown: "Session lock unknown; automatic controls unavailable",
             lock_status: "Session lock unknown",
             details: "Details…",
+            camera_inspect: "Inspect camera restrictions (administrator approval; read-only)",
+            inspecting: "Read-only camera inspection awaiting administrator approval / running…",
+            config_override: "Profile controlled by explicit --config; menu changes disabled",
         },
         Language::Fr => Words {
             idle: "Aucune capture observée",
@@ -409,6 +435,9 @@ fn words(lang: Language) -> Words {
             lock_unknown: "Verrouillage inconnu ; contrôles automatiques indisponibles",
             lock_status: "Verrouillage inconnu",
             details: "Détails…",
+            camera_inspect: "Inspecter les restrictions caméra (autorisation administrateur ; lecture seule)",
+            inspecting: "Inspection caméra en lecture seule : autorisation administrateur en attente / en cours…",
+            config_override: "Profil contrôlé par --config explicite ; modifications désactivées",
         },
         Language::De => Words {
             idle: "Keine Erfassung beobachtet",
@@ -434,6 +463,9 @@ fn words(lang: Language) -> Words {
             lock_unknown: "Sitzungssperre unbekannt; automatische Steuerung nicht verfügbar",
             lock_status: "Sitzungssperre unbekannt",
             details: "Details…",
+            camera_inspect: "Kamerabeschränkungen prüfen (Administratorfreigabe; nur lesend)",
+            inspecting: "Nur lesende Kameraprüfung wartet auf Administratorfreigabe / läuft…",
+            config_override: "Profil durch explizites --config gesteuert; Menüänderungen deaktiviert",
         },
         Language::Es => Words {
             idle: "No se observa captura",
@@ -459,6 +491,9 @@ fn words(lang: Language) -> Words {
             lock_unknown: "Bloqueo de sesión desconocido; controles automáticos no disponibles",
             lock_status: "Bloqueo de sesión desconocido",
             details: "Detalles…",
+            camera_inspect: "Inspeccionar restricciones de cámara (aprobación de administrador; solo lectura)",
+            inspecting: "Inspección de cámara de solo lectura: esperando aprobación de administrador / en curso…",
+            config_override: "Perfil controlado por --config explícito; cambios desactivados",
         },
         Language::Ja => Words {
             idle: "キャプチャは観測されていません",
@@ -484,6 +519,9 @@ fn words(lang: Language) -> Words {
             lock_unknown: "セッションロック不明・自動制御は利用できません",
             lock_status: "セッションロック不明",
             details: "詳細…",
+            camera_inspect: "カメラ制限を調査（管理者承認・読み取り専用）",
+            inspecting: "読み取り専用カメラ調査：管理者承認待ち／実行中…",
+            config_override: "明示的な --config がプロファイルを制御・メニュー変更は無効",
         },
         Language::Zh => Words {
             idle: "未观察到采集",
@@ -509,6 +547,9 @@ fn words(lang: Language) -> Words {
             lock_unknown: "会话锁定状态未知；自动控制不可用",
             lock_status: "会话锁定状态未知",
             details: "详细信息…",
+            camera_inspect: "检查摄像头限制（管理员授权；只读）",
+            inspecting: "只读摄像头检查：等待管理员授权／进行中…",
+            config_override: "由显式 --config 控制配置；已禁用菜单更改",
         },
         Language::Ru => Words {
             idle: "Захват не наблюдается",
@@ -534,6 +575,9 @@ fn words(lang: Language) -> Words {
             lock_unknown: "Блокировка сеанса неизвестна; автоматическое управление недоступно",
             lock_status: "Блокировка сеанса неизвестна",
             details: "Подробности…",
+            camera_inspect: "Проверить ограничения камеры (разрешение администратора; только чтение)",
+            inspecting: "Проверка камеры только для чтения: ожидание разрешения администратора / выполняется…",
+            config_override: "Профиль задан явным --config; изменения в меню отключены",
         },
     }
 }
@@ -552,6 +596,8 @@ fn entry(action: &'static str, label: impl Into<String>, enabled: bool) -> MenuE
         detail: None,
         label,
         enabled,
+        checked: None,
+        children: None,
     }
 }
 // Keep full diagnostics separate from compact visible statuses on both hosts.
@@ -568,6 +614,8 @@ fn compact_entry(
             label: first_line.to_owned(),
             detail: Some(label),
             enabled,
+            checked: None,
+            children: None,
         };
     }
     let short = if label == text.lock_unknown {
@@ -588,6 +636,8 @@ fn compact_entry(
             label: short.to_owned(),
             detail: Some(label),
             enabled,
+            checked: None,
+            children: None,
         },
         None => entry(action, label, enabled),
     }
@@ -668,6 +718,82 @@ fn observation_status(snapshot: &Snapshot, lang: Language) -> (String, &'static 
     }
     (summary, visual)
 }
+
+#[derive(Default)]
+struct CameraInspectionUi {
+    inventory_incomplete: bool,
+    administrator_required: bool,
+    running: bool,
+    detail: Option<String>,
+}
+
+#[derive(Default)]
+struct CameraInspectionWorker {
+    #[cfg(target_os = "macos")]
+    pending: Option<Receiver<Result<crate::privacy::CameraInspection>>>,
+    ui: CameraInspectionUi,
+}
+
+#[cfg(target_os = "macos")]
+impl CameraInspectionWorker {
+    fn start(&mut self, lang: Language) -> Result<()> {
+        if self.pending.is_some()
+            || !(self.ui.inventory_incomplete || self.ui.administrator_required)
+        {
+            return Ok(());
+        }
+        let (sender, receiver) = mpsc::sync_channel(1);
+        thread::Builder::new()
+            .name("camera-inspection".into())
+            .spawn(move || {
+                // Only this explicit menu action can request administrator approval.
+                let _ = sender.send(crate::privacy::camera_inspection(true));
+            })?;
+        self.pending = Some(receiver);
+        self.ui.running = true;
+        self.ui.detail = Some(words(lang).inspecting.to_owned());
+        Ok(())
+    }
+
+    fn poll(&mut self) -> bool {
+        let Some(receiver) = &self.pending else {
+            return false;
+        };
+        let result = match receiver.try_recv() {
+            Ok(result) => result,
+            Err(mpsc::TryRecvError::Empty) => return false,
+            Err(mpsc::TryRecvError::Disconnected) => Err(anyhow::anyhow!(
+                "camera inspection worker closed without a result"
+            )),
+        };
+        self.pending = None;
+        self.ui.running = false;
+        self.ui.detail = Some(match result {
+            Ok(inspection) => {
+                self.ui.administrator_required = inspection.administrator_required;
+                let authorization = match inspection.authorization {
+                    crate::privacy::CameraInspectionAuthorization::NotRequested => "not requested",
+                    crate::privacy::CameraInspectionAuthorization::Granted => "granted",
+                    crate::privacy::CameraInspectionAuthorization::Cancelled => "cancelled",
+                    crate::privacy::CameraInspectionAuthorization::Denied => "denied",
+                };
+                format!(
+                    "Read-only camera inspection — point-in-time result at {}\nAdministrator authorization: {authorization}\n{}",
+                    inspection.observed_at.to_rfc3339(),
+                    inspection.detail
+                )
+            }
+            Err(error) => format!("Read-only camera inspection failed: {error:#}"),
+        });
+        true
+    }
+}
+struct MenuContext<'a> {
+    lock: SessionLockState,
+    explicit_policy: bool,
+    inspection: &'a CameraInspectionUi,
+}
+
 fn make_view(
     status: (String, &'static str),
     mute: MicrophoneMuteState,
@@ -675,8 +801,13 @@ fn make_view(
     settings: &Settings,
     lang: Language,
     feedback: &Option<String>,
-    lock: SessionLockState,
+    context: MenuContext<'_>,
 ) -> View {
+    let MenuContext {
+        lock,
+        explicit_policy,
+        inspection,
+    } = context;
     let (summary, visual) = status;
     let (camera_blocked, camera_error) = camera;
     let text = words(lang);
@@ -726,6 +857,8 @@ fn make_view(
             ),
             detail: Some(error.to_owned()),
             enabled: false,
+            checked: None,
+            children: None,
         });
     }
     items.push(entry(
@@ -743,6 +876,26 @@ fn make_view(
         },
         cfg!(target_os = "macos") || camera_error.is_none(),
     ));
+    if inspection.inventory_incomplete || inspection.administrator_required {
+        items.push(entry(
+            "camera_inspect",
+            text.camera_inspect,
+            !inspection.running,
+        ));
+    }
+    if let Some(detail) = &inspection.detail {
+        let mut diagnostic = entry(
+            "header",
+            if inspection.running {
+                text.inspecting
+            } else {
+                text.camera_inspect
+            },
+            false,
+        );
+        diagnostic.detail = Some(detail.clone());
+        items.push(diagnostic);
+    }
     items.push(entry(
         "pause",
         if settings.notifications_paused() {
@@ -752,15 +905,41 @@ fn make_view(
         },
         true,
     ));
-    items.push(entry(
+    let profile = entry(
         "profile",
-        format!(
-            "{}: {}",
-            text.profile,
-            text.profiles[profile_index(settings.profile)]
-        ),
-        true,
-    ));
+        if explicit_policy {
+            format!("{} — {}", text.profile, text.config_override)
+        } else {
+            format!(
+                "{}: {}",
+                text.profile,
+                text.profiles[profile_index(settings.profile)]
+            )
+        },
+        !explicit_policy,
+    );
+    #[cfg(target_os = "macos")]
+    let profile = {
+        let mut profile = profile;
+        profile.children = Some(
+            [
+                "profile_balanced",
+                "profile_private",
+                "profile_meeting",
+                "profile_development",
+            ]
+            .into_iter()
+            .enumerate()
+            .map(|(index, action)| {
+                let mut choice = entry(action, text.profiles[index], !explicit_policy);
+                choice.checked = Some(!explicit_policy && index == profile_index(settings.profile));
+                choice
+            })
+            .collect(),
+        );
+        profile
+    };
+    items.push(profile);
     let autostart = crate::autostart::state();
     items.push(compact_entry(
         "autostart",
@@ -792,6 +971,10 @@ pub fn run_tray(
 ) -> Result<()> {
     let lifecycle = Lifecycle::acquire()?;
     let (sender, actions) = mpsc::sync_channel(32);
+    #[cfg(target_os = "macos")]
+    let mut inspection = CameraInspectionWorker::default();
+    #[cfg(target_os = "linux")]
+    let inspection = CameraInspectionWorker::default();
     let initial = make_view(
         (words(lang).degraded.to_owned(), "error"),
         MicrophoneMuteState::Unavailable,
@@ -806,7 +989,11 @@ pub fn run_tray(
         &settings,
         lang,
         &None,
-        SessionLockState::Unknown,
+        MenuContext {
+            lock: SessionLockState::Unknown,
+            explicit_policy,
+            inspection: &inspection.ui,
+        },
     );
     let mut host = DesktopHost::start(sender, lifecycle.ready.clone(), initial)?;
     let mut tracker = TransitionTracker::default();
@@ -843,6 +1030,11 @@ pub fn run_tray(
                 break;
             }
             host.check()?;
+            #[cfg(target_os = "macos")]
+            if inspection.poll() {
+                // Diagnostic completion never changes controls or manual action feedback.
+                next_poll = Instant::now();
+            }
             if Instant::now() >= next_poll {
                 let settings_error = match Settings::load() {
                     Ok(current) => {
@@ -947,6 +1139,7 @@ pub fn run_tray(
                     Ok(state) => {
                         camera_blocked = state == crate::privacy::CameraPrivacyState::Blocked;
                         camera_error = None;
+                        inspection.ui.inventory_incomplete = false;
                         if camera_pending_target == Some(camera_blocked) {
                             camera_pending_target = None;
                             feedback = Some(words(lang).done.to_owned());
@@ -954,6 +1147,8 @@ pub fn run_tray(
                         }
                     }
                     Err(error) => {
+                        inspection.ui.inventory_incomplete =
+                            error.is::<crate::privacy::CameraInventoryIncomplete>();
                         camera_error = Some(format!("{error:#}"));
                     }
                 }
@@ -965,12 +1160,25 @@ pub fn run_tray(
                     &settings,
                     lang,
                     &feedback,
-                    lock,
+                    MenuContext {
+                        lock,
+                        explicit_policy,
+                        inspection: &inspection.ui,
+                    },
                 ))?;
             }
             match actions.recv_timeout(Duration::from_millis(100)) {
                 Ok(Command::Exit) => break,
                 Ok(command) => {
+                    #[cfg(target_os = "macos")]
+                    if matches!(command, Command::CameraInspect) {
+                        if let Err(error) = inspection.start(lang) {
+                            inspection.ui.detail =
+                                Some(format!("Read-only camera inspection failed: {error:#}"));
+                        }
+                        next_poll = Instant::now();
+                        continue;
+                    }
                     #[cfg(target_os = "macos")]
                     if !matches!(command, Command::Camera) {
                         camera_pending_target = None;
@@ -993,7 +1201,11 @@ pub fn run_tray(
                                         &settings,
                                         lang,
                                         &feedback,
-                                        lock,
+                                        MenuContext {
+                                            lock,
+                                            explicit_policy,
+                                            inspection: &inspection.ui,
+                                        },
                                     )),
                                 )?;
                             }
@@ -1025,7 +1237,9 @@ pub fn run_tray(
                                         };
                                 })?;
                             }
+                            #[cfg(target_os = "linux")]
                             Command::Profile => {
+                                ensure!(!explicit_policy, "{}", words(lang).config_override);
                                 settings = Settings::update(|current| {
                                     current.profile = match current.profile {
                                         PrivacyProfile::Balanced => PrivacyProfile::Private,
@@ -1035,6 +1249,23 @@ pub fn run_tray(
                                     };
                                 })?;
                             }
+                            #[cfg(target_os = "macos")]
+                            Command::ProfileBalanced
+                            | Command::ProfilePrivate
+                            | Command::ProfileMeeting
+                            | Command::ProfileDevelopment => {
+                                ensure!(!explicit_policy, "{}", words(lang).config_override);
+                                let profile = match command {
+                                    Command::ProfileBalanced => PrivacyProfile::Balanced,
+                                    Command::ProfilePrivate => PrivacyProfile::Private,
+                                    Command::ProfileMeeting => PrivacyProfile::Meeting,
+                                    Command::ProfileDevelopment => PrivacyProfile::Development,
+                                    _ => unreachable!(),
+                                };
+                                settings = Settings::update(|current| current.profile = profile)?;
+                            }
+                            #[cfg(target_os = "macos")]
+                            Command::CameraInspect => unreachable!(),
                             Command::Autostart => match crate::autostart::state()? {
                                 crate::autostart::AutostartState::Enabled => {
                                     crate::autostart::disable()?
@@ -1065,7 +1296,11 @@ pub fn run_tray(
                         &settings,
                         lang,
                         &feedback,
-                        lock,
+                        MenuContext {
+                            lock,
+                            explicit_policy,
+                            inspection: &inspection.ui,
+                        },
                     ))?;
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
@@ -1354,7 +1589,7 @@ impl DesktopHost {
                             .send(action)
                             .context("tray action receiver closed")?;
                     } else {
-                        if event.kind == "ready" && event.protocol == Some(1) {
+                        if event.kind == "ready" && event.protocol == Some(2) {
                             readiness.store(true, Ordering::Release);
                         }
                         if event.kind == "error" || event.kind == "stopped" {
@@ -1386,7 +1621,7 @@ impl DesktopHost {
         {
             DesktopEvent {
                 kind,
-                protocol: Some(1),
+                protocol: Some(2),
                 ..
             } if kind == "ready" => Ok(host),
             event => bail!(
@@ -1518,6 +1753,97 @@ mod menu_tests {
         let (summary, visual) = observation_status(&snapshot, Language::En);
         assert_eq!(visual, "error");
         assert!(summary.lines().next().unwrap().contains("corespeechd"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn inspection_wait_and_completion_keep_observation_and_manual_failure_visible() {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let mut inspection = CameraInspectionWorker {
+            pending: Some(receiver),
+            ui: CameraInspectionUi {
+                inventory_incomplete: true,
+                running: true,
+                ..Default::default()
+            },
+        };
+        let feedback = Some("manual microphone action failure retained".to_owned());
+        let render = |inspection: &CameraInspectionWorker| {
+            make_view(
+                (
+                    "observed capture continues during authorization".into(),
+                    "error",
+                ),
+                MicrophoneMuteState::Mixed,
+                (true, None),
+                &Settings::default(),
+                Language::En,
+                &feedback,
+                MenuContext {
+                    lock: SessionLockState::Unknown,
+                    explicit_policy: false,
+                    inspection: &inspection.ui,
+                },
+            )
+        };
+        assert!(!inspection.poll());
+        let waiting = render(&inspection);
+        assert!(
+            !waiting
+                .items
+                .iter()
+                .find(|item| item.action == "camera_inspect")
+                .unwrap()
+                .enabled
+        );
+        assert!(
+            sender
+                .send(Ok(crate::privacy::CameraInspection {
+                    state: "unknown",
+                    complete_inventory: false,
+                    detail: "user cancelled this read-only inspection".into(),
+                    observed_at: chrono::Utc::now(),
+                    administrator_required: true,
+                    authorization: crate::privacy::CameraInspectionAuthorization::Cancelled,
+                }))
+                .is_ok()
+        );
+        assert!(inspection.poll());
+        let completed = render(&inspection);
+        let document = serde_json::to_string(&completed).unwrap();
+        assert!(document.contains(feedback.as_deref().unwrap()));
+        assert!(document.contains("user cancelled this read-only inspection"));
+        assert!(document.contains("observed capture continues during authorization"));
+        assert_eq!(completed.visual, "error");
+        assert!(
+            completed
+                .items
+                .iter()
+                .find(|item| item.action == "camera_inspect")
+                .unwrap()
+                .enabled
+        );
+        assert!(!inspection.poll());
+        let (sender, receiver) = mpsc::sync_channel(1);
+        inspection.pending = Some(receiver);
+        assert!(
+            sender
+                .send(Ok(crate::privacy::CameraInspection {
+                    state: "allowed",
+                    complete_inventory: true,
+                    detail: "administrator-approved point-in-time inventory".into(),
+                    observed_at: chrono::Utc::now(),
+                    administrator_required: false,
+                    authorization: crate::privacy::CameraInspectionAuthorization::Granted,
+                }))
+                .is_ok()
+        );
+        assert!(inspection.poll());
+        let completed = render(&inspection);
+        let document = serde_json::to_string(&completed).unwrap();
+        assert!(document.contains(feedback.as_deref().unwrap()));
+        assert!(document.contains("administrator-approved point-in-time inventory"));
+        assert_eq!(completed.visual, "error");
     }
 }
 

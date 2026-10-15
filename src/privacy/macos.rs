@@ -27,6 +27,92 @@ impl CameraPrivacyState {
         }
     }
 }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CameraInspectionAuthorization {
+    NotRequested,
+    Granted,
+    Cancelled,
+    Denied,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CameraInspection {
+    pub observed_at: chrono::DateTime<chrono::Utc>,
+    pub state: &'static str,
+    pub complete_inventory: bool,
+    pub administrator_required: bool,
+    pub authorization: CameraInspectionAuthorization,
+    pub detail: String,
+}
+
+#[derive(Debug)]
+pub struct CameraInventoryIncomplete {
+    detail: String,
+}
+impl std::fmt::Display for CameraInventoryIncomplete {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "Camera restriction status unknown: {}",
+            self.detail
+        )
+    }
+}
+impl std::error::Error for CameraInventoryIncomplete {}
+
+fn inspection(profile: CameraProfile) -> Result<CameraInspection> {
+    if profile.detail.len() > 8192 {
+        bail!("Native camera-profile diagnostic exceeds the 8192-byte limit");
+    }
+    let state = match profile.state.as_str() {
+        "allowed" if profile.complete_inventory => "allowed",
+        "blocked" if profile.owned_installed => "blocked",
+        "system_managed" => "system_managed",
+        "unknown" => "unknown",
+        _ => bail!("Inconsistent native camera-profile inventory"),
+    };
+    let authorization = match profile.authorization.as_str() {
+        "not_requested" => CameraInspectionAuthorization::NotRequested,
+        "granted" => CameraInspectionAuthorization::Granted,
+        "cancelled" => CameraInspectionAuthorization::Cancelled,
+        "denied" => CameraInspectionAuthorization::Denied,
+        _ => bail!("Unrecognized native inspection authorization outcome"),
+    };
+    if matches!(
+        authorization,
+        CameraInspectionAuthorization::Cancelled | CameraInspectionAuthorization::Denied
+    ) && (state != "unknown" || profile.complete_inventory)
+    {
+        bail!("Refused inspection cannot establish a complete camera inventory");
+    }
+    if authorization == CameraInspectionAuthorization::Granted
+        && (!profile.complete_inventory || state == "unknown")
+    {
+        bail!("Administrator approval did not establish a complete camera inventory");
+    }
+    Ok(CameraInspection {
+        observed_at: chrono::Utc::now(),
+        state,
+        complete_inventory: profile.complete_inventory,
+        administrator_required: state == "unknown" && !profile.complete_inventory,
+        authorization,
+        detail: profile.detail,
+    })
+}
+
+/// Point-in-time read-only metadata. Never updates control intent or ownership.
+pub fn camera_inspection(request_admin: bool) -> Result<CameraInspection> {
+    // No receipt is needed: diagnostics must work with corrupt/nonregular user
+    // state and must never adopt ownership from a global profile match.
+    let current = inspection(camera_request("camera_status", None, None)?)?;
+    if !request_admin || !current.administrator_required {
+        return Ok(current);
+    }
+    // The privileged query accepts no journal identity, path, command or output file.
+    inspection(camera_request("camera_status_admin", None, None)?)
+}
 #[derive(Debug, Serialize, Deserialize)]
 struct OwnedProfile {
     version: u32,
@@ -57,8 +143,22 @@ fn valid_owned(profile: &OwnedProfile) -> bool {
         && matches!(profile.intent.as_str(), "install" | "remove")
 }
 fn load(path: &Path) -> Result<Option<OwnedProfile>> {
-    match fs::read(path) {
-        Ok(bytes) => {
+    match OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
+        .open(path)
+    {
+        Ok(file) => {
+            use std::os::unix::fs::MetadataExt;
+            let metadata = file.metadata()?;
+            if !metadata.is_file() || metadata.uid() != unsafe { libc::geteuid() } {
+                bail!("camera ownership receipt is not a regular file owned by this user");
+            }
+            let mut bytes = Vec::new();
+            file.take(16_385).read_to_end(&mut bytes)?;
+            if bytes.len() > 16_384 {
+                bail!("camera ownership receipt exceeds the 16 KiB limit");
+            }
             let profile: OwnedProfile =
                 serde_json::from_slice(&bytes).context("invalid owned camera profile record")?;
             if !valid_owned(&profile) {
@@ -196,6 +296,10 @@ fn established_state(profile: &CameraProfile) -> Result<CameraPrivacyState> {
         "allowed" if profile.complete_inventory => Ok(CameraPrivacyState::Allowed),
         "blocked" if profile.owned_installed => Ok(CameraPrivacyState::Blocked),
         "system_managed" => Ok(CameraPrivacyState::SystemManaged),
+        "unknown" if !profile.complete_inventory => Err(CameraInventoryIncomplete {
+            detail: profile.detail.clone(),
+        }
+        .into()),
         _ => bail!("Camera restriction status unknown: {}", profile.detail),
     }
 }
@@ -340,6 +444,7 @@ mod tests {
             owned_installed: false,
             complete_inventory: false,
             detail: "partial scope".into(),
+            authorization: "not_requested".into(),
         };
         assert!(established_state(&metadata).is_err());
         metadata.state = "allowed".into();
@@ -361,5 +466,38 @@ mod tests {
             established_state(&metadata).unwrap(),
             CameraPrivacyState::SystemManaged
         );
+    }
+
+    #[test]
+    fn inspection_scope_and_authorization_do_not_manufacture_camera_permission() {
+        let profile = |state: &str, complete, authorization: &str| CameraProfile {
+            state: state.into(),
+            owned_installed: false,
+            complete_inventory: complete,
+            detail: "profile metadata only".into(),
+            authorization: authorization.into(),
+        };
+        let partial = inspection(profile("unknown", false, "not_requested")).unwrap();
+        assert_eq!(partial.state, "unknown");
+        assert!(partial.administrator_required);
+        let cancelled = inspection(profile("unknown", false, "cancelled")).unwrap();
+        assert_eq!(cancelled.state, "unknown");
+        assert_eq!(
+            cancelled.authorization,
+            CameraInspectionAuthorization::Cancelled
+        );
+        assert!(!cancelled.complete_inventory);
+        assert!(inspection(profile("allowed", false, "granted")).is_err());
+        assert!(inspection(profile("allowed", true, "cancelled")).is_err());
+        assert!(inspection(profile("system_managed", true, "denied")).is_err());
+        assert!(inspection(profile("unknown", true, "granted")).is_err());
+        let denied = inspection(profile("unknown", false, "denied")).unwrap();
+        assert_eq!(denied.authorization, CameraInspectionAuthorization::Denied);
+        assert!(denied.administrator_required);
+        let restricted = inspection(profile("system_managed", true, "granted")).unwrap();
+        assert_eq!(restricted.state, "system_managed");
+        assert!(!restricted.administrator_required);
+        assert!(inspection(profile("blocked", true, "granted")).is_err());
+        assert!(inspection(profile("unknown", false, "unexpected")).is_err());
     }
 }

@@ -236,6 +236,22 @@ fn root_camera_installation_absent() -> Result<()> {
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
+fn refuse_app_bundle_update(current: &Path) -> Result<()> {
+    // Check before receipts, version probes, network access or staging. A
+    // binary-only replacement would invalidate the enclosing app's seal and
+    // leave launcher/resources out of sync. Missing metadata is no exemption.
+    if current.ancestors().any(|path| {
+        path.extension()
+            .is_some_and(|extension| extension.as_encoded_bytes().eq_ignore_ascii_case(b"app"))
+    }) {
+        bail!(
+            "mcw update cannot replace a binary inside a macOS .app bundle. Quit MicCamWatch, then replace the whole MicCamWatch.app from the matching macOS DMG. The application, files, permissions and protection state were preserved; no update was downloaded."
+        );
+    }
+    Ok(())
+}
+
 enum Installation {
     Managed {
         prefix: PathBuf,
@@ -251,6 +267,15 @@ impl Installation {
     }
 
     fn inspect_at(current: &Path) -> Result<Self> {
+        #[cfg(target_os = "macos")]
+        {
+            refuse_app_bundle_update(current)?;
+            // Darwin may expose an invocation alias; an outside symlink must
+            // not hide that the physical executable belongs to an app.
+            if let Ok(physical) = current.canonicalize() {
+                refuse_app_bundle_update(&physical)?;
+            }
+        }
         if !current.is_absolute() || current.file_name() != Some(OsStr::new("mcw")) {
             bail!("mcw update requires an absolute installed executable named mcw");
         }
@@ -829,6 +854,50 @@ mod tests {
         let target = scratch.executable()?;
         assert!(Installation::inspect_at(&target).is_err());
         assert_eq!(std::fs::read(&target)?, b"owned fixture contents\n");
+        Ok(())
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn app_bundle_update_refuses_before_reading_or_changing_files() -> Result<()> {
+        let scratch = Scratch::new()?;
+        for layout in [
+            "MicCamWatch.app/Contents/MacOS/mcw",
+            "Renamed.APP/Contents/MacOS/mcw",
+            "MicCamWatch.app/Contents/bin/mcw",
+        ] {
+            let target = scratch.0.join(layout);
+            std::fs::create_dir_all(target.parent().unwrap())?;
+            std::fs::write(&target, b"bundle bytes must remain unchanged")?;
+            let before = std::fs::metadata(&target)?;
+            let error = Installation::inspect_at(&target).err().unwrap();
+            assert!(
+                error
+                    .to_string()
+                    .contains("replace the whole MicCamWatch.app")
+            );
+            assert_eq!(
+                std::fs::read(&target)?,
+                b"bundle bytes must remain unchanged"
+            );
+            assert_eq!(
+                std::fs::metadata(&target)?.permissions().mode(),
+                before.permissions().mode()
+            );
+            let alias = scratch.0.join("mcw");
+            symlink(&target, &alias)?;
+            let error = Installation::inspect_at(&alias).err().unwrap();
+            assert!(
+                error
+                    .to_string()
+                    .contains("replace the whole MicCamWatch.app")
+            );
+            std::fs::remove_file(alias)?;
+            std::fs::remove_file(&target)?;
+            // Refusal is structural, not conditional on a readable executable.
+            assert!(refuse_app_bundle_update(&target).is_err());
+        }
+        assert!(refuse_app_bundle_update(&scratch.0.join("ordinary/mcw")).is_ok());
         Ok(())
     }
 

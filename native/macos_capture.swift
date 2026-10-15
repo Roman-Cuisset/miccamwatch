@@ -190,6 +190,19 @@ guard let mode = arguments.first,
 let args = Array(arguments.dropFirst())
 // The persistent AppKit protocol is not a one-shot Output envelope.
 if mode == "desktop" { desktopMain(args: args) }
+// A tray can exit while an inspection worker is awaiting consent. Do not leave
+// its confirmation or nonprivileged utilities orphaned after the Rust owner dies.
+let requestParent = getppid()
+guard requestParent > 1 else { exit(1) }
+let parentExit = DispatchSource.makeProcessSource(identifier: requestParent, eventMask: .exit,
+                                                queue: .global(qos: .utility))
+parentExit.setEventHandler {
+    // Rust creates a private request group. Never signal an inherited shell group.
+    if getpgrp() == getpid() { kill(0, SIGKILL) }
+    exit(1)
+}
+parentExit.resume()
+guard getppid() == requestParent else { exit(1) }
 
 var output = Output()
 switch mode {
