@@ -43,7 +43,7 @@ var compileFailure: NSDictionary?
 demand(script.compileAndReturnError(&compileFailure), "fixed authorization AppleScript does not compile")
 let perl = Process()
 perl.executableURL = URL(fileURLWithPath: "/usr/bin/perl")
-perl.arguments = ["-T", "-c", "-e", profileInventoryProgram, "all"]
+perl.arguments = ["-T", "-c", "-e", profileInventoryProgram]
 try perl.run()
 perl.waitUntilExit()
 demand(perl.terminationStatus == 0, "bounded inventory supervisor does not compile")
@@ -51,7 +51,7 @@ if CommandLine.arguments.contains("--system-scope") {
     let query = Process()
     query.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
     query.arguments = ["-n", "/usr/bin/env", "-i", "PATH=/usr/bin:/bin:/usr/sbin:/sbin",
-                       "LC_ALL=C", "/usr/bin/perl", "-T", "-e", profileInventoryProgram, "all"]
+                       "LC_ALL=C", "/usr/bin/perl", "-T", "-e", profileInventoryProgram]
     let pipe = Pipe()
     query.standardOutput = pipe
     query.standardError = FileHandle.standardError

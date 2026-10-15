@@ -190,8 +190,10 @@ use strict;
 use IO::Select;
 use POSIX qw(WNOHANG);
 use Time::HiRes qw(clock_gettime CLOCK_MONOTONIC sleep);
+# Environment values remain tainted even after env -i; establish literals before exec.
+%ENV = (PATH => "/usr/bin:/bin:/usr/sbin:/sbin", LC_ALL => "C");
 $SIG{CHLD} = "DEFAULT";
-@ARGV == 1 && ($ARGV[0] eq "all" || $ARGV[0] eq "user") or exit 126;
+@ARGV == 0 or exit 126;
 pipe(my $reader, my $writer) or exit 126;
 my $pid = fork();
 defined($pid) or exit 126;
@@ -200,8 +202,7 @@ if ($pid == 0) {
     open(STDOUT, ">&", $writer) or exit 126;
     close($writer);
     open(STDERR, ">", "/dev/null") or exit 126;
-    my @args = ("show", "-type", "configuration", "-output", "stdout-xml");
-    push(@args, "-all") if $ARGV[0] eq "all";
+    my @args = ("show", "-type", "configuration", "-output", "stdout-xml", "-all");
     exec("/usr/bin/profiles", @args);
     exit 126;
 }
@@ -322,7 +323,7 @@ func decodeCameraProfileInventory(_ data: Data, completeInventory: Bool,
 private func administratorProfileScript() throws -> NSAppleScript {
     // Only the immutable program is quoted; no request value is interpolated.
     let quotedProgram = "'" + profileInventoryProgram.replacingOccurrences(of: "'", with: "'\\''") + "'"
-    let command = "/usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C /usr/bin/perl -T -e " + quotedProgram + " all"
+    let command = "/usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C /usr/bin/perl -T -e " + quotedProgram
     let appleScriptCommand = command.replacingOccurrences(of: "\\", with: "\\\\")
         .replacingOccurrences(of: "\"", with: "\\\"").replacingOccurrences(of: "\n", with: "\\n")
     let source = "with timeout of 110 seconds\n do shell script \"" + appleScriptCommand + "\" with administrator privileges\nend timeout"
