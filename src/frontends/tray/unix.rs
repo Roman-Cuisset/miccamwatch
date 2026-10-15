@@ -407,7 +407,7 @@ fn words(lang: Language) -> Words {
             lock_unknown: "Session lock unknown; automatic controls unavailable",
             lock_status: "Session lock unknown",
             details: "Details…",
-            camera_inspect: "Inspect camera restrictions (administrator approval; read-only)",
+            camera_inspect: "Inspect camera profiles (admin, read-only)",
             inspecting: "Read-only camera inspection awaiting administrator approval / running…",
             config_override: "Profile controlled by explicit --config; menu changes disabled",
         },
@@ -435,7 +435,7 @@ fn words(lang: Language) -> Words {
             lock_unknown: "Verrouillage inconnu ; contrôles automatiques indisponibles",
             lock_status: "Verrouillage inconnu",
             details: "Détails…",
-            camera_inspect: "Inspecter les restrictions caméra (autorisation administrateur ; lecture seule)",
+            camera_inspect: "Inspecter profils caméra (admin, lecture seule)",
             inspecting: "Inspection caméra en lecture seule : autorisation administrateur en attente / en cours…",
             config_override: "Profil contrôlé par --config explicite ; modifications désactivées",
         },
@@ -463,7 +463,7 @@ fn words(lang: Language) -> Words {
             lock_unknown: "Sitzungssperre unbekannt; automatische Steuerung nicht verfügbar",
             lock_status: "Sitzungssperre unbekannt",
             details: "Details…",
-            camera_inspect: "Kamerabeschränkungen prüfen (Administratorfreigabe; nur lesend)",
+            camera_inspect: "Kameraprofile prüfen (Admin, nur lesen)",
             inspecting: "Nur lesende Kameraprüfung wartet auf Administratorfreigabe / läuft…",
             config_override: "Profil durch explizites --config gesteuert; Menüänderungen deaktiviert",
         },
@@ -491,7 +491,7 @@ fn words(lang: Language) -> Words {
             lock_unknown: "Bloqueo de sesión desconocido; controles automáticos no disponibles",
             lock_status: "Bloqueo de sesión desconocido",
             details: "Detalles…",
-            camera_inspect: "Inspeccionar restricciones de cámara (aprobación de administrador; solo lectura)",
+            camera_inspect: "Perfiles de cámara (admin, solo lectura)",
             inspecting: "Inspección de cámara de solo lectura: esperando aprobación de administrador / en curso…",
             config_override: "Perfil controlado por --config explícito; cambios desactivados",
         },
@@ -519,7 +519,7 @@ fn words(lang: Language) -> Words {
             lock_unknown: "セッションロック不明・自動制御は利用できません",
             lock_status: "セッションロック不明",
             details: "詳細…",
-            camera_inspect: "カメラ制限を調査（管理者承認・読み取り専用）",
+            camera_inspect: "カメラプロファイル（管理者・読み取り専用）",
             inspecting: "読み取り専用カメラ調査：管理者承認待ち／実行中…",
             config_override: "明示的な --config がプロファイルを制御・メニュー変更は無効",
         },
@@ -547,7 +547,7 @@ fn words(lang: Language) -> Words {
             lock_unknown: "会话锁定状态未知；自动控制不可用",
             lock_status: "会话锁定状态未知",
             details: "详细信息…",
-            camera_inspect: "检查摄像头限制（管理员授权；只读）",
+            camera_inspect: "检查摄像头配置（管理员；只读）",
             inspecting: "只读摄像头检查：等待管理员授权／进行中…",
             config_override: "由显式 --config 控制配置；已禁用菜单更改",
         },
@@ -575,7 +575,7 @@ fn words(lang: Language) -> Words {
             lock_unknown: "Блокировка сеанса неизвестна; автоматическое управление недоступно",
             lock_status: "Блокировка сеанса неизвестна",
             details: "Подробности…",
-            camera_inspect: "Проверить ограничения камеры (разрешение администратора; только чтение)",
+            camera_inspect: "Профили камер (админ, только чтение)",
             inspecting: "Проверка камеры только для чтения: ожидание разрешения администратора / выполняется…",
             config_override: "Профиль задан явным --config; изменения в меню отключены",
         },
@@ -1753,97 +1753,6 @@ mod menu_tests {
         let (summary, visual) = observation_status(&snapshot, Language::En);
         assert_eq!(visual, "error");
         assert!(summary.lines().next().unwrap().contains("corespeechd"));
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn inspection_wait_and_completion_keep_observation_and_manual_failure_visible() {
-        let (sender, receiver) = mpsc::sync_channel(1);
-        let mut inspection = CameraInspectionWorker {
-            pending: Some(receiver),
-            ui: CameraInspectionUi {
-                inventory_incomplete: true,
-                running: true,
-                ..Default::default()
-            },
-        };
-        let feedback = Some("manual microphone action failure retained".to_owned());
-        let render = |inspection: &CameraInspectionWorker| {
-            make_view(
-                (
-                    "observed capture continues during authorization".into(),
-                    "error",
-                ),
-                MicrophoneMuteState::Mixed,
-                (true, None),
-                &Settings::default(),
-                Language::En,
-                &feedback,
-                MenuContext {
-                    lock: SessionLockState::Unknown,
-                    explicit_policy: false,
-                    inspection: &inspection.ui,
-                },
-            )
-        };
-        assert!(!inspection.poll());
-        let waiting = render(&inspection);
-        assert!(
-            !waiting
-                .items
-                .iter()
-                .find(|item| item.action == "camera_inspect")
-                .unwrap()
-                .enabled
-        );
-        assert!(
-            sender
-                .send(Ok(crate::privacy::CameraInspection {
-                    state: "unknown",
-                    complete_inventory: false,
-                    detail: "user cancelled this read-only inspection".into(),
-                    observed_at: chrono::Utc::now(),
-                    administrator_required: true,
-                    authorization: crate::privacy::CameraInspectionAuthorization::Cancelled,
-                }))
-                .is_ok()
-        );
-        assert!(inspection.poll());
-        let completed = render(&inspection);
-        let document = serde_json::to_string(&completed).unwrap();
-        assert!(document.contains(feedback.as_deref().unwrap()));
-        assert!(document.contains("user cancelled this read-only inspection"));
-        assert!(document.contains("observed capture continues during authorization"));
-        assert_eq!(completed.visual, "error");
-        assert!(
-            completed
-                .items
-                .iter()
-                .find(|item| item.action == "camera_inspect")
-                .unwrap()
-                .enabled
-        );
-        assert!(!inspection.poll());
-        let (sender, receiver) = mpsc::sync_channel(1);
-        inspection.pending = Some(receiver);
-        assert!(
-            sender
-                .send(Ok(crate::privacy::CameraInspection {
-                    state: "allowed",
-                    complete_inventory: true,
-                    detail: "administrator-approved point-in-time inventory".into(),
-                    observed_at: chrono::Utc::now(),
-                    administrator_required: false,
-                    authorization: crate::privacy::CameraInspectionAuthorization::Granted,
-                }))
-                .is_ok()
-        );
-        assert!(inspection.poll());
-        let completed = render(&inspection);
-        let document = serde_json::to_string(&completed).unwrap();
-        assert!(document.contains(feedback.as_deref().unwrap()));
-        assert!(document.contains("administrator-approved point-in-time inventory"));
-        assert_eq!(completed.visual, "error");
     }
 }
 

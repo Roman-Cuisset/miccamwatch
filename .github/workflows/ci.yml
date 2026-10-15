@@ -712,15 +712,15 @@ jobs:
         shell: bash
         run: python3 "$RUNNER_TEMP/native-smoke.py"
       - name: Verify compact native macOS menu and complete details
-        if: runner.os == 'macOS'
+        if: ${{ !cancelled() && runner.os == 'macOS' && env.MCW_RELEASE_BINARY != '' }}
         shell: bash
         run: python3 installer/tests/native_macos_menu.py --proof "$RUNNER_TEMP/native-proof/menu-width" --isolated-clipboard
       - name: Exercise read-only macOS profile inspection and native cancellation
-        if: runner.os == 'macOS'
+        if: ${{ !cancelled() && runner.os == 'macOS' && env.MCW_RELEASE_BINARY != '' }}
         shell: bash
         run: python3 -B installer/tests/native_macos_profiles.py --binary "$MCW_RELEASE_BINARY" --proof "$RUNNER_TEMP/native-proof/macos-profiles"
       - name: Exercise copied macOS app from real disk image
-        if: runner.os == 'macOS'
+        if: ${{ !cancelled() && runner.os == 'macOS' && env.MCW_RELEASE_BINARY != '' }}
         shell: bash
         run: |
           set +e
@@ -735,7 +735,7 @@ jobs:
             exit "$result"
           fi
       - name: Exercise genuine macOS portable bootstrap and self-update
-        if: runner.os == 'macOS'
+        if: ${{ !cancelled() && runner.os == 'macOS' && env.MCW_RELEASE_BINARY != '' }}
         shell: bash
         env:
           PACKAGE: miccamwatch-macos-${{ matrix.arch }}.tar.gz
