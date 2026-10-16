@@ -1327,5 +1327,11 @@ posix_spawn with inherited grouping and owned waitpid cleanup; the native fixtur
 checks the actual utility PGID. Rust observes helper exit with waitid WNOWAIT,
 terminates residual group members while the helper identity is still reserved,
 then reaps, including abnormal helper exits. ECHILD never permits a later signal
-against a potentially reused identity. Static review found no further issue;
-exact final native qualification is required before publication.
+against a potentially reused identity. Static review found no further issue.
+[CI38861126385](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38861126385)
+passed all four platforms on source `85fc7c93f6ee1eb284b65190bbfed56c701adc2d`.
+Both native Macs confirmed the actual ordinary utility inherits its request
+PGID, the scope/ownership/refusal boundaries, passive unknown inspection,
+native Cancel/owner-exit cleanup and the preauthorized read-only global query.
+The final harness-only SIGTERM-resistant cleanup fixture remains separately
+subject to native qualification before publication.

@@ -190,7 +190,7 @@ jobs:
           prerelease: ${{ vars.WINDOWS_RELEASE_APPROVED != 'true' }}
           make_latest: ${{ vars.WINDOWS_RELEASE_APPROVED == 'true' }}
           body: |
-            ## Partial capture coverage and actionable Windows tray details
+            ## Native macOS app, scoped diagnostics and direct profiles
 
             - Windows ZIP/MSI publication requires the explicit repository gate WINDOWS_RELEASE_APPROVED=true and a successful Windows build. This gate is independent of signing: a configured certificate signs and verifies both EXEs and MSI; absent a certificate they are unsigned. Neither signing, tests nor provenance is antivirus clearance. Quarantined executables are not restored or automatically reinstalled.
             - With approved Windows artifacts, this coordinated release is stable/latest for Windows, Linux and both macOS architectures. Otherwise it remains an explicitly selected Unix prerelease and does not replace stable latest. Use the public Unix installer without --version to follow stable, or --version ${{ github.ref_name }} to pin this release.
