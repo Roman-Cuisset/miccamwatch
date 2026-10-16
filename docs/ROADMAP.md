@@ -1,6 +1,6 @@
 # Roadmap technique MicCamWatch
 
-Dernière mise à jour : **2026-10-14**. Responsable : lead architecture/développement.
+Dernière mise à jour : **2026-10-15**. Responsable : lead architecture/développement.
 Base publiée : [v0.17.2 stable/latest](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.17.2), source `a58c8b9f3a967589a576879d6d27bfdbc40f9dff` ; [CI exacte avant tag](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38361454701) et [release native](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38364052525) vertes ; sept assets/digests et six attestations exactes vérifiés. Paire PC publique 0.17.2 conservée ; le 14/10 seule garde caméra réactivée après accord UAC explicite, micro toujours protégé/coupé. Site Pages corrigé, traduction complète en publication indépendante, aucun nouveau tag/binaire MCW.
 
 Ce document planifie les prochains travaux et consigne les lots livrés. Les fonctionnalités encore proposées ne sont pas annoncées comme disponibles ; les livraisons sont explicitement marquées dans le tableau et le journal. Les complexités sont des estimations de conception, pas des délais ni des mesures.
@@ -37,9 +37,9 @@ Les identifiants sont stables. À chaque livraison, remplacer l'état par **En c
 | Lot | Décision / état actuel | Complexité | Dépendance principale |
 | --- | --- | --- | --- |
 | P0-CAM-TRAY | **Publié 0.17.2 et installé sur PC**. Couverture partielle distincte, captures conservées, raisons natives détaillées ; Zoom PID brut valide/report FILETIME zéro, attribution prudente maintenue. Vrai tray PC avec Ktalk actif : menu compact, détails complets, icône rouge ; infobulle résiduelle suivie dans TRAY-WIN | Moyenne | Pas de certification matérielle ; timestamp nul reste Unknown, jamais autorité de kill |
-| P0-UNIX-DIAG | **Source 0.18.0 en requalification, non publiée** : captures conservées, partiel orange, causes dans Details, lecture inconnue distincte d'une action échouée | Moyenne | CI 38613211447 échouée : assertion Linux obsolète, rustls et Quit Intel ; correctifs intégrés, nouveau smoke requis |
-| P0-UNIX-OBS | **Implémenté en source, qualification en cours** : inspection profils macOS passive ou administrateur explicite en lecture seule, résultat horodaté et refus/annulation ; aucune élévation pour les limites API | Élevée | Vrais parcours natifs à qualifier ; UAC/Polkit existants inchangés, MCW reste dans la session utilisateur |
-| P1-MAC-MENU | **Implémenté en source 0.18.0, non publié** : quatre profils directs cochés, marque MCW et Details au-dessus d'Exit ; IPC desktop v2 sans shim | Moyenne | Requalification AppKit sept langues et priorités `--config` ; frontend/helper reconstruits ensemble |
+| P0-UNIX-DIAG | **Qualifié en source 0.18.0 `40ed84d`, non publié** : captures conservées, avertissement distinct, causes dans Details, lecture inconnue distincte d'une action échouée | Moyenne | CI38716101572 quatre OS verte ; corrections assertion Linux/rustls/Quit Intel prouvées, limites de mesure et matérielles conservées |
+| P0-UNIX-OBS | **Qualifié logiciellement en source** : inspection macOS passive sans état écrit, lecture globale fixe préautorisée, Cancel natif et disparition du helper au départ du propriétaire | Élevée | Consentement OS Accepter/Refuser avec identifiants humains non exercé ; pas de grant TCC ni preuve de capture, UAC/Polkit inchangés |
+| P1-MAC-MENU | **AppKit réel qualifié 0.18.0, non publié** : quatre profils directs cochés, marque MCW template/badges, Details au-dessus d'Exit, sept langues et `--config` prioritaire | Moyenne | IPC desktop v2 frontend/helper appariés ; captures rendues et vraies fenêtres relues, données de capture simulées explicitement |
 | SITE-PAGES | **Publié et vérifié sur HTTPS Pages**, source web `07eb173` : sept langues complètes, installateur exact, ZIP complet 34 fichiers ; aucune nouvelle version binaire MCW | Moyenne | Maintenir CI/bornes/permissions ; ancien export local Windows refusé EPERM, préservé |
 | SITE-TOKENS | **Corrigé sur Pages, vérifié après déploiement `f1344bf`**. Build Git exécuté depuis racine dépôt, output `site-dist`, version/source/checksum réels ; source HTML brute n'est plus un entrypoint | Faible à Moyenne | Gardes build, source unique des faits, aucun token résiduel |
 | SITE-L10N | **Publié et exercé en production** : en/fr/de/es/ja/zh/ru, 223 messages chacun, SEO/ARIA/copie/404/social ; desktop/mobile/clavier/no-JS locaux et sept préfixes HTTPS/404/canonical réels | Moyenne | CI site38530338888 réussie ; images171 restent historiques, CSP reste restrictive |
@@ -51,7 +51,7 @@ Les identifiants sont stables. À chaque livraison, remplacer l'état par **En c
 | P1-HB | Bloqué en qualification : Cellar ARM group-writable 0775, chaîne source Intel z3 défaillante ; aucune publication du tap | Moyenne | Préfixe sûr sans relâcher contrôles et prérequis Homebrew amont fonctionnels |
 | P1-AUR | Validé natif : makepkg/pacman/PipeWire/PTY ; publication AUR bloquée, accès SSH mainteneur non autorisé | Moyenne | Publication du correctif/source épinglée et clé SSH mainteneur AUR autorisée |
 | P1-WG | Winget : à faire | Moyenne | Identité MSI et upgrades contrôlés |
-| P1-MAC-APP-DMG | **Packaging natif implémenté, non publié** : DMG ARM/Intel avec app LSUIElement, logo et launcher exec direct ; tarballs conservés, update binaire seul refusé dans une app | Moyenne | Vrai montage/copie/Finder/menu/Quit en CI ; ad-hoc seulement, pas de Developer ID/notarisation ni autostart/protection implicites |
+| P1-MAC-APP-DMG | **DMG ARM/Intel construits et lancement Finder/instance/Exit qualifiés ; livraison complète en cours** | Moyenne | Compléter déplacement/remplacement, préférences/historique/autostart possédé/refus/retrait puis publication versionnée ; ad-hoc seulement, aucune activation implicite |
 | P1-ARM | Linux ARM64 : à faire | Élevée | ABI/sysroot, installation et tests natifs |
 | P1-UPGRADE | **Partiel, priorité corrective** : migration privée Windows 0.17.1→0.17.2 + no-op et neuf migrations installer Unix validés ; handoff legacy à consolider. Nouveau défaut réel : redémarrage du tray hérite des flux standard et bloque capture stdout de l'updater ; ancien CLI mappé laisse warning backup | Moyenne | Handoff natif/stdio bornés, receipts/PATH/root/package manager ; pas de kill ni release implicite |
 | P1-UNINSTALL | **Demandé, à faire** : désinstallation rapide par `mcw uninstall` ou point d'entrée équivalent, adapté à la provenance réelle de l'installation | Moyenne | Refus si protection/restauration active, identité/ownership exacts, délégation au gestionnaire MSI/Homebrew/AUR et conservation des données |
@@ -260,8 +260,8 @@ nom libre au RPC du 2026-10-11, aucune soumission ou acceptation officielle.
 
 **Demande utilisateur, capture jointe :** ajouter un **`.dmg` pour macOS**,
 une **`.app` prête à utiliser**, et démarrer directement dans la **barre de menus**
-à l'ouverture de cette application. État : demandé, **non livré** ; les archives
-CLI actuelles ne constituent pas ce livrable.
+à l'ouverture de cette application. **Source et deux DMG CI disponibles, non
+publiés en release** ; critères de remplacement/retrait en qualification complémentaire.
 
 **Livrable :** image disque contenant `MicCamWatch.app`, installation par Finder
 vers Applications et ouverture normale sans compilation ni lancement préalable
@@ -788,7 +788,7 @@ est cohérente avec Mio [INFERENCE], non tracée. Échantillonnage au-delà de 5
 
 **Lot repris :** source **0.18.0 non publiée**, car nouvelle commande macOS et
 rupture IPC desktop v2. Diagnostic administrateur ciblé, profils directs, icône
-MCW et packaging app/dmg intégrés ; qualification native composée en cours.
+MCW et packaging app/dmg intégrés ; CI38716101572 quatre OS entièrement verte.
 Le site, les recettes publiques et la paire PC restent **0.17.2**. Aucun tag,
 restart utilisateur, mute/unmute, Block/Allow, profil, autostart, permission ou
 application capturante modifié sur le PC.
@@ -825,13 +825,28 @@ PID/flux et le verrouillage public inconnu sont des limites API, pas des défaut
 réparables par admin. Aucun contournement TCC/SIP/quarantaine, aucune élévation
 globale, aucune prétention d'observer les clients caméra après élévation.
 
-**Qualification intégrée :** scénario natif prévu : CLI passive réelle, Cancel
-AppKit avant demande OS, parser de production et lecture globale fixe avec
-l'autorisation sudo préexistante du runner jetable. Cela ne prouve pas le clic
-Accepter/Refuser dans le dialogue OS avec identifiants humains ; cette limite
-reste explicite. Le relevé du Mac utilisateur reste une preuve distincte.
+**Qualification intégrée réussie :** [CI38716101572](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38716101572),
+source `40ed84d81f8cbcb978684b045385f68d7d8400da`, Windows/Linux/macOS ARM/Intel.
+Sur les deux Mac : vraie CLI passive sort 2 avec scope incomplet et proposition
+admin, sans état créé ; parser/bornes/ownership, Cancel AppKit avant demande OS,
+fermeture du propriétaire et commande globale fixe sous sudo préautorisé réussis.
+La lecture globale retourne `allowed` pour les seuls profils, sans ownership
+adopté ; ce n'est ni TCC ni disponibilité matérielle. Le PATH hérité de `env -i`
+restait tainted dans Perl `-T` : affectation littérale interne corrigée, protection
+`-T` conservée, avant/après reproduit et lecture native confirmée.
+
+Les clics Accepter/Refuser du dialogue OS avec identifiants humains restent non
+exercés. La cohérence Granted/Cancelled/Denied est testée à la frontière Rust ;
+aucun clic ou grant OS inventé. Le relevé du Mac utilisateur reste indépendant.
 
 ## P1-MAC-MENU — Retours AppKit à traiter
+
+**État :** critères visuels et choix directs qualifiés en source par la CI
+ci-dessus ; navigation clavier complémentaire en qualification. Menus longs
+399 pt, détails complets et Copy all natif ;
+cas quatre sélections, priorité config explicite, partial→recovery et badges
+clair/sombre 1×/2×. Le badge macOS template respecte le contraste système ; ne
+pas promettre une couleur orange sur cette icône monochrome.
 
 - **Profil :** sous-menu avec choix direct Balanced/Private/Meeting/Development,
   état sélectionné visible ; ne plus imposer le cycle successif. Un `--config`

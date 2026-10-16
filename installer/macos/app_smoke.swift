@@ -50,7 +50,9 @@ while Date() < deadline {
         guard AXUIElementPerformAction(exitItem, kAXPressAction as CFString) == .success else {
             stop("real native Exit menu press failed")
         }
-        print("Pressed real native Exit menu item")
+        // The orchestrator separately proves readiness and both owned processes
+        // retire. A successful AX press alone is not process-exit evidence.
+        print("{\"action\":\"AXPress\",\"title\":\"Exit\",\"helper_pid\":\(pid),\"native_menu_press\":\"passed\"}")
         exit(0)
     }
     if !pressed {

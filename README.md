@@ -1,6 +1,6 @@
 # miccamwatch
 
-`mcw` monitors microphone and camera access using platform-specific evidence. Windows uses native capture and privacy APIs; Linux and macOS 15+ provide native monitoring, desktop frontends and scoped controls with narrower evidence. It supports high-contrast terminal colors, seven display languages, policy-driven trust validation, JSONL history and native event notifications. Detailed evidence remains in English for stable machine-readable diagnostics. The coordinated `v0.17.2` distribution includes Windows ZIP/MSI, Linux x64 and macOS Apple Silicon/Intel packages; previous release tags and assets remain unchanged.
+`mcw` monitors microphone and camera access using platform-specific evidence. Windows uses native capture and privacy APIs; Linux and macOS 15+ provide native monitoring, desktop frontends and scoped controls with narrower evidence. It supports high-contrast terminal colors, seven display languages, policy-driven trust validation, JSONL history and native event notifications. Detailed evidence remains in English for stable machine-readable diagnostics. Distribution covers Windows ZIP/MSI, Linux x64 and macOS Apple Silicon/Intel CLI archives and native application disk images; previous release tags and assets remain immutable.
 
 ## macOS camera activity
 
@@ -278,14 +278,14 @@ unchanged protections were verified read-only instead, without rerunning update.
 The private migration also retained a mapped-old-CLI cleanup warning; no security
 protection or quarantine was bypassed.
 
-## Unreleased 0.18.0 — Unix diagnostics and native macOS application
+## v0.18.0 — Unix diagnostics and native macOS application
 
-Source changes only; published binaries and installation recipes remain 0.17.2.
+Version 0.18.0 adds the following capabilities; publication and qualification status is recorded in ROADMAP.
 The minor version covers the new macOS diagnostic command and desktop IPC v2;
 the Rust frontend and its embedded native helper must be built together.
 
 The Unix tray keeps observed active/ready clients visible during incomplete
-observation, with an orange warning and full collector reasons in Details.
+observation, with a distinct warning badge and full collector reasons in Details.
 An unknown camera restriction read is not a failed action or camera permission.
 Manual profile approval remains available; unrelated action failures stay visible.
 
@@ -321,6 +321,37 @@ Native qualification and its GUI/authorization/hardware limits are recorded in
 [ROADMAP](docs/ROADMAP.md#p0-unix-obs--causes-réelles-permissions-et-autorisations-utiles).
 No interactive administrator approval or physical capture claim follows from
 compilation or a hosted runner without the required hardware/authorization.
+
+### macOS application (DMG)
+
+Choose Apple Silicon (`aarch64`) or Intel (`x86_64`). Mount the matching DMG,
+drag `MicCamWatch.app` onto its Applications shortcut, then open the copied app.
+No Terminal or development tools are needed to start the menu bar. The app is
+ad-hoc sealed only; a checksum or attestation does not replace Developer ID
+signing, notarization or the user's Gatekeeper decision.
+
+For manual replacement, quit MCW and copy the **whole app** from the new DMG to
+the same location. Do not replace only `Contents/MacOS/mcw`. Preferences and
+history live outside the app, at paths reported by the bundled CLI:
+
+```sh
+"/Applications/MicCamWatch.app/Contents/MacOS/mcw" config settings-path
+"/Applications/MicCamWatch.app/Contents/MacOS/mcw" history path
+```
+
+If you explicitly own a login registration, refresh it after replacement:
+
+```sh
+"/Applications/MicCamWatch.app/Contents/MacOS/mcw" autostart refresh
+```
+
+Refresh must not enable dormant/disabled intent or adopt an unrelated registration.
+Before moving an app with owned autostart, disable that registration from its
+old bundled CLI; re-enable from the new location only if you still choose login
+startup. For removal, disable owned autostart before quitting and deleting only
+the app. Preferences/history are retained. Quit or deleting the app does not
+implicitly restore device/profile changes; handle any owned restriction explicitly
+before removal. Never remove TCC, SIP, quarantine or unrelated launch registrations.
 
 
 ## Commands

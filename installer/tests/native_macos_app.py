@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Real DMG mount/copy/update-refusal and Finder launch/native Exit smoke.
+"""Real DMG/Finder/Exit, relocation, whole-app replacement and removal smoke.
 
-Run only on a disposable macOS 15+ runner, never a user's installation. Uses
-open --env to isolate the launched app without modifying launchd's environment.
-Aqua and preexisting Accessibility for the compiled driver are prerequisites;
-absence is recorded as unavailable with exit 77 (not PASS). Does not grant TCC,
-remove quarantine, bypass Gatekeeper, enable autostart or control capture devices.
+Run only on a disposable macOS 15+ ordinary-user runner. open --env isolates
+Finder launches. LaunchAgent scenarios additionally require a GitHub-hosted
+runner and absent login-account product state, because launchd does not inherit
+the invoking CLI's private HOME. Never overwrite existing login-account state.
+Aqua and preexisting Accessibility are prerequisites for native Exit proof;
+absence is unavailable/partial (exit 77), never PASS. Does not grant TCC,
+remove quarantine, bypass Gatekeeper or control capture devices.
 """
 import argparse
 import ctypes
@@ -15,8 +17,10 @@ import os
 from pathlib import Path
 import platform
 import plistlib
+import pwd
 import stat
 import subprocess
+import shutil
 import tempfile
 import time
 
@@ -48,10 +52,15 @@ def main():
     args = parser.parse_args()
     require(platform.system() == 'Darwin', 'native DMG smoke requires macOS')
     require(int(platform.mac_ver()[0].split('.')[0]) >= 15, 'macOS 15+ required')
+    require(os.getuid() != 0 and os.geteuid() == os.getuid(),
+            'run smoke as an ordinary user, without root/sudo/setuid')
     proof = args.proof.resolve()
     proof.mkdir(parents=True, exist_ok=True)
     report = dict(status='failed', device_control_tested=False, physical_capture_tested=False,
-                  developer_id_or_notarization_asserted=False)
+                  developer_id_or_notarization_asserted=False,
+                  cross_version_app_upgrade_tested=False,
+                  replacement_scope='same-build whole-bundle replacement; first public .app',
+                  os_authorization_granted=False)
 
     def record(name, argv, env=None, codes=(0,), timeout=60):
         result = subprocess.run([str(arg) for arg in argv], capture_output=True,
@@ -68,13 +77,22 @@ def main():
 
     repo = Path(__file__).resolve().parents[2]
     try:
-        with tempfile.TemporaryDirectory(prefix='mcw-app-', dir='/tmp') as directory:
-            work = Path(directory).resolve()
+        directory = tempfile.mkdtemp(prefix='mcw-app-', dir='/tmp')
+        work = Path(directory).resolve()
+        report['sandbox'] = str(work)
+        cleanup_safe = True
+        try:
             mount = work / 'mount'
             mount.mkdir()
             attached = False
             cli = None
             env = None
+            login_env = None
+            login_roots = {}
+            login_ancestors = {}
+            login_preserved = {}
+            owned_autostart = False
+            service = 'gui/' + str(os.getuid()) + '/com.roman-cuisset.miccamwatch.tray'
             try:
                 record('mount', ['hdiutil', 'attach', '-readonly', '-nobrowse', '-noautoopen',
                                  '-mountpoint', mount, args.dmg.resolve()])
@@ -107,10 +125,66 @@ def main():
                            XDG_RUNTIME_DIR=str(runtime), LANG='en_US.UTF-8', LC_ALL='en_US.UTF-8')
                 sentinel = home / 'unrelated-user-file'
                 sentinel.write_bytes(b'preserve user files and permissions\n')
+                sentinel_before = (sentinel.read_bytes(), stat.S_IMODE(sentinel.stat().st_mode),
+                                   sentinel.stat().st_ino)
+                def seed_state(prefix, state_env):
+                    paths = {}
+                    for name, command in (('settings', ['config', 'settings-path']),
+                                          ('history', ['history', 'path'])):
+                        path = Path(record(prefix + '-' + name + '-path',
+                                    [cli, *command], env=state_env).stdout.decode().strip())
+                        require(path.is_absolute() and path.name ==
+                                ('settings.toml' if name == 'settings' else 'history.jsonl'),
+                                'CLI returned an unexpected persistent state path')
+                        paths[name] = path
+                    return paths
+
+                def write_state(paths):
+                    settings = (b'notifications_enabled = false\nsound_enabled = false\n'
+                                b'show_ready = false\nhistory_enabled = false\nprofile = "development"\n'
+                                b'mute_on_lock = false\nblock_camera_on_lock = false\n'
+                                b'restore_on_unlock = false\n')
+                    # Genuine history schema, seeded rather than an observation.
+                    history = (json.dumps(dict(
+                        schema_version=3, event_code=1001,
+                        tool_version=plist['CFBundleShortVersionString'],
+                        action='start', observed_at='2026-01-01T00:00:00Z',
+                        resource='microphone', activity='ready', risk='expected',
+                        confidence='low', enforcement='alert',
+                        application='retained lifecycle history fixture (not live capture)',
+                        pid=None, executable=None, device=None, started_at=None, evidence=[]
+                    ), separators=(',', ':')) + '\n').encode()
+                    for name, contents in (('settings', settings), ('history', history)):
+                        path = paths[name]
+                        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                        with path.open('xb') as handle:
+                            handle.write(contents)
+                        path.chmod(0o600)
+                        report.setdefault('persistent_fixtures', []).append(dict(
+                            path=str(path), sha256=hashlib.sha256(contents).hexdigest(),
+                            mode=stat.S_IMODE(path.stat().st_mode), inode=path.stat().st_ino,
+                            seeded_history_not_capture_evidence=name == 'history'))
+                    return {path: (path.read_bytes(), stat.S_IMODE(path.stat().st_mode),
+                                   path.stat().st_ino) for path in paths.values()}
+
+                preserved = write_state(seed_state('private', env))
+
+                def unchanged_state(stage):
+                    for path, expected in {**preserved, **login_preserved}.items():
+                        require((path.read_bytes(), stat.S_IMODE(path.stat().st_mode),
+                                 path.stat().st_ino) == expected,
+                                f'{stage}: preferences/history changed: {path}')
+                    require((sentinel.read_bytes(), stat.S_IMODE(sentinel.stat().st_mode),
+                             sentinel.stat().st_ino) == sentinel_before,
+                            f'{stage}: unrelated sentinel bytes/permissions/inode changed')
+                    report.setdefault('state_preservation', []).append(stage)
+
+                require(record('settings-loaded-notifications',
+                               [cli, 'notifications', 'status'], env=env).stdout.strip() == b'disabled',
+                        'product did not load safe notification preferences')
                 before_app, before_home = snapshot(app), snapshot(home)
                 refusal = record('bundle-update-refusal', [cli, '--lang', 'en', 'update'], env=env, codes=None)
-                require(refusal.returncode != 0 and b'replace the whole MicCamWatch.app' in refusal.stderr,
-                        'binary-only bundle update did not give whole-app replacement guidance')
+                require(refusal.returncode != 0, 'binary-only bundle update was not refused')
                 require(snapshot(app) == before_app and snapshot(home) == before_home,
                         'refused bundle update changed app/state/permissions/xattrs')
                 report.update(bundle_update_refusal='passed', mount_copy_seal_version_icon='passed',
@@ -126,8 +200,8 @@ def main():
                     print('UNAVAILABLE: DMG/update checks passed; real GUI lifecycle not exercised. See app-smoke.json.')
                     return 77
 
-                def running():
-                    return subprocess.run([str(cli), 'tray', 'status'], env=env,
+                def running(state_env=env):
+                    return subprocess.run([str(cli), 'tray', 'status'], env=state_env,
                                           capture_output=True, timeout=10).returncode == 0
 
                 def until(predicate, message):
@@ -151,70 +225,337 @@ def main():
                             rows.append((pid, parent, os.fsdecode(buffer.value)))
                     return rows
 
-                launch = ['/usr/bin/open', '-n', '-a', app]
-                for name in ('HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_STATE_HOME',
-                             'XDG_RUNTIME_DIR', 'LANG', 'LC_ALL'):
-                    launch.extend(['--env', name + '=' + env[name]])
-                record('finder-open', launch, env=env)
-                until(running, 'copied .app never reached native tray readiness')
-                record('menu-readiness', [cli, 'tray', 'status'], env=env)
-                owners = [pid for pid, _, path in processes() if path == str(cli)]
-                require(len(owners) == 1, f'exec launcher must leave exactly one Rust tray owner: {owners}')
-                owner = owners[0]
-                record('duplicate-finder-open', launch, env=env)
-                time.sleep(3)
-                require(running(), 'duplicate start stopped original tray')
-                require([pid for pid, _, path in processes() if path == str(cli)] == [owner],
-                        'duplicate start replaced original owner or left another resident wrapper')
-                helpers = []
-                for pid, parent, path in processes():
-                    if parent != owner or Path(path).name != 'MicCamWatchHelper':
-                        continue
-                    mode = subprocess.run(['/bin/ps', '-p', str(pid), '-o', 'args='],
-                                          capture_output=True, text=True)
-                    if mode.returncode == 0 and mode.stdout.rstrip().endswith(' desktop'):
-                        helpers.append(pid)
-                require(len(helpers) == 1, 'persistent AppKit desktop helper child not found')
-                report.update(finder_open_native_readiness='passed', duplicate_preserved_owner='passed')
+                accessibility = record('accessibility-prerequisite', [driver, 'accessibility'], codes=(0, 77))
+                native_exit = accessibility.returncode == 0
+                report['native_menu_exit'] = 'pending' if native_exit else 'unavailable'
+                if not native_exit:
+                    report['accessibility'] = accessibility.stderr.decode().strip()
+
+                def tray_processes():
+                    owners = [pid for pid, _, path in processes() if path == str(cli)]
+                    require(len(owners) == 1, f'exactly one sandbox Rust tray owner required: {owners}')
+                    owner = owners[0]
+                    helpers = []
+                    for pid, parent, path in processes():
+                        if parent != owner or Path(path).name != 'MicCamWatchHelper':
+                            continue
+                        mode = subprocess.run(['/bin/ps', '-p', str(pid), '-o', 'args='],
+                                              capture_output=True, text=True)
+                        if mode.returncode == 0 and mode.stdout.rstrip().endswith(' desktop'):
+                            helpers.append(pid)
+                    require(len(helpers) == 1, 'persistent AppKit desktop helper child not found')
+                    return owner, helpers[0]
+
+                def finder_open(name, duplicate=False):
+                    launch = ['/usr/bin/open', '-n', '-a', app]
+                    for key in ('HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_STATE_HOME',
+                                'XDG_RUNTIME_DIR', 'LANG', 'LC_ALL'):
+                        launch.extend(['--env', key + '=' + env[key]])
+                    record(name, launch, env=env)
+                    until(running, name + ': app never reached native readiness')
+                    record(name + '-readiness', [cli, 'tray', 'status'], env=env)
+                    owner, helper = tray_processes()
+                    if duplicate:
+                        record('duplicate-finder-open', launch, env=env)
+                        time.sleep(3)
+                        require(running() and tray_processes() == (owner, helper),
+                                'duplicate start replaced original owner/helper or left a resident wrapper')
+                        report['duplicate_preserved_owner'] = 'passed'
+                    return owner, helper
+
+                def quit_app(name, state_env=env):
+                    owner, helper = tray_processes()
+                    if native_exit:
+                        record(name + '-native-exit', [driver, 'quit', helper])
+                        report['native_menu_exit'] = 'passed'
+                    else:
+                        record(name + '-authenticated-ipc-quit', [cli, 'tray', 'stop'], env=state_env)
+                        report['authenticated_ipc_quit'] = 'passed'
+                    until(lambda: not running(state_env), name + ': Quit left readiness active')
+                    until(lambda: not any(pid in (owner, helper) for pid, _, _ in processes()),
+                          name + ': Quit left product processes resident')
+                    unchanged_state(name)
+
                 registration = home / 'Library/LaunchAgents/com.roman-cuisset.miccamwatch.tray.plist'
+                receipt = home / 'config/MicCamWatch/autostart/autostart.json'
+                finder_open('finder-open', duplicate=True)
                 require(not registration.exists(), 'app launch installed autostart registration')
                 record('autostart-not-enabled', [cli, 'autostart', 'status'], env=env, codes=(1,))
-                report['autostart_not_enabled'] = True
-                accessibility = record('accessibility-prerequisite', [driver, 'accessibility'], codes=(0, 77))
-                if accessibility.returncode == 77:
-                    record('authenticated-ipc-quit', [cli, 'tray', 'stop'], env=env)
-                    until(lambda: not running(), 'authenticated Quit did not retire app readiness')
-                    until(lambda: not any(pid in (owner, helpers[0]) for pid, _, _ in processes()),
-                          'authenticated Quit left product processes resident')
-                    report.update(status='partial', native_menu_exit='unavailable', authenticated_ipc_quit='passed',
-                                  accessibility=accessibility.stderr.decode().strip())
-                    print('PARTIAL: Finder/readiness/duplicate/authenticated Quit passed; native Exit click needs preexisting Accessibility.')
-                    return 77
-                record('native-exit-menu', [driver, 'quit', helpers[0]])
-                until(lambda: not running(), 'real native Exit did not retire tray readiness')
-                until(lambda: not any(pid in (owner, helpers[0]) for pid, _, _ in processes()),
-                      'real native Exit left product processes resident')
+                quit_app('initial')
                 require(not registration.exists(), 'app launch enabled autostart')
-                require(sentinel.read_bytes() == b'preserve user files and permissions\n',
-                        'app changed unrelated user file')
                 require(snapshot(app) == before_app, 'app launch/quit changed bundle bytes or metadata')
-                report.update(status='passed', finder_open_native_readiness='passed',
-                              duplicate_preserved_owner='passed', native_menu_exit='passed',
-                              autostart_not_enabled=True)
+                report.update(finder_open_native_readiness='passed', autostart_not_enabled=True)
+
+                # Ordinary POSIX refusal, not TCC/Gatekeeper or an administrator prompt.
+                blocked = work / 'Permission Refusal'
+                blocked.mkdir(mode=0o700)
+                blocked.chmod(0o500)
+                try:
+                    denied = record('permission-refusal', ['/usr/bin/ditto',
+                                    mount / 'MicCamWatch.app', blocked / 'MicCamWatch.app'], codes=None)
+                    require(denied.returncode != 0 and not (blocked / 'MicCamWatch.app').exists(),
+                            'ordinary-user unwritable destination did not refuse installation')
+                finally:
+                    blocked.chmod(0o700)
+                record('permission-recovery-copy', ['/usr/bin/ditto', mount / 'MicCamWatch.app',
+                                                   blocked / 'MicCamWatch.app'])
+                record('permission-recovery-seal', ['codesign', '--verify', '--deep', '--strict',
+                                                   blocked / 'MicCamWatch.app'])
+                shutil.rmtree(blocked / 'MicCamWatch.app')
+                unchanged_state('permission-refusal-and-recovery')
+                report['ordinary_user_filesystem_permission_refusal_recovery'] = 'passed'
+
+                def replace_bundle(name):
+                    require(not any(path == str(cli) for _, _, path in processes()),
+                            'whole-bundle replacement requires Quit first')
+                    staged = work / (name + '.app')
+                    record(name + '-fresh-dmg-copy', ['/usr/bin/ditto', mount / 'MicCamWatch.app', staged])
+                    record(name + '-fresh-seal', ['codesign', '--verify', '--deep', '--strict', staged])
+                    require((staged / 'Contents/MacOS/mcw').read_bytes() == cli.read_bytes(),
+                            'same-build replacement payload unexpectedly differs')
+                    retired = work / (name + '-retired.app')
+                    app.rename(retired)
+                    staged.rename(app)
+                    record(name + '-installed-seal', ['codesign', '--verify', '--deep', '--strict', app])
+                    shutil.rmtree(retired)
+                    unchanged_state(name)
+                    report.setdefault('whole_bundle_replacements', []).append(name)
+
+                replace_bundle('manual-replacement-no-opt-in')
+                finder_open('replacement-finder-reopen')
+                quit_app('replacement-reopen')
+                require(not registration.exists(), 'manual replacement/reopen implicitly opted into autostart')
+
+                # The native service ignores the invoking CLI's HOME. The sole
+                # permitted real-account fixture is an empty GitHub-hosted login.
+                launchagent_ready = (os.environ.get('GITHUB_ACTIONS') == 'true' and
+                                     os.environ.get('RUNNER_ENVIRONMENT') == 'github-hosted')
+                unavailable = 'requires explicitly disposable GitHub-hosted login account'
+                if launchagent_ready:
+                    existing = record('launchagent-before', ['launchctl', 'print', service], codes=(0, 3, 113))
+                    disabled = record('launchagent-disabled-before',
+                                      ['launchctl', 'print-disabled', 'gui/' + str(os.getuid())])
+                    disabled_lines = disabled.stdout.decode().splitlines()
+                    override = [line.strip() for line in disabled_lines
+                                if line.strip().startswith('"com.roman-cuisset.miccamwatch.tray" => ')]
+                    launchagent_ready = existing.returncode != 0 and all(
+                        line.rstrip(',;').endswith('false') for line in override)
+                    unavailable = 'preexisting fixed-label service or disabled/unknown intent; preserved untouched'
+                if launchagent_ready:
+                    login_env = dict(os.environ, HOME=pwd.getpwuid(os.getuid()).pw_dir)
+                    for key in ('HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME',
+                                'XDG_STATE_HOME', 'XDG_RUNTIME_DIR'):
+                        value = record('login-launchd-env-' + key, ['launchctl', 'getenv', key],
+                                       codes=(0, 1)).stdout.decode().strip()
+                        if value:
+                            login_env[key] = value
+                        elif key != 'HOME':
+                            login_env.pop(key, None)
+                    login_paths = seed_state('login', login_env)
+                    roots = set(path.parent for path in login_paths.values())
+                    require(not any(a != b and a in b.parents for a in roots for b in roots),
+                            'overlapping login state roots are unsupported; preserving them')
+                    launchagent_ready = all(not path.exists() and not path.is_symlink() for path in roots)
+                    unavailable = 'preexisting login settings/history parent; preserved untouched'
+                if launchagent_ready:
+                    for root in roots:
+                        missing = []
+                        ancestor = root
+                        while not ancestor.exists():
+                            require(not ancestor.is_symlink(), 'login state ancestor is a symlink')
+                            missing.append(ancestor)
+                            ancestor = ancestor.parent
+                        require(ancestor.resolve() == ancestor,
+                                'login state has a redirected ancestor; preserved')
+                        for created in reversed(missing):
+                            created.mkdir(mode=0o700)
+                            identity = created.stat().st_dev, created.stat().st_ino
+                            if created == root:
+                                login_roots[root] = identity
+                            else:
+                                login_ancestors[created] = identity
+                    login_preserved = write_state(login_paths)
+                    # Record intent before invoking: a failing enable may retain
+                    # an ownership journal; cleanup must use the genuine CLI.
+                    owned_autostart = True
+                    record('explicit-autostart-enable', [cli, 'autostart', 'enable'], env=env)
+                    record('explicit-autostart-enabled', [cli, 'autostart', 'status'], env=env)
+                    until(lambda: running(login_env), 'owned LaunchAgent never reached login readiness')
+                    quit_app('enabled-login', login_env)
+                    enabled_registration = registration.read_bytes(), receipt.read_bytes()
+                    replace_bundle('manual-replacement-enabled')
+                    record('enabled-refresh', [cli, 'autostart', 'refresh'], env=env)
+                    record('enabled-after-replacement', [cli, 'autostart', 'status'], env=env)
+                    require((registration.read_bytes(), receipt.read_bytes()) == enabled_registration,
+                            'same-path replacement changed explicitly enabled registration/receipt')
+                    record('enabled-service-preserved', ['launchctl', 'print', service])
+
+                    # Reopen moved app first: Finder must not silently repair or
+                    # enable autostart. Only an explicit CLI refresh may repoint.
+                    old_cli = cli
+                    moved = work / 'Moved Applications' / 'MicCamWatch.app'
+                    moved.parent.mkdir()
+                    app.rename(moved)
+                    app, cli = moved, moved / 'Contents/MacOS/mcw'
+                    finder_open('moved-enabled-finder-reopen')
+                    quit_app('moved-enabled-reopen')
+                    require((registration.read_bytes(), receipt.read_bytes()) == enabled_registration,
+                            'moved Finder reopen silently changed autostart')
+                    require(plistlib.loads(registration.read_bytes())['ProgramArguments'][0] == str(old_cli),
+                            'registration did not retain the old path before explicit refresh')
+                    record('moved-enabled-explicit-refresh', [cli, 'autostart', 'refresh'], env=env)
+                    record('moved-enabled-status', [cli, 'autostart', 'status'], env=env)
+                    require(plistlib.loads(registration.read_bytes())['ProgramArguments'] ==
+                            [str(cli), 'tray', 'run'], 'explicit refresh did not repoint enabled intent')
+                    until(lambda: running(login_env), 'repointed enabled service did not reach readiness')
+                    quit_app('moved-enabled-login', login_env)
+                    report['enabled_owned_intent_replacement_refresh'] = 'passed'
+
+                    # Dormant means explicitly owned but unloaded, not a forged
+                    # receipt and not launchctl disable's persistent user override.
+                    record('make-owned-registration-dormant', ['launchctl', 'bootout', service])
+                    record('dormant-service-absent', ['launchctl', 'print', service], codes=(3, 113))
+                    dormant_registration = registration.read_bytes(), receipt.read_bytes()
+                    replace_bundle('manual-replacement-dormant')
+                    record('dormant-same-path-refresh', [cli, 'autostart', 'refresh'], env=env)
+                    require((registration.read_bytes(), receipt.read_bytes()) == dormant_registration,
+                            'replacement changed dormant owned intent')
+                    moved = work / 'Moved Again' / 'MicCamWatch.app'
+                    moved.parent.mkdir()
+                    app.rename(moved)
+                    app, cli = moved, moved / 'Contents/MacOS/mcw'
+                    finder_open('moved-dormant-finder-reopen')
+                    quit_app('moved-dormant-reopen')
+                    require((registration.read_bytes(), receipt.read_bytes()) == dormant_registration,
+                            'moved reopen implicitly refreshed dormant registration')
+                    dormant = record('dormant-status-guidance', [cli, 'autostart', 'status'],
+                                     env=env, codes=None)
+                    require(dormant.returncode != 0,
+                            'dormant stale-path intent did not refuse enabled status')
+                    require((registration.read_bytes(), receipt.read_bytes()) == dormant_registration,
+                            'dormant status inspection changed the registration/receipt')
+                    record('dormant-status-still-unloaded', ['launchctl', 'print', service], codes=(3, 113))
+                    require(not running(login_env), 'dormant status inspection implicitly started login tray')
+                    record('dormant-explicit-refresh', [cli, 'autostart', 'refresh'], env=env)
+                    require(plistlib.loads(registration.read_bytes())['ProgramArguments'] ==
+                            [str(cli), 'tray', 'run'], 'refresh did not repoint dormant registration')
+                    record('dormant-refresh-still-unloaded', ['launchctl', 'print', service], codes=(3, 113))
+                    require(not running(login_env), 'dormant refresh implicitly started login tray')
+                    report.update(dormant_owned_intent_replacement_refresh='passed',
+                                  relocation_autostart_guidance='Finder reopen preserves old registration; '
+                                  'explicit bundled mcw autostart refresh repoints owned intent without '
+                                  'enabling a dormant service; enable is a separate explicit repair/opt-in')
+                    unchanged_state('owned-enabled-and-dormant-lifecycle')
+                    record('remove-owned-autostart', [cli, 'autostart', 'disable'], env=env)
+                    require(not registration.exists() and not receipt.exists(),
+                            'owned registration/receipt remained after removal')
+                    record('removed-service-absent', ['launchctl', 'print', service], codes=(3, 113))
+                    owned_autostart = False
+                    report['owned_registration_removal'] = 'passed'
+                    report['owned_launchagent_lifecycle'] = 'passed'
+                else:
+                    report['owned_launchagent_lifecycle'] = 'unavailable'
+                    report['owned_launchagent_unavailable_reason'] = unavailable
+                    moved = work / 'Moved Applications' / 'MicCamWatch.app'
+                    moved.parent.mkdir()
+                    app.rename(moved)
+                    app, cli = moved, moved / 'Contents/MacOS/mcw'
+                    finder_open('moved-no-opt-in-finder-reopen')
+                    quit_app('moved-no-opt-in-reopen')
+                    require(not registration.exists(), 'relocation implicitly enabled autostart')
+
+                report['moved_bundle_reopen'] = 'passed'
+                unchanged_state('before-owned-app-removal')
+                require(app.is_relative_to(work) and not app.is_symlink(),
+                        'refusing removal outside the authenticated sandbox')
+                record('remove-owned-app-seal', ['codesign', '--verify', '--deep', '--strict', app])
+                shutil.rmtree(app)
+                require(not app.exists(), 'sandbox app removal failed')
+                unchanged_state('after-owned-app-and-registration-removal')
+                report.update(owned_app_removal='passed',
+                              preferences_history_and_unrelated_sentinel_preserved='passed',
+                              status='passed' if native_exit and launchagent_ready else 'partial')
             finally:
-                # Stop only this sandbox's authenticated tray socket, never the
-                # user's actual tray or another process selected by name.
-                if cli is not None and env is not None:
-                    record('sandbox-cleanup-stop', [cli, 'tray', 'stop'], env=env, codes=(0, 1))
-                if attached:
-                    record('detach', ['hdiutil', 'detach', mount])
+                # CLI disable reauthenticates the exact owned plist and job.
+                cleanup_cli = cli if cli is not None and cli.exists() else mount / 'MicCamWatch.app/Contents/MacOS/mcw'
+                try:
+                    if owned_autostart:
+                        record('cleanup-owned-autostart', [cleanup_cli, 'autostart', 'disable'], env=env)
+                        owned_autostart = False
+                    if login_roots:
+                        record('cleanup-service-absent', ['launchctl', 'print', service], codes=(3, 113))
+                        record('cleanup-login-authenticated-stop', [cleanup_cli, 'tray', 'stop'],
+                               env=login_env, codes=(0, 1))
+                    if env is not None and cleanup_cli.exists():
+                        record('sandbox-cleanup-stop', [cleanup_cli, 'tray', 'stop'], env=env, codes=(0, 1))
+                    if 'processes' in locals():
+                        until(lambda: not any(Path(path).is_relative_to(work) and
+                                              Path(path).name in ('mcw', 'MicCamWatchHelper')
+                                              for _, _, path in processes()),
+                              'owned sandbox processes remain; preserving their files')
+                    for root, identity in login_roots.items():
+                        require(not root.is_symlink() and
+                                (root.stat().st_dev, root.stat().st_ino) == identity,
+                                'login fixture root changed; preserving state')
+                    for path, expected in login_preserved.items():
+                        require((path.read_bytes(), stat.S_IMODE(path.stat().st_mode),
+                                 path.stat().st_ino) == expected,
+                                'login fixture state changed; preserving it for review')
+                    allowed_directories, allowed_locks = set(), set()
+                    if login_roots:
+                        config = login_paths['settings'].parent
+                        data = login_paths['history'].parent
+                        allowed_directories.update((config / 'autostart', data / 'tray-runtime',
+                                                    data / 'macos-controls'))
+                        allowed_locks.update((config / 'autostart/autostart.lock',
+                                              data / 'tray-runtime/control.lock',
+                                              data / 'macos-controls/camera.lock'))
+                    allowed = set(login_preserved) | allowed_directories | allowed_locks
+                    for root in login_roots:
+                        for path in root.rglob('*'):
+                            info = path.lstat()
+                            require(path in allowed and not path.is_symlink() and
+                                    info.st_uid == os.getuid(),
+                                    f'unexpected login fixture entry; preserving state: {path}')
+                            if path in allowed_directories:
+                                require(stat.S_ISDIR(info.st_mode) and stat.S_IMODE(info.st_mode) == 0o700,
+                                        f'owned fixture directory changed; preserving state: {path}')
+                            elif path in allowed_locks:
+                                require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and
+                                        info.st_size == 0 and stat.S_IMODE(info.st_mode) == 0o600,
+                                        f'owned fixture lock changed; preserving state: {path}')
+                    for root in login_roots:
+                        shutil.rmtree(root)
+                    for ancestor, identity in sorted(login_ancestors.items(),
+                                                     key=lambda row: len(row[0].parts), reverse=True):
+                        require(not ancestor.is_symlink() and
+                                (ancestor.stat().st_dev, ancestor.stat().st_ino) == identity,
+                                'created login ancestor changed; preserving it')
+                        if not any(ancestor.iterdir()):
+                            ancestor.rmdir()
+                    report['owned_login_fixture_cleanup'] = 'passed' if login_roots else 'not-created'
+                except BaseException as cleanup_error:
+                    cleanup_safe = False
+                    report['cleanup_error'] = str(cleanup_error)
+                    raise
+                finally:
+                    if attached:
+                        record('detach', ['hdiutil', 'detach', mount])
+        finally:
+            if cleanup_safe and report['status'] in ('passed', 'partial', 'unavailable'):
+                shutil.rmtree(work)
+                report['sandbox_cleanup'] = 'passed'
+            else:
+                report['sandbox_cleanup'] = 'retained for conflict/failure inspection'
     except BaseException as error:
+        report['status'] = 'failed'
         report['error'] = str(error)
         raise
     finally:
         save()
-    print('PASS real DMG mount/copy/.app launch/native readiness/duplicate/Exit/update refusal; no capture assertions.')
-    return 0
+    print(('PASS' if report['status'] == 'passed' else 'PARTIAL') +
+          ': real DMG app lifecycle; see app-smoke.json for exact scope and unavailable proof.')
+    return 0 if report['status'] == 'passed' else 77
 
 
 if __name__ == '__main__':

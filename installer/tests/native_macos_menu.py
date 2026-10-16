@@ -197,6 +197,45 @@ for test in cases {
                          "diagnostic_utf8_bytes": content.diagnostic.utf8.count,
                          "native_menu_tracking": tracked, "native_details_copy": inspected && checkClipboard])
 }
+// Exercise actual AppKit keyboard tracking, not direct selector forwarding.
+let keyboardContent = DesktopMenu(summary: cases[0].frame.summary!, entries: cases[0].frame.items!,
+                                  detailsLabel: cases[0].frame.details_label!)
+let keyboardMenu = keyboardContent.menu
+let profileRow = keyboardMenu.items.firstIndex { $0.submenu != nil }!
+let preceding = keyboardMenu.items[..<profileRow].filter { $0.isEnabled && !$0.isSeparatorItem }.count
+func postMenuKey(_ characters: String, _ code: UInt16) {
+    let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+        timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: 0, context: nil,
+        characters: characters, charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code)!
+    NSApp.postEvent(event, atStart: false)
+}
+let down = String(UnicodeScalar(UInt32(NSDownArrowFunctionKey))!)
+let right = String(UnicodeScalar(UInt32(NSRightArrowFunctionKey))!)
+let home = String(UnicodeScalar(UInt32(NSHomeFunctionKey))!)
+let navigate = Timer(timeInterval: 0.2, repeats: false) { _ in
+    postMenuKey(home, 115)
+    for _ in 0..<preceding { postMenuKey(down, 125) }
+    postMenuKey(right, 124)
+    postMenuKey(home, 115)
+    postMenuKey(down, 125)
+    postMenuKey(down, 125)
+    postMenuKey("\r", 36)
+}
+var keyboardTimedOut = false
+let keyboardDeadline = Timer(timeInterval: 3, repeats: false) { _ in
+    keyboardTimedOut = true
+    keyboardMenu.cancelTracking()
+}
+for timer in [navigate, keyboardDeadline] {
+    RunLoop.main.add(timer, forMode: .eventTracking)
+    RunLoop.main.add(timer, forMode: .common)
+}
+let keyboardScreen = NSScreen.main!.visibleFrame
+keyboardMenu.popUp(positioning: nil, at: NSPoint(x: keyboardScreen.midX, y: keyboardScreen.midY), in: nil)
+keyboardDeadline.invalidate()
+require(!keyboardTimedOut, "keyboard navigation did not activate a direct profile choice")
+try! Data("{\"requested_action\":\"profile_meeting\",\"app_local_keyboard_tracking\":true}\n".utf8)
+    .write(to: proof.appendingPathComponent("keyboard-profile.json"))
 require(verifyTrackedMenuUpdate(cases[0].frame, cases.last!.frame), "state refresh broke a tracked menu action")
 for appearance in [NSAppearance.Name.aqua, .darkAqua] {
     NSApp.appearance = NSAppearance(named: appearance)
@@ -389,7 +428,8 @@ def main():
                 elif enabled:
                     yield dict(kind='action', action=row['action'])
         expected = [event for case in cases for event in dispatched(case['frame']['items'])]
-        expected += [dict(kind='ready', protocol=2), dict(kind='action', action='status')]
+        expected += [dict(kind='action', action='profile_meeting'),
+                     dict(kind='ready', protocol=2), dict(kind='action', action='status')]
         require(events == expected, 'native dispatch changed direct action IDs or emitted a Details/device action')
     (proof / 'scope.txt').write_text(
         'Real production AppKit NSMenu intrinsic width and menu tracking; real enabled action dispatch; '
@@ -397,7 +437,8 @@ def main():
         'real local Details NSAlert rendering, wrapping, scrolling and full-text copy. '
         'Menu-text PNGs are rendered visual fixtures, not screenshots of the tracked menu. '
         'Details-alert PNGs are actual NSAlert content snapshots. '
-        'No Accessibility/event-posting/TCC grants or capture/device actions. '
+        'App-local keyboard navigation selects a direct profile through real NSMenu tracking. '
+        'No Accessibility/global-event-posting/TCC grants or capture/device actions. '
         'Native tracked-menu screen capture is optional and uses only existing authorization.\n')
     print('PASS native AppKit width, full Details, live menu updates; clipboard exercised=' + str(args.isolated_clipboard))
 

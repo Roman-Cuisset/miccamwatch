@@ -1273,3 +1273,40 @@ that, authenticated IPC Quit is exercised and the native-click gap is recorded
 as partial (exit 77), never full lifecycle PASS. No user authorization is granted
 by the harness. Exact integrated CI results belong in ROADMAP after execution.
 
+[Exact CI38716101572](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38716101572)
+passed all four targets for source `40ed84d81f8cbcb978684b045385f68d7d8400da`.
+Both Macs executed passive CLI (unknown/exit2, no state write), native consent
+Cancel, owner-exit cleanup and the fixed preauthorized root query (complete
+profile inventory, no adopted ownership). An inherited PATH remains tainted
+under Perl `-T` even when supplied by `env -i`; assigning literal environment
+values inside the program repaired actual root execution without weakening
+taint mode. See [Perl's execution rule](https://perldoc.perl.org/perlsec#Cleaning-Up-Your-Path).
+This root-query proof is not interactive OS credential approval/denial.
+
+Real DMG mount/copy/seal/icon/version and Finder/native-menu Exit passed on both
+architectures with preexisting runner Accessibility, not an exit77 substitute.
+AppKit tracking, complete Details/Copy all, four direct profile choices,
+explicit-policy precedence and partial recovery passed thirteen visual cases;
+the seven language fixtures measured 399 pt with long diagnostics. Screen
+captures and real alert contents were read; simulated capture data remains
+labeled. Additional relocation/replacement/removal and keyboard qualification
+are recorded separately rather than inferred from those successes.
+
+Sampled candidate product-tree resources on that exact source are below.
+MB are decimal; CPU is the harness's observed sustained delta over 20 seconds.
+The sampler missed its <=50 ms requirement, so peaks are observed lower bounds,
+not certified highwater measurements or a qualified sub-15 MB claim. Hosted
+zero-device Aqua does not represent the user's hardware.
+
+| macOS | Mode | Sustained RSS median MB | Observed concurrent peak MB | Observed CPU seconds / 20 s | Ready seconds |
+| --- | --- | ---: | ---: | ---: | ---: |
+| ARM | top idle | 6.52 | 18.56 | 0.015 | 0.093 |
+| ARM | tray idle | 33.85 | 45.76 | 0.004 | 0.428 |
+| Intel | top idle | 4.76 | 13.21 | 2.771 | 0.164 |
+| Intel | tray idle | 23.08 | 30.24 | 0.884 | 1.263 |
+
+Tray maximum sample gaps were 188.6 ms (ARM) and 345.0 ms (Intel). Functional
+baseline/candidate comparisons completed, but the soft 15 MB target remains
+unmet and timing/sample limitations are not waived. No sum of separate-process
+peaks or separate profiles is presented as a concurrent total.
+
