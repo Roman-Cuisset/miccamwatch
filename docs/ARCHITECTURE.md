@@ -1310,3 +1310,22 @@ baseline/candidate comparisons completed, but the soft 15 MB target remains
 unmet and timing/sample limitations are not waived. No sum of separate-process
 peaks or separate profiles is presented as a concurrent total.
 
+The complete app lifecycle additionally passed
+[CI38859102456](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38859102456)
+on source `b84976f739ad328f91cfa35a0e739668594b4735`: both native reports are
+`passed`, not an exit77 authorization substitute. Real ordinary-user chmod
+refusal/recovery, bundle relocation/reopen, whole-bundle replacements, exact
+preferences/history bytes/mode/inode preservation, genuine enabled/dormant owned
+LaunchAgent refresh/removal and exact fixture cleanup passed. Replacement uses
+the same genuine build: this is the first public app, not evidence of an
+invented older-app cross-version upgrade. App-local keyboard events selected
+Meeting through real NSMenu tracking, with no global event permission grant.
+
+Security follow-up found Foundation Process could put the ordinary profiles
+utility outside its request group. It now uses literal-argument/environment
+posix_spawn with inherited grouping and owned waitpid cleanup; the native fixture
+checks the actual utility PGID. Rust observes helper exit with waitid WNOWAIT,
+terminates residual group members while the helper identity is still reserved,
+then reaps, including abnormal helper exits. ECHILD never permits a later signal
+against a potentially reused identity. Static review found no further issue;
+exact final native qualification is required before publication.

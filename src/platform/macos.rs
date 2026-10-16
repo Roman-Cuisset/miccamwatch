@@ -588,11 +588,41 @@ impl Helper {
             reaped: false,
         };
         let result = (|| {
+            let mut exit_info: libc::siginfo_t = unsafe { std::mem::zeroed() };
             let status = loop {
                 if stdout.metadata()?.len() > MAX_OUTPUT || stderr.metadata()?.len() > MAX_OUTPUT {
                     bail!("macOS helper output exceeds {MAX_OUTPUT}-byte size limit");
                 }
-                if let Some(status) = child.child.try_wait()? {
+                // Observe exit without releasing the PID: residual utilities
+                // must be contained before this private group can be reused.
+                let observed = unsafe {
+                    libc::waitid(
+                        libc::P_PID,
+                        child.child.id() as libc::id_t,
+                        &mut exit_info,
+                        libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+                    )
+                };
+                if observed == -1 {
+                    let error = std::io::Error::last_os_error();
+                    if error.raw_os_error() == Some(libc::ECHILD) {
+                        child.reaped = true;
+                    }
+                    if error.kind() != std::io::ErrorKind::Interrupted {
+                        return Err(error.into());
+                    }
+                } else if exit_info.si_pid != 0 {
+                    let _ =
+                        unsafe { libc::kill(-(child.child.id() as libc::pid_t), libc::SIGKILL) };
+                    let status = match child.child.wait() {
+                        Ok(status) => status,
+                        Err(error) => {
+                            if error.raw_os_error() == Some(libc::ECHILD) {
+                                child.reaped = true;
+                            }
+                            return Err(error.into());
+                        }
+                    };
                     child.reaped = true;
                     break status;
                 }
