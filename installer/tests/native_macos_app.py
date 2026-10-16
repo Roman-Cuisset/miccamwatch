@@ -265,15 +265,16 @@ def main():
 
                 def quit_app(name, state_env=env):
                     owner, helper = tray_processes()
+                    result_key = 'native_menu_exit' if native_exit else 'authenticated_ipc_quit'
+                    report[result_key] = 'pending'
                     if native_exit:
                         record(name + '-native-exit', [driver, 'quit', helper])
-                        report['native_menu_exit'] = 'passed'
                     else:
                         record(name + '-authenticated-ipc-quit', [cli, 'tray', 'stop'], env=state_env)
-                        report['authenticated_ipc_quit'] = 'passed'
                     until(lambda: not running(state_env), name + ': Quit left readiness active')
                     until(lambda: not any(pid in (owner, helper) for pid, _, _ in processes()),
                           name + ': Quit left product processes resident')
+                    report[result_key] = 'passed'
                     unchanged_state(name)
 
                 registration = home / 'Library/LaunchAgents/com.roman-cuisset.miccamwatch.tray.plist'

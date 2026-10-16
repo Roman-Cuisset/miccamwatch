@@ -38,6 +38,16 @@ do {
 } catch {}
 let rejected = microphoneControl("{\"operation\":\"camera_status_admin\",\"path\":\"/tmp/untrusted\"}")
 demand(!rejected.ok && rejected.camera == nil, "privileged operation accepted request-controlled path")
+let groupProbe = Pipe()
+let groupPID = try spawnProfileInventory(groupProbe)
+let actualGroup = getpgid(groupPID)
+Darwin.kill(groupPID, SIGKILL)
+var groupStatus: Int32 = 0
+var groupWait: pid_t
+repeat { groupWait = waitpid(groupPID, &groupStatus, 0) } while groupWait == -1 && errno == EINTR
+demand(groupWait == groupPID, "ordinary profile-query probe was not reaped")
+demand(actualGroup == getpgrp(), "ordinary profiles utility escaped the request process group")
+print("ordinary profiles utility inherits its request process group")
 let script = try administratorProfileScript()
 var compileFailure: NSDictionary?
 demand(script.compileAndReturnError(&compileFailure), "fixed authorization AppleScript does not compile")

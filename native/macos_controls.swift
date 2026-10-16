@@ -240,18 +240,64 @@ while (1) {
 }
 """#
 
+private func profileCString(_ value: StaticString) -> UnsafeMutablePointer<CChar> {
+    UnsafeMutablePointer(mutating: UnsafeRawPointer(value.utf8Start).assumingMemoryBound(to: CChar.self))
+}
+
+// Foundation Process creates another process group on macOS. Use spawn's
+// default group inheritance so the request owner can contain this utility.
+private func spawnProfileInventory(_ pipe: Pipe) throws -> pid_t {
+    defer { pipe.fileHandleForWriting.closeFile() }
+    let null = Darwin.open("/dev/null", O_RDWR | O_CLOEXEC)
+    guard null >= 0 else { throw MacControlError.failed("Cannot open profile query null device") }
+    defer { Darwin.close(null) }
+    var actions: posix_spawn_file_actions_t?
+    guard posix_spawn_file_actions_init(&actions) == 0 else {
+        throw MacControlError.failed("Cannot initialize profile query file actions")
+    }
+    defer { posix_spawn_file_actions_destroy(&actions) }
+    guard posix_spawn_file_actions_adddup2(&actions, null, STDIN_FILENO) == 0,
+          posix_spawn_file_actions_adddup2(&actions, null, STDERR_FILENO) == 0,
+          posix_spawn_file_actions_adddup2(&actions, pipe.fileHandleForWriting.fileDescriptor, STDOUT_FILENO) == 0,
+          posix_spawn_file_actions_addclose(&actions, null) == 0,
+          posix_spawn_file_actions_addclose(&actions, pipe.fileHandleForReading.fileDescriptor) == 0,
+          posix_spawn_file_actions_addclose(&actions, pipe.fileHandleForWriting.fileDescriptor) == 0 else {
+        throw MacControlError.failed("Cannot prepare profile query file actions")
+    }
+    var pid: pid_t = 0
+    let error = withUnsafeTemporaryAllocation(of: UnsafeMutablePointer<CChar>?.self, capacity: 8) { arguments in
+        let argv = arguments.baseAddress!
+        argv.initialize(to: profileCString("/usr/bin/profiles"))
+        argv.advanced(by: 1).initialize(to: profileCString("show"))
+        argv.advanced(by: 2).initialize(to: profileCString("-type"))
+        argv.advanced(by: 3).initialize(to: profileCString("configuration"))
+        argv.advanced(by: 4).initialize(to: profileCString("-output"))
+        argv.advanced(by: 5).initialize(to: profileCString("stdout-xml"))
+        argv.advanced(by: 6).initialize(to: geteuid() == 0 ? profileCString("-all") : nil)
+        argv.advanced(by: 7).initialize(to: nil)
+        return withUnsafeTemporaryAllocation(of: UnsafeMutablePointer<CChar>?.self, capacity: 3) { environment in
+            let envp = environment.baseAddress!
+            envp.initialize(to: profileCString("PATH=/usr/bin:/bin:/usr/sbin:/sbin"))
+            envp.advanced(by: 1).initialize(to: profileCString("LC_ALL=C"))
+            envp.advanced(by: 2).initialize(to: nil)
+            return posix_spawn(&pid, "/usr/bin/profiles", &actions, nil, argv, envp)
+        }
+    }
+    guard error == 0 else { throw MacControlError.failed("Cannot spawn profile query (errno \(error))") }
+    return pid
+}
+
 private func installedCameraProfile(_ identifier: String?, _ uuid: String?) throws -> MacCameraProfile {
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/usr/bin/profiles")
-    process.arguments = ["show", "-type", "configuration", "-output", "stdout-xml"] + (geteuid() == 0 ? ["-all"] : [])
-    process.standardInput = FileHandle.nullDevice
     let pipe = Pipe()
-    process.standardOutput = pipe
-    process.standardError = FileHandle.nullDevice
-    try process.run()
+    let pid = try spawnProfileInventory(pipe)
+    var reaped = false
     defer {
-        if process.isRunning { process.terminate() }
-        process.waitUntilExit()
+        if !reaped {
+            // No other reaper owns this child; its PID remains reserved.
+            Darwin.kill(pid, SIGKILL)
+            var status: Int32 = 0
+            while waitpid(pid, &status, 0) == -1 && errno == EINTR {}
+        }
     }
     var data = Data()
     while let chunk = try pipe.fileHandleForReading.read(upToCount: 65536), !chunk.isEmpty {
@@ -260,9 +306,17 @@ private func installedCameraProfile(_ identifier: String?, _ uuid: String?) thro
         }
         data.append(chunk)
     }
-    process.waitUntilExit()
-    guard process.terminationStatus == 0 else {
-        throw MacControlError.failed("Installed profile metadata could not be read (profiles exit \(process.terminationStatus))")
+    var status: Int32 = 0
+    var waited: pid_t
+    repeat { waited = waitpid(pid, &status, 0) } while waited == -1 && errno == EINTR
+    if waited != pid {
+        let error = errno
+        if error == ECHILD { reaped = true }
+        throw MacControlError.failed("Cannot reap profile query (errno \(error))")
+    }
+    reaped = true
+    guard status == 0 else {
+        throw MacControlError.failed("Installed profile metadata could not be read (wait status \(status))")
     }
     return try decodeCameraProfileInventory(data, completeInventory: geteuid() == 0,
                                             identifier: identifier, uuid: uuid)
