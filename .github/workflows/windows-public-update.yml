@@ -1,0 +1,98 @@
+name: Public Windows 0.18 migration proof
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  attestations: read
+
+jobs:
+  migrate:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Verify public payloads and exercise genuine paired updater
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $repo = 'Roman-Cuisset/miccamwatch'
+          $proof = Join-Path $env:RUNNER_TEMP 'public-update-proof'
+          New-Item -ItemType Directory $proof | Out-Null
+          $env:APPDATA = Join-Path $proof 'appdata'
+          $env:LOCALAPPDATA = Join-Path $proof 'localappdata'
+          New-Item -ItemType Directory $env:APPDATA,$env:LOCALAPPDATA | Out-Null
+          if (Get-Process mcw,mcw-tray -ErrorAction SilentlyContinue) { throw 'Runner is not isolated from an existing MCW process' }
+          function Get-VerifiedPackage([string]$tag, [string]$source, [string]$directory) {
+            New-Item -ItemType Directory $directory | Out-Null
+            $releaseJson = gh api "repos/$repo/releases/tags/$tag"
+            if ($LASTEXITCODE -ne 0) { throw "Cannot read release $tag" }
+            $release = $releaseJson | ConvertFrom-Json
+            if ($release.draft -or $release.prerelease -or $release.tag_name -ne $tag) { throw 'Expected immutable stable release' }
+            $refJson = gh api "repos/$repo/git/ref/tags/$tag"
+            if ($LASTEXITCODE -ne 0) { throw 'Cannot resolve tag' }
+            $target = ($refJson | ConvertFrom-Json).object
+            if ($target.type -eq 'tag') {
+              $tagJson = gh api "repos/$repo/git/tags/$($target.sha)"
+              if ($LASTEXITCODE -ne 0) { throw 'Cannot resolve annotated tag' }
+              $target = ($tagJson | ConvertFrom-Json).object
+            }
+            if ($target.type -ne 'commit' -or $target.sha -ne $source) { throw 'Tag source differs from qualified source' }
+            gh release download $tag --repo $repo --pattern miccamwatch-windows-x86_64.zip --pattern SHA256SUMS --dir $directory | Write-Host
+            if ($LASTEXITCODE -ne 0) { throw 'Public download failed' }
+            foreach ($name in @('miccamwatch-windows-x86_64.zip', 'SHA256SUMS')) {
+              $file = Get-Item (Join-Path $directory $name)
+              $asset = @($release.assets | Where-Object name -eq $name)
+              $hash = (Get-FileHash $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+              if ($asset.Count -ne 1 -or $asset[0].size -ne $file.Length -or $asset[0].digest -ne "sha256:$hash") { throw "API digest/size mismatch: $name" }
+            }
+            $zip = Join-Path $directory 'miccamwatch-windows-x86_64.zip'
+            $digest = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+            $manifest = @(Get-Content (Join-Path $directory 'SHA256SUMS') | Where-Object { $_ -cmatch '^([a-f0-9]{64})  miccamwatch-windows-x86_64\.zip$' })
+            if ($manifest.Count -ne 1 -or $manifest[0].Substring(0,64) -cne $digest) { throw 'Manifest ZIP digest mismatch' }
+            gh attestation verify $zip --repo $repo --signer-workflow "$repo/.github/workflows/release.yml" --source-ref "refs/tags/$tag" --source-digest $source --deny-self-hosted-runners | Write-Host
+            if ($LASTEXITCODE -ne 0) { throw 'Exact release provenance verification failed' }
+            $entries = [IO.Compression.ZipFile]::OpenRead($zip)
+            try {
+              $names = @($entries.Entries | ForEach-Object FullName | Sort-Object)
+              $expected = @('LICENSE','README.md','mcw-tray.exe','mcw.exe') | Sort-Object
+              if (Compare-Object $names $expected -CaseSensitive) { throw 'Unexpected ZIP entry set; refusing extraction' }
+            } finally { $entries.Dispose() }
+            $payload = Join-Path $directory 'payload'
+            Expand-Archive $zip $payload
+            return $payload
+          }
+          $old = Get-VerifiedPackage 'v0.17.2' 'a58c8b9f3a967589a576879d6d27bfdbc40f9dff' (Join-Path $proof 'old')
+          $new = Get-VerifiedPackage 'v0.18.0' 'a2b19b6226ded2f32debb3147d3a3e9ef99116a4' (Join-Path $proof 'new')
+          $cli = Join-Path $old 'mcw.exe'
+          if ((& $cli --version) -ne 'mcw 0.17.2' -or $LASTEXITCODE -ne 0) { throw 'Old public CLI did not run' }
+          $output = & $cli update 2>&1
+          $exit = $LASTEXITCODE
+          $output | Set-Content (Join-Path $proof 'update.txt')
+          $output | Write-Host
+          if ($exit -ne 0) { throw "Public updater failed: $exit" }
+          if ((& $cli --version) -ne 'mcw 0.18.0' -or $LASTEXITCODE -ne 0) { throw 'Updated public CLI did not run' }
+          foreach ($name in @('mcw.exe','mcw-tray.exe')) {
+            if ((Get-FileHash (Join-Path $old $name)).Hash -ne (Get-FileHash (Join-Path $new $name)).Hash) { throw "Updated pair differs from verified public payload: $name" }
+          }
+          $output = & $cli update 2>&1
+          $exit = $LASTEXITCODE
+          $output | Set-Content (Join-Path $proof 'noop.txt')
+          $output | Write-Host
+          if ($exit -ne 0) { throw "No-op update failed: $exit" }
+          foreach ($name in @('mcw.exe','mcw-tray.exe')) {
+            if ((Get-FileHash (Join-Path $old $name)).Hash -ne (Get-FileHash (Join-Path $new $name)).Hash) { throw "No-op changed public pair: $name" }
+          }
+          if (Get-Process mcw,mcw-tray -ErrorAction SilentlyContinue) { throw 'Updater unexpectedly left a resident frontend' }
+          @{ status = 'passed'; from = '0.17.2'; to = '0.18.0'; public_pair_hashes_exact = $true; noop_pair_unchanged = $true; tray_started = $false; device_control_tested = $false; user_pc_touched = $false } | ConvertTo-Json | Set-Content (Join-Path $proof 'result.json')
+      - name: Upload public migration evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: public-windows-update-proof
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/public-update-proof/*.txt
+            ${{ runner.temp }}/public-update-proof/result.json
