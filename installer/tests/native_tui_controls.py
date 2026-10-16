@@ -202,17 +202,32 @@ class NativeTerminal:
         path.with_suffix(".json").write_text(json.dumps(cells, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     def close(self):
-        if self.alive():
+        try:
+            if self.alive():
+                if self.windows:
+                    self.process.terminate(force=True)
+                else:
+                    import signal
+                    try:
+                        os.killpg(self.process.pid, signal.SIGTERM)
+                    except ProcessLookupError:
+                        pass  # Exit may race the signal; wait must still reap it.
+                    try:
+                        self.process.wait(timeout=20)
+                    except subprocess.TimeoutExpired:
+                        # wait timed out without reaping this owned session
+                        # leader. No other thread polls/waits, so its group ID
+                        # cannot be reused between this signal and final reap.
+                        try:
+                            os.killpg(self.process.pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                        self.process.wait(timeout=20)
+        finally:
             if self.windows:
-                self.process.terminate(force=True)
+                self.process.close(force=True)
             else:
-                import signal
-                os.killpg(self.process.pid, signal.SIGTERM)
-                self.process.wait(timeout=20)
-        if self.windows:
-            self.process.close(force=True)
-        else:
-            os.close(self.master)
+                os.close(self.master)
 
 
 def exercise(binary, proof, language):
@@ -283,12 +298,40 @@ def exercise(binary, proof, language):
         (proof / (language + ".ansi")).write_bytes(terminal.raw)
 
 
+def verify_forced_cleanup(proof):
+    if os.name == "nt":
+        return
+    import signal
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix="mcw-terminal-cleanup-") as directory:
+        fixture = Path(directory) / "ignore-termination"
+        fixture.write_text(
+            "#!/usr/bin/env python3\nimport signal\n"
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+            "print('owned cleanup fixture ready', flush=True)\n"
+            "while True: signal.pause()\n", encoding="utf-8")
+        fixture.chmod(0o700)
+        terminal = NativeTerminal(fixture, "en", 80, 24)
+        try:
+            deadline = time.monotonic() + 10
+            while b"owned cleanup fixture ready" not in terminal.raw and time.monotonic() < deadline:
+                terminal.drain(.1)
+            assert b"owned cleanup fixture ready" in terminal.raw, "SIGTERM refusal fixture did not become ready"
+        finally:
+            terminal.close()
+        assert terminal.process.returncode == -signal.SIGKILL, "Owned SIGTERM-resistant child was not forcibly reaped"
+        (proof / "owned-terminal-forced-cleanup.json").write_text(
+            json.dumps(dict(exit_code=terminal.process.returncode, signal="SIGKILL",
+                            scope="owned fixture only; not a product Quit success")) + "\n", encoding="utf-8")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--binary", type=Path, required=True)
     parser.add_argument("--proof", type=Path, required=True)
     args = parser.parse_args()
     args.proof.mkdir(parents=True, exist_ok=True)
+    verify_forced_cleanup(args.proof)
     for language in LANGUAGES:
         exercise(args.binary.resolve(), args.proof, language)
     (args.proof / "scope.txt").write_text(
@@ -297,7 +340,9 @@ def main():
         "(Unix keyboard Quit immediately follows resize, with no retry key). "
         "Rendered terminal frames retain cell colors for visual review. Linux camera "
         "controls are invoked only as disabled actions. No camera profile, microphone "
-        "mute or process termination is authorized; no hardware activity claim.\n", encoding="utf-8")
+        "mute or capture-application termination is authorized; no hardware activity claim. "
+        "A separate owned fixture ignores SIGTERM and is forcibly reaped; this is "
+        "harness cleanup evidence, never a product Quit success.\n", encoding="utf-8")
 
 
 if __name__ == "__main__":
