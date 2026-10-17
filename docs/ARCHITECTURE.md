@@ -1196,7 +1196,7 @@ active. After explicit user “Réactiver avec UAC” consent, camera block rene
 owner; same native tray PID recovered without restart and mic remained protected.
 No Allow/unmute was issued. Cause of the previous helper exit is not established.
 
-## Unreleased 0.18.0: scoped macOS inspection, menu and app
+## 0.18.0: scoped macOS inspection, menu and app
 
 Desktop IPC moves to v2, with no compatibility shim: Rust and the embedded
 AppKit helper are one versioned build. Frames remain bounded to 65,536 bytes,
@@ -1333,5 +1333,32 @@ passed all four platforms on source `85fc7c93f6ee1eb284b65190bbfed56c701adc2d`.
 Both native Macs confirmed the actual ordinary utility inherits its request
 PGID, the scope/ownership/refusal boundaries, passive unknown inspection,
 native Cancel/owner-exit cleanup and the preauthorized read-only global query.
-The final harness-only SIGTERM-resistant cleanup fixture remains separately
-subject to native qualification before publication.
+The harness-only SIGTERM-resistant cleanup fixture passed on Linux and both
+Macs in CI38862636413: the owned fixture exited by SIGKILL (-9) and was reaped.
+This is not a successful product Quit or a reclassification of a failed baseline.
+
+### Public v0.18.0
+
+The immutable annotated unsigned tag fixes
+`a2b19b6226ded2f32debb3147d3a3e9ef99116a4`.
+[Exact source CI38863239649](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38863239649)
+and [release38865573731](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/38865573731)
+passed Windows, Linux and native macOS ARM/Intel. Final native app reports are
+`passed`, including enabled/dormant owned intent, exact state preservation and
+cleanup; profile-group, cancellation, owner-exit and app-local keyboard proof
+also passed. Read the real product menu separately from labeled long-text
+fixtures; deliberately oversized fixture labels are not production translations.
+
+Published 2026-10-16; public verification on 2026-10-17 confirmed stable/latest,
+non-draft, exactly nine assets. All downloaded API SHA-256 digests and sizes,
+all eight exact named manifest entries and all eight payload/SBOM attestations
+matched this repository, release workflow, tag ref and full source digest, with
+self-hosted runners denied. Both DMGs are covered. These checks do not establish
+Developer ID, notarization, antivirus clearance or physical capture/enforcement.
+
+Public installer/updater migrations are qualified separately. The first
+disposable Windows run39024728463 stopped before replacement on an anonymous
+GitHub API HTTP403 quota failure; its legacy updater does not consume GH_TOKEN.
+The fixture now checks that network prerequisite before a single updater
+attempt, with at most one bounded wait for the advertised reset. No API response
+is mocked, no legacy binary is patched and no user-PC guard is stopped.

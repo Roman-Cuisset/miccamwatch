@@ -68,6 +68,18 @@ jobs:
           $new = Get-VerifiedPackage 'v0.18.0' 'a2b19b6226ded2f32debb3147d3a3e9ef99116a4' (Join-Path $proof 'new')
           $cli = Join-Path $old 'mcw.exe'
           if ((& $cli --version) -ne 'mcw 0.17.2' -or $LASTEXITCODE -ne 0) { throw 'Old public CLI did not run' }
+          # Published legacy CLI uses anonymous API requests; GH_TOKEN only authenticates gh.
+          # Wait for its external prerequisite, never retry or patch the updater itself.
+          $quotaHeaders = @{ 'User-Agent' = 'MicCamWatch-public-migration-proof'; 'Cache-Control' = 'no-cache' }
+          $quota = Invoke-RestMethod 'https://api.github.com/rate_limit' -Headers $quotaHeaders
+          if ($quota.resources.core.remaining -lt 3) {
+            $delay = [Math]::Max(1, $quota.resources.core.reset - [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() + 2)
+            if ($delay -gt 600) { throw "Anonymous API prerequisite unavailable for $delay seconds; no update attempted" }
+            Write-Host "Anonymous API prerequisite exhausted; waiting $delay seconds for its advertised reset"
+            Start-Sleep -Seconds $delay
+            $quota = Invoke-RestMethod 'https://api.github.com/rate_limit' -Headers $quotaHeaders
+          }
+          if ($quota.resources.core.remaining -lt 3) { throw 'Anonymous API prerequisite still unavailable; no update attempted' }
           $output = & $cli update 2>&1
           $exit = $LASTEXITCODE
           $output | Set-Content (Join-Path $proof 'update.txt')
