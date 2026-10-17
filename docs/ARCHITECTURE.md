@@ -1362,3 +1362,30 @@ GitHub API HTTP403 quota failure; its legacy updater does not consume GH_TOKEN.
 The fixture now checks that network prerequisite before a single updater
 attempt, with at most one bounded wait for the advertised reset. No API response
 is mocked, no legacy binary is patched and no user-PC guard is stopped.
+
+The genuine public cross-version qualification then passed:
+[Unix39024728377](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/39024728377)
+on Linux and both native Macs, including the standalone macOS bootstrap/updater;
+[Windows39025271101](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/39025271101)
+updated the verified public 0.17.2 pair to exact public 0.18.0 binary hashes and
+then preserved both hashes on a no-op update. No tray was started or user PC
+touched. The mapped old Windows CLI still retained a backup directory with
+AccessDenied; this successful idle migration does not fix the separate active-tray
+inherited-stdio handoff defect. The one-release manual proof workflow is removed
+after this evidence, not retained as a misleading reusable migration service.
+
+The seven production locale routes now serve the actual DMGs and 0.18.0 facts.
+[Site CI39025249706](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/39025249706)
+passed for web source `f7dcdb13f95d2e84989d9875fe2ce58e612579da`.
+Actual Chromium interaction selected the macOS tab in each locale at 1280 and
+390 CSS pixels, confirmed both visible exact release links and canonical URLs,
+and moved keyboard focus from Apple Silicon to Intel. French desktop/mobile
+captures were reviewed. No global horizontal overflow or unresolved release
+token was observed in these panels; this does not close the separately reported
+Russian hero overlap/default-root-language work.
+
+Arch39025249674 built and installed the pinned 0.18.0 package, then its smoke
+rejected the installed version against an obsolete hardcoded 0.17.2 expectation.
+The fixture now obtains its expected CLI/helper/pacman version from the readonly
+recipe rather than maintaining a second release pin. Native requalification is
+required; no tap/AUR publication is implied by updated recipes.

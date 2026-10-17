@@ -35,7 +35,6 @@ PRIVILEGED = (
     Path("/usr/.miccamwatch-install"),
 )
 PAYLOAD = Path("/usr/share/miccamwatch/linux-camera")
-VERSION = "0.17.2"
 
 
 def require(condition, message):
@@ -123,11 +122,11 @@ def smoke(args):
     proof.mkdir(parents=True, exist_ok=True)
     protected_absent()
     require(shutil.which("mcw") == "/usr/bin/mcw", "Installed mcw is not available through native PATH")
-    require(record(proof, "version", ["mcw", "--version"]).stdout.decode().strip() == f"mcw {VERSION}",
+    require(record(proof, "version", ["mcw", "--version"]).stdout.decode().strip() == f"mcw {args.version}",
             "Installed CLI version differs from source release")
     helper = json.loads(record(proof, "helper-protocol", [str(PAYLOAD / "mcw-camera-helper"),
                                                         "--protocol-version"]).stdout)
-    require(helper == {"protocol": 1, "version": VERSION}, "Reviewable helper protocol/version mismatch")
+    require(helper == {"protocol": 1, "version": args.version}, "Reviewable helper protocol/version mismatch")
     for filename in ("install-camera-helper.sh", "com.roman-cuisset.miccamwatch.camera.policy"):
         require((PAYLOAD / filename).is_file(), f"Missing reviewable material: {filename}")
 
@@ -187,7 +186,7 @@ def qualify(args):
     require(shutil.which("mcw") is None, "Fresh Arch container already contains mcw")
     proof = args.proof.resolve()
     proof.mkdir(parents=True, exist_ok=True)
-    report = {"schema": 1, "status": "failed", "source_version": VERSION,
+    report = {"schema": 1, "status": "failed", "source_version": args.version,
               "scope": "native_arch_x86_64_source_package_private_pipewire_read_only_cli_pty",
               "completed": [], "hardware_capture": False, "privileged_bootstrap": False,
               "publication": "not_submitted"}
@@ -308,7 +307,7 @@ def qualify(args):
         upgrade = package_path("upgrade-package")
         record(proof, "upgrade", ["pacman", "-U", "--noconfirm", str(upgrade)], timeout=180)
         require(record(proof, "upgraded-version", ["pacman", "-Q", "miccamwatch"]).stdout.decode().strip()
-                == f"miccamwatch {VERSION}-2", "Pacman did not execute the real pkgrel upgrade")
+                == f"miccamwatch {args.version}-2", "Pacman did not execute the real pkgrel upgrade")
         record(proof, "upgraded-integrity", ["pacman", "-Qkk", "miccamwatch"])
         native("upgraded-native")
         report["completed"].append("real_pkgrel_upgrade_preserves_user_files_and_disabled_external_autostart")
@@ -334,6 +333,10 @@ def main():
     parser.add_argument("--smoke", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--home", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args()
+    version = re.search(r"^pkgver=([0-9]+\.[0-9]+\.[0-9]+)$",
+                        Path(__file__).with_name("PKGBUILD").read_text(), re.MULTILINE)
+    require(version is not None, "Qualification requires the recipe's declared release version")
+    args.version = version[1]
     if args.smoke:
         require(args.home is not None, "Internal smoke requires an isolated home")
         smoke(args)
