@@ -1451,5 +1451,35 @@ matched both authenticated public executable hashes; the repair exercised the
 published ZIP9 decoder. No tray or user-PC control was started. The old mapped
 CLI still emitted the documented retained-backup warning; active-tray inherited
 stdio is not fixed by this idle qualification.
-Unix migrations and updated web/package metadata are recorded separately;
-earlier release assets are not replaced.
+[Public Unix39029450053](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/39029450053)
+passed all Linux/macOS ARM/Intel installer jobs with bash/zsh/fish and the genuine
+0.18.0→0.18.1 managed upgrade. Both public native macOS standalone
+bootstrap/updater jobs also passed. These are not whole-app cross-version
+replacement or physical-capture proofs. Earlier release assets are not replaced.
+
+[Site CI39029747260](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/39029747260)
+passed for metadata source `cc0d3bf60f69c15c6d62790d2bacb5abf5f09600`.
+The live seven locale routes were exercised through their actual macOS tabs at
+1280/390 CSS pixels: two visible 0.18.1 DMG links, the full 034d2c1 source,
+canonical URLs, unresolved-token absence and keyboard ARM→Intel all passed.
+French desktop/mobile screenshots were reviewed; the managed browser was closed.
+Production installer bytes still match SHA-256 b7348c9a…3384d1bb. Prior screenshots,
+Russian hero/root-language limitations and signing/notarization boundaries are
+not relabeled or waived by this metadata update.
+
+[Arch39029747230](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/39029747230)
+passed native source-package qualification for 0.18.1: .SRCINFO/locked build,
+private PipeWire/PTY, genuine pacman install/reinstall/pkgrel upgrade/removal.
+The report records source_version0.18.1 and statuspassed, preservation of user
+fixtures/external disabled autostart, no hardware capture/privileged bootstrap
+and publication=not_submitted. This is not an AUR submission or Homebrew tap
+publication.
+
+[Post-publication integration CI39029747275](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/39029747275)
+also passed Windows, Linux and macOS ARM/Intel on metadata source
+`cc0d3bf60f69c15c6d62790d2bacb5abf5f09600`, including the unsuppressed
+dependency audit, native UI/lifecycle, app and package checks. This closes the
+coordinated corrective release qualification without moving either release tag.
+The newly requested cross-platform direct profile menu is recorded separately
+in ROADMAP P1-TRAY-PROFILES: macOS is delivered, Windows/Linux implementation
+is not claimed by 0.18.1.
