@@ -45,11 +45,11 @@ Les identifiants sont stables. À chaque livraison, remplacer l'état par **En c
 | P1-MAC-MENU | **Publié 0.18.0, AppKit réel qualifié** : quatre profils directs cochés, marque MCW template/badges, Details au-dessus d'Exit, sept langues et `--config` prioritaire | Moyenne | IPC desktop v2 frontend/helper appariés ; captures rendues et vraies fenêtres relues, données de capture simulées explicitement |
 | P1-MAC-UX | **Demandé pour la prochaine version, non implémenté** : statut compréhensible, vraie fenêtre de consultation, tray simplifié et À propos concis | Moyenne | Retours utilisateur macOS ; fenêtre AppKit native, diagnostic honnête et revue des actions superflues sans retirer d'accès utile |
 | P1-TRAY-PROFILES | **Demandé pour tous les OS** : quatre profils directement sélectionnables dans les menus Windows, Linux et macOS ; macOS livré 0.18.0, Windows/Linux à implémenter et qualifier | Moyenne | Choix directs cochés, logique/persistance existantes, priorité `--config`, souris/clavier et sept langues sur chaque frontend natif |
-| SITE-PAGES | **Publié et vérifié sur HTTPS Pages**, source web `cc0d3bf` : DMG 0.18.1 Apple Silicon/Intel et archives CLI, sept langues, vrai onglet macOS desktop/mobile/clavier exercé | Moyenne | CI site39029747260 réussie ; script HTTPS/SHA exact, ancien export local Windows refusé EPERM préservé ; marque/captures historiques non relabellées |
+| SITE-PAGES | **Publié et vérifié sur HTTPS Pages**, source web `277dd04` : racine anglaise et titres longs corrigés ; DMG/CLI0.18.1 et sept langues conservés | Moyenne | CI site39032505628 et Cloudflare5ff8f167 réussis ; archive CI récupérée/vérifiée et 133 scénarios HTTPS ; export local EPERM préservé, captures historiques non relabellées |
 | SITE-TOKENS | **Corrigé sur Pages, vérifié après déploiement `f1344bf`**. Build Git exécuté depuis racine dépôt, output `site-dist`, version/source/checksum réels ; source HTML brute n'est plus un entrypoint | Faible à Moyenne | Gardes build, source unique des faits, aucun token résiduel |
-| SITE-L10N | **Publié et exercé en production** : en/fr/de/es/ja/zh/ru, 227 messages chacun, DMG localisés et quatorze parcours macOS desktop/mobile/clavier vérifiés | Moyenne | CI site39029747260 réussie ; preuves no-JS/404 historiques conservées, images171 non relabellées, CSP reste restrictive |
-| SITE-HERO | **Corrigé en source, qualifié en preview Pages ; publication en cours** : titres longs autorisés à revenir à la ligne et navigation mobile repliable ; texte russe intégral, aucune troncature | Faible | 133 scénarios Chromium sur sept langues, rectangles de texte contre carte, largeurs320–1568, reflow équivalent125/150 % et texte200 % ; vrai HTTPS à vérifier |
-| SITE-DEFAULT-EN | **Corrigé en source, qualifié en preview Pages ; publication en cours** : accueil/404 racine anglais sans redirection de langue ; sept routes et sélecteur conservés | Faible | Navigateur français, `/` conservé, métadonnées en_US/canonical `/en/`, choix français et racine sans JS exercés ; vrai HTTPS à vérifier |
+| SITE-L10N | **Publié et exercé en production** : en/fr/de/es/ja/zh/ru, 227 messages chacun, titres longs et navigation mobile repliables ; DMG localisés conservés | Moyenne | CI site39032505628 ; 133 scénarios HTTPS sept langues, racine sans JS/français/russe et404 root/fr/ru observées ; images171 non relabellées, CSP inchangée |
+| SITE-HERO | **Publié et vérifié sur HTTPS**, source `277dd04` : titres longs autorisés à revenir à la ligne et navigation mobile repliable ; texte russe intégral, aucune troncature | Faible | 133 scénarios Chromium sur sept langues, rectangles de texte contre carte, largeurs320–1568, reflow équivalent125/150 % et texte200 % ; captures russes desktop/mobile relues |
+| SITE-DEFAULT-EN | **Publié et vérifié sur HTTPS**, source `277dd04` : accueil/404 racine anglais sans redirection de langue ; sept routes et sélecteur conservés | Faible | `/` conservé avec/sans JS et navigateurs français/russe ; métadonnées en_US/canonical `/en/`, choix français, cible installation et404 réelles root/fr/ru exercés |
 | SITE-INSTALL-404 | **Corrigé et exercé en production**. `/install.sh` Pages sert le script exact ; vrai curl serveur ASUS, installation native 0.17.2 puis uninstall possédé sous HOME temporaire | Faible à Moyenne | Maintenir payload/routage et digest ; aucun autostart/tray/protection/root-helper activé |
 | P1-RAM | Publié 0.17.0, validé logiciel/natif : bornes et mesures complètes, 15 Mo non atteints, scénario composé Windows ~43 Mo | Moyenne | Maintien des preuves/limites canoniques ; 30 Mo reste une référence |
 | P1-RESTORE | Publié 0.17.0, validé logiciel/natif : propriétaire Windows, états opposés/hotplug/partiel simulés, release natif réel sans devices | Élevée | Pas de certification matérielle ou déni exclusif/ASIO |
@@ -632,7 +632,7 @@ identiques et corrects dans tous les exports ; SITE-TOKENS doit être résolu.
 « Ваша осведомлённость » dépasse sa colonne ; la fin du mot passe derrière la
 carte de capture Windows et devient illisible. Dimension de l'image connue,
 viewport CSS/zoom exacts non établis. Défaut visuel établi par la capture.
-**Corrigé en source le17/10, qualifié en preview Pages ; publication HTTPS en cours.**
+**Publié et vérifié sur HTTPS le17/10, source web `277dd04`.**
 
 **Correction appliquée :** les titres partagés autorisent la césure selon la
 langue et le retour à la ligne de secours (`hyphens: auto`, `overflow-wrap:
@@ -655,14 +655,20 @@ leur inclusion dans la colonne et leur intersection avec la carte, pas seulement
 la largeur globale. Captures russes desktop et mobile relues ; aucune collision,
 troncature ou largeur globale excédentaire dans les cas normaux/de reflow.
 Les zooms sont émulés par viewport CSS/DPR, pas par le menu du navigateur.
-Le vrai HTTPS reste à contrôler après publication.
+
+**Qualification HTTPS du17/10 :** les mêmes133 scénarios ont été exercés sur
+le déploiement réel ; aucune collision de fragments avec la carte ni troncature.
+Captures russes desktop/mobile relues. CI site
+[39032505628](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/39032505628)
+réussie et check Cloudflare Pages du commit `277dd04` réussi
+(déploiement `5ff8f167-00e5-40ac-ae51-e707eebf683d`).
 
 ### SITE-DEFAULT-EN — Anglais à la racine sans préfixe
 
 **Demande utilisateur :** ouvrir **`https://miccamwatch.pages.dev/`** sans
 `/en/`, `/fr/` ou autre préfixe doit afficher le site **en anglais**, pas en
-français. **Correction source et preview Pages qualifiées le17/10 ; publication
-HTTPS en cours.** La présence de `/en/` seule ne satisfait pas cette demande.
+français. **Publié et vérifié sur HTTPS le17/10, source `277dd04`.**
+La présence de `/en/` seule ne satisfait pas cette demande.
 
 **Correction appliquée :** le générateur choisit le catalogue anglais pour
 l'accueil et la404 racine, sans redirection ni détection automatique de langue.
@@ -676,6 +682,15 @@ JavaScript, même si le navigateur est en français/russe. Liens d'installation,
 sélecteur et sept routes fonctionnels ; canonical/hreflang/x-default/sitemap
 cohérents, sans contradiction entre langue déclarée et contenu. Documentation,
 instructions de publication et nouvelle archive reflètent le défaut anglais.
+
+**Qualification HTTPS du17/10 :** racine200 anglaise sans changement d'URL,
+avec et sans JavaScript et navigateur français/russe ; vrai choix de langue vers
+`/fr/`, cible d'installation visible après défilement, `lang`/og:locale/canonical/
+hreflang/x-default cohérents. Routes inconnues :404 anglaise à la racine,
+française sous `/fr/` et russe sous `/ru/`. Nouvelle archive complète produite
+en privé et artefact `miccamwatch-pages` de la CI39032505628 récupéré :
+accueil/404 root anglais, CSS qualifiée identique hors CRLF Windows/LF Linux,
+script install.sh SHA b734 exact. Aucun nouvel installateur binaire ou tag.
 
 ### Résultat web du 2026-10-14
 
@@ -1009,3 +1024,4 @@ sur ces deux plateformes.
 | 2026-10-17 | Clôture corrective 0.18.1 / intégration | **Lot livré et vérifié de bout en bout**, CI39029747275 quatre OS réussie sur métadonnées `cc0d3bf` | Source034/tag0.18.1 immuables ; audit sans ignore, neuf assets/huit attestations/SBOM corrigé, Windows update/no-op/réparation, Unix trois OS, app native ARM/Intel, Arch et Pages sept langues qualifiés. Dernier commit de ce bilan documentaire distinct du tag | P1-TRAY-PROFILES tous OS inscrit : Windows/Linux restent à faire ; handoff stdout d'un tray actif, signatures/notarisation et limites matérielles/API restent explicites. Aucun changement de la paire PC0.17.2 ou des contrôles demandé |
 | 2026-10-17 | P1-MAC-UX — retours ami macOS pour la prochaine version | **Quatre demandes inscrites, non implémentées** | Statut peu clair, absence de vraie fenêtre de consultation, entrées tray potentiellement superflues à examiner, ajout d'un À propos présentant brièvement MicCamWatch ; section et critères dédiés ajoutés | Réaliser et vérifier les quatre surfaces natives ; choix précis des entrées à retirer après revue, profils directs tous OS conservés dans P1-TRAY-PROFILES |
 | 2026-10-17 | SITE-DEFAULT-EN / SITE-HERO — correctifs | **Source corrigée et preview qualifiée ; publication HTTPS en cours** | Export réel racine accueil/404 anglais et quatorze pages localisées ; quatre tests Node ; Chromium français sans redirection, choix `/fr/`,404 root et racine sans JS ; 133 scénarios de lisibilité/rectangles sur sept langues, dont reflow équivalent125/150 % et texte200 % | Publier, observer le vrai HTTPS et consigner CI/archives ; ni version binaire ni installation/contrôle PC modifiés |
+| 2026-10-17 | SITE-DEFAULT-EN / SITE-HERO — clôture HTTPS | **Publié et vérifié**, source web `277dd04`, CI site39032505628/Cloudflare5ff8f167 réussis | 133 scénarios réels sur sept langues et captures russes relues ; racine200 anglaise avec/sans JS et navigateurs français/russe,404 réelles anglaise/française/russe, sélecteur et installation exercés ; métadonnées et nouvelle archive CI vérifiées | Aucun reste sur ces deux correctifs ; P1-MAC-UX et profils directs Windows/Linux restent pour la prochaine version. Binaires/tags/PC0.17.2 et contrôles inchangés ; zoom qualifié par reflow CSS/DPR, pas par menu navigateur |
