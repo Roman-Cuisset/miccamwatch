@@ -278,6 +278,19 @@ unchanged protections were verified read-only instead, without rerunning update.
 The private migration also retained a mapped-old-CLI cleanup warning; no security
 protection or quarantine was bypassed.
 
+## v0.18.1 — ZIP dependency security maintenance
+
+Version 0.18.1 upgrades the Windows updater to `self_update` 1.3.1 and ZIP 9;
+qualification/publication status is recorded in ROADMAP. It removes the ZIP
+versions affected by [RUSTSEC-2026-0367](https://rustsec.org/advisories/RUSTSEC-2026-0367),
+[0368](https://rustsec.org/advisories/RUSTSEC-2026-0368) and
+[0369](https://rustsec.org/advisories/RUSTSEC-2026-0369), issued 2026-10-17.
+The advisories concern upstream full/stream extraction and Unix permission or
+symlink handling. MCW selects two named executable entries through the single-file
+Windows updater; no MCW exploit is demonstrated. The dependency is nevertheless
+updated rather than ignored. Privacy behavior and permission requirements are
+unchanged; the published 0.18.0 tag/assets remain immutable.
+
 ## v0.18.0 — Unix diagnostics and native macOS application
 
 Version 0.18.0 adds the following capabilities; publication and qualification status is recorded in ROADMAP.

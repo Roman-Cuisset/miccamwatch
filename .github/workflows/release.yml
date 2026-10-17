@@ -190,8 +190,9 @@ jobs:
           prerelease: ${{ vars.WINDOWS_RELEASE_APPROVED != 'true' }}
           make_latest: ${{ vars.WINDOWS_RELEASE_APPROVED == 'true' }}
           body: |
-            ## Native macOS app, scoped diagnostics and direct profiles
+            ## ZIP dependency security maintenance and native macOS app
 
+            - Windows updater dependencies now use self_update 1.3.1 and ZIP 9, removing versions affected by RUSTSEC-2026-0367, RUSTSEC-2026-0368 and RUSTSEC-2026-0369 (issued 2026-10-17). No advisory is ignored. The upstream full/stream extraction issues concern Unix permissions/symlinks; MCW selects two named Windows executables, so no MCW exploit is demonstrated. Privacy behavior and permissions are unchanged; earlier tags/assets remain immutable.
             - Windows ZIP/MSI publication requires the explicit repository gate WINDOWS_RELEASE_APPROVED=true and a successful Windows build. This gate is independent of signing: a configured certificate signs and verifies both EXEs and MSI; absent a certificate they are unsigned. Neither signing, tests nor provenance is antivirus clearance. Quarantined executables are not restored or automatically reinstalled.
             - With approved Windows artifacts, this coordinated release is stable/latest for Windows, Linux and both macOS architectures. Otherwise it remains an explicitly selected Unix prerelease and does not replace stable latest. Use the public Unix installer without --version to follow stable, or --version ${{ github.ref_name }} to pin this release.
             - Partial Windows camera/client attribution no longer hides known microphone/camera activity behind a generic grey error cross. An amber exclamation distinguishes incomplete coverage from camera-ready pause and real collection/control failures. Complete details retain Active/Ready accesses, known or unknown PID identities, collector reasons, observation gaps and protection/notification errors; a healthy refresh recovers without clearing unrelated manual failures.

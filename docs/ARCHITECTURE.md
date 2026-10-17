@@ -1387,5 +1387,45 @@ Russian hero overlap/default-root-language work.
 Arch39025249674 built and installed the pinned 0.18.0 package, then its smoke
 rejected the installed version against an obsolete hardcoded 0.17.2 expectation.
 The fixture now obtains its expected CLI/helper/pacman version from the readonly
-recipe rather than maintaining a second release pin. Native requalification is
-required; no tap/AUR publication is implied by updated recipes.
+recipe rather than maintaining a second release pin.
+[Arch39025771494](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/39025771494)
+passed on `8782e5f4aedacfac919932629c069f0d2454faa4`: native locked source build
+and .SRCINFO, C/Rust SPA roundtrip, private PipeWire/PTY, pacman install/reinstall,
+real pkgrel upgrade and removal. The final report is `passed`, source_version
+`0.18.0`; settings/history and external disabled autostart were preserved, with
+no privileged bootstrap or hardware capture. The two package artifacts are CI
+proof, not submitted AUR packages. Tap/AUR publication still requires its
+separate external prerequisites.
+
+Production `/install.sh` was also fetched over HTTPS as text/plain and matched
+the unchanged installer SHA-256
+`b7348c9a6f37a3d4f89faa2b767fd4880162d90c8f5d7c151185e0823384d1bb`.
+
+## 0.18.1: ZIP dependency security maintenance
+
+Post-publication CI39025249652 passed Linux and both macOS jobs, but Windows
+stopped at dependency audit after its format/clippy/unit steps. RustSec issued
+three ZIP advisories on 2026-10-17, after the 0.18.0 publication:
+[0367](https://rustsec.org/advisories/RUSTSEC-2026-0367),
+[0368](https://rustsec.org/advisories/RUSTSEC-2026-0368) and
+[0369](https://rustsec.org/advisories/RUSTSEC-2026-0369). Its fresh database
+reported ZIP8.6.0 affected, with ZIP>=9.0.0 patched. No audit ignore is added.
+
+Source 0.18.1 upgrades self_update1.3.0→1.3.1, ZIP8.6.0→9.0.4 and the
+associated zipsign-api0.2.1→0.2.2, including the Windows dev dependency.
+The current client uses `Extract::extract_file` for two fixed Windows executable
+names, not upstream full/stream Unix archive extraction. Its single-file path
+rejects symlink entries and masks privileged Unix mode bits; no MCW exploit has
+been demonstrated. This reachability boundary does not justify retaining an
+affected dependency or pretending the audit succeeded.
+
+Local audit scanned all 462 locked dependencies against 1,334 advisories and
+reported no vulnerabilities. Format/clippy, 167 tests (two ignored), release
+build and the actual `mcw 0.18.1` version command passed. A throwaway native
+single-file extractor using self_update1.3.1/ZIP9.0.4 decoded the already verified
+public 0.18.0 ZIP: both executable SHA-256 hashes matched the authentic members;
+the extracted executables were not launched. Its source harness was removed.
+Coordinated four-platform qualification remains required before patch publication.
+The 0.18.0 tag and assets are not rewritten. No user-PC tray/guard or capture
+application is stopped, and this maintenance does not add authentication,
+automatic retries, privacy controls or broader administrative access.

@@ -59,7 +59,7 @@ def main():
     report = dict(status='failed', device_control_tested=False, physical_capture_tested=False,
                   developer_id_or_notarization_asserted=False,
                   cross_version_app_upgrade_tested=False,
-                  replacement_scope='same-build whole-bundle replacement; first public .app',
+                  replacement_scope='same-build whole-bundle replacement',
                   os_authorization_granted=False)
 
     def record(name, argv, env=None, codes=(0,), timeout=60):
