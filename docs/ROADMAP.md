@@ -43,6 +43,7 @@ Les identifiants sont stables. À chaque livraison, remplacer l'état par **En c
 | P0-UNIX-DIAG | **Publié 0.18.0** : captures conservées, avertissement distinct, causes dans Details, lecture inconnue distincte d'une action échouée | Moyenne | CI exacte38863239649 et release38865573731 quatre OS vertes ; limites de mesure et matérielles conservées |
 | P0-UNIX-OBS | **Publié 0.18.0, qualifié logiciellement** : inspection macOS passive sans état écrit, lecture globale fixe préautorisée, Cancel natif et disparition du helper au départ du propriétaire | Élevée | Consentement OS Accepter/Refuser avec identifiants humains non exercé ; pas de grant TCC ni preuve de capture, UAC/Polkit inchangés |
 | P1-MAC-MENU | **Publié 0.18.0, AppKit réel qualifié** : quatre profils directs cochés, marque MCW template/badges, Details au-dessus d'Exit, sept langues et `--config` prioritaire | Moyenne | IPC desktop v2 frontend/helper appariés ; captures rendues et vraies fenêtres relues, données de capture simulées explicitement |
+| P1-TRAY-PROFILES | **Demandé pour tous les OS** : quatre profils directement sélectionnables dans les menus Windows, Linux et macOS ; macOS livré 0.18.0, Windows/Linux à implémenter et qualifier | Moyenne | Choix directs cochés, logique/persistance existantes, priorité `--config`, souris/clavier et sept langues sur chaque frontend natif |
 | SITE-PAGES | **Publié et vérifié sur HTTPS Pages**, source web `f7dcdb1` : DMG 0.18.0 Apple Silicon/Intel et archives CLI, sept langues, vrai onglet macOS desktop/mobile/clavier exercé | Moyenne | CI site39025249706 réussie ; ancien export local Windows refusé EPERM, préservé ; marque/captures historiques non relabellées |
 | SITE-TOKENS | **Corrigé sur Pages, vérifié après déploiement `f1344bf`**. Build Git exécuté depuis racine dépôt, output `site-dist`, version/source/checksum réels ; source HTML brute n'est plus un entrypoint | Faible à Moyenne | Gardes build, source unique des faits, aucun token résiduel |
 | SITE-L10N | **Publié et exercé en production** : en/fr/de/es/ja/zh/ru, 227 messages chacun, DMG localisés et quatorze parcours macOS desktop/mobile/clavier vérifiés | Moyenne | CI site39025249706 réussie ; preuves no-JS/404 historiques conservées, images171 non relabellées, CSP reste restrictive |
@@ -855,12 +856,33 @@ pas promettre une couleur orange sur cette icône monochrome.
 - **Profil :** sous-menu avec choix direct Balanced/Private/Meeting/Development,
   état sélectionné visible ; ne plus imposer le cycle successif. Un `--config`
   explicite reste prioritaire sur le profil de préférence.
+  La sélection directe n'est pas réservée à macOS : la parité Windows/Linux est
+  suivie séparément dans P1-TRAY-PROFILES ci-dessous.
 - **Icône :** identité MCW reconnaissable avec le logo autorisé du site ; expliquer
   les badges d'état, sans remplacer une activité par un symbole générique.
 - **Ordre :** placer Details au-dessus de Exit ; vérifier navigation clavier,
   diagnostic complet, lisibilité des sept langues et menu réellement affiché.
 - **Distribution :** `.app`/`.dmg`, logo Finder et barre de menus relèvent de
   P1-MAC-APP-DMG ; demandes inscrites, pas encore des artefacts publiés.
+
+## P1-TRAY-PROFILES — Sélection directe des profils sur tous les OS
+
+**Demande utilisateur :** proposer les quatre profils directement dans les menus
+natifs Windows, Linux et macOS, pas uniquement dans le menu AppKit.
+**État :** macOS livré et qualifié depuis 0.18.0 ; Windows et Linux restent à
+implémenter puis à exercer réellement. Ce lot n'est pas annoncé comme déjà livré
+sur ces deux plateformes.
+
+- Présenter Balanced, Private, Meeting et Development comme quatre choix directs,
+  avec le profil actif clairement coché ; ne pas imposer de clics successifs pour
+  faire défiler les profils.
+- Réutiliser la logique de profil et la persistance existantes ; conserver la
+  priorité d'un `--config` explicite et rendre visible un choix désactivé/non
+  applicable plutôt qu'une fausse sélection.
+- Vérifier les vrais menus natifs Windows, Linux et macOS : sélection à la souris
+  et au clavier, changement du choix coché, conservation après redémarrage,
+  configuration explicite et lisibilité des sept langues. Une preuve AppKit
+  seule ne valide pas Windows ou Linux.
 
 ## Livraison Git, releases et suivi à chaque lot majeur
 
@@ -931,3 +953,4 @@ pas promettre une couleur orange sur cette icône monochrome.
 | 2026-10-17 | Qualification native Arch 0.18.0 `8782e5f` | **Réussie**, CI39025771494/report source_version0.18.0 statuspassed | .SRCINFO/build source locked, C/Rust SPA réel, PipeWire privé/PTY, pacman install/reinstall/vrai pkgrel-upgrade/remove ; préférences/historique/autostart externe désactivé préservés, aucun bootstrap privilégié. `install.sh` Pages HTTPS/textplain/SHA b734 exact ; marqueur de version du smoke dérivé de recette | Aucune publication AUR/tap ni nouvelle permission/installation PC ; limites macOS API, consentement OS humain, matériel et mémoire inchangées. Tag0.18.0 reste immuable |
 | 2026-10-17 | P0-DEPS-ZIP — audit postpublication | **CI39025249652 échouée à l'audit Windows**, Linux/ARM/Intel réussis ; source corrective0.18.1 en qualification | RustSec0367/0368/0369 émis le17/10, ZIP8.6.0 affecté/patched>=9.0.0 ; self_update1.3.1 publié ce jour utilise ZIP9. Manifest/lock migrés vers ZIP9.0.4 et zipsign-api0.2.2, aucune exception d'audit. MCW sélectionne deux exécutables Windows via extraction single-file refusant les symlinks ; pas d'exploitation MCW prouvée | Vérifier audit et véritable extraction de ZIP publique, puis CI4OS/tagcorrectif/9assets/provenance/migrations/site. Stable reste0.18.0 pendant qualification ; PC0.17.2 préservé |
 | 2026-10-17 | P0-DEPS-ZIP — qualification locale 0.18.1 | **Audit sans avis signalé et vraie extraction native réussis**, source non publiée | 462 dépendances/1334 avis, fmt/Clippy/167 tests (2 ignorés), build release/CLI réelle0.18.1 ; extracteur single-file self_update1.3.1/ZIP9.0.4 sur ZIP publique0.18 attestée, deux hashes exécutables exacts. Source de smoke jetable retirée ; workflow public Windows paramétré prépare update/no-op/réparation d'un compagnon absent sur runner jetable | CI4OS et releasecorrective avant site/recettes ; aucune exécution des anciens exécutables extraits ni mutation des contrôles PC |
+| 2026-10-17 | P1-TRAY-PROFILES — extension demandée à tous les OS | **Inscrit, Windows/Linux non implémentés dans ce lot** | L'utilisateur précise que les quatre choix directs de profils doivent être proposés dans tous les menus natifs, pas seulement macOS. État macOS0.18.0 livré conservé ; lot multiplateforme et critères dédiés ajoutés | Implémenter/qualifier Windows et Linux avec choix coché, persistance, priorité config explicite et souris/clavier/sept langues ; ne pas présenter la seule preuve Mac comme parité acquise |
