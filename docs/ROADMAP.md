@@ -43,6 +43,7 @@ Les identifiants sont stables. À chaque livraison, remplacer l'état par **En c
 | P0-UNIX-DIAG | **Publié 0.18.0** : captures conservées, avertissement distinct, causes dans Details, lecture inconnue distincte d'une action échouée | Moyenne | CI exacte38863239649 et release38865573731 quatre OS vertes ; limites de mesure et matérielles conservées |
 | P0-UNIX-OBS | **Publié 0.18.0, qualifié logiciellement** : inspection macOS passive sans état écrit, lecture globale fixe préautorisée, Cancel natif et disparition du helper au départ du propriétaire | Élevée | Consentement OS Accepter/Refuser avec identifiants humains non exercé ; pas de grant TCC ni preuve de capture, UAC/Polkit inchangés |
 | P1-MAC-MENU | **Publié 0.18.0, AppKit réel qualifié** : quatre profils directs cochés, marque MCW template/badges, Details au-dessus d'Exit, sept langues et `--config` prioritaire | Moyenne | IPC desktop v2 frontend/helper appariés ; captures rendues et vraies fenêtres relues, données de capture simulées explicitement |
+| P1-MAC-UX | **Demandé pour la prochaine version, non implémenté** : statut compréhensible, vraie fenêtre de consultation, tray simplifié et À propos concis | Moyenne | Retours utilisateur macOS ; fenêtre AppKit native, diagnostic honnête et revue des actions superflues sans retirer d'accès utile |
 | P1-TRAY-PROFILES | **Demandé pour tous les OS** : quatre profils directement sélectionnables dans les menus Windows, Linux et macOS ; macOS livré 0.18.0, Windows/Linux à implémenter et qualifier | Moyenne | Choix directs cochés, logique/persistance existantes, priorité `--config`, souris/clavier et sept langues sur chaque frontend natif |
 | SITE-PAGES | **Publié et vérifié sur HTTPS Pages**, source web `cc0d3bf` : DMG 0.18.1 Apple Silicon/Intel et archives CLI, sept langues, vrai onglet macOS desktop/mobile/clavier exercé | Moyenne | CI site39029747260 réussie ; script HTTPS/SHA exact, ancien export local Windows refusé EPERM préservé ; marque/captures historiques non relabellées |
 | SITE-TOKENS | **Corrigé sur Pages, vérifié après déploiement `f1344bf`**. Build Git exécuté depuis racine dépôt, output `site-dist`, version/source/checksum réels ; source HTML brute n'est plus un entrypoint | Faible à Moyenne | Gardes build, source unique des faits, aucun token résiduel |
@@ -865,6 +866,42 @@ pas promettre une couleur orange sur cette icône monochrome.
 - **Distribution :** `.app`/`.dmg`, logo Finder et barre de menus relèvent de
   P1-MAC-APP-DMG ; DMG Apple Silicon/Intel publiés depuis 0.18.0, version courante indiquée dans la base publiée.
 
+## P1-MAC-UX — Prochaine version : statut, fenêtre, menu et À propos
+
+**Origine :** retour de l'ami de l'utilisateur sur macOS : le statut reste peu
+compréhensible, aucune fenêtre de programme ne permet de consulter les
+informations, certains éléments du tray semblent superflus et une courte
+présentation dans « À propos… » manque.
+**État :** demandé pour la prochaine version ; non implémenté, sans numéro de
+version future figé. Les validations du menu actuel ne clôturent pas ces retours.
+
+1. **Clarifier le statut.** Présenter un résumé lisible du micro et de la caméra,
+   en distinguant activité observée, protection demandée/effective et couverture
+   incomplète. Expliquer simplement les états inconnus/dégradés et leurs causes,
+   sans masquer une limite API ni faire croire qu'un droit admin suffit toujours.
+2. **Ajouter une vraie fenêtre de consultation.** Fournir une fenêtre AppKit
+   native accessible depuis le tray ; la réouverture de l'app doit permettre
+   d'afficher la fenêtre existante sans doublon. Montrer l'état micro/caméra,
+   les accès connus et les diagnostics utiles, sans imposer le Terminal ni se
+   limiter à une alerte « Details ». Conserver un fonctionnement discret en
+   arrière-plan ; fermer la fenêtre ne doit pas implicitement quitter le tray
+   ou modifier les contrôles.
+3. **Simplifier le menu tray.** Examiner les entrées réellement utiles, retirer
+   les doublons et regrouper/déplacer les options avancées dans la fenêtre si
+   pertinent. Les éléments précis à retirer restent à décider après cette revue :
+   ne pas supprimer arbitrairement une commande ou l'accès aux diagnostics.
+   Conserver la sélection directe des profils prévue par P1-TRAY-PROFILES.
+4. **Ajouter « À propos… ».** Afficher la version et une présentation courte,
+   par exemple : « MicCamWatch est une application de surveillance des accès
+   au microphone et à la caméra. Elle affiche les informations rendues visibles
+   par le système, sans enregistrer de son ni d'image. » Ne pas promettre une
+   attribution ou un blocage que macOS ne permet pas.
+
+**Validation :** vrais statut/fenêtre/menu/À propos sous macOS, compréhension des
+états actif/inactif/inconnu/dégradé, ouverture/réouverture/fermeture sans doublon,
+navigation clavier et lisibilité des sept langues. Aucun droit, autostart ou
+contrôle de confidentialité ne doit être activé implicitement par ces surfaces.
+
 ## P1-TRAY-PROFILES — Sélection directe des profils sur tous les OS
 
 **Demande utilisateur :** proposer les quatre profils directement dans les menus
@@ -960,3 +997,4 @@ sur ces deux plateformes.
 | 2026-10-17 | Migrations Unix publiques correctives 0.18.1 | **Réussies**, workflow39029450053 trois OS vert | Linux/macOS ARM/Intel, installer bash/zsh/fish et migration0.18.0→0.18.1, bootstrap/updater standalone Mac réels passés ; aucun exit77 substitué à une preuve de migration, pas de capture ou permission humaine revendiquée | Qualification Arch39029747230 et intégration39029747275 encore suivies ; politiques/contrôles PC0.17.2 et tags antérieurs préservés |
 | 2026-10-17 | Qualification Arch corrective 0.18.1 | **Réussie**, CI39029747230/report source_version0.18.1 statuspassed | Source034/SHA c2aa, .SRCINFO/build locked, PipeWire privé/PTY et pacman install/reinstall/pkgrel-upgrade/remove ; préférences/historique/autostart externe désactivé préservés, aucun bootstrap privilégié. Rapports et paquets de preuve conservés, publication=not_submitted | Aucun tap/AUR soumis, ni changement PC ; CI intégration39029747275 encore suivie, tag0.18.1 non déplacé |
 | 2026-10-17 | Clôture corrective 0.18.1 / intégration | **Lot livré et vérifié de bout en bout**, CI39029747275 quatre OS réussie sur métadonnées `cc0d3bf` | Source034/tag0.18.1 immuables ; audit sans ignore, neuf assets/huit attestations/SBOM corrigé, Windows update/no-op/réparation, Unix trois OS, app native ARM/Intel, Arch et Pages sept langues qualifiés. Dernier commit de ce bilan documentaire distinct du tag | P1-TRAY-PROFILES tous OS inscrit : Windows/Linux restent à faire ; handoff stdout d'un tray actif, signatures/notarisation et limites matérielles/API restent explicites. Aucun changement de la paire PC0.17.2 ou des contrôles demandé |
+| 2026-10-17 | P1-MAC-UX — retours ami macOS pour la prochaine version | **Quatre demandes inscrites, non implémentées** | Statut peu clair, absence de vraie fenêtre de consultation, entrées tray potentiellement superflues à examiner, ajout d'un À propos présentant brièvement MicCamWatch ; section et critères dédiés ajoutés | Réaliser et vérifier les quatre surfaces natives ; choix précis des entrées à retirer après revue, profils directs tous OS conservés dans P1-TRAY-PROFILES |
