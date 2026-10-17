@@ -1425,7 +1425,31 @@ build and the actual `mcw 0.18.1` version command passed. A throwaway native
 single-file extractor using self_update1.3.1/ZIP9.0.4 decoded the already verified
 public 0.18.0 ZIP: both executable SHA-256 hashes matched the authentic members;
 the extracted executables were not launched. Its source harness was removed.
-Coordinated four-platform qualification remains required before patch publication.
+[CI39027055886](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/39027055886)
+then passed all four platforms, including the Windows dependency audit.
 The 0.18.0 tag and assets are not rewritten. No user-PC tray/guard or capture
 application is stopped, and this maintenance does not add authentication,
 automatic retries, privacy controls or broader administrative access.
+
+### Public v0.18.1
+
+The immutable annotated tag fixes
+`034d2c1e5cd5a2f06bf40fc69d0b15bed83defcc`.
+[Release39028452282](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/39028452282)
+passed Windows packaging and all three Unix/native app jobs; Windows remains
+unsigned and macOS ad-hoc, without Developer ID/notarization. Stable/latest is
+0.18.1, published 2026-10-17. All nine public assets were downloaded separately;
+API sizes/digests, eight exact manifest entries and eight release attestations
+matched this workflow/tag/full source with self-hosted runners denied.
+The authenticated public SBOM declares self_update1.3.1, ZIP9.0.4 and
+zipsign-api0.2.2. The immutable source archive is 1,191,879 bytes, SHA-256
+`c2aa153f1424b96b04b662703a5d0c1141baea5e51dac1db3f5794d4747afb17`.
+[Public Windows39029450035](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/39029450035)
+passed genuine 0.18.0→0.18.1 update, unchanged paired no-op and same-version
+repair after deliberately removing the private runner companion. Every phase
+matched both authenticated public executable hashes; the repair exercised the
+published ZIP9 decoder. No tray or user-PC control was started. The old mapped
+CLI still emitted the documented retained-backup warning; active-tray inherited
+stdio is not fixed by this idle qualification.
+Unix migrations and updated web/package metadata are recorded separately;
+earlier release assets are not replaced.
