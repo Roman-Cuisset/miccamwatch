@@ -594,13 +594,15 @@ Build from the repository root with Node.js (qualified here under Node 24):
 node site/build.mjs
 ```
 
-Output: **`site-dist/`**, with a French default `index.html`, `/en/`, `/fr/`,
-`/de/`, `/es/`, `/ja/`, `/zh/`, `/ru/`, localized 404 pages and root `install.sh`.
+Output: **`site-dist/`**, with English default `index.html` and `404.html`, `/en/`,
+`/fr/`, `/de/`, `/es/`, `/ja/`, `/zh/`, `/ru/`, localized 404 pages and root `install.sh`.
 The exporter verifies the canonical installer SHA-256 and every catalog,
 substitutes release facts, and rejects missing translations or modified technical
 markup/code/tokens rather than silently falling back. It refuses unowned/symlinked
 output and preserves unrelated files. Upload the output, **never `site/`**;
 the latter contains build inputs, not a deployable website.
+The root stays English regardless of browser language; language selection uses
+the explicit locale links, without an automatic language redirect.
 
 ### Publish by direct upload
 

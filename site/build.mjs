@@ -248,7 +248,7 @@ async function build() {
         const localized = localizedPage(template, catalog, filename);
         const rendered = renderText(localized, filename, release, origin, catalog);
         await writeGenerated(stage, `${catalog.language}/${filename}`, rendered, generated);
-        if (catalog.language === 'fr') await writeGenerated(stage, filename, rendered, generated);
+        if (catalog.language === 'en') await writeGenerated(stage, filename, rendered, generated);
       }
     }
     for (const asset of assets) {

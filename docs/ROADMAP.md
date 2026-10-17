@@ -48,8 +48,8 @@ Les identifiants sont stables. À chaque livraison, remplacer l'état par **En c
 | SITE-PAGES | **Publié et vérifié sur HTTPS Pages**, source web `cc0d3bf` : DMG 0.18.1 Apple Silicon/Intel et archives CLI, sept langues, vrai onglet macOS desktop/mobile/clavier exercé | Moyenne | CI site39029747260 réussie ; script HTTPS/SHA exact, ancien export local Windows refusé EPERM préservé ; marque/captures historiques non relabellées |
 | SITE-TOKENS | **Corrigé sur Pages, vérifié après déploiement `f1344bf`**. Build Git exécuté depuis racine dépôt, output `site-dist`, version/source/checksum réels ; source HTML brute n'est plus un entrypoint | Faible à Moyenne | Gardes build, source unique des faits, aucun token résiduel |
 | SITE-L10N | **Publié et exercé en production** : en/fr/de/es/ja/zh/ru, 227 messages chacun, DMG localisés et quatorze parcours macOS desktop/mobile/clavier vérifiés | Moyenne | CI site39029747260 réussie ; preuves no-JS/404 historiques conservées, images171 non relabellées, CSP reste restrictive |
-| SITE-HERO | **Signalé, à corriger** : titre russe desktop trop large, mot « осведомлённость » masqué derrière la carte de capture ; chevauchement des colonnes malgré absence possible de scrollbar globale | Faible | Typographie/grille responsive, toutes langues et zoom ; aucun texte tronqué pour cacher le défaut |
-| SITE-DEFAULT-EN | **Demandé, à faire** : `https://miccamwatch.pages.dev/` sans préfixe doit présenter le site anglais, et non français ; conserver les sept routes explicites et le sélecteur | Faible | Export accueil/404 par défaut anglais, lang/SEO et liens cohérents ; pas de redirection forcée vers une autre langue |
+| SITE-HERO | **Corrigé en source, qualifié en preview Pages ; publication en cours** : titres longs autorisés à revenir à la ligne et navigation mobile repliable ; texte russe intégral, aucune troncature | Faible | 133 scénarios Chromium sur sept langues, rectangles de texte contre carte, largeurs320–1568, reflow équivalent125/150 % et texte200 % ; vrai HTTPS à vérifier |
+| SITE-DEFAULT-EN | **Corrigé en source, qualifié en preview Pages ; publication en cours** : accueil/404 racine anglais sans redirection de langue ; sept routes et sélecteur conservés | Faible | Navigateur français, `/` conservé, métadonnées en_US/canonical `/en/`, choix français et racine sans JS exercés ; vrai HTTPS à vérifier |
 | SITE-INSTALL-404 | **Corrigé et exercé en production**. `/install.sh` Pages sert le script exact ; vrai curl serveur ASUS, installation native 0.17.2 puis uninstall possédé sous HOME temporaire | Faible à Moyenne | Maintenir payload/routage et digest ; aucun autostart/tray/protection/root-helper activé |
 | P1-RAM | Publié 0.17.0, validé logiciel/natif : bornes et mesures complètes, 15 Mo non atteints, scénario composé Windows ~43 Mo | Moyenne | Maintien des preuves/limites canoniques ; 30 Mo reste une référence |
 | P1-RESTORE | Publié 0.17.0, validé logiciel/natif : propriétaire Windows, états opposés/hotplug/partiel simulés, release natif réel sans devices | Élevée | Pas de certification matérielle ou déni exclusif/ASIO |
@@ -631,15 +631,14 @@ identiques et corrects dans tous les exports ; SITE-TOKENS doit être résolu.
 **Signalement utilisateur, capture 1568×658 :** sur la page russe, le titre
 « Ваша осведомлённость » dépasse sa colonne ; la fin du mot passe derrière la
 carte de capture Windows et devient illisible. Dimension de l'image connue,
-viewport CSS/zoom exacts non établis. Défaut visuel établi par la capture,
-**non corrigé** ; ne pas refaire un contrôle uniquement pour confirmer le signalement.
+viewport CSS/zoom exacts non établis. Défaut visuel établi par la capture.
+**Corrigé en source le17/10, qualifié en preview Pages ; publication HTTPS en cours.**
 
-**Correction attendue :** adapter la grille et la typographie du hero aux
-traductions longues, avec largeur de colonne, taille de titre et retours à la
-ligne cohérents. Vérifier les contraintes de largeur intrinsèque/min-width et
-les breakpoints avant de choisir le correctif ; ne pas attribuer une cause CSS
-exacte sans inspection. Ne pas cacher/tronquer le texte, déplacer simplement le
-problème ou remplacer la traduction par une formulation artificiellement courte.
+**Correction appliquée :** les titres partagés autorisent la césure selon la
+langue et le retour à la ligne de secours (`hyphens: auto`, `overflow-wrap:
+anywhere`). Les colonnes conservent leur `min-width: 0` existant ; la navigation
+mobile peut passer sur plusieurs lignes pour les libellés longs. Aucun texte
+masqué, raccourci ou tronqué ; aucune réduction artificielle de la traduction.
 
 **Acceptation :** titre russe intégralement lisible, aucune collision entre
 texte et carte ; même qualité pour les sept langues en desktop/tablette/mobile,
@@ -647,19 +646,30 @@ aux largeurs voisines des breakpoints et avec zoom 100/125/150 %. Contrôler le
 chevauchement réel des éléments, pas seulement `scrollWidth > innerWidth`.
 Les smokes précédents restent datés et ne prouvent pas cette absence de collision.
 
+**Qualification privée du17/10 :** export réel sous Wrangler Pages4.149.0,
+quatre tests de localisation réussis et 133 scénarios Chromium sur les sept
+langues : 56 largeurs normales320/390/800/801/900/1024/1280/1568, 21 cas avec
+texte agrandi200 %, 56 reflows équivalents aux zooms125/150 % pour les surfaces
+1568/1280/1024/390. La mesure porte sur les rectangles des fragments de texte,
+leur inclusion dans la colonne et leur intersection avec la carte, pas seulement
+la largeur globale. Captures russes desktop et mobile relues ; aucune collision,
+troncature ou largeur globale excédentaire dans les cas normaux/de reflow.
+Les zooms sont émulés par viewport CSS/DPR, pas par le menu du navigateur.
+Le vrai HTTPS reste à contrôler après publication.
+
 ### SITE-DEFAULT-EN — Anglais à la racine sans préfixe
 
 **Demande utilisateur :** ouvrir **`https://miccamwatch.pages.dev/`** sans
 `/en/`, `/fr/` ou autre préfixe doit afficher le site **en anglais**, pas en
-français. L'export actuel conserve le français à la racine ; **changement non
-appliqué**. Ne pas présenter la présence de `/en/` comme une réponse suffisante.
+français. **Correction source et preview Pages qualifiées le17/10 ; publication
+HTTPS en cours.** La présence de `/en/` seule ne satisfait pas cette demande.
 
-**Correction attendue :** générer l'accueil par défaut en anglais à `/`, avec
-`lang="en"` et textes/metadata/feedback cohérents. Conserver `/en/`, `/fr/`,
-`/de/`, `/es/`, `/ja/`, `/zh/`, `/ru/` et le choix manuel de langue ; ne pas
-forcer une autre langue selon le navigateur ni imposer une redirection vers
-un préfixe pour obtenir l'accueil anglais demandé. Harmoniser la 404 de racine
-et la navigation sans préfixe ; les 404 sous un préfixe restent localisées.
+**Correction appliquée :** le générateur choisit le catalogue anglais pour
+l'accueil et la404 racine, sans redirection ni détection automatique de langue.
+Les sept routes, le choix manuel et les404 localisées restent présents.
+`lang="en"`/`og:locale=en_US`, canonical `/en/` et x-default `/` sont cohérents
+avec le contenu anglais ; le catalogue français reste le maître de validation
+des traductions, distinct de la langue par défaut des visiteurs.
 
 **Acceptation :** vrai HTTPS `/` anglais, URL racine conservée, avec et sans
 JavaScript, même si le navigateur est en français/russe. Liens d'installation,
@@ -998,3 +1008,4 @@ sur ces deux plateformes.
 | 2026-10-17 | Qualification Arch corrective 0.18.1 | **Réussie**, CI39029747230/report source_version0.18.1 statuspassed | Source034/SHA c2aa, .SRCINFO/build locked, PipeWire privé/PTY et pacman install/reinstall/pkgrel-upgrade/remove ; préférences/historique/autostart externe désactivé préservés, aucun bootstrap privilégié. Rapports et paquets de preuve conservés, publication=not_submitted | Aucun tap/AUR soumis, ni changement PC ; CI intégration39029747275 encore suivie, tag0.18.1 non déplacé |
 | 2026-10-17 | Clôture corrective 0.18.1 / intégration | **Lot livré et vérifié de bout en bout**, CI39029747275 quatre OS réussie sur métadonnées `cc0d3bf` | Source034/tag0.18.1 immuables ; audit sans ignore, neuf assets/huit attestations/SBOM corrigé, Windows update/no-op/réparation, Unix trois OS, app native ARM/Intel, Arch et Pages sept langues qualifiés. Dernier commit de ce bilan documentaire distinct du tag | P1-TRAY-PROFILES tous OS inscrit : Windows/Linux restent à faire ; handoff stdout d'un tray actif, signatures/notarisation et limites matérielles/API restent explicites. Aucun changement de la paire PC0.17.2 ou des contrôles demandé |
 | 2026-10-17 | P1-MAC-UX — retours ami macOS pour la prochaine version | **Quatre demandes inscrites, non implémentées** | Statut peu clair, absence de vraie fenêtre de consultation, entrées tray potentiellement superflues à examiner, ajout d'un À propos présentant brièvement MicCamWatch ; section et critères dédiés ajoutés | Réaliser et vérifier les quatre surfaces natives ; choix précis des entrées à retirer après revue, profils directs tous OS conservés dans P1-TRAY-PROFILES |
+| 2026-10-17 | SITE-DEFAULT-EN / SITE-HERO — correctifs | **Source corrigée et preview qualifiée ; publication HTTPS en cours** | Export réel racine accueil/404 anglais et quatorze pages localisées ; quatre tests Node ; Chromium français sans redirection, choix `/fr/`,404 root et racine sans JS ; 133 scénarios de lisibilité/rectangles sur sept langues, dont reflow équivalent125/150 % et texte200 % | Publier, observer le vrai HTTPS et consigner CI/archives ; ni version binaire ni installation/contrôle PC modifiés |
