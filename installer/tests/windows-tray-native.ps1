@@ -28,6 +28,12 @@ public static class McwNativeProof {
         if (SendInput(2, new[] { right, left }, Marshal.SizeOf(typeof(INPUT))) != 2)
             throw new InvalidOperationException("Native mouse move input was rejected.");
     }
+    public static void ClickLeft() {
+        var down = new INPUT { type = 0, mouse = new MOUSEINPUT { dwFlags = 0x0002 } };
+        var up = new INPUT { type = 0, mouse = new MOUSEINPUT { dwFlags = 0x0004 } };
+        if (SendInput(2, new[] { down, up }, Marshal.SizeOf(typeof(INPUT))) != 2)
+            throw new InvalidOperationException("Native overflow click input was rejected.");
+    }
     [DllImport("shell32.dll")] public static extern int Shell_NotifyIconGetRect(ref NOTIFYICONIDENTIFIER icon, out RECT rect);
     [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern IntPtr FindWindow(string cls, string title);
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
@@ -124,7 +130,9 @@ function Get-ShellWindows {
         }
     }
 }
-function Get-FixtureShellButton([string]$expected) {
+function Get-FixtureShellButton([string]$expected, $identity) {
+    $owned = New-Object McwNativeProof+RECT
+    $registered = [McwNativeProof]::Shell_NotifyIconGetRect([ref]$identity, [ref]$owned) -eq 0
     $condition = New-Object System.Windows.Automation.PropertyCondition -ArgumentList ([System.Windows.Automation.AutomationElement]::ControlTypeProperty), ([System.Windows.Automation.ControlType]::Button)
     $buttons = @(foreach ($window in @(Get-ShellWindows)) {
         foreach ($element in $window.FindAll([System.Windows.Automation.TreeScope]::Subtree, $condition)) { $element }
@@ -133,7 +141,11 @@ function Get-FixtureShellButton([string]$expected) {
     foreach ($button in $buttons) {
         if ($button.Current.Name.StartsWith('miccamwatch', [StringComparison]::Ordinal)) {
             $hostProcess = Get-Process -Id $button.Current.ProcessId -ErrorAction SilentlyContinue
-            if ($hostProcess -and $hostProcess.ProcessName -eq 'explorer') { $matches += $button }
+            $bounds = $button.Current.BoundingRectangle
+            if ($registered -and $hostProcess -and $hostProcess.ProcessName -eq 'explorer' -and
+                $bounds.Contains((($owned.Left + $owned.Right) / 2), (($owned.Top + $owned.Bottom) / 2))) {
+                $matches += $button
+            }
         }
     }
     if ($matches.Count -gt 1) { throw 'More than one miccamwatch shell button exists on the isolated runner.' }
@@ -160,8 +172,13 @@ function Get-FixtureShellButton([string]$expected) {
         if ($button.Current.Name -in @('Show hidden icons', 'Show hidden icons.', 'Hidden icons menu')) {
             $hostProcess = Get-Process -Id $button.Current.ProcessId -ErrorAction SilentlyContinue
             if ($hostProcess -and $hostProcess.ProcessName -eq 'explorer') {
-                $pattern = $button.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
-                $pattern.Invoke()
+                $bounds = $button.Current.BoundingRectangle
+                if ($button.Current.IsOffscreen -or $bounds.IsEmpty -or $bounds.Width -le 0 -or $bounds.Height -le 0) { continue }
+                # Open the actual flyout through pointer input so Explorer
+                # enters its native mouse/focus path, not UIA keyboard mode.
+                [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point -ArgumentList ([int]($bounds.X + $bounds.Width / 2)), ([int]($bounds.Y + $bounds.Height / 2))
+                [McwNativeProof]::RefreshMouseMove()
+                [McwNativeProof]::ClickLeft()
                 return $null
             }
         }
@@ -198,7 +215,7 @@ function Confirm-FixtureShellTooltip([string]$name) {
     $deadline = (Get-Date).AddSeconds(30)
     $button = $null
     while (-not $button -and (Get-Date) -lt $deadline) {
-        $button = Get-FixtureShellButton $shell.tooltip
+        $button = Get-FixtureShellButton $shell.tooltip $identity
         if (-not $button) { Start-Sleep -Milliseconds 200 }
     }
     if (-not $button) { throw 'Fixture shell icon is not UIA-accessible, including overflow. Requires an unlocked English hosted Explorer desktop.' }
@@ -223,6 +240,10 @@ function Confirm-FixtureShellTooltip([string]$name) {
     $hitProcess = Get-Process -Id $hitPid -ErrorAction SilentlyContinue
     $inputEvidence | Add-Member -NotePropertyName hit_window -NotePropertyValue $hitWindow.ToInt64()
     $inputEvidence | Add-Member -NotePropertyName hit_process -NotePropertyValue $hitProcess.ProcessName
+    $registered = [McwNativeProof]::Shell_NotifyIconGetRect([ref]$identity, [ref]$rect) -eq 0
+    $inputEvidence | Add-Member -NotePropertyName owned_rect -NotePropertyValue @{
+        registered=$registered; left=$rect.Left; top=$rect.Top; right=$rect.Right; bottom=$rect.Bottom
+    }
     $condition = New-Object System.Windows.Automation.PropertyCondition -ArgumentList ([System.Windows.Automation.AutomationElement]::NameProperty), ([string]$shell.tooltip)
     $deadline = (Get-Date).AddSeconds(20)
     $observed = @()
