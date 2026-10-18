@@ -840,6 +840,17 @@ fn queue_lock_camera_block(state: &mut TrayAppState, camera_state: CameraPrivacy
     }
 }
 
+fn queue_deferred_lock_block(state: &mut TrayAppState) {
+    if take_deferred_lock_block(
+        state.pending_manual,
+        &mut state.deferred_lock_block,
+        state.lock_state,
+        state.settings.block_camera_on_lock,
+    ) {
+        queue_lock_camera_block(state, state.camera_state);
+    }
+}
+
 // Unknown readings do not invent an edge or discard the last known baseline.
 // The first known startup state is observation, never a new control request.
 fn advance_lock_baseline(previous: &mut SessionLockState, current: SessionLockState) -> bool {
@@ -853,10 +864,8 @@ fn advance_lock_baseline(previous: &mut SessionLockState, current: SessionLockSt
 
 fn apply_lock_policy(state: &mut TrayAppState, current: SessionLockState) {
     state.lock_state = current;
-    if current == SessionLockState::Unknown {
-        state.deferred_lock_block = false;
-    }
     if !advance_lock_baseline(&mut state.policy_lock_state, current) {
+        queue_deferred_lock_block(state);
         return;
     }
     if current == SessionLockState::Locked {
@@ -1477,16 +1486,20 @@ fn restore_due_after_lock_result(
         && same_manual_generation
 }
 
-fn should_queue_deferred_block(
+fn take_deferred_lock_block(
     pending_manual: usize,
-    deferred_lock_block: bool,
+    deferred_lock_block: &mut bool,
     lock_state: SessionLockState,
     block_camera_on_lock: bool,
 ) -> bool {
-    pending_manual == 0
-        && deferred_lock_block
+    let due = pending_manual == 0
+        && *deferred_lock_block
         && lock_state == SessionLockState::Locked
-        && block_camera_on_lock
+        && block_camera_on_lock;
+    if due || lock_state == SessionLockState::Unlocked || !block_camera_on_lock {
+        *deferred_lock_block = false;
+    }
+    due
 }
 
 fn handle_camera_operation_result(
@@ -1517,18 +1530,7 @@ fn handle_camera_operation_result(
         CameraRequest::Manual | CameraRequest::Resume => {
             state.pending_manual -= 1;
             handle_camera_result(state, request, result);
-            let block_after_manual = should_queue_deferred_block(
-                state.pending_manual,
-                state.deferred_lock_block,
-                state.lock_state,
-                state.settings.block_camera_on_lock,
-            );
-            if state.pending_manual == 0 {
-                state.deferred_lock_block = false;
-            }
-            if block_after_manual {
-                queue_lock_camera_block(state, state.camera_state);
-            }
+            queue_deferred_lock_block(state);
         }
         CameraRequest::Block {
             id,
@@ -3348,12 +3350,41 @@ mod tests {
         }
         assert_eq!(restore_camera, Some(CameraPrivacyState::Allowed));
         assert_eq!(camera_state, CameraPrivacyState::Blocked);
-        assert!(!should_queue_deferred_block(
+        assert!(!take_deferred_lock_block(
             0,
-            false,
+            &mut false,
             SessionLockState::Unlocked,
             true,
         ));
+    }
+
+    #[test]
+    fn deferred_lock_work_survives_unknown_and_is_consumed_only_once() {
+        use SessionLockState::{Locked, Unknown, Unlocked};
+        let mut deferred = true;
+        assert!(!take_deferred_lock_block(1, &mut deferred, Locked, true));
+        assert!(!take_deferred_lock_block(1, &mut deferred, Unknown, true));
+        assert!(!take_deferred_lock_block(0, &mut deferred, Unknown, true));
+        assert!(
+            deferred,
+            "Unknown completion must retain the observed lock obligation"
+        );
+        assert!(take_deferred_lock_block(0, &mut deferred, Locked, true));
+        assert!(!deferred);
+        assert!(!take_deferred_lock_block(0, &mut deferred, Locked, true));
+        for (observed, enabled) in [(Unlocked, true), (Locked, false), (Unknown, false)] {
+            deferred = true;
+            assert!(!take_deferred_lock_block(
+                0,
+                &mut deferred,
+                observed,
+                enabled
+            ));
+            assert!(
+                !deferred,
+                "Unlock or explicit policy removal cancels deferred work"
+            );
+        }
     }
 
     #[test]
