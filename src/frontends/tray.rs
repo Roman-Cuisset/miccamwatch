@@ -2944,8 +2944,8 @@ mod tests {
     #[ignore = "requires interactive Windows desktop; run installer/tests/windows-tray-native.ps1"]
     fn native_windows_tray_visual_smoke() {
         use windows::Win32::UI::WindowsAndMessaging::{
-            ES_AUTOHSCROLL, GWL_STYLE, GetWindowTextLengthW, GetWindowTextW, IsWindow, PM_REMOVE,
-            PeekMessageW,
+            ChangeWindowMessageFilterEx, ES_AUTOHSCROLL, GWL_STYLE, GetWindowTextLengthW,
+            GetWindowTextW, IsWindow, MSGFLT_ALLOW, PM_REMOVE, PeekMessageW,
         };
         let directory = std::path::PathBuf::from(
             std::env::var_os("MCW_WINDOWS_NATIVE_PROOF_DIR").expect("proof output directory"),
@@ -2957,6 +2957,10 @@ mod tests {
         );
         std::fs::create_dir_all(&directory).unwrap();
         let owner = native_test_owner();
+        // The hosted runner can be elevated above Explorer. Only this owned,
+        // inert fixture callback must cross UIPI; no product/control message.
+        unsafe { ChangeWindowMessageFilterEx(owner, WM_TRAY_CALLBACK, MSGFLT_ALLOW, None) }
+            .unwrap();
         let initial_icon = create_status_icon((107, 114, 128), IconGlyph::Error, unsafe {
             GetSystemMetrics(SM_CXSMICON)
         })

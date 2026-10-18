@@ -17,6 +17,8 @@ using System.Runtime.InteropServices;
 public static class McwNativeProof {
     [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
     [StructLayout(LayoutKind.Sequential)] public struct NOTIFYICONIDENTIFIER { public uint cbSize; public IntPtr hWnd; public uint uID; public Guid guidItem; }
+    [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X, Y; }
+    [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(POINT point);
     [StructLayout(LayoutKind.Sequential)] public struct MOUSEINPUT { public int dx, dy; public uint mouseData, dwFlags, time; public UIntPtr extra; }
     [StructLayout(LayoutKind.Sequential)] public struct INPUT { public uint type; public MOUSEINPUT mouse; }
     [DllImport("user32.dll", SetLastError=true)] public static extern uint SendInput(uint count, INPUT[] input, int size);
@@ -45,6 +47,12 @@ if ($desktop -eq [IntPtr]::Zero) { throw 'No accessible input desktop: native ge
 [void][McwNativeProof]::CloseDesktop($desktop)
 $directory = [IO.Path]::GetFullPath((Join-Path $OutputDirectory ((Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + $PID)))
 [void][IO.Directory]::CreateDirectory($directory)
+$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+try {
+    $principal = New-Object Security.Principal.WindowsPrincipal -ArgumentList $identity
+    @{ elevated=$principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator); interactive=[Environment]::UserInteractive } |
+        ConvertTo-Json | Set-Content -Encoding UTF8 (Join-Path $directory 'driver-context.json')
+} finally { $identity.Dispose() }
 $previous = $env:MCW_WINDOWS_NATIVE_PROOF_DIR
 $env:MCW_WINDOWS_NATIVE_PROOF_DIR = $directory
 $process = $null
@@ -206,6 +214,15 @@ function Confirm-FixtureShellTooltip([string]$name) {
     Capture-NativeDesktop "$name-shell-hover"
     [IO.File]::WriteAllText((Join-Path $directory "$name-shell-inspect"), 'inspect native callbacks')
     $inputEvidence = Wait-ProofFile "$name-shell-input.json"
+    $hitPoint = New-Object McwNativeProof+POINT
+    $hitPoint.X = [int]($bounds.X + $bounds.Width / 2)
+    $hitPoint.Y = [int]($bounds.Y + $bounds.Height / 2)
+    $hitWindow = [McwNativeProof]::WindowFromPoint($hitPoint)
+    [uint32]$hitPid = 0
+    [void][McwNativeProof]::GetWindowThreadProcessId($hitWindow, [ref]$hitPid)
+    $hitProcess = Get-Process -Id $hitPid -ErrorAction SilentlyContinue
+    $inputEvidence | Add-Member -NotePropertyName hit_window -NotePropertyValue $hitWindow.ToInt64()
+    $inputEvidence | Add-Member -NotePropertyName hit_process -NotePropertyValue $hitProcess.ProcessName
     $condition = New-Object System.Windows.Automation.PropertyCondition -ArgumentList ([System.Windows.Automation.AutomationElement]::NameProperty), ([string]$shell.tooltip)
     $deadline = (Get-Date).AddSeconds(20)
     $observed = @()
