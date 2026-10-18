@@ -2741,12 +2741,19 @@ mod tests {
             == &Ok(CameraPrivacyState::Blocked)));
     }
 
+    static SHELL_CALLBACK_COUNT: AtomicU64 = AtomicU64::new(0);
+    static SHELL_CALLBACK_EVENT: AtomicU64 = AtomicU64::new(0);
+
     unsafe extern "system" fn native_test_wnd_proc(
         hwnd: HWND,
         message: u32,
         wparam: WPARAM,
         lparam: LPARAM,
     ) -> LRESULT {
+        if message == WM_TRAY_CALLBACK {
+            SHELL_CALLBACK_COUNT.fetch_add(1, Ordering::Relaxed);
+            SHELL_CALLBACK_EVENT.store(lparam.0 as u64, Ordering::Relaxed);
+        }
         unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
     }
 
@@ -2900,11 +2907,27 @@ mod tests {
         )
         .unwrap();
         let deadline = Instant::now() + Duration::from_secs(90);
-        while !directory.join(format!("{name}-shell-checked")).exists() {
+        let checked = directory.join(format!("{name}-shell-checked"));
+        let inspect = directory.join(format!("{name}-shell-inspect"));
+        let input = directory.join(format!("{name}-shell-input.json"));
+        let mut input_recorded = false;
+        while !checked.exists() {
             assert!(
                 Instant::now() < deadline,
                 "isolated driver did not qualify actual shell tooltip"
             );
+            if !input_recorded && inspect.exists() {
+                std::fs::write(
+                    &input,
+                    serde_json::to_vec(&serde_json::json!({
+                        "callback_count": SHELL_CALLBACK_COUNT.load(Ordering::Relaxed),
+                        "last_callback": SHELL_CALLBACK_EVENT.load(Ordering::Relaxed),
+                    }))
+                    .unwrap(),
+                )
+                .unwrap();
+                input_recorded = true;
+            }
             let mut message = MSG::default();
             if unsafe { PeekMessageW(&mut message, None, 0, 0, PM_REMOVE) }.as_bool() {
                 unsafe {

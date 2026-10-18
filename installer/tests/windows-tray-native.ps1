@@ -21,8 +21,9 @@ public static class McwNativeProof {
     [StructLayout(LayoutKind.Sequential)] public struct INPUT { public uint type; public MOUSEINPUT mouse; }
     [DllImport("user32.dll", SetLastError=true)] public static extern uint SendInput(uint count, INPUT[] input, int size);
     public static void RefreshMouseMove() {
-        var input = new INPUT { type = 0, mouse = new MOUSEINPUT { dwFlags = 1 } };
-        if (SendInput(1, new[] { input }, Marshal.SizeOf(typeof(INPUT))) != 1)
+        var right = new INPUT { type = 0, mouse = new MOUSEINPUT { dx = 1, dwFlags = 0x2001 } };
+        var left = new INPUT { type = 0, mouse = new MOUSEINPUT { dx = -1, dwFlags = 0x2001 } };
+        if (SendInput(2, new[] { right, left }, Marshal.SizeOf(typeof(INPUT))) != 2)
             throw new InvalidOperationException("Native mouse move input was rejected.");
     }
     [DllImport("shell32.dll")] public static extern int Shell_NotifyIconGetRect(ref NOTIFYICONIDENTIFIER icon, out RECT rect);
@@ -95,6 +96,15 @@ function Capture-NativeWindow([IntPtr]$window, [string]$name, [switch]$RenderWin
         if (-not $different) { throw "Blank native screenshot for $name; desktop is unavailable/locked." }
     } finally { $graphics.Dispose(); $bitmap.Dispose() }
     return @{ left=$rect.Left; top=$rect.Top; right=$rect.Right; bottom=$rect.Bottom; width=$width; height=$height }
+}
+function Capture-NativeDesktop([string]$name) {
+    $screen = [System.Windows.Forms.SystemInformation]::VirtualScreen
+    $frame = New-Object System.Drawing.Bitmap -ArgumentList $screen.Width, $screen.Height
+    $graphics = [System.Drawing.Graphics]::FromImage($frame)
+    try {
+        $graphics.CopyFromScreen($screen.Left, $screen.Top, 0, 0, $frame.Size)
+        $frame.Save((Join-Path $directory "$name.png"), [System.Drawing.Imaging.ImageFormat]::Png)
+    } finally { $graphics.Dispose(); $frame.Dispose() }
 }
 function Get-ShellWindows {
     # Microsoft UIA guidance: enumerate desktop Children, never its entire
@@ -192,6 +202,10 @@ function Confirm-FixtureShellTooltip([string]$name) {
     Start-Sleep -Milliseconds 200
     [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point -ArgumentList ([int]($bounds.X + $bounds.Width / 2)), ([int]($bounds.Y + $bounds.Height / 2))
     [McwNativeProof]::RefreshMouseMove()
+    Start-Sleep -Milliseconds 1000
+    Capture-NativeDesktop "$name-shell-hover"
+    [IO.File]::WriteAllText((Join-Path $directory "$name-shell-inspect"), 'inspect native callbacks')
+    $inputEvidence = Wait-ProofFile "$name-shell-input.json"
     $condition = New-Object System.Windows.Automation.PropertyCondition -ArgumentList ([System.Windows.Automation.AutomationElement]::NameProperty), ([string]$shell.tooltip)
     $deadline = (Get-Date).AddSeconds(20)
     $observed = @()
@@ -242,16 +256,11 @@ function Confirm-FixtureShellTooltip([string]$name) {
             button_offscreen=$button.Current.IsOffscreen;
             button=@{left=$bounds.Left; top=$bounds.Top; right=$bounds.Right; bottom=$bounds.Bottom};
             cursor=@{x=[System.Windows.Forms.Cursor]::Position.X; y=[System.Windows.Forms.Cursor]::Position.Y};
+            native_input=$inputEvidence;
             observed=@($observed | Select-Object -Unique)
         }
         ConvertTo-Json -InputObject $diagnostic -Depth 6 | Set-Content -Encoding UTF8 (Join-Path $directory "$name-shell-observed.json")
-        $screen = [System.Windows.Forms.SystemInformation]::VirtualScreen
-        $frame = New-Object System.Drawing.Bitmap -ArgumentList $screen.Width, $screen.Height
-        $graphics = [System.Drawing.Graphics]::FromImage($frame)
-        try {
-            $graphics.CopyFromScreen($screen.Left, $screen.Top, 0, 0, $frame.Size)
-            $frame.Save((Join-Path $directory "$name-shell-desktop.png"), [System.Drawing.Imaging.ImageFormat]::Png)
-        } finally { $graphics.Dispose(); $frame.Dispose() }
+        Capture-NativeDesktop "$name-shell-desktop"
         throw "Actual Explorer tooltip did not match current fixture text ($($shell.tooltip)); see $name-shell-observed.json"
     }
     if ($tipWindow -eq [IntPtr]::Zero) { throw 'Explorer tooltip has no native window for screenshot proof.' }
@@ -259,6 +268,7 @@ function Confirm-FixtureShellTooltip([string]$name) {
     $script:shellMeasurements += @{
         case=$name; accessible_name=$button.Current.Name; tooltip=$tooltip.Current.Name;
         tooltip_bounds=$tipBounds; native_utf16_units=$shell.utf16_units;
+        native_input=$inputEvidence;
         shell_rect=@{left=$rect.Left; top=$rect.Top; right=$rect.Right; bottom=$rect.Bottom}
     }
     [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point -ArgumentList 0, 0
