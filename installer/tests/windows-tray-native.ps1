@@ -96,9 +96,21 @@ function Capture-NativeWindow([IntPtr]$window, [string]$name, [switch]$RenderWin
     } finally { $graphics.Dispose(); $bitmap.Dispose() }
     return @{ left=$rect.Left; top=$rect.Top; right=$rect.Right; bottom=$rect.Bottom; width=$width; height=$height }
 }
+function Get-ShellWindows {
+    # Microsoft UIA guidance: enumerate desktop Children, never its entire
+    # Descendants tree (hosted terminals contain thousands of unrelated nodes).
+    foreach ($hostProcess in @(Get-Process -Name explorer,ShellExperienceHost -ErrorAction SilentlyContinue)) {
+        $condition = New-Object System.Windows.Automation.PropertyCondition -ArgumentList ([System.Windows.Automation.AutomationElement]::ProcessIdProperty), ([int]$hostProcess.Id)
+        foreach ($window in [System.Windows.Automation.AutomationElement]::RootElement.FindAll([System.Windows.Automation.TreeScope]::Children, $condition)) {
+            $window
+        }
+    }
+}
 function Get-FixtureShellButton([string]$expected) {
     $condition = New-Object System.Windows.Automation.PropertyCondition -ArgumentList ([System.Windows.Automation.AutomationElement]::ControlTypeProperty), ([System.Windows.Automation.ControlType]::Button)
-    $buttons = [System.Windows.Automation.AutomationElement]::RootElement.FindAll([System.Windows.Automation.TreeScope]::Descendants, $condition)
+    $buttons = @(foreach ($window in @(Get-ShellWindows)) {
+        foreach ($element in $window.FindAll([System.Windows.Automation.TreeScope]::Subtree, $condition)) { $element }
+    })
     $matches = @()
     foreach ($button in $buttons) {
         if ($button.Current.Name.StartsWith('miccamwatch', [StringComparison]::Ordinal)) {
@@ -180,17 +192,47 @@ function Confirm-FixtureShellTooltip([string]$name) {
     Start-Sleep -Milliseconds 200
     [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point -ArgumentList ([int]($bounds.X + $bounds.Width / 2)), ([int]($bounds.Y + $bounds.Height / 2))
     [McwNativeProof]::RefreshMouseMove()
-    $condition = New-Object System.Windows.Automation.PropertyCondition -ArgumentList ([System.Windows.Automation.AutomationElement]::ControlTypeProperty), ([System.Windows.Automation.ControlType]::ToolTip)
+    $condition = New-Object System.Windows.Automation.PropertyCondition -ArgumentList ([System.Windows.Automation.AutomationElement]::NameProperty), ([string]$shell.tooltip)
     $deadline = (Get-Date).AddSeconds(20)
     $observed = @()
     $tooltip = $null
+    $tipWindow = [IntPtr]::Zero
     while (-not $tooltip -and (Get-Date) -lt $deadline) {
-        $tips = [System.Windows.Automation.AutomationElement]::RootElement.FindAll([System.Windows.Automation.TreeScope]::Descendants, $condition)
-        foreach ($tip in $tips) {
-            $text = $tip.Current.Name
-            $observed += $text
-            $hostProcess = Get-Process -Id $tip.Current.ProcessId -ErrorAction SilentlyContinue
-            if ($hostProcess -and $hostProcess.ProcessName -eq 'explorer' -and [string]::Equals($text, $shell.tooltip, [StringComparison]::Ordinal)) { $tooltip = $tip; break }
+        foreach ($window in @(Get-ShellWindows)) {
+            try {
+                if ($window.Current.IsOffscreen) { continue }
+                $tips = $window.FindAll([System.Windows.Automation.TreeScope]::Subtree, $condition)
+                foreach ($tip in $tips) {
+                    $text = $tip.Current.Name
+                    $observed += $text
+                    if (-not $tip.Current.IsOffscreen -and
+                        $tip.Current.ControlType -ne [System.Windows.Automation.ControlType]::Button -and
+                        [string]::Equals($text, $shell.tooltip, [StringComparison]::Ordinal)) {
+                        # Win32 and XAML may expose different UIA roles/parents.
+                        # Require a real popup HWND, never the icon host's label.
+                        $ancestor = $tip
+                        $nativeWindow = [IntPtr]::Zero
+                        for ($depth = 0; $ancestor -and $depth -lt 16; $depth++) {
+                            $nativeWindow = [IntPtr]$ancestor.Current.NativeWindowHandle
+                            if ($nativeWindow -ne [IntPtr]::Zero) { break }
+                            $ancestor = [System.Windows.Automation.TreeWalker]::RawViewWalker.GetParent($ancestor)
+                        }
+                        if ($nativeWindow -eq [IntPtr]::Zero) { continue }
+                        $popup = New-Object McwNativeProof+RECT
+                        if (-not [McwNativeProof]::GetWindowRect($nativeWindow, [ref]$popup)) { continue }
+                        $x = $bounds.X + $bounds.Width / 2
+                        $y = $bounds.Y + $bounds.Height / 2
+                        if ($x -ge $popup.Left -and $x -lt $popup.Right -and
+                            $y -ge $popup.Top -and $y -lt $popup.Bottom) { continue }
+                        $tooltip = $tip
+                        $tipWindow = $nativeWindow
+                        break
+                    }
+                }
+                if ($tooltip) { break }
+            } catch [System.Windows.Automation.ElementNotAvailableException] {
+                # Hover popups are transient; reacquire fresh Shell roots.
+            }
         }
         if (-not $tooltip) { Start-Sleep -Milliseconds 100 }
     }
@@ -212,7 +254,6 @@ function Confirm-FixtureShellTooltip([string]$name) {
         } finally { $graphics.Dispose(); $frame.Dispose() }
         throw "Actual Explorer tooltip did not match current fixture text ($($shell.tooltip)); see $name-shell-observed.json"
     }
-    $tipWindow = [IntPtr]$tooltip.Current.NativeWindowHandle
     if ($tipWindow -eq [IntPtr]::Zero) { throw 'Explorer tooltip has no native window for screenshot proof.' }
     $tipBounds = Capture-NativeWindow $tipWindow "$name-shell-tooltip"
     $script:shellMeasurements += @{
