@@ -268,15 +268,30 @@ Native [Arch qualification](https://github.com/Roman-Cuisset/miccamwatch/actions
 passed with the reviewed immutable release archive; AUR submission and Homebrew
 tap publication remain blocked as documented.
 
-Two observed Windows issues remain prioritized in [ROADMAP](docs/ROADMAP.md):
-the shell tooltip still prefixes active accesses with localized idle text, and
-restarting an owned tray inherits updater standard streams. Scripted output
-capture hung during the actual handoff; [INFERENCE] the live companion retained EOF.
-The authorized workstation update's captured exit/stdout
-was unavailable after its tool timeout; the installed pair, new native tray and
-unchanged protections were verified read-only instead, without rerunning update.
-The private migration also retained a mapped-old-CLI cleanup warning; no security
-protection or quarantine was bypassed.
+Two issues were observed on the installed public v0.17.2 Windows pair:
+the shell's accessible icon name contradicted active captures, and captured
+updater output did not reach EOF after tray restart. The captured workstation
+exit/stdout was unavailable after its timeout; the new paired files, native tray
+and unchanged protections were verified read-only without rerunning update.
+The old mapped-CLI cleanup warning remains separate. See the unreleased source
+corrections below and [ROADMAP](docs/ROADMAP.md); no installed application or
+security protection has been changed by that source work.
+
+## Unreleased source — Windows tray identity and restart lifecycle
+
+The tray starts with a neutral product identity rather than asserting idle
+before its first observation. Its native tooltip contains the current bounded
+headline; full capture, health and control diagnostics remain in Status details.
+Encoding reserves the native terminator and never splits a UTF-16 surrogate pair.
+
+The Windows updater restarts its authenticated companion with native
+`CreateProcessW` and handle inheritance disabled. Redirecting standard streams to
+`NUL` alone still lets Windows inherit other pipe handles; it is insufficient.
+Exact-image ownership, cooperative shutdown, busy/UAC refusal and restoration
+requirements are unchanged. Native proof exercises captured caller EOF while a
+successor remains alive; actual tray and Explorer/UIA checks run only on a
+disposable hosted Windows desktop. Qualification status is recorded in ROADMAP.
+These fixes are not retroactively included in the published v0.18.1 artifacts.
 
 ## v0.18.1 — ZIP dependency security maintenance
 
@@ -603,6 +618,9 @@ output and preserves unrelated files. Upload the output, **never `site/`**;
 the latter contains build inputs, not a deployable website.
 The root stays English regardless of browser language; language selection uses
 the explicit locale links, without an automatic language redirect.
+Home and 404 footers display **© 2026 Roman Cuisset**. The home footer links to
+the MIT license; the author name in `LICENSE` uses the same spelling without a
+hyphen. The MIT permissions are unchanged.
 
 ### Publish by direct upload
 

@@ -33,6 +33,8 @@ jobs:
       - name: Audit Rust dependencies
         run: cargo install cargo-audit --locked && cargo audit
       - run: cargo build --release --locked --features windows-tray
+      - name: Verify tray restart releases captured updater streams
+        run: cargo test --lib --locked --features windows-tray updater::process::tests::native_restart_releases_captured_streams_while_successor_lives -- --ignored --exact --test-threads=1 --nocapture
       - name: Exercise real Windows top buttons and responsive layout
         shell: pwsh
         run: |
@@ -67,6 +69,10 @@ jobs:
           $python = Join-Path $env:RUNNER_TEMP 'mcw-ui-proof-venv/Scripts/python.exe'
           & $python -B installer/tests/native_resources.py --binary (Resolve-Path target/release/mcw.exe).Path --gate-candidate --proof "$env:RUNNER_TEMP/native-windows-top/resources" --runner-desktop --scenario disposable_windows_native_collectors
           if ($LASTEXITCODE -ne 0) { throw 'Native resource qualification failed; inspect resources.json partial evidence' }
+      - name: Verify captured restart with a live native tray and cooperative exit
+        env:
+          MCW_TEST_RESTART_PRODUCT: ${{ github.workspace }}/target/release/mcw-tray.exe
+        run: cargo test --lib --locked --features windows-tray updater::process::tests::native_restart_releases_captured_streams_while_successor_lives -- --ignored --exact --test-threads=1 --nocapture
       - name: Upload Windows top terminal frames
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -76,7 +82,7 @@ jobs:
           path: ${{ runner.temp }}/native-windows-top
       - name: Verify compact native Windows tray and complete copyable details
         shell: powershell
-        run: powershell.exe -NoProfile -STA -File installer/tests/windows-tray-native.ps1 -OutputDirectory "${{ runner.temp }}/native-windows-tray" -IsolatedClipboard
+        run: powershell.exe -NoProfile -STA -File installer/tests/windows-tray-native.ps1 -OutputDirectory "${{ runner.temp }}/native-windows-tray" -IsolatedDesktop -IsolatedClipboard
       - name: Upload native Windows tray visual evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

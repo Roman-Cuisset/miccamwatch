@@ -488,8 +488,10 @@ pub fn run_tray(
         autostart_state: crate::autostart::state()
             .unwrap_or(crate::autostart::AutostartState::Disabled),
         lang,
-        visual: TrayVisual::Idle,
-        summary: idle_text(lang).to_owned(),
+        // NIM_ADD can become Explorer's cached accessible icon identity. Before
+        // the first observation, brand neutrally rather than asserting inactivity.
+        visual: TrayVisual::Error,
+        summary: "miccamwatch".to_owned(),
         settings,
         lock_state: crate::platform::session_lock_state(),
         microphone_worker,
@@ -562,7 +564,7 @@ pub fn run_tray(
     };
 
     let state = unsafe { &*state_ptr };
-    let nid = notify_icon_data(hwnd, state.green_icon, &state.summary);
+    let nid = notify_icon_data(hwnd, state.gray_icon, &state.summary);
     if !unsafe { Shell_NotifyIconW(NIM_ADD, &nid) }.as_bool() {
         unsafe {
             let _ = DestroyWindow(hwnd);
@@ -2160,10 +2162,25 @@ fn notify_icon_data(hwnd: HWND, icon: HICON, tooltip: &str) -> NOTIFYICONDATAW {
         hIcon: icon,
         ..Default::default()
     };
-    let wide: Vec<u16> = OsStr::new(tooltip).encode_wide().collect();
-    let length = wide.len().min(data.szTip.len().saturating_sub(1));
-    data.szTip[..length].copy_from_slice(&wide[..length]);
-    data.szTip[length] = 0;
+    // Only the current bounded headline belongs in the shell tooltip; full
+    // application/collector/protection diagnostics remain in Status details.
+    // Leave one UTF-16 unit for NUL and never copy half a surrogate pair.
+    let mut length = 0;
+    let headline = tooltip.lines().next().unwrap_or_default();
+    let brand = if headline.starts_with("miccamwatch") {
+        ""
+    } else {
+        "miccamwatch: "
+    };
+    for character in brand.chars().chain(headline.chars()) {
+        if character == '\0' || length + character.len_utf16() >= data.szTip.len() {
+            break;
+        }
+        let mut encoded = [0u16; 2];
+        let units = character.encode_utf16(&mut encoded);
+        data.szTip[length..length + units.len()].copy_from_slice(units);
+        length += units.len();
+    }
     data
 }
 
@@ -2332,6 +2349,123 @@ mod tests {
             accesses: vec![microphone, camera, ready],
             observation_gaps: vec![Resource::Camera],
         }
+    }
+
+    fn native_tip_text(data: &NOTIFYICONDATAW) -> String {
+        assert_eq!(data.szTip.len(), 128);
+        let end = data.szTip.iter().position(|unit| *unit == 0).unwrap();
+        assert!(end <= 127);
+        assert!(data.szTip[end..].iter().all(|unit| *unit == 0));
+        String::from_utf16(&data.szTip[..end]).expect("shell tooltip must be valid UTF-16")
+    }
+
+    #[test]
+    fn native_tooltip_reports_current_activity_health_and_idle_in_every_language() {
+        let fixture = StatusFixture::healthy();
+        for lang in [
+            Language::En,
+            Language::Fr,
+            Language::De,
+            Language::Es,
+            Language::Ja,
+            Language::Zh,
+            Language::Ru,
+        ] {
+            let mut snapshot = partial_activity_snapshot();
+            for expected in [
+                TrayVisual::Partial,
+                TrayVisual::Error,
+                TrayVisual::Active,
+                TrayVisual::Ready,
+                TrayVisual::Idle,
+            ] {
+                match expected {
+                    TrayVisual::Error => snapshot.collectors[0].state = CollectorState::Unavailable,
+                    TrayVisual::Active => {
+                        snapshot.collectors[0].state = CollectorState::Healthy;
+                        snapshot.collectors[0].detail = None;
+                        snapshot.observation_gaps.clear();
+                    }
+                    TrayVisual::Ready => {
+                        snapshot.accesses.retain(|a| a.activity == Activity::Ready)
+                    }
+                    TrayVisual::Idle => snapshot.accesses.clear(),
+                    TrayVisual::Partial => {}
+                }
+                let mut status = fixture.status();
+                status.lang = lang;
+                let (visual, summary) = refreshed_status(Ok(&snapshot), status);
+                assert_eq!(visual, expected);
+                let tooltip = native_tip_text(&notify_icon_data(
+                    HWND::default(),
+                    HICON::default(),
+                    &summary,
+                ));
+                assert!(tooltip.starts_with("miccamwatch"));
+                assert!(!tooltip.contains('\n'));
+                assert!(!tooltip.contains("SDK reports"));
+                if expected == TrayVisual::Idle {
+                    assert_eq!(tooltip, idle_text(lang));
+                } else {
+                    assert!(!tooltip.contains(idle_text(lang)));
+                    assert!(tooltip.contains(if expected == TrayVisual::Ready {
+                        "0 active"
+                    } else {
+                        "2 active"
+                    }));
+                    if expected != TrayVisual::Ready {
+                        assert!(tooltip.contains("1 Mic, 1 Cam"));
+                    }
+                }
+                if expected == TrayVisual::Partial {
+                    assert!(tooltip.contains("Partial"));
+                } else if expected == TrayVisual::Error {
+                    assert!(tooltip.contains("Status error"));
+                } else {
+                    assert!(!tooltip.contains("Partial"));
+                    assert!(!tooltip.contains("Status error"));
+                }
+            }
+            let mut status = fixture.status();
+            status.lang = lang;
+            let (_, summary) = refreshed_status(Err("worker unavailable"), status);
+            let tooltip = native_tip_text(&notify_icon_data(
+                HWND::default(),
+                HICON::default(),
+                &summary,
+            ));
+            assert_eq!(tooltip, "miccamwatch: telemetry unavailable");
+            assert!(!tooltip.contains(idle_text(lang)));
+            assert!(diagnostic_document(&summary).contains("worker unavailable"));
+        }
+        let startup = native_tip_text(&notify_icon_data(
+            HWND::default(),
+            HICON::default(),
+            "miccamwatch",
+        ));
+        assert_eq!(startup, "miccamwatch");
+    }
+
+    #[test]
+    fn native_tooltip_utf16_boundary_never_splits_surrogates_or_loses_terminator() {
+        for prefix_units in [125, 126, 127, 128] {
+            let prefix = format!("miccamwatch: {}", "a".repeat(prefix_units - 13));
+            let input = format!("{prefix}🛡suffix\nprivate diagnostic");
+            let tooltip =
+                native_tip_text(&notify_icon_data(HWND::default(), HICON::default(), &input));
+            let expected = if prefix_units <= 125 {
+                format!("{prefix}🛡")
+            } else {
+                prefix.chars().take(127).collect()
+            };
+            assert_eq!(tooltip, expected);
+        }
+        let tooltip = native_tip_text(&notify_icon_data(
+            HWND::default(),
+            HICON::default(),
+            "2 active\0false idle",
+        ));
+        assert_eq!(tooltip, "miccamwatch: 2 active");
     }
 
     #[test]
@@ -2743,6 +2877,46 @@ mod tests {
         let _ = unsafe { DestroyWindow(owner) };
     }
 
+    struct NativeProofShellIcon(NOTIFYICONDATAW);
+
+    impl Drop for NativeProofShellIcon {
+        fn drop(&mut self) {
+            let _ = unsafe { Shell_NotifyIconW(NIM_DELETE, &self.0) };
+        }
+    }
+
+    fn qualify_native_shell_tip(directory: &std::path::Path, name: &str, data: &NOTIFYICONDATAW) {
+        use windows::Win32::UI::WindowsAndMessaging::{PM_REMOVE, PeekMessageW};
+        std::fs::write(
+            directory.join(format!("{name}-shell.json")),
+            serde_json::to_vec(&serde_json::json!({
+                "owner": data.hWnd.0 as usize,
+                "id": data.uID,
+                "tooltip": native_tip_text(data),
+                "utf16_units": data.szTip.iter().position(|unit| *unit == 0).unwrap(),
+                "capacity": data.szTip.len(),
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(90);
+        while !directory.join(format!("{name}-shell-checked")).exists() {
+            assert!(
+                Instant::now() < deadline,
+                "isolated driver did not qualify actual shell tooltip"
+            );
+            let mut message = MSG::default();
+            if unsafe { PeekMessageW(&mut message, None, 0, 0, PM_REMOVE) }.as_bool() {
+                unsafe {
+                    let _ = TranslateMessage(&message);
+                    DispatchMessageW(&message);
+                }
+            } else {
+                thread::sleep(Duration::from_millis(10));
+            }
+        }
+    }
+
     #[test]
     #[ignore = "requires interactive Windows desktop; run installer/tests/windows-tray-native.ps1"]
     fn native_windows_tray_visual_smoke() {
@@ -2753,17 +2927,33 @@ mod tests {
         let directory = std::path::PathBuf::from(
             std::env::var_os("MCW_WINDOWS_NATIVE_PROOF_DIR").expect("proof output directory"),
         );
+        assert_eq!(std::env::var("GITHUB_ACTIONS").as_deref(), Ok("true"));
+        assert_eq!(
+            std::env::var("RUNNER_ENVIRONMENT").as_deref(),
+            Ok("github-hosted")
+        );
         std::fs::create_dir_all(&directory).unwrap();
         let owner = native_test_owner();
+        let initial_icon = create_status_icon((107, 114, 128), IconGlyph::Error, unsafe {
+            GetSystemMetrics(SM_CXSMICON)
+        })
+        .unwrap();
+        let mut shell_icon =
+            NativeProofShellIcon(notify_icon_data(owner, initial_icon, "miccamwatch"));
+        assert!(unsafe { Shell_NotifyIconW(NIM_ADD, &shell_icon.0) }.as_bool());
+        qualify_native_shell_tip(&directory, "startup", &shell_icon.0);
         let fixture = StatusFixture::healthy();
         let mut partial = partial_activity_snapshot();
         let partial_summary = refreshed_status(Ok(&partial), fixture.status()).1;
+        partial.collectors[0].state = CollectorState::Unavailable;
+        let error_summary = refreshed_status(Ok(&partial), fixture.status()).1;
         partial.collectors[0].state = CollectorState::Healthy;
         partial.collectors[0].detail = None;
         partial.observation_gaps.clear();
         let recovered_summary = refreshed_status(Ok(&partial), fixture.status()).1;
         for (name, visual, summary) in [
             ("partial-active", TrayVisual::Partial, partial_summary),
+            ("error-active", TrayVisual::Error, error_summary),
             ("recovered-active", TrayVisual::Active, recovered_summary),
             (
                 "long-error",
@@ -2798,6 +2988,9 @@ mod tests {
             };
             let icon =
                 create_status_icon(color, glyph, unsafe { GetSystemMetrics(SM_CXSMICON) }).unwrap();
+            shell_icon.0 = notify_icon_data(owner, icon, &summary);
+            assert!(unsafe { Shell_NotifyIconW(NIM_MODIFY, &shell_icon.0) }.as_bool());
+            qualify_native_shell_tip(&directory, name, &shell_icon.0);
             let menu = build_context_menu(
                 owner,
                 &summary,
@@ -2888,10 +3081,12 @@ mod tests {
             }
             let _ = unsafe { DestroyIcon(icon) };
         }
+        drop(shell_icon);
+        let _ = unsafe { DestroyIcon(initial_icon) };
         let _ = unsafe { DestroyWindow(owner) };
         std::fs::write(
             directory.join("complete"),
-            "native HMENU geometry and full EDIT content checked",
+            "actual shell tooltip/UIA, native HMENU geometry and full EDIT content checked",
         )
         .unwrap();
     }

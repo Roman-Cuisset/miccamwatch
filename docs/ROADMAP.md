@@ -50,6 +50,7 @@ Les identifiants sont stables. À chaque livraison, remplacer l'état par **En c
 | SITE-L10N | **Publié et exercé en production** : en/fr/de/es/ja/zh/ru, 227 messages chacun, titres longs et navigation mobile repliables ; DMG localisés conservés | Moyenne | CI site39032505628 ; 133 scénarios HTTPS sept langues, racine sans JS/français/russe et404 root/fr/ru observées ; images171 non relabellées, CSP inchangée |
 | SITE-HERO | **Publié et vérifié sur HTTPS**, source `277dd04` : titres longs autorisés à revenir à la ligne et navigation mobile repliable ; texte russe intégral, aucune troncature | Faible | 133 scénarios Chromium sur sept langues, rectangles de texte contre carte, largeurs320–1568, reflow équivalent125/150 % et texte200 % ; captures russes desktop/mobile relues |
 | SITE-DEFAULT-EN | **Publié et vérifié sur HTTPS**, source `277dd04` : accueil/404 racine anglais sans redirection de langue ; sept routes et sélecteur conservés | Faible | `/` conservé avec/sans JS et navigateurs français/russe ; métadonnées en_US/canonical `/en/`, choix français, cible installation et404 réelles root/fr/ru exercés |
+| SITE-COPYRIGHT | **Source et preview qualifiées, publication en cours** : `© 2026 Roman Cuisset` sans tiret sur accueil/404 de toutes les langues ; même nom dans LICENSE | Faible | Quatre tests Node et32 surfaces réelles Pages desktop/mobile ; lien MIT, permissions inchangées, anglais racine conservé ; HTTPS à vérifier |
 | SITE-INSTALL-404 | **Corrigé et exercé en production**. `/install.sh` Pages sert le script exact ; vrai curl serveur ASUS, installation native 0.17.2 puis uninstall possédé sous HOME temporaire | Faible à Moyenne | Maintenir payload/routage et digest ; aucun autostart/tray/protection/root-helper activé |
 | P1-RAM | Publié 0.17.0, validé logiciel/natif : bornes et mesures complètes, 15 Mo non atteints, scénario composé Windows ~43 Mo | Moyenne | Maintien des preuves/limites canoniques ; 30 Mo reste une référence |
 | P1-RESTORE | Publié 0.17.0, validé logiciel/natif : propriétaire Windows, états opposés/hotplug/partiel simulés, release natif réel sans devices | Élevée | Pas de certification matérielle ou déni exclusif/ASIO |
@@ -58,7 +59,7 @@ Les identifiants sont stables. À chaque livraison, remplacer l'état par **En c
 | P1-WG | Winget : à faire | Moyenne | Identité MSI et upgrades contrôlés |
 | P1-MAC-APP-DMG | **Publié 0.18.1**, DMG Apple Silicon et Intel avec app native, sommes et attestations vérifiées | Moyenne | Finder/doublon/Exit, déplacement, remplacement même build, préférences/historique, autostart possédé enabled/dormant, refus POSIX/retrait et cleanup passés ; ad-hoc seulement, pas d'upgrade inter-version app inventé |
 | P1-ARM | Linux ARM64 : à faire | Élevée | ABI/sysroot, installation et tests natifs |
-| P1-UPGRADE | **Partiel, priorité corrective** : migrations publiques 0.18.0→0.18.1 Windows update/no-op/réparation et neuf installer Unix validées ; bootstrap/updater Mac ARM/Intel validés. Redémarrage d'un tray actif avec flux hérités non corrigé ; ancien CLI mappé laisse toujours warning backup | Moyenne | Handoff natif/stdio bornés, receipts/PATH/root/package manager ; pas de kill ni release implicite ; migration Windows sans tray ne prouve pas ce handoff |
+| P1-UPGRADE | **Partiel, correctif de handoff en qualification** : relance Windows native sans héritage de handles, arrêt coopératif/identité/refus conservés ; migrations publiques0.18.0→0.18.1 déjà qualifiées | Moyenne | NUL stdio seul insuffisant dans preuve native ; EOF/successeur vivant qualifié localement, vrai compagnon à vérifier sur runner ; warning ancien CLI mappé toujours ouvert, aucune mise à jour PC |
 | P1-UNINSTALL | **Demandé, à faire** : désinstallation rapide par `mcw uninstall` ou point d'entrée équivalent, adapté à la provenance réelle de l'installation | Moyenne | Refus si protection/restauration active, identité/ownership exacts, délégation au gestionnaire MSI/Homebrew/AUR et conservation des données |
 | P2-HOOKS | Retenu, à faire | Élevée | Transitions actives cohérentes, effets bornés |
 | P2-NET | Reformulé en métadonnées locales, à faire | Élevée | PID authentifié ; macOS conditionnel |
@@ -70,7 +71,7 @@ Les identifiants sont stables. À chaque livraison, remplacer l'état par **En c
 | P4-ANDROID | Hors cœur, reporté en dernier | Élevée | Projet indépendant et modèle de permissions |
 | SITE-ROOT | Demandé, à faire plus tard : ne plus servir l'ancienne page à la racine HTTPS `/` | Faible | Routage Caddy exact ; préserver `/mcw` et les autres services |
 | SITE-MCW | Demandé, à faire plus tard : améliorer la présentation et la lisibilité du site `/mcw` | Moyenne | Page statique, parcours Windows/Linux/macOS et vérification desktop/mobile |
-| TRAY-WIN | **P0 publié/installé 0.17.2 ; infobulle corrective prioritaire**. Vrai menu 319×262, captures/détails et icône rouge observés sur PC. Infobulle UIA contredit encore l'activité : « aucun accès actif 2 active… » ; ne pas déclarer ce défaut corrigé | Moyenne | Préfixe neutre + résumé fidèle borné ; activité/partial/error/idle, UTF-16 et langues |
+| TRAY-WIN | **Correctif source en qualification, PC0.17.2 inchangé** : identité initiale Shell neutre avant observation, résumé courant borné et UTF-16 sans demi-surrogate | Moyenne | Fixture Shell réelle NIM_ADD/MODIFY, Explorer UIA/hover/recovery sur runner hébergé isolé ; aucune nouvelle observation/interaction avec le tray utilisateur |
 | INSTALL-CURL | Livré côté script : étapes/couleurs terminal, résultat et conseils PATH ; vrai curl HTTPS Linux/macOS et DNS validé, aucune activation implicite | Faible | Source immutable et checksum script vérifiés ; Windows conserve MSI/ZIP natif |
 
 ## P0-CAM-TRAY — Caméra Zoom non attribuée et croix grise pendant une capture
@@ -128,6 +129,28 @@ Les identifiants sont stables. À chaque livraison, remplacer l'état par **En c
 
 1. **TRAY-WIN — infobulle fausse** : UIA lit réellement « miccamwatch : aucun accès actif 2 active (1 Mic, 1 Cam); 1 ready… », alors que CLI/menu/détails montrent les captures. Le littéral inactif existe dans `src/frontends/tray.rs::idle_text` ; les références hors workspace n'ont pas été résolues par LSP, ne pas inventer une chaîne d'appels. Correction attendue : nom produit neutre devant résumé borné réellement courant ; inactivité uniquement si état idle. Qualifier active/partial/error/idle, langues et limite UTF-16, sans élargir le menu ni masquer la santé.
 2. **P1-UPGRADE — flux hérités après restart** : `src/updater/process.rs::restart` fait `Command::spawn` sans configurer stdin/stdout/stderr ; ces flux sont hérités. Lors du vrai handoff, nouveau tray vivant/paires 0.17.2, plus de CLI updater observé, mais `subprocess.run(capture_output=True)` ne rend pas sa sortie ; timeout 210 s et kernel détruit. **[INFERENCE]** l'EOF est retenu par le compagnon héritier, cohérent avec la source et l'absence de ce problème dans le smoke privé sans restart. Correction à qualifier sur runner desktop jetable : détacher uniquement les trois flux du compagnon, capturer la fin de l'updater avec nouveau tray toujours vivant ; refus/protections/identité/restoration inchangés. Ne pas contourner en tuant le tray utilisateur, en cachant timeout/erreur ou en libérant une garde.
+
+### Correctifs source du17/10 — qualification en cours
+
+- **TRAY-WIN :** la source courante conserve déjà les comptes Active/Ready sous
+  Partial/Error. Le défaut initial restant est l'affirmation d'inactivité fournie
+  à `NIM_ADD` avant toute observation ; elle devient une identité produit neutre.
+  L'hypothèse d'un cache Explorer expliquant exactement le relevé0.17.2 reste
+  non démontrée sur ce PC, qui n'a pas été réobservé. L'infobulle native utilise
+  la première ligne courante, marque neutre,127 unités UTF-16 utiles au maximum,
+  sans couper une paire de surrogates ; tous les détails restent accessibles.
+- **P1-UPGRADE :** une preuve native isolée a montré que `Stdio::null()` pour les
+  trois flux ne suffit pas : d'autres handles héritables retiennent encore EOF.
+  La relance suit désormais le pattern natif du broker existant :
+  `CreateProcessW`, `bInheritHandles=false`, détachement de console, aucun
+  handle standard imposé et fermeture des deux handles retournés. Aucun
+  changement du protocole d'arrêt coopératif, des refus UAC/busy ou de l'identité.
+- **Qualification locale :** le successeur contrôlé reste vivant après la fin
+  de l'appelant et EOF stdout/stderr ; stdin reçoit EOF malgré l'entrée originale
+  laissée ouverte avec des données. Chemin avec espaces et cyrillique, vraie
+  création Windows et sortie coopérative exercés. Le vrai compagnon et Explorer
+  restent à qualifier sur runner hébergé, jamais sur l'installation utilisateur.
+
 
 
 ## Phase 1 — Packaging et écosystème de distribution (immédiat)
@@ -1025,3 +1048,4 @@ sur ces deux plateformes.
 | 2026-10-17 | P1-MAC-UX — retours ami macOS pour la prochaine version | **Quatre demandes inscrites, non implémentées** | Statut peu clair, absence de vraie fenêtre de consultation, entrées tray potentiellement superflues à examiner, ajout d'un À propos présentant brièvement MicCamWatch ; section et critères dédiés ajoutés | Réaliser et vérifier les quatre surfaces natives ; choix précis des entrées à retirer après revue, profils directs tous OS conservés dans P1-TRAY-PROFILES |
 | 2026-10-17 | SITE-DEFAULT-EN / SITE-HERO — correctifs | **Source corrigée et preview qualifiée ; publication HTTPS en cours** | Export réel racine accueil/404 anglais et quatorze pages localisées ; quatre tests Node ; Chromium français sans redirection, choix `/fr/`,404 root et racine sans JS ; 133 scénarios de lisibilité/rectangles sur sept langues, dont reflow équivalent125/150 % et texte200 % | Publier, observer le vrai HTTPS et consigner CI/archives ; ni version binaire ni installation/contrôle PC modifiés |
 | 2026-10-17 | SITE-DEFAULT-EN / SITE-HERO — clôture HTTPS | **Publié et vérifié**, source web `277dd04`, CI site39032505628/Cloudflare5ff8f167 réussis | 133 scénarios réels sur sept langues et captures russes relues ; racine200 anglaise avec/sans JS et navigateurs français/russe,404 réelles anglaise/française/russe, sélecteur et installation exercés ; métadonnées et nouvelle archive CI vérifiées | Aucun reste sur ces deux correctifs ; P1-MAC-UX et profils directs Windows/Linux restent pour la prochaine version. Binaires/tags/PC0.17.2 et contrôles inchangés ; zoom qualifié par reflow CSS/DPR, pas par menu navigateur |
+| 2026-10-17 | TRAY-WIN / P1-UPGRADE / SITE-COPYRIGHT — reprise | **Source corrective intégrée, qualification native en cours** | Copyright approuvé sans tiret, licence MIT inchangée hors nom, quatre tests Node et32 footers réels qualifiés en preview ; lancement NUL insuffisant établi, relance native sans héritage/détachée et EOF avec successeur vivant réussis ; fixtures vrai compagnon et Explorer réservées au runner hébergé | Consigner qualification finale/CI native et copyright HTTPS ; pas de version/tag/release ni de changement à l'installation ou aux protections PC |
