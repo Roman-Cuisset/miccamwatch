@@ -108,6 +108,7 @@ const CMD_TOGGLE_NOTIFICATIONS: usize = 104;
 const CMD_TOGGLE_AUTOSTART: usize = 105;
 const CMD_CYCLE_PROFILE: usize = 106;
 const CMD_DETAILS: usize = 107;
+const CMD_RESUME_CAMERA: usize = 108;
 const DETAILS_EDIT: i32 = 201;
 const DETAILS_COPY: usize = 202;
 // Standard EDIT messages (no common-controls dependency).
@@ -153,6 +154,7 @@ struct TrayRefresh {
 #[derive(Clone, Copy, Debug)]
 enum CameraRequest {
     Manual,
+    Resume,
     Block {
         id: u64,
         previous: CameraPrivacyState,
@@ -238,6 +240,7 @@ struct TrayAppState {
     autostart_state: crate::autostart::AutostartState,
     settings: Settings,
     lock_state: SessionLockState,
+    policy_lock_state: SessionLockState,
     microphone_worker: microphone_worker::Worker,
     pending_microphone: usize,
     microphone_generation: u64,
@@ -478,6 +481,7 @@ pub fn run_tray(
     // made the icons look muddy. Render at the size the notification area will use.
     let icon_size = unsafe { GetSystemMetrics(SM_CXSMICON) }.max(16);
 
+    let lock_state = crate::platform::session_lock_state();
     let state = Box::new(TrayAppState {
         mute_state: MicrophoneMuteState::Unavailable,
         camera_state: CameraPrivacyState::SystemManaged,
@@ -493,7 +497,8 @@ pub fn run_tray(
         visual: TrayVisual::Error,
         summary: "miccamwatch".to_owned(),
         settings,
-        lock_state: crate::platform::session_lock_state(),
+        lock_state,
+        policy_lock_state: lock_state,
         microphone_worker,
         pending_microphone: 0,
         microphone_generation: 0,
@@ -668,7 +673,8 @@ unsafe extern "system" fn tray_wnd_proc(
         WM_COMMAND => {
             match wparam.0 & 0xffff {
                 CMD_TOGGLE_MUTE => toggle_mute(hwnd),
-                CMD_TOGGLE_CAMERA => toggle_camera(hwnd),
+                CMD_TOGGLE_CAMERA => queue_manual_camera(hwnd, CameraRequest::Manual),
+                CMD_RESUME_CAMERA => queue_manual_camera(hwnd, CameraRequest::Resume),
                 CMD_TOGGLE_NOTIFICATIONS => toggle_notifications(hwnd),
                 CMD_TOGGLE_AUTOSTART => toggle_autostart(hwnd),
                 CMD_CYCLE_PROFILE => cycle_profile(hwnd),
@@ -743,6 +749,9 @@ fn start_camera_worker(hwnd_cell: Arc<AtomicIsize>) -> CameraWorker {
                     match request {
                         CameraRequest::Manual => {
                             crate::privacy::toggle_camera()?;
+                        }
+                        CameraRequest::Resume => {
+                            crate::privacy::resume_camera_protection()?;
                         }
                         CameraRequest::Block { .. } => {
                             crate::privacy::set_camera_state(CameraPrivacyState::Blocked)?;
@@ -831,8 +840,23 @@ fn queue_lock_camera_block(state: &mut TrayAppState, camera_state: CameraPrivacy
     }
 }
 
+// Unknown readings do not invent an edge or discard the last known baseline.
+// The first known startup state is observation, never a new control request.
+fn advance_lock_baseline(previous: &mut SessionLockState, current: SessionLockState) -> bool {
+    if current == SessionLockState::Unknown {
+        return false;
+    }
+    let transition = *previous != SessionLockState::Unknown && *previous != current;
+    *previous = current;
+    transition
+}
+
 fn apply_lock_policy(state: &mut TrayAppState, current: SessionLockState) {
-    if current == state.lock_state {
+    state.lock_state = current;
+    if current == SessionLockState::Unknown {
+        state.deferred_lock_block = false;
+    }
+    if !advance_lock_baseline(&mut state.policy_lock_state, current) {
         return;
     }
     if current == SessionLockState::Locked {
@@ -858,7 +882,6 @@ fn apply_lock_policy(state: &mut TrayAppState, current: SessionLockState) {
             }
         }
     }
-    state.lock_state = current;
 }
 
 const NOTIFICATION_QUEUE_CAPACITY: usize = 32;
@@ -1305,15 +1328,12 @@ fn operation_error(state: &mut TrayAppState, resource: Resource, manual: bool, m
     notify_async(state, "MicCamWatch privacy operation", &message);
 }
 
-fn toggle_camera(hwnd: HWND) {
+fn queue_manual_camera(hwnd: HWND, request: CameraRequest) {
     let Some(state) = state(hwnd) else { return };
-    if state.pending_manual < 6
-        && state
-            .camera_requests
-            .try_send(CameraRequest::Manual)
-            .is_ok()
-    {
-        state.manual_generation = state.manual_generation.wrapping_add(1);
+    if state.pending_manual < 6 && state.camera_requests.try_send(request).is_ok() {
+        if matches!(request, CameraRequest::Manual) {
+            state.manual_generation = state.manual_generation.wrapping_add(1);
+        }
         state.pending_manual += 1;
     } else {
         camera_queue_error(state);
@@ -1486,16 +1506,17 @@ fn handle_camera_operation_result(
             CameraPrivacyState::Allowed
         };
         state.camera_observation = Some(observation);
-        state
-            .operation_errors
-            .completed(Resource::Camera, matches!(request, CameraRequest::Manual));
+        state.operation_errors.completed(
+            Resource::Camera,
+            matches!(request, CameraRequest::Manual | CameraRequest::Resume),
+        );
         state.camera_status_error = None;
         desired
     });
     match request {
-        CameraRequest::Manual => {
+        CameraRequest::Manual | CameraRequest::Resume => {
             state.pending_manual -= 1;
-            handle_camera_result(state, result);
+            handle_camera_result(state, request, result);
             let block_after_manual = should_queue_deferred_block(
                 state.pending_manual,
                 state.deferred_lock_block,
@@ -1609,18 +1630,26 @@ fn commit_manual_camera_state(
     camera_state: &mut CameraPrivacyState,
     restore_camera: &mut Option<CameraPrivacyState>,
     completed: CameraPrivacyState,
+    request: CameraRequest,
 ) {
     *camera_state = completed;
-    *restore_camera = None;
+    if matches!(request, CameraRequest::Manual) {
+        *restore_camera = None;
+    }
 }
 
-fn handle_camera_result(state: &mut TrayAppState, result: Result<CameraPrivacyState, String>) {
+fn handle_camera_result(
+    state: &mut TrayAppState,
+    request: CameraRequest,
+    result: Result<CameraPrivacyState, String>,
+) {
     match result {
         Ok(camera_state) => {
             commit_manual_camera_state(
                 &mut state.camera_state,
                 &mut state.restore_camera,
                 camera_state,
+                request,
             );
             // Force the poller to re-read privacy state instead of overwriting this
             // with a value captured before the toggle.
@@ -2007,12 +2036,24 @@ fn camera_block_label(lang: Language) -> &'static str {
     }
 }
 
+fn camera_resume_label(lang: Language) -> &'static str {
+    match lang {
+        Language::En => "Restart camera protection (UAC)…",
+        Language::Fr => "Réactiver la protection caméra (UAC)…",
+        Language::De => "Kameraschutz neu starten (UAC)…",
+        Language::Es => "Reactivar protección de cámaras (UAC)…",
+        Language::Ja => "カメラ保護を再開 (UAC)…",
+        Language::Zh => "重新启用摄像头保护 (UAC)…",
+        Language::Ru => "Возобновить защиту камер (UAC)…",
+    }
+}
+
 fn build_context_menu(
     hwnd: HWND,
     summary: &str,
     lang: Language,
     microphone_requested: Option<bool>,
-    camera_blocked: Option<bool>,
+    camera: Option<&CameraControlObservation>,
     settings: &Settings,
     autostart_state: crate::autostart::AutostartState,
 ) -> Result<HMENU> {
@@ -2037,7 +2078,7 @@ fn build_context_menu(
             CMD_TOGGLE_MUTE,
             PCWSTR(mute_wide.as_ptr()),
         );
-        let camera_text = format_wide(match camera_blocked {
+        let camera_text = format_wide(match camera.map(|status| status.desired_blocked) {
             Some(true) => camera_allow_label(lang),
             Some(false) => camera_block_label(lang),
             None => lang.unknown_protection(false),
@@ -2048,6 +2089,10 @@ fn build_context_menu(
             CMD_TOGGLE_CAMERA,
             PCWSTR(camera_text.as_ptr()),
         );
+        if camera.is_some_and(|status| status.desired_blocked && !status.helper_active) {
+            let resume = format_wide(camera_resume_label(lang));
+            let _ = AppendMenuW(menu, MF_STRING, CMD_RESUME_CAMERA, PCWSTR(resume.as_ptr()));
+        }
         let notifications = format_wide(if settings.notifications_paused() {
             "Resume notifications"
         } else {
@@ -2094,10 +2139,7 @@ fn show_context_menu(hwnd: HWND) {
             .microphone_protection
             .as_ref()
             .map(|status| status.requested),
-        state
-            .camera_observation
-            .as_ref()
-            .map(|status| status.desired_blocked),
+        state.camera_observation.as_ref(),
         &state.settings,
         state.autostart_state,
     ) else {
@@ -2787,7 +2829,7 @@ mod tests {
 
     fn assert_native_menu(menu: HMENU, owner: HWND) {
         use windows::Win32::UI::WindowsAndMessaging::{
-            GetMenuItemID, GetMenuState, GetMenuStringW, MF_BYPOSITION,
+            GetMenuState, GetMenuStringW, MF_BYCOMMAND, MF_BYPOSITION,
         };
         unsafe {
             let mut label = [0u16; 1024];
@@ -2811,23 +2853,19 @@ mod tests {
             let _ = SelectObject(dc, previous);
             let _ = ReleaseDC(Some(owner), dc);
             let _ = DeleteObject(font.into());
-            for (position, command) in [
-                (2, CMD_DETAILS),
-                (4, CMD_TOGGLE_MUTE),
-                (5, CMD_TOGGLE_CAMERA),
-                (6, CMD_TOGGLE_NOTIFICATIONS),
-                (7, CMD_CYCLE_PROFILE),
-                (8, CMD_TOGGLE_AUTOSTART),
-                (10, CMD_EXIT),
+            for command in [
+                CMD_DETAILS,
+                CMD_TOGGLE_MUTE,
+                CMD_TOGGLE_CAMERA,
+                CMD_TOGGLE_NOTIFICATIONS,
+                CMD_CYCLE_PROFILE,
+                CMD_TOGGLE_AUTOSTART,
+                CMD_EXIT,
             ] {
-                assert_eq!(GetMenuItemID(menu, position), command as u32);
+                let flags = GetMenuState(menu, command as u32, MF_BYCOMMAND);
+                assert_ne!(flags, u32::MAX, "essential action is missing");
+                assert_eq!(flags & (MF_DISABLED.0 | MF_GRAYED.0), 0);
             }
-            let flags = GetMenuState(
-                menu,
-                CMD_TOGGLE_MUTE as u32,
-                windows::Win32::UI::WindowsAndMessaging::MF_BYCOMMAND,
-            );
-            assert_eq!(flags & (MF_DISABLED.0 | MF_GRAYED.0), 0);
         }
     }
 
@@ -2878,6 +2916,39 @@ mod tests {
                 )
                 .unwrap();
                 assert_native_menu(menu, owner);
+                let _ = unsafe { DestroyMenu(menu) };
+            }
+        }
+        let _ = unsafe { DestroyWindow(owner) };
+    }
+
+    #[test]
+    fn native_menu_can_resume_missing_guard_without_removing_allow() {
+        use windows::Win32::UI::WindowsAndMessaging::{GetMenuState, MF_BYCOMMAND};
+        let owner = native_test_owner();
+        let mut fixture = StatusFixture::healthy();
+        for requested in [false, true] {
+            for active in [false, true] {
+                fixture.camera.desired_blocked = requested;
+                fixture.camera.helper_active = active;
+                let menu = build_context_menu(
+                    owner,
+                    "miccamwatch",
+                    Language::Fr,
+                    None,
+                    Some(&fixture.camera),
+                    &Settings::default(),
+                    crate::autostart::AutostartState::Disabled,
+                )
+                .unwrap();
+                assert_native_menu(menu, owner);
+                let flags = unsafe { GetMenuState(menu, CMD_RESUME_CAMERA as u32, MF_BYCOMMAND) };
+                if requested && !active {
+                    assert_ne!(flags, u32::MAX);
+                    assert_eq!(flags & (MF_DISABLED.0 | MF_GRAYED.0), 0);
+                } else {
+                    assert_eq!(flags, u32::MAX);
+                }
                 let _ = unsafe { DestroyMenu(menu) };
             }
         }
@@ -2978,7 +3049,23 @@ mod tests {
         partial.collectors[0].detail = None;
         partial.observation_gaps.clear();
         let recovered_summary = refreshed_status(Ok(&partial), fixture.status()).1;
+        let mut missing_guard = StatusFixture::healthy();
+        missing_guard.camera.desired_blocked = true;
+        missing_guard.camera.helper_active = false;
+        missing_guard.camera.state = CameraPrivacyState::SystemManaged;
+        missing_guard.camera.owned_blocked_present = 1;
+        let idle = Snapshot {
+            collectors: partial.collectors.clone(),
+            accesses: Vec::new(),
+            observation_gaps: Vec::new(),
+        };
+        let missing_guard_summary = refreshed_status(Ok(&idle), missing_guard.status()).1;
         for (name, visual, summary) in [
+            (
+                "camera-guard-missing",
+                TrayVisual::Error,
+                missing_guard_summary,
+            ),
             ("partial-active", TrayVisual::Partial, partial_summary),
             ("error-active", TrayVisual::Error, error_summary),
             ("recovered-active", TrayVisual::Active, recovered_summary),
@@ -3023,7 +3110,11 @@ mod tests {
                 &summary,
                 Language::En,
                 Some(true),
-                Some(false),
+                Some(if name == "camera-guard-missing" {
+                    &missing_guard.camera
+                } else {
+                    &fixture.camera
+                }),
                 &Settings::default(),
                 crate::autostart::AutostartState::Disabled,
             )
@@ -3201,6 +3292,46 @@ mod tests {
     }
 
     #[test]
+    fn passive_startup_and_observation_gaps_do_not_invent_lock_edges() {
+        use SessionLockState::{Locked, Unknown, Unlocked};
+        for initial in [Unknown, Locked, Unlocked] {
+            let mut baseline = initial;
+            assert!(!advance_lock_baseline(&mut baseline, Unknown));
+            let first = if initial == Unknown { Locked } else { initial };
+            assert!(!advance_lock_baseline(&mut baseline, first));
+            assert_eq!(baseline, first);
+            assert!(!advance_lock_baseline(&mut baseline, Unknown));
+            assert!(!advance_lock_baseline(&mut baseline, first));
+            let next = if first == Locked { Unlocked } else { Locked };
+            assert!(advance_lock_baseline(&mut baseline, next));
+            assert_eq!(baseline, next);
+            assert!(advance_lock_baseline(&mut baseline, first));
+        }
+    }
+
+    #[test]
+    fn restarting_camera_guard_keeps_automatic_restoration_ownership() {
+        let mut camera = CameraPrivacyState::Blocked;
+        let mut restore = Some(CameraPrivacyState::Allowed);
+        commit_manual_camera_state(
+            &mut camera,
+            &mut restore,
+            CameraPrivacyState::Blocked,
+            CameraRequest::Resume,
+        );
+        assert_eq!(restore, Some(CameraPrivacyState::Allowed));
+        assert_eq!(camera, CameraPrivacyState::Blocked);
+        commit_manual_camera_state(
+            &mut camera,
+            &mut restore,
+            CameraPrivacyState::Allowed,
+            CameraRequest::Manual,
+        );
+        assert_eq!(restore, None);
+        assert_eq!(camera, CameraPrivacyState::Allowed);
+    }
+
+    #[test]
     fn declined_manual_toggle_does_not_reprompt_pending_unlock_restore() {
         // The block finished after unlock; its original restore obligation is
         // retained, but a declined manual UAC must not issue another request.
@@ -3208,7 +3339,12 @@ mod tests {
         let mut camera_state = CameraPrivacyState::Blocked;
         let declined: Result<CameraPrivacyState, String> = Err("approval declined".into());
         if let Ok(completed) = declined {
-            commit_manual_camera_state(&mut camera_state, &mut restore_camera, completed);
+            commit_manual_camera_state(
+                &mut camera_state,
+                &mut restore_camera,
+                completed,
+                CameraRequest::Manual,
+            );
         }
         assert_eq!(restore_camera, Some(CameraPrivacyState::Allowed));
         assert_eq!(camera_state, CameraPrivacyState::Blocked);
@@ -3276,7 +3412,12 @@ mod tests {
         let mut state = CameraPrivacyState::Allowed;
         let mut restore_camera = Some(CameraPrivacyState::Allowed);
         // A declined automatic restore leaves its intent outstanding.
-        commit_manual_camera_state(&mut state, &mut restore_camera, CameraPrivacyState::Blocked);
+        commit_manual_camera_state(
+            &mut state,
+            &mut restore_camera,
+            CameraPrivacyState::Blocked,
+            CameraRequest::Manual,
+        );
         assert_eq!(state, CameraPrivacyState::Blocked);
         assert_eq!(restore_camera, None);
         let previous = restore_camera.unwrap_or(state);
@@ -3309,7 +3450,7 @@ mod tests {
             |request| match request {
                 CameraRequest::Restore { .. } => Ok(CameraPrivacyState::Allowed),
                 CameraRequest::Manual => Ok(CameraPrivacyState::Blocked),
-                CameraRequest::Block { .. } => unreachable!(),
+                CameraRequest::Block { .. } | CameraRequest::Resume => unreachable!(),
             },
             || {},
             || true,
@@ -3324,9 +3465,14 @@ mod tests {
                     restore_camera = None;
                 }
                 CameraRequest::Manual => {
-                    commit_manual_camera_state(&mut actual, &mut restore_camera, completed);
+                    commit_manual_camera_state(
+                        &mut actual,
+                        &mut restore_camera,
+                        completed,
+                        CameraRequest::Manual,
+                    );
                 }
-                CameraRequest::Block { .. } => unreachable!(),
+                CameraRequest::Block { .. } | CameraRequest::Resume => unreachable!(),
             }
         }
         assert_eq!(actual, CameraPrivacyState::Blocked);

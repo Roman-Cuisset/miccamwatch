@@ -210,7 +210,8 @@ def main():
         earliest = int(time.time() * 10_000_000) + 116444736000000000
         attempted["camera"] = earliest
         command(["camera", "block"])
-        owned.append(native.track_server("camera", backend, sampler, earliest))
+        camera_owner = native.track_server("camera", backend, sampler, earliest)
+        owned.append(camera_owner)
         tracked_resources.add("camera")
         blocked = await_state(lambda s: s["camera"]["desired_blocked"] and s["camera"]["helper_active"], "Zero-camera global Block helper did not activate")
         assert blocked["camera"]["owned_blocked_present"] == 0, "Invented expected camera/owned device"
@@ -271,7 +272,48 @@ def main():
         phase = dict(frontend_role="tray_frontend")
         result["frontend_phases"].append(phase)
         sustain(phase, sampler, lambda: tray.poll() is None and windows_tray_window(tray.pid))
-        assert windows_tray_window(tray.pid, close=True), "Owned tray window unavailable at close"
+        # Simulate loss of OUR authenticated zero-device helper, never a user
+        # guard or an unverified PID. Preserve Block throughout the recovery.
+        backend.terminate(*camera_owner)
+        lost = await_state(lambda s: s["camera"]["desired_blocked"] and not s["camera"]["helper_active"],
+                           "Lost helper was not reported without clearing Block")
+        assert lost["microphone"]["requested"] and lost["microphone"]["service_active"]
+        tracked_resources.discard("camera")
+        user = C.WinDLL("user32", use_last_error=True)
+        user.FindWindowW.argtypes = [W.LPCWSTR, W.LPCWSTR]
+        user.FindWindowW.restype = W.HWND
+        user.GetWindowThreadProcessId.argtypes = [W.HWND, C.POINTER(W.DWORD)]
+        user.SendMessageTimeoutW.argtypes = [W.HWND, W.UINT, W.WPARAM, W.LPARAM, W.UINT, W.UINT, C.POINTER(C.c_size_t)]
+        user.SendMessageTimeoutW.restype = W.LPARAM
+        window = user.FindWindowW("MicCamWatchTrayClass", None)
+        window_pid, returned = W.DWORD(), C.c_size_t()
+        assert tray.poll() is None and window, "Owned live tray required for recovery command"
+        user.GetWindowThreadProcessId(window, C.byref(window_pid))
+        assert window_pid.value == tray.pid, "Recovery command would target a foreign tray"
+        earliest = int(time.time() * 10_000_000) + 116444736000000000
+        attempted["camera"] = earliest
+        # Actual production WM_COMMAND handler -> serialized camera worker ->
+        # resume-only intent validation -> approved native helper. No Allow.
+        assert user.SendMessageTimeoutW(window, 0x111, 108, 0, 2, 5000, C.byref(returned)), C.WinError()
+        resumed = await_state(lambda s: s["camera"]["desired_blocked"] and s["camera"]["helper_active"],
+                              "Tray did not restart the requested guard without Allow")
+        new_owner = native.track_server("camera", backend, sampler, earliest)
+        owned.append(new_owner)
+        assert new_owner != camera_owner, "Guard recovery did not establish a new owned lifetime"
+        assert resumed["microphone"]["requested"] and resumed["microphone"]["service_active"]
+        tracked_resources.add("camera")
+        result["camera_guard_recovery"] = dict(
+            block_retained_without_allow=True, actual_tray_command=True,
+            new_authenticated_helper=True, microphone_protection_preserved=True,
+            human_uac_consent_exercised=False, physical_device_arrivals_exercised=False)
+        deadline = time.monotonic() + 15
+        while True:
+            assert tray.poll() is None, "Tray exited before acknowledging cooperative close"
+            assert user.SendMessageTimeoutW(window, 0x10, 0, 0, 2, 5000, C.byref(returned)), C.WinError()
+            if returned.value == 0x4D435731:
+                break
+            assert returned.value == 0x4D435732 and time.monotonic() < deadline, "Owned tray did not finish its recovery operation"
+            time.sleep(.05)
         tray.wait(timeout=15)
         assert tray.returncode == 0, "Native tray did not exit cleanly"
         tray = None

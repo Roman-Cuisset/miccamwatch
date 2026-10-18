@@ -1604,7 +1604,7 @@ fn observe_entries<'a>(
         all_running,
     );
     let detail = detail.map(str::to_owned).or_else(|| {
-        if record.desired_blocked && !helper_active { Some("Global Block requested, but its approved elevated helper is not running; future arrivals are not protected.".to_owned()) }
+        if record.desired_blocked && !helper_active { Some("Global Block requested, but its approved elevated helper is unavailable; protection of future arrivals is not proven. Restart camera protection (UAC) to resume without selecting Allow.".to_owned()) }
         else if record.intent_generation == 0 && has_records { Some("Legacy camera restore information is retained; unsigned historical records are not privileged ownership authority. Absent entries are informational, not a blocked-camera count.".to_owned()) }
         else if absent_owned > 0 && !record.desired_blocked { Some("Allow is requested globally. Owned offline configurations await positive Windows restoration; no permanent elevated helper remains after Allow.".to_owned()) }
         else { None }
@@ -1764,20 +1764,23 @@ fn combined_record(user: CameraBlockRecord, journal: Option<&Journal>) -> Camera
     record
 }
 pub(super) fn observation() -> Result<CameraControlObservation> {
-    if let Ok(response) = request(&Request::Status) {
-        if response.observation.unknown_devices > 0
-            && response.completed_generation >= response.generation
-        {
-            if let Some(error) = response.error {
-                bail!("{error}");
+    let unavailable = match request(&Request::Status) {
+        Ok(response) => {
+            if response.observation.unknown_devices > 0
+                && response.completed_generation >= response.generation
+            {
+                if let Some(error) = response.error {
+                    bail!("{error}");
+                }
+                bail!(
+                    "native camera inventory has {} unknown device status(es); no absence or fulfilled protection is inferred",
+                    response.observation.unknown_devices
+                );
             }
-            bail!(
-                "native camera inventory has {} unknown device status(es); no absence or fulfilled protection is inferred",
-                response.observation.unknown_devices
-            );
+            return Ok(response.observation);
         }
-        return Ok(response.observation);
-    }
+        Err(error) => error,
+    };
     let user = load_record()?.unwrap_or_default();
     let journal = read_journal()?;
     let legacy = user
@@ -1812,6 +1815,15 @@ pub(super) fn observation() -> Result<CameraControlObservation> {
     // Historical writable IDs remain informational; only the protected native
     // journal can authenticate an actual owned blocked-device count.
     observed.owned_blocked_present = owned_blocked_count(journal.as_ref(), &inventory);
+    if record.desired_blocked {
+        use std::fmt::Write as _;
+        let detail = observed.detail.get_or_insert_with(String::new);
+        let _ = write!(
+            detail,
+            "; Native camera helper status failed: {unavailable:#}"
+        );
+        crate::windows_control::truncate_detail(detail, 8192);
+    }
     Ok(observed)
 }
 pub(super) fn arrived_targets() -> Result<Vec<String>> {
@@ -2081,11 +2093,56 @@ fn wait_for_shutdown() -> Result<()> {
     }
     Ok(())
 }
-fn control_requested(selection: Option<bool>) -> Result<()> {
+#[derive(Clone, Copy)]
+enum Selection {
+    Set(bool),
+    Toggle,
+    Resume,
+}
+
+fn selected_block(
+    selection: Selection,
+    record: &CameraBlockRecord,
+    journal: Option<&Journal>,
+    existing: Option<&Response>,
+) -> Result<bool> {
+    match selection {
+        Selection::Set(blocked) => Ok(blocked),
+        Selection::Toggle => Ok(!existing.map_or(record.desired_blocked, |status| {
+            status.observation.desired_blocked
+        })),
+        Selection::Resume => {
+            let mut latest = (record.intent_generation, record.desired_blocked);
+            for (generation, blocked) in journal
+                .map(|journal| (journal.generation, journal.requested))
+                .into_iter()
+                .chain(
+                    existing.map(|status| (status.generation, status.observation.desired_blocked)),
+                )
+            {
+                if generation > latest.0 {
+                    latest = (generation, blocked);
+                } else if generation == latest.0 {
+                    // A concurrent/pending Allow must never become a new Block
+                    // because a stale menu offered to restart the guard.
+                    latest.1 &= blocked;
+                }
+            }
+            ensure!(
+                latest.1,
+                "camera protection is no longer requested; guard restart refused without selecting Block"
+            );
+            Ok(true)
+        }
+    }
+}
+
+fn control_requested(selection: Selection) -> Result<()> {
     let transaction = crate::windows_control::acquire_request_lock("camera")?;
     let mut record = load_record()?.unwrap_or_default();
     let journal = read_journal()?;
     let mut existing = request(&Request::Status).ok();
+    let blocked = selected_block(selection, &record, journal.as_ref(), existing.as_ref())?;
     if existing.as_ref().is_some_and(|status| status.retiring) {
         let retiring = existing
             .take()
@@ -2095,11 +2152,6 @@ fn control_requested(selection: Option<bool>) -> Result<()> {
         })?;
         wait_for_shutdown()?;
     }
-    let blocked = selection.unwrap_or_else(|| {
-        !existing.as_ref().map_or(record.desired_blocked, |status| {
-            status.observation.desired_blocked
-        })
-    });
     let generation = record
         .intent_generation
         .max(journal.as_ref().map_or(0, |journal| journal.generation))
@@ -2163,10 +2215,13 @@ fn control_requested(selection: Option<bool>) -> Result<()> {
     Ok(())
 }
 pub(super) fn set_requested(blocked: bool) -> Result<()> {
-    control_requested(Some(blocked))
+    control_requested(Selection::Set(blocked))
 }
 pub(super) fn toggle_requested() -> Result<()> {
-    control_requested(None)
+    control_requested(Selection::Toggle)
+}
+pub(crate) fn resume_requested() -> Result<()> {
+    control_requested(Selection::Resume)
 }
 pub(super) fn restore_legacy(instance_id: &str) -> Result<CameraControlObservation> {
     // Global Allow is authoritative before one NEW UAC approval for this exact
@@ -2577,6 +2632,47 @@ mod tests {
     }
 
     #[test]
+    fn guard_resume_preserves_block_and_never_overrides_newer_allow() {
+        for (record, journal, live, allowed) in [
+            ((7, true), Some((7, true)), None, true),
+            ((8, false), Some((7, true)), Some((7, true)), false),
+            ((7, true), Some((8, false)), None, false),
+            ((7, true), Some((7, true)), Some((8, false)), false),
+            ((7, true), Some((7, true)), Some((7, false)), false),
+            ((8, true), Some((7, false)), None, true),
+            ((0, false), None, None, false),
+        ] {
+            let record = CameraBlockRecord {
+                intent_generation: record.0,
+                desired_blocked: record.1,
+                ..Default::default()
+            };
+            let journal = journal.map(|(generation, requested)| Journal {
+                generation,
+                requested,
+                ..Default::default()
+            });
+            let live = live.map(|(generation, blocked)| Response {
+                observation: unknown_observation(blocked, true, String::new()),
+                generation,
+                completed_generation: generation,
+                retiring: !blocked,
+                error: None,
+            });
+            let result =
+                selected_block(Selection::Resume, &record, journal.as_ref(), live.as_ref());
+            if allowed {
+                assert!(result.unwrap());
+            } else {
+                assert!(
+                    result.is_err(),
+                    "Restart must not select a new Block after Allow"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn zero_camera_block_is_a_real_global_intent() -> Result<()> {
         let record = CameraBlockRecord {
             desired_blocked: true,
@@ -2590,7 +2686,6 @@ mod tests {
         assert!(!record.is_empty());
         let missing = observe_inventory(&record, false, None, &[], |_| unreachable!())?;
         assert_eq!(missing.state, CameraPrivacyState::SystemManaged);
-        assert!(missing.detail.as_deref().unwrap().contains("not running"));
         Ok(())
     }
 

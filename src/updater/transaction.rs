@@ -52,7 +52,8 @@ pub fn apply(ops: &mut impl Operations, count: usize, was_running: bool) -> Resu
     if count == 0 {
         return Ok(());
     }
-    // Reserve before stopping a frontend: tray exit never releases a background guard.
+    // Reserve before frontend shutdown: it can resolve automatic restoration
+    // ownership, while manual protection remains independently owned.
     ops.reserve().context(
         "update refused; installed binaries and tray unchanged; protection was not released",
     )?;
@@ -127,11 +128,17 @@ struct ProtectionReservation {
 }
 impl ProtectionReservation {
     fn acquire() -> Result<Self> {
-        let camera_request = crate::windows_control::acquire_request_lock("camera")?;
-        let microphone_request = crate::windows_control::acquire_request_lock("microphone")?;
+        let camera_request = crate::windows_control::acquire_request_lock("camera").context(
+            "cannot reserve camera control requests; a pending operation may still own them",
+        )?;
+        let microphone_request = crate::windows_control::acquire_request_lock("microphone")
+            .context("cannot reserve microphone control requests; a pending operation may still own them")?;
         let identity = crate::windows_control::current_identity()?;
-        let microphone = crate::windows_control::acquire_resource_for("microphone", &identity)?;
-        let camera = crate::windows_control::acquire_resource_for("camera", &identity)?;
+        let microphone = crate::windows_control::acquire_resource_for("microphone", &identity)
+            .context("cannot reserve native microphone ownership; a protection owner may still be active")?;
+        let camera = crate::windows_control::acquire_resource_for("camera", &identity).context(
+            "cannot reserve native camera ownership; a protection owner may still be active",
+        )?;
         // Live owners are excluded globally, including foreign operational scopes.
         // Read dormant/manual/automatic intent only after locking out new owners.
         crate::platform::ensure_microphone_update_inactive()?;

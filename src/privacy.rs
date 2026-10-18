@@ -363,6 +363,7 @@ fn save_record_at(path: &Path, record: &CameraBlockRecord) -> Result<()> {
 }
 mod windows_guard;
 pub(crate) use windows_guard::ensure_update_inactive as ensure_camera_update_inactive;
+pub(crate) use windows_guard::resume_requested as resume_camera_protection;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CameraControlObservation {

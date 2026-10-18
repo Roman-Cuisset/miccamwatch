@@ -44,21 +44,43 @@ public static class McwNativeProof {
     [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr hwnd, uint msg, IntPtr wparam, IntPtr lparam);
     [DllImport("user32.dll")] public static extern IntPtr OpenInputDesktop(uint flags, bool inherit, uint access);
     [DllImport("user32.dll")] public static extern bool CloseDesktop(IntPtr desktop);
+    [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
+    [DllImport("user32.dll")] public static extern IntPtr GetThreadDesktop(uint thread);
+    [DllImport("user32.dll", CharSet=CharSet.Unicode, SetLastError=true)] private static extern bool GetUserObjectInformation(IntPtr value, int index, System.Text.StringBuilder text, uint bytes, out uint needed);
+    public static string DesktopName(IntPtr desktop) {
+        var name = new System.Text.StringBuilder(256);
+        uint needed;
+        if (!GetUserObjectInformation(desktop, 2, name, 512, out needed))
+            throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+        return name.ToString();
+    }
+    [DllImport("user32.dll", SetLastError=true)] private static extern bool SystemParametersInfo(uint action, uint parameter, out uint value, uint flags);
+    public static uint MouseHoverTime() {
+        uint value;
+        if (!SystemParametersInfo(0x66, 0, out value, 0))
+            throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+        return value;
+    }
     [DllImport("user32.dll", SetLastError=true)] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
 }
 '@
 if (-not [Environment]::UserInteractive) { throw 'Native proof requires an interactive, unlocked Windows desktop.' }
 $desktop = [McwNativeProof]::OpenInputDesktop(0, $false, 1)
 if ($desktop -eq [IntPtr]::Zero) { throw 'No accessible input desktop: native geometry/screenshots cannot be verified.' }
-[void][McwNativeProof]::CloseDesktop($desktop)
+try { $inputDesktop = [McwNativeProof]::DesktopName($desktop) }
+finally { [void][McwNativeProof]::CloseDesktop($desktop) }
+$threadDesktop = [McwNativeProof]::DesktopName([McwNativeProof]::GetThreadDesktop([McwNativeProof]::GetCurrentThreadId()))
 $directory = [IO.Path]::GetFullPath((Join-Path $OutputDirectory ((Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + $PID)))
 [void][IO.Directory]::CreateDirectory($directory)
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 try {
     $principal = New-Object Security.Principal.WindowsPrincipal -ArgumentList $identity
-    @{ elevated=$principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator); interactive=[Environment]::UserInteractive } |
+    @{ elevated=$principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator); interactive=[Environment]::UserInteractive; input_desktop=$inputDesktop; thread_desktop=$threadDesktop; mouse_hover_milliseconds=[McwNativeProof]::MouseHoverTime() } |
         ConvertTo-Json | Set-Content -Encoding UTF8 (Join-Path $directory 'driver-context.json')
 } finally { $identity.Dispose() }
+if ($inputDesktop -ne $threadDesktop -or $inputDesktop -eq 'Winlogon') {
+    throw 'The current thread is not on an unlocked input desktop; no input, desktop switch or unlock attempted.'
+}
 $previous = $env:MCW_WINDOWS_NATIVE_PROOF_DIR
 $env:MCW_WINDOWS_NATIVE_PROOF_DIR = $directory
 $process = $null
@@ -154,8 +176,12 @@ function Get-FixtureShellButton([string]$expected, $identity) {
         $name = $matches[0].Current.Name
         # Shell may retain NIM_ADD's accessible identity even after NIM_MODIFY.
         # A neutral product identity is fine; an old idle/status assertion is not.
-        if ($name -ne 'miccamwatch' -and -not [string]::Equals($name, $expected, [StringComparison]::Ordinal)) {
-            throw "Shell accessible identity contradicts current fixture status: $name (expected $expected or neutral product name)"
+        # Explorer also composes the original neutral title and the current tip.
+        $composed = 'miccamwatch ' + $expected
+        if ($name -ne 'miccamwatch' -and
+            -not [string]::Equals($name, $expected, [StringComparison]::Ordinal) -and
+            -not [string]::Equals($name, $composed, [StringComparison]::Ordinal)) {
+            throw "Shell accessible identity contradicts current fixture status: $name (expected current status, optionally prefixed by neutral product name)"
         }
         # UIA can expose the hidden overflow contents with nonempty off-screen
         # bounds. Do not hover a stale/hidden rectangle; open overflow first.
@@ -327,7 +353,7 @@ try {
     $null = $process.Handle
     $measurements = @()
     Confirm-FixtureShellTooltip 'startup'
-    foreach ($name in @('partial-active', 'error-active', 'recovered-active', 'long-error', 'unicode-controls', 'idle-protected')) {
+    foreach ($name in @('camera-guard-missing', 'partial-active', 'error-active', 'recovered-active', 'long-error', 'unicode-controls', 'idle-protected')) {
         Confirm-FixtureShellTooltip $name
         $menu = Wait-ProofFile "$name-menu.json"
         $owner = [IntPtr][long]$menu.owner

@@ -291,6 +291,23 @@ Exact-image ownership, cooperative shutdown, busy/UAC refusal and restoration
 requirements are unchanged. Native proof exercises captured caller EOF while a
 successor remains alive; actual tray and Explorer/UIA checks run only on a
 disposable hosted Windows desktop. Qualification status is recorded in ROADMAP.
+
+When camera Block remains requested but its elevated guard is unavailable, the
+Windows tray offers **Restart camera protection (UAC)…** alongside the separate
+Allow action. Restart revalidates the latest intent under the camera request lock;
+it cannot turn a newer Allow back into Block. It preserves automatic restoration
+ownership, reuses normal administrator approval and never inserts an Allow step.
+The original native helper-status error is retained in diagnostics instead of
+assuming that every failed IPC query proves the helper process stopped.
+
+Windows lock policy treats its first known session state as a passive startup
+baseline, not a new locking event. Unknown readings do not erase that baseline;
+later configured transitions still work. Existing requested protection and
+pending restoration are not reset or implicitly released at startup.
+Updater reservation errors now distinguish camera/microphone and request/resource
+ownership. A real protected owner remains a refusal: closing its frontend first
+is not a safe workaround, because it can resolve automatic restoration.
+
 These fixes are not retroactively included in the published v0.18.1 artifacts.
 
 ## v0.18.1 — ZIP dependency security maintenance

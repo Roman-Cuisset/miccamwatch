@@ -1,7 +1,7 @@
 # Roadmap technique MicCamWatch
 
 Dernière mise à jour : **2026-10-18**. Responsable : lead architecture/développement.
-Base publiée : [v0.18.1 stable/latest](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.18.1), source `034d2c1e5cd5a2f06bf40fc69d0b15bed83defcc` ; [CI exacte avant tag](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/39027055886) et [release native](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/39028452282) vertes ; neuf assets/digests et huit attestations exactes vérifiés. Dépendances ZIP corrigées, SBOM public vérifié. Migrations publiques Windows/Unix, Pages et qualification native Arch 0.18.1 réussies. Paire PC 0.17.2 non modifiée ; état des protections non réobservé depuis le relevé du 14/10. Recettes externes non publiées.
+Base publiée : [v0.18.1 stable/latest](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.18.1), source `034d2c1e5cd5a2f06bf40fc69d0b15bed83defcc` ; [CI exacte avant tag](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/39027055886) et [release native](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/39028452282) vertes ; neuf assets/digests et huit attestations exactes vérifiés. Dépendances ZIP corrigées, SBOM public vérifié. Migrations publiques Windows/Unix, Pages et qualification native Arch0.18.1 réussies. Le18/10, l'utilisateur rapporte sa mise à jour PC vers0.18.1 après Exit manuel du tray ; aucune nouvelle intervention ou observation de cette installation par l'assistant. État des protections non réobservé depuis le relevé du14/10. Recettes externes non publiées.
 
 **P0-DEPS-ZIP : publié 0.18.1.** Les trois avis ZIP émis le17/10 sont traités par self_update1.3.1/ZIP9.0.4 ; audit natif sans ignore et CI quatre OS réussis. Tag et assets0.18.0 conservés immuables.
 
@@ -42,6 +42,7 @@ Les identifiants sont stables. À chaque livraison, remplacer l'état par **En c
 | P0-CAM-TRAY | **Publié 0.17.2 et installé sur PC**. Couverture partielle distincte, captures conservées, raisons natives détaillées ; Zoom PID brut valide/report FILETIME zéro, attribution prudente maintenue. Vrai tray PC avec Ktalk actif : menu compact, détails complets, icône rouge ; infobulle résiduelle suivie dans TRAY-WIN | Moyenne | Pas de certification matérielle ; timestamp nul reste Unknown, jamais autorité de kill |
 | P0-UNIX-DIAG | **Publié 0.18.0** : captures conservées, avertissement distinct, causes dans Details, lecture inconnue distincte d'une action échouée | Moyenne | CI exacte38863239649 et release38865573731 quatre OS vertes ; limites de mesure et matérielles conservées |
 | P0-UNIX-OBS | **Publié 0.18.0, qualifié logiciellement** : inspection macOS passive sans état écrit, lecture globale fixe préautorisée, Cancel natif et disparition du helper au départ du propriétaire | Élevée | Consentement OS Accepter/Refuser avec identifiants humains non exercé ; pas de grant TCC ni preuve de capture, UAC/Polkit inchangés |
+| P0-CAM-RESUME | **Implémenté en source, qualification native à terminer** : action Réactiver la protection caméra (UAC) sans Allow intermédiaire ; cause IPC conservée au lieu d'affirmer tout helper arrêté | Élevée | 173 tests Windows passés, Clippy/build réussis ; intention la plus récente et ownership de restauration préservés ; pas publié ni installé |
 | P1-MAC-MENU | **Publié 0.18.0, AppKit réel qualifié** : quatre profils directs cochés, marque MCW template/badges, Details au-dessus d'Exit, sept langues et `--config` prioritaire | Moyenne | IPC desktop v2 frontend/helper appariés ; captures rendues et vraies fenêtres relues, données de capture simulées explicitement |
 | P1-MAC-UX | **Demandé pour la prochaine version, non implémenté** : statut compréhensible, vraie fenêtre de consultation, tray simplifié et À propos concis | Moyenne | Retours utilisateur macOS ; fenêtre AppKit native, diagnostic honnête et revue des actions superflues sans retirer d'accès utile |
 | P1-TRAY-PROFILES | **Demandé pour tous les OS** : quatre profils directement sélectionnables dans les menus Windows, Linux et macOS ; macOS livré 0.18.0, Windows/Linux à implémenter et qualifier | Moyenne | Choix directs cochés, logique/persistance existantes, priorité `--config`, souris/clavier et sept langues sur chaque frontend natif |
@@ -59,7 +60,9 @@ Les identifiants sont stables. À chaque livraison, remplacer l'état par **En c
 | P1-WG | Winget : à faire | Moyenne | Identité MSI et upgrades contrôlés |
 | P1-MAC-APP-DMG | **Publié 0.18.1**, DMG Apple Silicon et Intel avec app native, sommes et attestations vérifiées | Moyenne | Finder/doublon/Exit, déplacement, remplacement même build, préférences/historique, autostart possédé enabled/dormant, refus POSIX/retrait et cleanup passés ; ad-hoc seulement, pas d'upgrade inter-version app inventé |
 | P1-ARM | Linux ARM64 : à faire | Élevée | ABI/sysroot, installation et tests natifs |
-| P1-UPGRADE | **Partiel ; correctif handoff validé natif en source** : relance Windows sans héritage de handles, fin de l'appelant capturé avec vrai compagnon vivant puis sortie coopérative | Moyenne | CI39127360852 : deux preuves EOF réussies, contrôles/identité/refus conservés ; binaires publics non remplacés, warning ancien CLI mappé toujours ouvert, PC inchangé |
+| P1-UPGRADE | **Partiel ; correctif handoff/EOF validé natif en source** : relance Windows sans héritage de handles et sortie coopérative ; refus préalable avec tray actif confirmé séparément dans P1-UPGRADE-ACTIVE | Moyenne | CI39127360852 : appelant capturé terminé avec vrai compagnon vivant ; binaires publics non remplacés par l'assistant, warning ancien CLI mappé toujours ouvert |
+| P1-UPGRADE-ACTIVE | **Audité, pas de lease inutilisé établi** : v0.17.2/v0.18.1 partagent le même code d'ownership ; Exit peut résoudre une protection automatique, pas simplement un verrou de frontend | Moyenne | Diagnostics source précisent ressource/requête ; arrêt avant readiness interdit ; migration réelle tray actif à qualifier ; autres OS non déclarés affectés |
+| P1-STARTUP-PASSIVE | **Corrigé en source Windows, non publié** : premier état de session connu = baseline passive ; les lacunes Unknown ne créent pas d'arête | Moyenne | Régressions initial Unknown/Locked/Unlocked et transitions ultérieures passées ; protections demandées/restaurations conservées ; aucune action sur le PC |
 | P1-UNINSTALL | **Demandé, à faire** : désinstallation rapide par `mcw uninstall` ou point d'entrée équivalent, adapté à la provenance réelle de l'installation | Moyenne | Refus si protection/restauration active, identité/ownership exacts, délégation au gestionnaire MSI/Homebrew/AUR et conservation des données |
 | P2-HOOKS | Retenu, à faire | Élevée | Transitions actives cohérentes, effets bornés |
 | P2-NET | Reformulé en métadonnées locales, à faire | Élevée | PID authentifié ; macOS conditionnel |
@@ -71,7 +74,7 @@ Les identifiants sont stables. À chaque livraison, remplacer l'état par **En c
 | P4-ANDROID | Hors cœur, reporté en dernier | Élevée | Projet indépendant et modèle de permissions |
 | SITE-ROOT | Demandé, à faire plus tard : ne plus servir l'ancienne page à la racine HTTPS `/` | Faible | Routage Caddy exact ; préserver `/mcw` et les autres services |
 | SITE-MCW | Demandé, à faire plus tard : améliorer la présentation et la lisibilité du site `/mcw` | Moyenne | Page statique, parcours Windows/Linux/macOS et vérification desktop/mobile |
-| TRAY-WIN | **Correctif source en qualification, PC0.17.2 inchangé** : identité initiale Shell neutre avant observation, résumé courant borné et UTF-16 sans demi-surrogate | Moyenne | Fixture Shell réelle NIM_ADD/MODIFY, Explorer UIA/hover/recovery sur runner hébergé isolé ; aucune nouvelle observation/interaction avec le tray utilisateur |
+| TRAY-WIN | **Correctif source en qualification ; PC passé0.18.1 selon l'utilisateur** : identité initiale Shell neutre avant observation, résumé courant borné et UTF-16 sans demi-surrogate | Moyenne | Fixture Shell réelle NIM_ADD/MODIFY, Explorer UIA/hover/recovery sur runner hébergé isolé ; aucune nouvelle observation/interaction avec le tray utilisateur |
 | INSTALL-CURL | Livré côté script : étapes/couleurs terminal, résultat et conseils PATH ; vrai curl HTTPS Linux/macOS et DNS validé, aucune activation implicite | Faible | Source immutable et checksum script vérifiés ; Windows conserve MSI/ZIP natif |
 
 ## P0-CAM-TRAY — Caméra Zoom non attribuée et croix grise pendant une capture
@@ -368,6 +371,125 @@ permission refusée et retrait ; pas de preuve de capture matérielle déduite d
 **Validation :** download public réel, origine 0.15.1 via installateur courant, 0.16.0 vers nouveau paquet, origine Windows portable/MSI, cible en cours d'exécution, chemins avec espaces, erreurs réseau/digest/permissions et interruption. Pas de shim ni de mutation des assets/tags anciens.
 
 **Complexité : Moyenne.**
+
+### P1-UPGRADE-ACTIVE — Mettre à jour sans Exit manuel du tray
+
+**Signalement utilisateur du18/10, Windows confirmé :** deux appels à
+`mcw update` téléchargent/vérifient la paire0.18.1 puis refusent avec
+`native control ownership is busy in another owner/scope; no SDK mutation permitted`.
+Après fermeture manuelle du tray par **Exit**, un troisième appel annonce la
+mise à jour réussie ; `mcw tray` redémarre ensuite la barre. L'utilisateur
+rapporte cette séquence : ne pas la rejouer pour confirmer et ne pas modifier
+son installation, ses contrôles ou ses protections pendant l'investigation.
+
+**Défaut à corriger :** un frontend actif de l'installation visée ne doit pas
+imposer un Exit manuel lorsqu'une mise à jour sûre est possible. Distinguer ce
+refus préalable du défaut EOF après redémarrage déjà corrigé en source.
+La présence du tray n'autorise pas à ignorer un vrai propriétaire étranger,
+une opération UAC/caméra en cours ou une protection/restauration active.
+
+**Diagnostic et contrat :** identifier le verrou réellement détenu, sa portée,
+son propriétaire/génération et l'ordre readiness/arrêt. Examiner notamment les
+leases du frontend et des workers inactifs ; ne pas affirmer leur cause avant
+lecture et preuve. Réutiliser l'authentification de l'exécutable exact et le
+protocole coopératif pour négocier l'état sûr/quiescent puis le remplacement.
+Ne pas simplement arrêter le tray avant les gardes : sa sortie ne doit pas
+servir à libérer implicitement une protection ou annuler une restauration.
+Un Busy réellement dangereux doit rester un refus explicite, sans mutation.
+
+**Audit historique vérifié :** les fichiers pertinents d'ownership, observateurs,
+workers tray et updater sont identiques entre les commits publiés
+`a58c8b9f3a967589a576879d6d27bfdbc40f9dff` (v0.17.2) et
+`034d2c1e5cd5a2f06bf40fc69d0b15bed83defcc` (v0.18.1). Aucun lease global
+inutilisé du frontend n'y a été trouvé. La fin du consommateur peut résoudre une
+protection micro **automatique**, puis laisser son broker libérer le mutex ;
+protection manuelle et Block caméra persistent indépendamment du tray.
+Cette possibilité est compatible avec la séquence rapportée, pas sa cause prouvée.
+Le nouveau diagnostic source précise caméra/micro et requête/ressource ; l'ordre
+des gardes reste inchangé. Le CLI **qui invoque** update exécute l'ancien
+transactionnel : un binaire téléchargé ne corrige pas rétroactivement ce client.
+Version invocatrice, mutex et état exact lors des refus historiques restent inconnus.
+
+
+**Acceptation :** sur Windows jetable, exercer le vrai `mcw update` avec le vrai
+tray de la même installation déjà actif : vérification du paquet, négociation et
+arrêt coopératif, swap de la paire, redémarrage d'un seul tray à la bonne version
+et fin de l'appelant avec EOF, **sans Exit manuel**. Préférences, historique,
+autostart et intentions de protection préservés ; erreurs/busy/UAC/protection
+active, propriétaire étranger, PID réutilisé et rollback ne doivent ni tuer un
+processus, ni muter le SDK, ni contourner les contrôles. Les anciens clients/
+artefacts ne sont pas réécrits : prévoir une migration explicite si nécessaire.
+
+**Périmètre et distinction :** macOS/Linux sont à auditer, pas déclarés affectés ;
+respecter leurs contraintes de provenance et d'exécutable actif au lieu de copier
+une fermeture forcée Windows. L'avertissement séparé d'accès refusé au backup
+`.mcw-update-*` sous `%USERPROFILE%\.cargo\bin` reste suivi dans P1-UPGRADE :
+aucun nettoyage automatique sur le PC ni récupération d'un fichier en quarantaine.
+
+### P0-CAM-RESUME — Reprendre la garde caméra sans Autoriser/Rebloquer
+
+**Relevé utilisateur du18/10, sans nouvelle interrogation de son PC :**
+`0 active (0 Mic, 0 Cam); 0 ready`, protection micro demandée avec garde active,
+sourdine SDK et un endpoint annonçant la capacité hardware mute ; blocage global
+caméra demandé, `present:1 blocked:1 pending:0 absent:0 unknown:0`, mais garde
+inactive et avertissement que les futures arrivées ne sont pas protégées.
+Le contournement rapporté est **Autoriser puis Rebloquer**.
+
+**Interprétation bornée :** zéro capture observée n'est pas un refus
+d'autorisation de capture. La sourdine endpoint n'est pas une permission de
+capture, et la capacité hardware mute n'est pas une preuve de commutateur
+physique actionné. Le statut d'erreur ne doit pas être masqué : l'intention
+caméra et le périphérique bloqué ne prouvent pas une garde vivante.
+Ce relevé ne fixe pas rétrospectivement l'état des protections lors des trois
+tentatives d'update précédentes.
+
+**Correctif attendu :** diagnostiquer la disparition/non-reprise du helper et
+permettre de réarmer la garde de l'intention Block existante, sans transition
+Allow, sans abandon de l'ownership ni restauration d'un périphérique.
+Réutiliser le protocole authentifié et les générations ; demander explicitement
+le consentement UAC lorsque nécessaire, sans élévation silencieuse au lancement.
+Un refus UAC, une portée étrangère ou un helper incompatible reste un état
+non protégé explicite, pas un succès. Qualifier la reprise, l'annulation,
+les nouvelles arrivées et les intentions concurrentes en environnement isolé ;
+ne pas exercer les contrôles ou une capture sur le PC utilisateur.
+
+**Source implémentée, pas encore publiée :** le menu conserve Autoriser et ajoute
+une action de reprise explicite seulement pour Block demandé/garde indisponible.
+Sous le request lock, la reprise refuse toute intention Allow plus récente ou
+contradictoire avant écriture/élévation ; elle réutilise Block sans transition
+Allow et conserve la restauration automatique du tray. L'erreur native de la
+requête Status est désormais conservée : l'ancien code effaçait tout échec IPC
+et le décrivait comme un helper arrêté. La cause historique sur le PC n'est donc
+pas établie. 173 tests ordinaires Windows et Clippy/build passés ; scénario réel
+tray → perte du helper possédé → reprise sans Allow ajouté au runner isolé,
+inventaire natif obligatoirement nul. Consentement UAC humain, appareil bloqué
+physique et futures connexions physiques restent hors preuve de ce runner.
+
+
+### P1-STARTUP-PASSIVE — Démarrage passif sûr
+
+**Choix utilisateur confirmé le18/10 :** observer sans nouveau blocage et sans
+prendre de verrou technique inutile ; conserver les protections déjà demandées
+ainsi que l'ownership nécessaire à leur restauration. Cela n'autorise ni remise
+à zéro des intentions persistées ni ouverture automatique de caméra/micro.
+
+**Hypothèse à vérifier, pas un diagnostic :** l'utilisateur suspecte que les
+« verrous » au démarrage cachent les caméras. Le mutex d'ownership et le blocage
+SDK sont distincts ; les constructeurs Windows lus sont observateurs, sans
+acquisition de lease global. Vérifier les chemins de reprise existants et la
+première observation de verrouillage de session : un premier état connu ne doit
+pas être pris pour une nouvelle transition déclenchant un blocage automatique.
+Les transitions ultérieures configurées et les protections antérieures restent
+respectées. Le cas P0-CAM-RESUME est une garde absente avec blocage demandé,
+pas une raison de supprimer ce blocage.
+
+**Changement source Windows :** un état de politique distinct retient le dernier
+état de session connu. Le premier état valide initialise cette baseline sans
+requête de contrôle ; Unknown n'invente ni verrouillage ni déverrouillage.
+Les transitions ultérieures et leur restauration continuent via les workers
+existants. Tests des trois états initiaux, lacunes et transitions passés ;
+aucune remise à zéro d'intention persistante ni ouverture de périphérique.
+
 
 ### P1-UNINSTALL — Désinstallation rapide depuis MCW
 
@@ -1063,3 +1185,9 @@ sur ces deux plateformes.
 | 2026-10-18 | CI39133674447 — réception native du hover | **Handoff réussi ; aucune callback Shell reçue**, trois Unix réussis | Vraies frames à1 seconde et après attente relues : pas de popup ; trace de la fenêtre propriétaire `callback_count=0`, contrairement à une simple difficulté de rôle UIA. Les mouvements SendInput sont acceptés mais cette seule acceptation ne prouve pas leur réception | Vérifier la frontière UIPI du runner élevé : seule la callback inerte de la fenêtre de fixture est autorisée, jamais une fenêtre/message produit ; contexte d'élévation et hit-test natif consignés pour la prochaine preuve. PC inchangé |
 | 2026-10-18 | CI39135806841 — contexte du runner | **Hover toujours non qualifié**, handoff et trois Unix réussis | Runner effectivement élevé ; le hit-test natif vise Explorer, mais la callback reste à zéro malgré le filtre limité à la fixture. Probe local temporaire d'une fenêtre masquée possédée : message posté reçu, aucun Shell/utilisateur touché ; probe retiré après preuve | L'activation du flyout passe désormais par clic natif, et le bouton doit correspondre au rectangle Shell de l'identité exacte HWND/uID (pas seulement au nom), afin d'écarter caches/icônes anciennes. Requalifier, sans déclarer UIPI cause démontrée |
 | 2026-10-18 | CI39138433664 — identité exacte de l'icône | **Popup initial toujours non qualifié**, handoff et trois Unix réussis | Le rectangle de l'identité Shell HWND/uID correspond exactement au bouton survolé ; le hit-test vise Explorer et les callbacks restent nulles. Ni icône ancienne ni simple nom de bouton ne constituent désormais la preuve | Le pilote collecte tous les états Active/Partial/Error/Ready/Idle et leurs menus/détails avant d'échouer globalement si un popup manque ; aucun cas manquant n'est transformé en succès, aucune portée d'acceptation abaissée |
+| 2026-10-18 | P1-UPGRADE-ACTIVE — retour utilisateur Windows | **Inscrit en priorité corrective, non corrigé** | Deux refus ownership Busy avec tray actif, réussite0.18.1 après Exit manuel puis `mcw tray`, selon la console utilisateur ; warning backup accès refusé distinct. Aucun nouvel essai sur son PC | Coordonner update/frontend de la même installation sans arrêt manuel ni contournement des protections ; vraie migration native à qualifier ; autres plateformes à examiner, pas présumées affectées |
+| 2026-10-18 | P1-STARTUP-PASSIVE / P0-CAM-RESUME — précisions utilisateur | **Choix et défaut inscrits, non corrigés** | Démarrage passif sûr choisi ; relevé caméra bloquée/garde inactive et contournement Autoriser/Rebloquer rapportés. Aucune action sur les appareils du PC | Conserver l'intention existante, réarmer sans Allow intermédiaire avec consentement requis et qualifier le premier état de session ; ne pas confondre zéro capture, permission et ownership |
+| 2026-10-18 | P0-CAM-RESUME / P1-STARTUP-PASSIVE — implémentation source | **173 tests Windows passés, 3 natifs ignorés, Clippy/build réussis** | Reprise seule sans Allow, refus d'une intention Allow récente, restauration conservée ; première lecture de session passive. Nouveau scénario natif réel ajouté mais pas encore exécuté ; aucune interaction avec le tray ou les appareils installés | Qualifier la nouvelle paire en CI isolée ; UAC humain et matériel restent non exercés ; source non publiée en release |
+| 2026-10-18 | P1-UPGRADE-ACTIVE — audit historique et diagnostic | **Pas de verrou global inutilisé démontré** | Code pertinent identique v0.17.2/v0.18.1 ; propriétaires natifs réels seuls détenteurs des ressources ; arrêt du consommateur peut résoudre une restauration automatique. 14 régressions transactionnelles passées après précision des erreurs | État des tentatives historiques inconnu ; ne pas transformer Exit en contournement automatique ni prétendre la migration complète corrigée |
+| 2026-10-18 | CI39140614452 — qualification du popup Windows | **Échec natif conservé, pas de certification** | Trois jobs Unix réussis ; vrai handoff/EOF du tray et protections zéro périphérique réussis. Popup startup absent ; collecte suivante interrompue par le nom UIA composé `miccamwatch` + statut courant, pas par un statut périmé | Pilote corrigé pour cette composition exacte et diagnostic des noms de desktops/hover time ; aucune preuve popup inventée |
+| 2026-10-18 | Site — exemple SHA-256 macOS signalé par capture | **Corrigé dans les sept catalogues, à publier** | Deux vrais noms v0.18.1 Apple Silicon/Intel vérifiés via API des assets ; quatre tests de localisation et export privé réussis, placeholder français retiré | Vérifier la surface dépliée sur desktop/mobile avant publication ; aucun binaire stable modifié |
