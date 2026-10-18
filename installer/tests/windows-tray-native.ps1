@@ -17,6 +17,14 @@ using System.Runtime.InteropServices;
 public static class McwNativeProof {
     [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
     [StructLayout(LayoutKind.Sequential)] public struct NOTIFYICONIDENTIFIER { public uint cbSize; public IntPtr hWnd; public uint uID; public Guid guidItem; }
+    [StructLayout(LayoutKind.Sequential)] public struct MOUSEINPUT { public int dx, dy; public uint mouseData, dwFlags, time; public UIntPtr extra; }
+    [StructLayout(LayoutKind.Sequential)] public struct INPUT { public uint type; public MOUSEINPUT mouse; }
+    [DllImport("user32.dll", SetLastError=true)] public static extern uint SendInput(uint count, INPUT[] input, int size);
+    public static void RefreshMouseMove() {
+        var input = new INPUT { type = 0, mouse = new MOUSEINPUT { dwFlags = 1 } };
+        if (SendInput(1, new[] { input }, Marshal.SizeOf(typeof(INPUT))) != 1)
+            throw new InvalidOperationException("Native mouse move input was rejected.");
+    }
     [DllImport("shell32.dll")] public static extern int Shell_NotifyIconGetRect(ref NOTIFYICONIDENTIFIER icon, out RECT rect);
     [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern IntPtr FindWindow(string cls, string title);
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
@@ -106,7 +114,15 @@ function Get-FixtureShellButton([string]$expected) {
         if ($name -ne 'miccamwatch' -and -not [string]::Equals($name, $expected, [StringComparison]::Ordinal)) {
             throw "Shell accessible identity contradicts current fixture status: $name (expected $expected or neutral product name)"
         }
-        return $matches[0]
+        # UIA can expose the hidden overflow contents with nonempty off-screen
+        # bounds. Do not hover a stale/hidden rectangle; open overflow first.
+        $bounds = $matches[0].Current.BoundingRectangle
+        $screen = [System.Windows.Forms.SystemInformation]::VirtualScreen
+        if (-not $matches[0].Current.IsOffscreen -and -not $bounds.IsEmpty -and
+            $bounds.Right -gt $screen.Left -and $bounds.Left -lt $screen.Right -and
+            $bounds.Bottom -gt $screen.Top -and $bounds.Top -lt $screen.Bottom) {
+            return $matches[0]
+        }
     }
     # Hosted English Windows images may hide newly added notification icons.
     # Invoke only Explorer's overflow button, never a product/control command.
@@ -163,6 +179,7 @@ function Confirm-FixtureShellTooltip([string]$name) {
     [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point -ArgumentList 0, 0
     Start-Sleep -Milliseconds 200
     [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point -ArgumentList ([int]($bounds.X + $bounds.Width / 2)), ([int]($bounds.Y + $bounds.Height / 2))
+    [McwNativeProof]::RefreshMouseMove()
     $condition = New-Object System.Windows.Automation.PropertyCondition -ArgumentList ([System.Windows.Automation.AutomationElement]::ControlTypeProperty), ([System.Windows.Automation.ControlType]::ToolTip)
     $deadline = (Get-Date).AddSeconds(20)
     $observed = @()
@@ -178,7 +195,21 @@ function Confirm-FixtureShellTooltip([string]$name) {
         if (-not $tooltip) { Start-Sleep -Milliseconds 100 }
     }
     if (-not $tooltip) {
-        $observed | Select-Object -Unique | ConvertTo-Json | Set-Content -Encoding UTF8 (Join-Path $directory "$name-shell-observed.json")
+        $diagnostic = @{
+            expected=$shell.tooltip; accessible_name=$button.Current.Name;
+            button_offscreen=$button.Current.IsOffscreen;
+            button=@{left=$bounds.Left; top=$bounds.Top; right=$bounds.Right; bottom=$bounds.Bottom};
+            cursor=@{x=[System.Windows.Forms.Cursor]::Position.X; y=[System.Windows.Forms.Cursor]::Position.Y};
+            observed=@($observed | Select-Object -Unique)
+        }
+        ConvertTo-Json -InputObject $diagnostic -Depth 6 | Set-Content -Encoding UTF8 (Join-Path $directory "$name-shell-observed.json")
+        $screen = [System.Windows.Forms.SystemInformation]::VirtualScreen
+        $frame = New-Object System.Drawing.Bitmap -ArgumentList $screen.Width, $screen.Height
+        $graphics = [System.Drawing.Graphics]::FromImage($frame)
+        try {
+            $graphics.CopyFromScreen($screen.Left, $screen.Top, 0, 0, $frame.Size)
+            $frame.Save((Join-Path $directory "$name-shell-desktop.png"), [System.Drawing.Imaging.ImageFormat]::Png)
+        } finally { $graphics.Dispose(); $frame.Dispose() }
         throw "Actual Explorer tooltip did not match current fixture text ($($shell.tooltip)); see $name-shell-observed.json"
     }
     $tipWindow = [IntPtr]$tooltip.Current.NativeWindowHandle
