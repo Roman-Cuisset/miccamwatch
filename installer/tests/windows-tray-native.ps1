@@ -65,6 +65,7 @@ $process = $null
 $fixtureProcess = $null
 $previousCursor = [System.Windows.Forms.Cursor]::Position
 $shellMeasurements = @()
+$tooltipFailures = @()
 function Wait-ProofFile([string]$name) {
     $deadline = (Get-Date).AddMinutes(10)
     $path = Join-Path $directory $name
@@ -299,7 +300,10 @@ function Confirm-FixtureShellTooltip([string]$name) {
         }
         ConvertTo-Json -InputObject $diagnostic -Depth 6 | Set-Content -Encoding UTF8 (Join-Path $directory "$name-shell-observed.json")
         Capture-NativeDesktop "$name-shell-desktop"
-        throw "Actual Explorer tooltip did not match current fixture text ($($shell.tooltip)); see $name-shell-observed.json"
+        $script:tooltipFailures += $name
+        [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point -ArgumentList 0, 0
+        [IO.File]::WriteAllText((Join-Path $directory "$name-shell-inspected"), 'failed: actual popup not observed')
+        return
     }
     if ($tipWindow -eq [IntPtr]::Zero) { throw 'Explorer tooltip has no native window for screenshot proof.' }
     $tipBounds = Capture-NativeWindow $tipWindow "$name-shell-tooltip"
@@ -310,7 +314,7 @@ function Confirm-FixtureShellTooltip([string]$name) {
         shell_rect=@{left=$rect.Left; top=$rect.Top; right=$rect.Right; bottom=$rect.Bottom}
     }
     [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point -ArgumentList 0, 0
-    [IO.File]::WriteAllText((Join-Path $directory "$name-shell-checked"), 'actual Explorer UIA tooltip and screenshot checked')
+    [IO.File]::WriteAllText((Join-Path $directory "$name-shell-inspected"), 'passed: actual Explorer tooltip and screenshot')
 }
 try {
     # GetWindowRect must return physical pixels, matching CopyFromScreen.
@@ -378,7 +382,12 @@ try {
     if (-not $process.WaitForExit(30000)) { throw 'Native fixture did not finish after closing details.' }
     if ($process.ExitCode -ne 0 -or -not (Test-Path (Join-Path $directory 'complete'))) { throw "Native fixture failed ($($process.ExitCode)); see fixture logs." }
     $measurements | ConvertTo-Json -Depth 8 | Set-Content -Encoding UTF8 (Join-Path $directory 'measurements.json')
-    $shellMeasurements | ConvertTo-Json -Depth 8 | Set-Content -Encoding UTF8 (Join-Path $directory 'shell-measurements.json')
+    ConvertTo-Json -InputObject @($shellMeasurements) -Depth 8 | Set-Content -Encoding UTF8 (Join-Path $directory 'shell-measurements.json')
+    @{ passed=$tooltipFailures.Count -eq 0; failed_cases=@($tooltipFailures); observed_popup_count=$shellMeasurements.Count } |
+        ConvertTo-Json -Depth 6 | Set-Content -Encoding UTF8 (Join-Path $directory 'tooltip-qualification.json')
+    if ($tooltipFailures.Count -ne 0) {
+        throw "Actual Explorer popup qualification failed for: $($tooltipFailures -join ', '). All reachable menu/details cases were still exercised; see tooltip-qualification.json."
+    }
     Write-Output "Verified actual Explorer tooltip/UIA updates, native popup bounds and full wrapping details (clipboard exercised: $([bool]$IsolatedClipboard)): $directory"
 } finally {
     $env:MCW_WINDOWS_NATIVE_PROOF_DIR = $previous

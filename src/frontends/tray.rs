@@ -2907,7 +2907,7 @@ mod tests {
         )
         .unwrap();
         let deadline = Instant::now() + Duration::from_secs(90);
-        let checked = directory.join(format!("{name}-shell-checked"));
+        let checked = directory.join(format!("{name}-shell-inspected"));
         let inspect = directory.join(format!("{name}-shell-inspect"));
         let input = directory.join(format!("{name}-shell-input.json"));
         let mut input_recorded = false;
