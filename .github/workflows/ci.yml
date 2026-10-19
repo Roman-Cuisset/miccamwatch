@@ -30,6 +30,7 @@ jobs:
         run: cargo test --all-targets --locked
       - run: cargo clippy --all-targets --features windows-tray --locked -- -D warnings
       - run: cargo test --all-targets --features windows-tray --locked
+        id: windows_tests
       - name: Audit Rust dependencies
         run: cargo install cargo-audit --locked && cargo audit
       - run: cargo build --release --locked --features windows-tray
@@ -81,6 +82,7 @@ jobs:
           if-no-files-found: warn
           path: ${{ runner.temp }}/native-windows-top
       - name: Verify compact native Windows tray and complete copyable details
+        if: ${{ !cancelled() && steps.windows_tests.outcome == 'success' }}
         shell: powershell
         run: powershell.exe -NoProfile -STA -File installer/tests/windows-tray-native.ps1 -OutputDirectory "${{ runner.temp }}/native-windows-tray" -IsolatedDesktop -IsolatedClipboard
       - name: Upload native Windows tray visual evidence
