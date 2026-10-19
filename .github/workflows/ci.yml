@@ -106,6 +106,8 @@ jobs:
           if-no-files-found: warn
           path: ${{ runner.temp }}/native-windows-tray
       - name: Build and smoke-test per-user MSI
+        # Packaging is independent of Shell hover; its failure still fails the job.
+        if: ${{ !cancelled() && steps.windows_tests.outcome == 'success' && steps.windows_release.outcome == 'success' }}
         shell: pwsh
         run: |
           dotnet tool restore
