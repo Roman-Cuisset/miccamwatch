@@ -2219,11 +2219,24 @@ fn build_context_menu(
             }
             let _ = AppendMenuW(profiles, flags, *command, PCWSTR(label.as_ptr()));
         }
-        let label = format_wide(&if explicit_policy {
-            format!("{} — {}", text.0, text.2)
+        let selection = if explicit_policy {
+            text.2
         } else {
-            text.0.to_owned()
-        });
+            match settings.profile {
+                PrivacyProfile::Balanced => text.1[0],
+                PrivacyProfile::Private => text.1[1],
+                PrivacyProfile::Meeting => text.1[2],
+                PrivacyProfile::Development => text.1[3],
+            }
+        };
+        let mut label = Vec::with_capacity(text.0.len() + selection.len() + 4);
+        label.extend(
+            text.0
+                .encode_utf16()
+                .chain(" — ".encode_utf16())
+                .chain(selection.encode_utf16())
+                .chain(Some(0)),
+        );
         let _ = AppendMenuW(menu, MF_POPUP, profiles.0 as usize, PCWSTR(label.as_ptr()));
         let autostart = format_wide(match autostart_state {
             crate::autostart::AutostartState::Enabled => "Disable autostart",
@@ -3111,7 +3124,9 @@ mod tests {
 
     #[test]
     fn native_profile_menu_checks_only_effective_selection_in_every_language() {
-        use windows::Win32::UI::WindowsAndMessaging::{GetMenuState, GetSubMenu, MF_BYCOMMAND};
+        use windows::Win32::UI::WindowsAndMessaging::{
+            GetMenuState, GetMenuStringW, GetSubMenu, MF_BYCOMMAND, MF_BYPOSITION,
+        };
         let owner = native_test_owner();
         for lang in [
             Language::En,
@@ -3142,8 +3157,31 @@ mod tests {
                     )
                     .unwrap();
                     let profiles = unsafe { GetSubMenu(menu, 7) };
+                    let mut parent_text = [0u16; 256];
+                    let parent_length =
+                        unsafe { GetMenuStringW(menu, 7, Some(&mut parent_text), MF_BYPOSITION) };
+                    assert!(parent_length > 0);
+                    let parent_text =
+                        String::from_utf16(&parent_text[..parent_length as usize]).unwrap();
                     for (command, profile) in PROFILE_CHOICES {
                         let flags = unsafe { GetMenuState(profiles, command as u32, MF_BYCOMMAND) };
+                        let mut choice_text = [0u16; 256];
+                        let choice_length = unsafe {
+                            GetMenuStringW(
+                                profiles,
+                                command as u32,
+                                Some(&mut choice_text),
+                                MF_BYCOMMAND,
+                            )
+                        };
+                        assert!(choice_length > 0);
+                        let choice_text =
+                            String::from_utf16(&choice_text[..choice_length as usize]).unwrap();
+                        assert_eq!(
+                            parent_text.contains(&choice_text),
+                            !explicit_policy && profile == selected,
+                            "root caption must expose only the effective selected profile"
+                        );
                         assert_ne!(flags, u32::MAX);
                         assert_eq!(
                             flags & MF_CHECKED.0 != 0,
