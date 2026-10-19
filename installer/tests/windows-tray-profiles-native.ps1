@@ -108,7 +108,10 @@ function Wait-Record([string]$name) {
     $deadline = (Get-Date).AddSeconds(45)
     while ((Get-Date) -lt $deadline) {
         if (Test-Path $path) {
-            try { return (Get-Content -Raw -Encoding UTF8 $path | ConvertFrom-Json) } catch { }
+            try {
+                $record = Get-Content -Raw -Encoding UTF8 $path | ConvertFrom-Json
+                if ($null -ne $record) { return $record }
+            } catch { }
         }
         if ($script:process.HasExited) { throw "Fixture exited ($($script:process.ExitCode)) before $name; see $script:runDirectory" }
         Start-Sleep -Milliseconds 25
