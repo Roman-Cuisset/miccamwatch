@@ -308,6 +308,16 @@ requirements are unchanged. Native proof exercises captured caller EOF while a
 successor remains alive; actual tray and Explorer/UIA checks run only on a
 disposable hosted Windows desktop. Qualification status is recorded in ROADMAP.
 
+Hosted qualification now exercises genuine public-old trays through the native
+candidate replacement and mixed-pair repair transactions, without manual Exit.
+It also checks refusal before shutdown while native ownership is held, and
+helper retirement after explicit release while the tray remains open. These
+native transaction proofs do not claim public acquisition of an unpublished
+candidate. Immutable public 0.18.0/0.18.1 updaters completed their real active-tray
+transactions but failed captured-stream EOF; the source restart fix is not
+retroactively present in those published clients.
+
+
 When camera Block remains requested but its elevated guard is unavailable, the
 Windows tray offers **Restart camera protection (UAC)…** alongside the separate
 Allow action. Restart revalidates the latest intent under the camera request lock;
