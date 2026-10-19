@@ -66,6 +66,11 @@ class NativePipe:
         self.kernel.GetNamedPipeServerProcessId.argtypes = [W.HANDLE, C.POINTER(W.ULONG)]
         self.kernel.QueryFullProcessImageNameW.argtypes = [W.HANDLE, W.DWORD, W.LPWSTR, C.POINTER(W.DWORD)]
         self.kernel.WriteFile.argtypes = [W.HANDLE, C.c_void_p, W.DWORD, C.POINTER(W.DWORD), C.c_void_p]
+        self.kernel.OpenMutexW.argtypes = [W.DWORD, W.BOOL, W.LPCWSTR]
+        self.kernel.OpenMutexW.restype = W.HANDLE
+        self.kernel.WaitForSingleObject.argtypes = [W.HANDLE, W.DWORD]
+        self.kernel.WaitForSingleObject.restype = W.DWORD
+        self.kernel.ReleaseMutex.argtypes = [W.HANDLE]
 
     def connect(self, resource):
         name = self.prefix + resource
@@ -117,6 +122,24 @@ class NativePipe:
             self.kernel.CloseHandle(handle)
         return time.monotonic() - started
 
+    def assert_resources_available(self):
+        for resource in ("microphone", "camera"):
+            handle = self.kernel.OpenMutexW(0x00100001, False, f"Global\\MicCamWatch-v1-native-{resource}")
+            if not handle:
+                assert C.get_last_error() == 2, f"Native {resource} ownership cannot be observed"
+                continue
+            acquired = False
+            try:
+                wait = self.kernel.WaitForSingleObject(handle, 0)
+                acquired = wait in (0, 128)
+                assert acquired, f"Native {resource} ownership remains held after helper exit"
+            finally:
+                try:
+                    if acquired:
+                        assert self.kernel.ReleaseMutex(handle), C.WinError()
+                finally:
+                    self.kernel.CloseHandle(handle)
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -165,6 +188,49 @@ def main():
         if check:
             assert child.returncode in allowed, f"CLI {arguments} exited {child.returncode}: {stderr.decode('utf-8', errors='replace')[:8192]}"
         return stdout
+
+    def start_owned_tray():
+        process = subprocess.Popen([str(args.binary.with_name("mcw-tray.exe"))], env=env,
+                                   stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            with sampler.lock:
+                row = backend.read_handle(process._handle, process.pid, name="mcw-tray.exe")
+                assert row and not row["has_exited"], "Native tray resource identity unavailable"
+                sampler.track(row, process._handle)
+                sampler.tracked[(row["pid"], row["identity"])]["role"] = "tray_frontend"
+            deadline = time.monotonic() + 15
+            while not windows_tray_window(process.pid):
+                assert process.poll() is None and time.monotonic() < deadline, "Owned native tray window did not become ready"
+                time.sleep(.05)
+            return process
+        except BaseException:
+            if process.poll() is None:
+                process.terminate()
+                process.wait(timeout=10)
+            raise
+
+    def close_owned_tray(process):
+        user = C.WinDLL("user32", use_last_error=True)
+        user.FindWindowW.argtypes = [W.LPCWSTR, W.LPCWSTR]
+        user.FindWindowW.restype = W.HWND
+        user.GetWindowThreadProcessId.argtypes = [W.HWND, C.POINTER(W.DWORD)]
+        user.SendMessageTimeoutW.argtypes = [W.HWND, W.UINT, W.WPARAM, W.LPARAM, W.UINT, W.UINT, C.POINTER(C.c_size_t)]
+        user.SendMessageTimeoutW.restype = W.LPARAM
+        window = user.FindWindowW("MicCamWatchTrayClass", None)
+        pid, returned = W.DWORD(), C.c_size_t()
+        assert window and process.poll() is None, "Owned live tray required for cooperative close"
+        user.GetWindowThreadProcessId(window, C.byref(pid))
+        assert pid.value == process.pid, "Close would target a foreign tray"
+        deadline = time.monotonic() + 15
+        while True:
+            assert process.poll() is None, "Tray exited before acknowledging cooperative close"
+            assert user.SendMessageTimeoutW(window, 0x10, 0, 0, 2, 5000, C.byref(returned)), C.WinError()
+            if returned.value == 0x4D435731:
+                break
+            assert returned.value == 0x4D435732 and time.monotonic() < deadline, "Owned tray did not finish its pending operation"
+            time.sleep(.05)
+        process.wait(timeout=15)
+        assert process.returncode == 0, "Native tray did not exit cleanly"
 
     def require_empty_camera_inventory():
         # Read PnP directly, independently of the helper's pending/unknown
@@ -289,17 +355,7 @@ def main():
         observed = status()
         assert observed["microphone"]["requested"] and observed["microphone"]["service_active"], "Top exit released microphone protection"
         assert observed["camera"]["desired_blocked"] and observed["camera"]["helper_active"], "Top exit released global camera protection"
-        tray = subprocess.Popen([str(args.binary.with_name("mcw-tray.exe"))], env=env,
-                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        with sampler.lock:
-            row = backend.read_handle(tray._handle, tray.pid, name="mcw-tray.exe")
-            assert row and not row["has_exited"], "Native tray resource identity unavailable"
-            sampler.track(row, tray._handle)
-            sampler.tracked[(row["pid"], row["identity"])]["role"] = "tray_frontend"
-        deadline = time.monotonic() + 15
-        while not windows_tray_window(tray.pid):
-            assert tray.poll() is None and time.monotonic() < deadline, "Owned native tray window did not become ready"
-            time.sleep(.05)
+        tray = start_owned_tray()
         phase = dict(frontend_role="tray_frontend")
         result["frontend_phases"].append(phase)
         sustain(phase, sampler, lambda: tray.poll() is None and windows_tray_window(tray.pid))
@@ -338,20 +394,14 @@ def main():
             block_retained_without_allow=True, actual_tray_command=True,
             new_authenticated_helper=True, microphone_protection_preserved=True,
             human_uac_consent_exercised=False, physical_device_arrivals_exercised=False)
-        deadline = time.monotonic() + 15
-        while True:
-            assert tray.poll() is None, "Tray exited before acknowledging cooperative close"
-            assert user.SendMessageTimeoutW(window, 0x10, 0, 0, 2, 5000, C.byref(returned)), C.WinError()
-            if returned.value == 0x4D435731:
-                break
-            assert returned.value == 0x4D435732 and time.monotonic() < deadline, "Owned tray did not finish its recovery operation"
-            time.sleep(.05)
-        tray.wait(timeout=15)
-        assert tray.returncode == 0, "Native tray did not exit cleanly"
+        close_owned_tray(tray)
         tray = None
         observed = status()
         assert observed["microphone"]["requested"] and observed["microphone"]["service_active"], "Tray exit released microphone protection"
         assert observed["camera"]["desired_blocked"] and observed["camera"]["helper_active"], "Tray exit released global camera protection"
+        # Preserve the protected-exit check above, then release while a real
+        # frontend remains open. Inactive status alone is not native readiness.
+        tray = start_owned_tray()
         command(["camera", "allow"])
         await_state(lambda s: not s["camera"]["desired_blocked"] and not s["camera"]["helper_active"], "Allow did not clear global intent/stop helper")
         command(["unmute"])
@@ -365,6 +415,21 @@ def main():
                     break
                 assert time.monotonic() < deadline, "Owned guard remained alive after explicit release"
                 time.sleep(.05)
+        observations = []
+        for index in range(3):
+            observed = status()
+            assert tray.poll() is None and windows_tray_window(tray.pid), "Inactive tray did not remain open"
+            assert not observed["microphone"]["requested"] and not observed["microphone"]["service_active"], "Passive tray observation recreated microphone ownership"
+            assert not observed["camera"]["desired_blocked"] and not observed["camera"]["helper_active"], "Passive tray observation recreated camera ownership"
+            native.assert_resources_available()
+            observations.append(dict(index=index, native_resources_available=True, tray_alive=True))
+            if index < 2:
+                time.sleep(4)
+        result["release_while_tray_active"] = dict(
+            helpers_exited=True, observations=observations,
+            native_resource_reservation_available=True, implicit_allow_or_unmute=False)
+        close_owned_tray(tray)
+        tray = None
         result["proof_complete"] = True
     except BaseException as error:
         result["failure"] = type(error).__name__ + ": " + str(error)

@@ -639,6 +639,786 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "real old/candidate tray transaction proof; disposable GitHub-hosted Windows only"]
+    fn native_active_tray_replacement_preserves_inactive_state() -> Result<()> {
+        use std::{
+            collections::BTreeMap,
+            fs,
+            os::windows::{
+                ffi::OsStringExt,
+                io::{AsRawHandle, FromRawHandle, OwnedHandle},
+                process::CommandExt,
+            },
+            process::{Child, Command, ExitStatus, Stdio},
+            sync::mpsc,
+            thread,
+            time::{Duration, Instant},
+        };
+        use windows::{
+            Win32::{
+                Foundation::{HANDLE, LPARAM, WAIT_OBJECT_0, WAIT_TIMEOUT, WPARAM},
+                System::Threading::{
+                    OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+                    PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, QueryFullProcessImageNameW,
+                    TerminateProcess, WaitForInputIdle, WaitForSingleObject,
+                },
+                UI::WindowsAndMessaging::{
+                    FindWindowW, GetWindowThreadProcessId, SMTO_ABORTIFHUNG, SMTO_BLOCK,
+                    SendMessageTimeoutW, WM_NULL,
+                },
+            },
+            core::PWSTR,
+        };
+
+        // This gate precedes even version probes, settings access and native identity lookup.
+        ensure!(
+            std::env::var("GITHUB_ACTIONS").as_deref() == Ok("true")
+                && std::env::var("RUNNER_ENVIRONMENT").as_deref() == Ok("github-hosted"),
+            "active tray replacement proof requires a disposable GitHub-hosted Windows runner"
+        );
+        fn absolute_env(name: &str) -> Result<PathBuf> {
+            let path =
+                PathBuf::from(std::env::var_os(name).with_context(|| format!("{name} required"))?);
+            ensure!(path.is_absolute(), "{name} must be absolute");
+            ensure!(
+                !path.components().any(|component| matches!(
+                    component,
+                    std::path::Component::ParentDir | std::path::Component::CurDir
+                )),
+                "{name} must not contain relative components"
+            );
+            Ok(path)
+        }
+        let previous = fs::canonicalize(absolute_env("MCW_TEST_UPDATE_PREVIOUS")?)?;
+        let candidate = fs::canonicalize(absolute_env("MCW_TEST_UPDATE_CANDIDATE")?)?;
+        let requested_root = absolute_env("MCW_TEST_UPDATE_PROOF")?;
+        let appdata = absolute_env("APPDATA")?;
+        let localappdata = absolute_env("LOCALAPPDATA")?;
+        ensure!(
+            appdata == requested_root.join("appdata")
+                && localappdata == requested_root.join("localappdata"),
+            "APPDATA and LOCALAPPDATA must be the private proof-root children"
+        );
+        let parent = fs::canonicalize(
+            requested_root
+                .parent()
+                .context("proof root has no parent")?,
+        )?;
+        let root = parent.join(
+            requested_root
+                .file_name()
+                .context("proof root has no name")?,
+        );
+        ensure!(
+            previous != candidate
+                && !previous.starts_with(&root)
+                && !root.starts_with(&previous)
+                && !candidate.starts_with(&root)
+                && !root.starts_with(&candidate),
+            "proof root and genuine artifact directories must be disjoint"
+        );
+        if requested_root.try_exists()? {
+            ensure!(
+                fs::canonicalize(&requested_root)? == root
+                    && fs::read_dir(&requested_root)?.next().is_none(),
+                "proof root must be an empty, non-redirected private directory"
+            );
+        } else {
+            fs::create_dir(&requested_root)?;
+        }
+        ensure!(
+            fs::canonicalize(&requested_root)? == root,
+            "redirected proof root"
+        );
+        fs::create_dir(&appdata)?;
+        fs::create_dir(&localappdata)?;
+        ensure!(
+            fs::canonicalize(&appdata)? == root.join("appdata")
+                && fs::canonicalize(&localappdata)? == root.join("localappdata"),
+            "private application roots must not escape the proof root"
+        );
+        for directory in [&previous, &candidate] {
+            for name in ["mcw.exe", "mcw-tray.exe"] {
+                let image = directory.join(name);
+                ensure!(
+                    fs::canonicalize(&image)? == image && image.is_file(),
+                    "input image must be an exact regular file: {}",
+                    image.display()
+                );
+                super::super::validate_pe(&image)?;
+            }
+        }
+
+        fn wait_child(child: &mut Child, seconds: u64) -> Result<ExitStatus> {
+            let deadline = Instant::now() + Duration::from_secs(seconds);
+            loop {
+                if let Some(status) = child.try_wait()? {
+                    return Ok(status);
+                }
+                ensure!(
+                    Instant::now() < deadline,
+                    "owned child {} did not exit",
+                    child.id()
+                );
+                thread::sleep(Duration::from_millis(25));
+            }
+        }
+        fn version(image: &Path, root: &Path, label: &str) -> Result<String> {
+            let stdout = root.join(format!("{label}-version.stdout"));
+            let stderr = root.join(format!("{label}-version.stderr"));
+            let mut child = Command::new(image)
+                .arg("--version")
+                .stdin(Stdio::null())
+                .stdout(fs::File::create(&stdout)?)
+                .stderr(fs::File::create(&stderr)?)
+                .creation_flags(0x0800_0000)
+                .spawn()?;
+            let status = match wait_child(&mut child, 10) {
+                Ok(status) => status,
+                Err(error) => {
+                    child
+                        .kill()
+                        .context("terminate only the timed-out owned version child")?;
+                    wait_child(&mut child, 5)?;
+                    return Err(error);
+                }
+            };
+            ensure!(
+                status.success(),
+                "{label} --version failed: {}",
+                fs::read_to_string(stderr)?
+            );
+            let output = fs::read_to_string(stdout)?;
+            let value = output
+                .trim()
+                .strip_prefix("mcw ")
+                .context("unexpected genuine CLI --version output")?;
+            ensure!(
+                !value.contains(char::is_whitespace),
+                "invalid CLI version output"
+            );
+            Ok(value.to_owned())
+        }
+        fn snapshot(root: &Path) -> Result<BTreeMap<PathBuf, Vec<u8>>> {
+            fn visit(
+                root: &Path,
+                path: &Path,
+                files: &mut BTreeMap<PathBuf, Vec<u8>>,
+            ) -> Result<()> {
+                for entry in fs::read_dir(path)? {
+                    let entry = entry?;
+                    let kind = entry.file_type()?;
+                    ensure!(
+                        !kind.is_symlink(),
+                        "private state contains a redirected entry"
+                    );
+                    if kind.is_dir() {
+                        visit(root, &entry.path(), files)?;
+                    } else {
+                        ensure!(kind.is_file(), "private state contains a non-file");
+                        files.insert(
+                            entry.path().strip_prefix(root)?.to_owned(),
+                            fs::read(entry.path())?,
+                        );
+                    }
+                }
+                Ok(())
+            }
+            let mut files = BTreeMap::new();
+            for name in ["appdata", "localappdata"] {
+                visit(root, &root.join(name), &mut files)?;
+            }
+            Ok(files)
+        }
+
+        struct ExactTray {
+            running: super::super::process::RunningTray,
+            process: OwnedHandle,
+            pid: u32,
+        }
+        impl ExactTray {
+            fn handle(&self) -> HANDLE {
+                HANDLE(self.process.as_raw_handle())
+            }
+            fn alive(&self) -> Result<bool> {
+                match unsafe { WaitForSingleObject(self.handle(), 0) } {
+                    WAIT_TIMEOUT => Ok(true),
+                    WAIT_OBJECT_0 => Ok(false),
+                    _ => bail!("cannot inspect retained exact tray process"),
+                }
+            }
+            fn acquire(target: &Path, expected_pid: Option<u32>) -> Result<Option<Self>> {
+                let Some(running) = super::super::process::owned_running_tray(target)? else {
+                    return Ok(None);
+                };
+                let class = wide(Path::new("MicCamWatchTrayClass"));
+                let window = unsafe { FindWindowW(PCWSTR(class.as_ptr()), PCWSTR::null()) }?;
+                let mut pid = 0;
+                unsafe { GetWindowThreadProcessId(window, Some(&mut pid)) };
+                ensure!(
+                    pid != 0 && expected_pid.is_none_or(|expected| pid == expected),
+                    "tray is not the fixture-owned launched child"
+                );
+                let handle = unsafe {
+                    OpenProcess(
+                        PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE | PROCESS_TERMINATE,
+                        false,
+                        pid,
+                    )
+                }?;
+                let process = unsafe { OwnedHandle::from_raw_handle(handle.0) };
+                let mut image = [0u16; 32768];
+                let mut length = image.len() as u32;
+                unsafe {
+                    QueryFullProcessImageNameW(
+                        handle,
+                        PROCESS_NAME_WIN32,
+                        PWSTR(image.as_mut_ptr()),
+                        &mut length,
+                    )
+                }?;
+                let image = PathBuf::from(std::ffi::OsString::from_wide(&image[..length as usize]));
+                ensure!(
+                    fs::canonicalize(image)? == fs::canonicalize(target)?,
+                    "retained tray handle does not own the exact fixture image"
+                );
+                let mut current_pid = 0;
+                unsafe { GetWindowThreadProcessId(window, Some(&mut current_pid)) };
+                ensure!(
+                    current_pid == pid,
+                    "tray changed during exact-handle acquisition"
+                );
+                let tray = Self {
+                    running,
+                    process,
+                    pid,
+                };
+                ensure!(tray.alive()?, "tray exited during handle acquisition");
+                Ok(Some(tray))
+            }
+            fn ready(&self) -> Result<()> {
+                ensure!(
+                    unsafe { WaitForInputIdle(self.handle(), 15000) } == 0,
+                    "exact tray never reached an idle input loop"
+                );
+                // A window alone is not readiness. Require its message loop to answer
+                // without using the mutating shutdown message as a readiness probe.
+                let class = wide(Path::new("MicCamWatchTrayClass"));
+                let window = unsafe { FindWindowW(PCWSTR(class.as_ptr()), PCWSTR::null()) }?;
+                let mut pid = 0;
+                unsafe { GetWindowThreadProcessId(window, Some(&mut pid)) };
+                ensure!(
+                    pid == self.pid && self.alive()?,
+                    "ready tray ownership changed"
+                );
+                let mut reply = 0;
+                ensure!(
+                    unsafe {
+                        SendMessageTimeoutW(
+                            window,
+                            WM_NULL,
+                            WPARAM(0),
+                            LPARAM(0),
+                            SMTO_ABORTIFHUNG | SMTO_BLOCK,
+                            5000,
+                            Some(&mut reply),
+                        )
+                    }
+                    .0 != 0,
+                    "exact tray message loop is not responsive"
+                );
+                Ok(())
+            }
+        }
+        struct Fixture {
+            target: PathBuf,
+            child: Option<Child>,
+            tray: Option<ExactTray>,
+            restart_possible: bool,
+            cleaned: bool,
+        }
+        impl Fixture {
+            fn await_tray(&mut self, expected_pid: Option<u32>) -> Result<()> {
+                let deadline = Instant::now() + Duration::from_secs(30);
+                loop {
+                    if let Some(tray) = ExactTray::acquire(&self.target, expected_pid)? {
+                        // Retain ownership before the next fallible readiness check.
+                        self.tray = Some(tray);
+                        break;
+                    }
+                    if let (Some(child), Some(_)) = (&mut self.child, expected_pid) {
+                        ensure!(
+                            child.try_wait()?.is_none(),
+                            "old tray exited before readiness"
+                        );
+                    }
+                    ensure!(Instant::now() < deadline, "exact-image tray did not appear");
+                    thread::sleep(Duration::from_millis(25));
+                }
+                let tray = self.tray.as_ref().context("tray handle missing")?;
+                tray.ready()?;
+                // Observe a real running loop, rather than racing window creation and
+                // stopping before startup workers have had a chance to take ownership.
+                let deadline = Instant::now() + Duration::from_secs(2);
+                while Instant::now() < deadline {
+                    tray.ready()?;
+                    thread::sleep(Duration::from_millis(100));
+                }
+                Ok(())
+            }
+            fn cleanup(&mut self) -> Result<()> {
+                let mut errors = Vec::new();
+                // A restart can succeed before a later assertion fails. Adopt only an
+                // exact-image successor, never a PID/name-selected foreign process.
+                if self
+                    .tray
+                    .as_ref()
+                    .is_none_or(|tray| matches!(tray.alive(), Ok(false)))
+                {
+                    let deadline = Instant::now() + Duration::from_secs(30);
+                    loop {
+                        match ExactTray::acquire(&self.target, None) {
+                            Ok(Some(tray)) => {
+                                self.tray = Some(tray);
+                                break;
+                            }
+                            Ok(None) if self.restart_possible && Instant::now() < deadline => {
+                                thread::sleep(Duration::from_millis(25));
+                            }
+                            Ok(None) => {
+                                if self.restart_possible {
+                                    errors.push("possible successor never exposed exact owned cleanup handles before deadline".to_owned());
+                                }
+                                break;
+                            }
+                            Err(error) => {
+                                errors.push(format!("locate owned cleanup tray: {error:#}"));
+                                break;
+                            }
+                        }
+                    }
+                }
+                if let Some(tray) = &self.tray {
+                    match tray.alive() {
+                        Ok(true) => {
+                            if let Err(error) = tray.ready().and_then(|()| tray.running.stop()) {
+                                errors.push(format!("cooperative cleanup: {error:#}"));
+                                // Last-resort cleanup is a failure, never positive proof.
+                                // This retained, exact-image handle is exclusively ours.
+                                match unsafe { TerminateProcess(tray.handle(), 1) } {
+                                    Ok(()) => {
+                                        if unsafe { WaitForSingleObject(tray.handle(), 5000) }
+                                            != WAIT_OBJECT_0
+                                        {
+                                            errors.push(
+                                                "owned tray termination timed out".to_owned(),
+                                            );
+                                        }
+                                    }
+                                    Err(error) => {
+                                        errors.push(format!("owned tray cleanup failed: {error}"))
+                                    }
+                                }
+                            }
+                        }
+                        Ok(false) => {}
+                        Err(error) => errors.push(format!("inspect cleanup tray: {error:#}")),
+                    }
+                }
+                if let Some(child) = &mut self.child {
+                    match wait_child(child, 5) {
+                        Ok(_) => {}
+                        Err(error) => {
+                            errors.push(format!("owned child cleanup: {error:#}"));
+                            match child.kill() {
+                                Ok(()) => {
+                                    if let Err(error) = wait_child(child, 5) {
+                                        errors.push(format!("reap owned child: {error:#}"));
+                                    }
+                                }
+                                Err(error) => {
+                                    errors.push(format!("terminate owned child: {error}"))
+                                }
+                            }
+                        }
+                    }
+                }
+                self.cleaned = true;
+                ensure!(errors.is_empty(), "{}", errors.join("; "));
+                Ok(())
+            }
+        }
+        impl Drop for Fixture {
+            fn drop(&mut self) {
+                if !self.cleaned
+                    && let Err(error) = self.cleanup()
+                {
+                    eprintln!("active transaction fixture cleanup failed: {error:#}");
+                }
+            }
+        }
+        struct HeldLease {
+            release: Option<mpsc::Sender<()>>,
+            worker: Option<thread::JoinHandle<Result<()>>>,
+        }
+        impl HeldLease {
+            fn acquire() -> Result<Self> {
+                let (ready_send, ready_receive) = mpsc::sync_channel(1);
+                let (release, released) = mpsc::channel();
+                let worker = thread::spawn(move || -> Result<()> {
+                    let acquired = (|| {
+                        let identity = crate::windows_control::current_identity()?;
+                        crate::windows_control::acquire_resource_for("microphone", &identity)
+                    })();
+                    match acquired {
+                        Ok(lease) => {
+                            ready_send
+                                .send(Ok(()))
+                                .context("lease readiness receiver closed")?;
+                            let result = released
+                                .recv_timeout(Duration::from_secs(60))
+                                .context("fixture lease release deadline expired");
+                            drop(lease); // Windows mutex release must run on its owning thread.
+                            result?;
+                        }
+                        Err(error) => {
+                            ready_send
+                                .send(Err(format!("{error:#}")))
+                                .context("lease failure receiver closed")?;
+                        }
+                    }
+                    Ok(())
+                });
+                let mut held = Self {
+                    release: Some(release),
+                    worker: Some(worker),
+                };
+                let ready = ready_receive
+                    .recv_timeout(Duration::from_secs(15))
+                    .context("native fixture lease did not report readiness");
+                match ready {
+                    Ok(Ok(())) => Ok(held),
+                    error => {
+                        let cleanup = held.release();
+                        bail!(
+                            "cannot hold fixture-only resource lease: {error:?}; cleanup: {cleanup:?}"
+                        );
+                    }
+                }
+            }
+            fn release(&mut self) -> Result<()> {
+                if let Some(release) = self.release.take() {
+                    // A disconnected receiver means the worker already released/failed;
+                    // joining below reports that outcome, rather than ignoring it.
+                    let sent = release.send(());
+                    if let Some(worker) = self.worker.take() {
+                        worker
+                            .join()
+                            .map_err(|_| anyhow::anyhow!("fixture lease thread panicked"))??;
+                    }
+                    sent.context("fixture lease worker exited before release")?;
+                }
+                Ok(())
+            }
+        }
+        impl Drop for HeldLease {
+            fn drop(&mut self) {
+                if let Err(error) = self.release() {
+                    eprintln!("fixture-only native lease cleanup failed: {error:#}");
+                }
+            }
+        }
+
+        let mut proof = serde_json::json!({
+            "format": 1,
+            "kind": "native-active-tray-transaction",
+            "public_candidate_acquisition_proven": false,
+            "previous": previous, "candidate": candidate,
+            "readiness": "exact owned_running_tray, idle input loop, responsive WM_NULL, two-second live observation",
+            "lease_fixture": "real global microphone resource lease on a different owned thread; not a genuine protection helper",
+            "limits": [
+                "No candidate public release acquisition or mcw update routing is exercised",
+                "The test driver is not the mapped installed CLI",
+                "UI-loop readiness does not assert asynchronous collector completion",
+                "No active protection, restoration or UAC request is created or released"
+            ],
+            "layouts": []
+        });
+        let result = (|| -> Result<()> {
+            let old_version = version(&previous.join("mcw.exe"), &root, "previous")?;
+            let candidate_version = version(&candidate.join("mcw.exe"), &root, "candidate")?;
+            proof["previous_version"] = serde_json::json!(old_version);
+            proof["candidate_version"] = serde_json::json!(candidate_version);
+            ensure!(
+                old_version != candidate_version,
+                "old and candidate CLI versions must genuinely differ"
+            );
+            ensure!(
+                candidate_version == env!("CARGO_PKG_VERSION"),
+                "candidate is not this actual source version"
+            );
+            ensure!(
+                crate::autostart::tray_matches_version(
+                    &previous.join("mcw-tray.exe"),
+                    &old_version
+                )? && crate::autostart::tray_matches_version(
+                    &candidate.join("mcw-tray.exe"),
+                    &candidate_version
+                )?,
+                "genuine input companions do not match their CLI versions"
+            );
+            crate::settings::Settings::update(|settings| {
+                settings.notifications_enabled = false;
+                settings.sound_enabled = false;
+                settings.show_ready = false;
+                settings.history_enabled = false;
+                settings.mute_on_lock = false;
+                settings.block_camera_on_lock = false;
+                settings.restore_on_unlock = false;
+            })?;
+            let data = crate::settings::data_dir()?;
+            fs::create_dir_all(&data)?;
+            let identity = crate::windows_control::current_identity()?;
+            let intent = data.join("microphone-protection").join(format!(
+                "{}-{}-{}",
+                identity.user, identity.session, identity.scope
+            ));
+            fs::create_dir_all(&intent)?;
+            fs::write(
+                intent.join("intent.json"),
+                serde_json::to_vec(&serde_json::json!({
+                    "format": 1, "generation": 0, "requested": false, "release_pending": false,
+                    "next_lock": 0, "automatic_token": 0, "automatic_generation": 0,
+                    "automatic_restore_pending": false
+                }))?,
+            )?;
+            fs::write(intent.join("intent.lock"), b"")?;
+            fs::write(data.join("blocked-camera-devices.json"), br#"{"blocked":[],"restore_on_arrival":[],"desired_blocked":false,"intent_generation":0}"#)?;
+            let initial_state = snapshot(&root)?;
+            let mut layout_errors = Vec::new();
+            for (label, cli_source, cli_version) in [
+                ("old-pair-to-candidate", &previous, &old_version),
+                (
+                    "candidate-cli-old-tray-repair",
+                    &candidate,
+                    &candidate_version,
+                ),
+            ] {
+                let layout = root.join(label);
+                let installed = layout.join("installed");
+                let stage = layout.join("stage");
+                fs::create_dir_all(&installed)?;
+                fs::create_dir(&stage)?;
+                fs::copy(cli_source.join("mcw.exe"), installed.join("mcw.exe"))?;
+                fs::copy(
+                    previous.join("mcw-tray.exe"),
+                    installed.join("mcw-tray.exe"),
+                )?;
+                for name in ["mcw.exe", "mcw-tray.exe"] {
+                    fs::copy(candidate.join(name), stage.join(name))?;
+                }
+                let target = installed.join("mcw-tray.exe");
+                let mut fixture = Fixture {
+                    target: target.clone(),
+                    child: None,
+                    tray: None,
+                    restart_possible: false,
+                    cleaned: false,
+                };
+                let mut evidence = serde_json::json!({
+                    "layout": label, "installed": installed,
+                    "initial_cli_version": cli_version, "initial_tray_version": old_version,
+                    "target_version": candidate_version, "result": "failed"
+                });
+                let attempt = (|| -> Result<()> {
+                    ensure!(
+                        snapshot(&root)? == initial_state,
+                        "private state changed before fresh layout"
+                    );
+                    let child = Command::new(&target)
+                        .stdin(Stdio::null())
+                        .stdout(fs::File::create(layout.join("old-tray.stdout"))?)
+                        .stderr(fs::File::create(layout.join("old-tray.stderr"))?)
+                        .creation_flags(0x0800_0000)
+                        .spawn()?;
+                    let pid = child.id();
+                    fixture.child = Some(child);
+                    fixture.await_tray(Some(pid))?;
+                    evidence["old_pid"] = serde_json::json!(pid);
+                    evidence["old_ready"] = serde_json::json!(true);
+                    ensure!(
+                        snapshot(&root)? == initial_state,
+                        "old tray changed private durable state"
+                    );
+                    let mut ops =
+                        NativeOperations::new(
+                            ["mcw-tray.exe", "mcw.exe"]
+                                .into_iter()
+                                .map(|name| Replacement {
+                                    staged: stage.join(name),
+                                    target: installed.join(name),
+                                    backup: stage.join(format!("previous-{name}")),
+                                    had_original: true,
+                                    running_cli: false,
+                                })
+                                .collect(),
+                            Some(super::super::process::owned_running_tray(&target)?.context(
+                                "ready old tray no longer accepted by ownership matcher",
+                            )?),
+                            target.clone(),
+                        );
+                    let original_cli = fs::read(installed.join("mcw.exe"))?;
+                    let original_tray = fs::read(&target)?;
+                    let mut held = HeldLease::acquire()?;
+                    ensure!(
+                        fixture
+                            .tray
+                            .as_ref()
+                            .context("old tray handle missing")?
+                            .alive()?,
+                        "old tray died before refusal attempt"
+                    );
+                    fixture.restart_possible = true;
+                    let refusal = match apply(&mut ops, 2, true) {
+                        Err(error) => error,
+                        Ok(()) => {
+                            bail!("real other-thread resource lease did not refuse replacement")
+                        }
+                    };
+                    evidence["lease_refusal"] = serde_json::json!(format!("{refusal:#}"));
+                    ensure!(
+                        fixture
+                            .child
+                            .as_mut()
+                            .context("old child missing")?
+                            .try_wait()?
+                            .is_none(),
+                        "reservation refusal stopped the old child"
+                    );
+                    ensure!(
+                        fixture.tray.as_ref().context("old tray missing")?.alive()?,
+                        "reservation refusal killed the retained old tray"
+                    );
+                    ensure!(
+                        super::super::process::owned_running_tray(&target)?.is_some(),
+                        "refusal lost exact tray ownership"
+                    );
+                    ensure!(
+                        fs::read(installed.join("mcw.exe"))? == original_cli
+                            && fs::read(&target)? == original_tray,
+                        "refusal changed installed bytes"
+                    );
+                    for replacement in &ops.replacements {
+                        ensure!(
+                            !replacement.backup.try_exists()?,
+                            "refusal created a transaction backup"
+                        );
+                        ensure!(
+                            fs::read(&replacement.staged)?
+                                == fs::read(
+                                    candidate.join(
+                                        replacement
+                                            .target
+                                            .file_name()
+                                            .context("missing target name")?
+                                    )
+                                )?,
+                            "refusal changed staged bytes"
+                        );
+                    }
+                    ensure!(
+                        snapshot(&root)? == initial_state,
+                        "refusal changed private durable state"
+                    );
+                    evidence["refusal_preserved_files_tray_state"] = serde_json::json!(true);
+                    held.release()?;
+                    ensure!(
+                        fixture.tray.as_ref().context("old tray missing")?.alive()?,
+                        "old tray must still be alive immediately before positive apply"
+                    );
+                    apply(&mut ops, 2, true)?;
+                    ensure!(
+                        wait_child(fixture.child.as_mut().context("old child missing")?, 5)?
+                            .success(),
+                        "old tray did not exit successfully after cooperative updater stop"
+                    );
+                    ensure!(
+                        !fixture.tray.as_ref().context("old tray missing")?.alive()?,
+                        "old retained process survived replacement"
+                    );
+                    evidence["old_cooperatively_exited"] = serde_json::json!(true);
+                    fixture.tray = None;
+                    fixture.await_tray(None)?;
+                    let successor = fixture.tray.as_ref().context("successor handle missing")?;
+                    evidence["successor_pid"] = serde_json::json!(successor.pid);
+                    evidence["successor_exact_image_ready"] = serde_json::json!(true);
+                    for name in ["mcw.exe", "mcw-tray.exe"] {
+                        ensure!(
+                            fs::read(installed.join(name))? == fs::read(candidate.join(name))?,
+                            "installed {name} differs from genuine candidate input"
+                        );
+                    }
+                    ensure!(
+                        fs::read(stage.join("previous-mcw.exe"))? == original_cli
+                            && fs::read(stage.join("previous-mcw-tray.exe"))? == original_tray,
+                        "transaction backups do not preserve the actual original pair"
+                    );
+                    ensure!(
+                        snapshot(&root)? == initial_state,
+                        "replacement changed private durable state"
+                    );
+                    evidence["installed_pair_byte_equal"] = serde_json::json!(true);
+                    successor.running.stop()?;
+                    ensure!(!successor.alive()?, "successor did not cooperatively close");
+                    fixture.restart_possible = false;
+                    ensure!(
+                        super::super::process::owned_running_tray(&target)?.is_none(),
+                        "fixture tray remained registered after cooperative close"
+                    );
+                    ensure!(
+                        snapshot(&root)? == initial_state,
+                        "successor shutdown changed private state"
+                    );
+                    evidence["successor_cooperatively_exited"] = serde_json::json!(true);
+                    evidence["private_preferences_and_operational_state_unchanged"] =
+                        serde_json::json!(true);
+                    evidence["result"] = serde_json::json!("passed");
+                    Ok(())
+                })();
+                let cleanup = fixture.cleanup();
+                if let Err(error) = &attempt {
+                    evidence["error"] = serde_json::json!(format!("{error:#}"));
+                }
+                if let Err(error) = &cleanup {
+                    evidence["cleanup_error"] = serde_json::json!(format!("{error:#}"));
+                    evidence["result"] = serde_json::json!("failed");
+                }
+                proof["layouts"]
+                    .as_array_mut()
+                    .context("proof layouts missing")?
+                    .push(evidence);
+                match (attempt, cleanup) {
+                    (Ok(()), Ok(())) => {}
+                    (Err(error), Ok(())) => layout_errors.push(format!("{label}: {error:#}")),
+                    (Ok(()), Err(cleanup)) => return Err(cleanup),
+                    (Err(error), Err(cleanup)) => bail!("{error:#}; cleanup: {cleanup:#}"),
+                }
+            }
+            ensure!(layout_errors.is_empty(), "{}", layout_errors.join("; "));
+            Ok(())
+        })();
+        proof["result"] = serde_json::json!(if result.is_ok() { "passed" } else { "failed" });
+        if let Err(error) = &result {
+            proof["error"] = serde_json::json!(format!("{error:#}"));
+        }
+        fs::write(
+            root.join("native-active-tray-transaction.json"),
+            serde_json::to_vec_pretty(&proof)?,
+        )?;
+        result
+    }
+
+    #[test]
     fn tray_failure_preserves_cli_and_restarts_original() {
         let mut fake = Fake {
             fail_install: Some(0),
