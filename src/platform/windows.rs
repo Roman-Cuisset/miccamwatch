@@ -194,6 +194,10 @@ impl PlatformMonitor {
             _com: com,
         })
     }
+    pub(crate) fn set_policy(&mut self, policy: Policy) {
+        self.policy = policy;
+    }
+
     fn new_microphone_owner() -> Result<Self> {
         let com = ComGuard::new()?;
         let enumerator = unsafe { CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL) }

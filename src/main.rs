@@ -248,7 +248,7 @@ fn run() -> Result<u8> {
             TrayCommand::Run => {
                 let monitor = PlatformMonitor::new(policy.clone())?;
                 #[cfg(windows)]
-                tray::run_tray(monitor, policy, lang, settings)?;
+                tray::run_tray(monitor, policy, lang, settings, cli.config.is_some())?;
                 #[cfg(unix)]
                 tray::run_tray(
                     monitor,

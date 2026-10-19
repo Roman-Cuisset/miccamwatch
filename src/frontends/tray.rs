@@ -47,16 +47,16 @@ use windows::{
                 DefWindowProcW, DestroyIcon, DestroyMenu, DestroyWindow, DispatchMessageW,
                 ES_AUTOVSCROLL, ES_MULTILINE, ES_READONLY, FindWindowW, GWLP_USERDATA,
                 GetClientRect, GetCursorPos, GetDlgItem, GetMessageW, GetSystemMetrics,
-                GetWindowLongPtrW, HICON, HMENU, ICONINFO, KillTimer, MF_DISABLED, MF_GRAYED,
-                MF_SEPARATOR, MF_STRING, MSG, MoveWindow, NONCLIENTMETRICSW, PostMessageW,
-                PostQuitMessage, RegisterClassW, SM_CXSMICON, SPI_GETNONCLIENTMETRICS, SW_SHOW,
-                SendMessageW, SetForegroundWindow, SetTimer, SetWindowLongPtrW, SetWindowTextW,
-                ShowWindow, TPM_BOTTOMALIGN, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON,
-                TrackPopupMenu, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CLOSE,
-                WM_COMMAND, WM_COPY, WM_DESTROY, WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_NCCREATE,
-                WM_NULL, WM_RBUTTONUP, WM_SETFONT, WM_SIZE, WM_TIMER, WNDCLASSW, WS_CHILD,
-                WS_EX_CLIENTEDGE, WS_OVERLAPPED, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE,
-                WS_VSCROLL,
+                GetWindowLongPtrW, HICON, HMENU, ICONINFO, KillTimer, MF_CHECKED, MF_DISABLED,
+                MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MSG, MoveWindow, NONCLIENTMETRICSW,
+                PostMessageW, PostQuitMessage, RegisterClassW, SM_CXSMICON,
+                SPI_GETNONCLIENTMETRICS, SW_SHOW, SendMessageW, SetForegroundWindow, SetTimer,
+                SetWindowLongPtrW, SetWindowTextW, ShowWindow, TPM_BOTTOMALIGN, TPM_NONOTIFY,
+                TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, WINDOW_EX_STYLE,
+                WINDOW_STYLE, WM_APP, WM_CLOSE, WM_COMMAND, WM_COPY, WM_DESTROY, WM_LBUTTONDBLCLK,
+                WM_LBUTTONUP, WM_NCCREATE, WM_NULL, WM_RBUTTONUP, WM_SETFONT, WM_SIZE, WM_TIMER,
+                WNDCLASSW, WS_CHILD, WS_EX_CLIENTEDGE, WS_OVERLAPPED, WS_OVERLAPPEDWINDOW,
+                WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
             },
         },
     },
@@ -106,7 +106,10 @@ const CMD_TOGGLE_CAMERA: usize = 102;
 const CMD_EXIT: usize = 103;
 const CMD_TOGGLE_NOTIFICATIONS: usize = 104;
 const CMD_TOGGLE_AUTOSTART: usize = 105;
-const CMD_CYCLE_PROFILE: usize = 106;
+const CMD_PROFILE_BALANCED: usize = 109;
+const CMD_PROFILE_PRIVATE: usize = 110;
+const CMD_PROFILE_MEETING: usize = 111;
+const CMD_PROFILE_DEVELOPMENT: usize = 112;
 const CMD_DETAILS: usize = 107;
 const CMD_RESUME_CAMERA: usize = 108;
 const DETAILS_EDIT: i32 = 201;
@@ -239,6 +242,7 @@ struct TrayAppState {
     camera_status_error: Option<String>,
     autostart_state: crate::autostart::AutostartState,
     settings: Settings,
+    explicit_policy: bool,
     lock_state: SessionLockState,
     policy_lock_state: SessionLockState,
     microphone_worker: microphone_worker::Worker,
@@ -285,6 +289,11 @@ impl Drop for TrayAppState {
     }
 }
 
+struct RefreshPolicy {
+    policy: crate::config::Policy,
+    explicit_policy: bool,
+}
+
 fn start_refresh_worker(
     hwnd_cell: Arc<AtomicIsize>,
     workers_alive: Arc<AtomicBool>,
@@ -292,8 +301,12 @@ fn start_refresh_worker(
     microphone_sequence: Arc<AtomicU64>,
     restore_requests: SyncSender<RestorePermit>,
     restore_activity: Arc<Mutex<RestoreActivity>>,
-    policy: crate::config::Policy,
+    profile_policy: RefreshPolicy,
 ) -> Receiver<TrayRefresh> {
+    let RefreshPolicy {
+        mut policy,
+        explicit_policy,
+    } = profile_policy;
     let CameraRefreshSignals {
         dirty: camera_dirty,
         sequence: camera_sequence,
@@ -305,7 +318,8 @@ fn start_refresh_worker(
         let resume_error = crate::platform::resume_requested_microphone_protection()
             .err()
             .map(|error| format!("{error:#}"));
-        let monitor = match PlatformMonitor::new(policy) {
+        let mut applied_profile = None;
+        let mut monitor = match PlatformMonitor::new(policy.clone()) {
             Ok(monitor) => monitor,
             Err(error) => {
                 let _ = sender.send(TrayRefresh {
@@ -342,6 +356,21 @@ fn start_refresh_worker(
         // a declined UAC prompt from being raised again for the same arrival.
         let mut restore_offered: Vec<String> = Vec::new();
         while workers_alive.load(Ordering::Acquire) {
+            let settings = Settings::load().map_err(|error| format!("{error:#}"));
+            if let Ok(settings) = &settings
+                && !explicit_policy
+                && applied_profile != Some(settings.profile)
+            {
+                policy.profile = match settings.profile {
+                    PrivacyProfile::Private => crate::config::Profile::Strict,
+                    PrivacyProfile::Development => crate::config::Profile::Conservative,
+                    PrivacyProfile::Meeting | PrivacyProfile::Balanced => {
+                        crate::config::Profile::Balanced
+                    }
+                };
+                monitor.set_policy(policy.clone());
+                applied_profile = Some(settings.profile);
+            }
             let snapshot = monitor
                 .snapshot((&filter).into())
                 .map_err(|error| format!("{error:#}"));
@@ -449,6 +478,7 @@ pub fn run_tray(
     policy: crate::config::Policy,
     lang: Language,
     settings: Settings,
+    explicit_policy: bool,
 ) -> Result<()> {
     enable_dpi_awareness();
     let mutex_name = format_wide("Local\\MicCamWatch.Tray");
@@ -475,7 +505,10 @@ pub fn run_tray(
         Arc::clone(&microphone_worker.sequence),
         restore_requests,
         Arc::clone(&restore_activity),
-        policy,
+        RefreshPolicy {
+            policy,
+            explicit_policy,
+        },
     );
     // The shell downsamples anything larger than the small-icon metric, which is what
     // made the icons look muddy. Render at the size the notification area will use.
@@ -497,6 +530,7 @@ pub fn run_tray(
         visual: TrayVisual::Error,
         summary: "miccamwatch".to_owned(),
         settings,
+        explicit_policy,
         lock_state,
         policy_lock_state: lock_state,
         microphone_worker,
@@ -677,7 +711,10 @@ unsafe extern "system" fn tray_wnd_proc(
                 CMD_RESUME_CAMERA => queue_manual_camera(hwnd, CameraRequest::Resume),
                 CMD_TOGGLE_NOTIFICATIONS => toggle_notifications(hwnd),
                 CMD_TOGGLE_AUTOSTART => toggle_autostart(hwnd),
-                CMD_CYCLE_PROFILE => cycle_profile(hwnd),
+                CMD_PROFILE_BALANCED => select_profile(hwnd, PrivacyProfile::Balanced),
+                CMD_PROFILE_PRIVATE => select_profile(hwnd, PrivacyProfile::Private),
+                CMD_PROFILE_MEETING => select_profile(hwnd, PrivacyProfile::Meeting),
+                CMD_PROFILE_DEVELOPMENT => select_profile(hwnd, PrivacyProfile::Development),
                 CMD_DETAILS => {
                     if let Some(state) = state(hwnd)
                         && let Err(error) = show_diagnostic_window(hwnd, &state.summary)
@@ -971,6 +1008,11 @@ fn accepts_control_refresh(
 }
 
 fn refresh_state(hwnd: HWND, state: &mut TrayAppState) {
+    // Preferences are read now, never copied from an older queued observation:
+    // a pre-click collector frame must not roll back a successful menu update.
+    if let Ok(settings) = Settings::load() {
+        state.settings = settings;
+    }
     // Consume each retained observation, then display the newest. Intermediate
     // lock/unlock and capture transitions carry effects and cannot be skipped.
     while let Some(refresh) = next_refresh(&state.refreshes, state.pending_microphone) {
@@ -1705,16 +1747,17 @@ fn toggle_autostart(hwnd: HWND) {
         crate::autostart::state().unwrap_or(crate::autostart::AutostartState::Disabled);
 }
 
-fn cycle_profile(hwnd: HWND) {
+fn update_profile(explicit_policy: bool, profile: PrivacyProfile) -> Result<Settings> {
+    anyhow::ensure!(
+        !explicit_policy,
+        "Profile controlled by explicit --config; menu changes disabled"
+    );
+    Settings::update(|settings| settings.profile = profile)
+}
+
+fn select_profile(hwnd: HWND, profile: PrivacyProfile) {
     let Some(state) = state(hwnd) else { return };
-    match Settings::update(|settings| {
-        settings.profile = match settings.profile {
-            PrivacyProfile::Balanced => PrivacyProfile::Private,
-            PrivacyProfile::Private => PrivacyProfile::Meeting,
-            PrivacyProfile::Meeting => PrivacyProfile::Development,
-            PrivacyProfile::Development => PrivacyProfile::Balanced,
-        };
-    }) {
+    match update_profile(state.explicit_policy, profile) {
         Ok(settings) => state.settings = settings,
         Err(error) => {
             state.summary = format!("miccamwatch: settings update failed: {error:#}");
@@ -2050,15 +2093,67 @@ fn camera_resume_label(lang: Language) -> &'static str {
     }
 }
 
+const PROFILE_CHOICES: [(usize, PrivacyProfile); 4] = [
+    (CMD_PROFILE_BALANCED, PrivacyProfile::Balanced),
+    (CMD_PROFILE_PRIVATE, PrivacyProfile::Private),
+    (CMD_PROFILE_MEETING, PrivacyProfile::Meeting),
+    (CMD_PROFILE_DEVELOPMENT, PrivacyProfile::Development),
+];
+
+fn profile_words(lang: Language) -> (&'static str, [&'static str; 4], &'static str) {
+    match lang {
+        Language::En => (
+            "Profile",
+            ["Balanced", "Private", "Meeting", "Development"],
+            "Set by --config",
+        ),
+        Language::Fr => (
+            "Profil",
+            ["Équilibré", "Privé", "Réunion", "Développement"],
+            "Défini par --config",
+        ),
+        Language::De => (
+            "Profil",
+            ["Ausgewogen", "Privat", "Besprechung", "Entwicklung"],
+            "Durch --config festgelegt",
+        ),
+        Language::Es => (
+            "Perfil",
+            ["Equilibrado", "Privado", "Reunión", "Desarrollo"],
+            "Definido por --config",
+        ),
+        Language::Ja => (
+            "プロファイル",
+            ["バランス", "プライベート", "会議", "開発"],
+            "--config で指定",
+        ),
+        Language::Zh => ("配置", ["平衡", "隐私", "会议", "开发"], "由 --config 指定"),
+        Language::Ru => (
+            "Профиль",
+            ["Сбалансированный", "Приватный", "Встреча", "Разработка"],
+            "Задан --config",
+        ),
+    }
+}
+
+struct ProfileMenuState<'a> {
+    settings: &'a Settings,
+    explicit_policy: bool,
+}
+
 fn build_context_menu(
     hwnd: HWND,
     summary: &str,
     lang: Language,
     microphone_requested: Option<bool>,
     camera: Option<&CameraControlObservation>,
-    settings: &Settings,
+    profile_state: ProfileMenuState<'_>,
     autostart_state: crate::autostart::AutostartState,
 ) -> Result<HMENU> {
+    let ProfileMenuState {
+        settings,
+        explicit_policy,
+    } = profile_state;
     unsafe {
         let menu = CreatePopupMenu()?;
         append_disabled(menu, &format!("miccamwatch v{}", env!("CARGO_PKG_VERSION")));
@@ -2106,8 +2201,30 @@ fn build_context_menu(
             CMD_TOGGLE_NOTIFICATIONS,
             PCWSTR(notifications.as_ptr()),
         );
-        let profile = format_wide(&format!("Profile: {:?} (change)", settings.profile));
-        let _ = AppendMenuW(menu, MF_STRING, CMD_CYCLE_PROFILE, PCWSTR(profile.as_ptr()));
+        let text = profile_words(lang);
+        let profiles = match CreatePopupMenu() {
+            Ok(profiles) => profiles,
+            Err(error) => {
+                let _ = DestroyMenu(menu);
+                return Err(error.into());
+            }
+        };
+        for (index, (command, profile)) in PROFILE_CHOICES.iter().enumerate() {
+            let label = format_wide(text.1[index]);
+            let mut flags = MF_STRING;
+            if explicit_policy {
+                flags |= MF_DISABLED | MF_GRAYED;
+            } else if settings.profile == *profile {
+                flags |= MF_CHECKED;
+            }
+            let _ = AppendMenuW(profiles, flags, *command, PCWSTR(label.as_ptr()));
+        }
+        let label = format_wide(&if explicit_policy {
+            format!("{} — {}", text.0, text.2)
+        } else {
+            text.0.to_owned()
+        });
+        let _ = AppendMenuW(menu, MF_POPUP, profiles.0 as usize, PCWSTR(label.as_ptr()));
         let autostart = format_wide(match autostart_state {
             crate::autostart::AutostartState::Enabled => "Disable autostart",
             crate::autostart::AutostartState::Disabled => "Enable autostart",
@@ -2126,6 +2243,11 @@ fn build_context_menu(
 }
 
 fn show_context_menu(hwnd: HWND) {
+    if let Some(state) = state(hwnd)
+        && let Ok(settings) = Settings::load()
+    {
+        state.settings = settings;
+    }
     let Some(state) = state(hwnd) else { return };
     let mut point = POINT::default();
     unsafe {
@@ -2142,7 +2264,10 @@ fn show_context_menu(hwnd: HWND) {
             .as_ref()
             .map(|status| status.requested),
         state.camera_observation.as_ref(),
-        &state.settings,
+        ProfileMenuState {
+            settings: &state.settings,
+            explicit_policy: state.explicit_policy,
+        },
         state.autostart_state,
     ) else {
         return;
@@ -2870,12 +2995,23 @@ mod tests {
                 CMD_TOGGLE_MUTE,
                 CMD_TOGGLE_CAMERA,
                 CMD_TOGGLE_NOTIFICATIONS,
-                CMD_CYCLE_PROFILE,
                 CMD_TOGGLE_AUTOSTART,
                 CMD_EXIT,
             ] {
                 let flags = GetMenuState(menu, command as u32, MF_BYCOMMAND);
                 assert_ne!(flags, u32::MAX, "essential action is missing");
+                assert_eq!(flags & (MF_DISABLED.0 | MF_GRAYED.0), 0);
+            }
+            let profiles =
+                (0..windows::Win32::UI::WindowsAndMessaging::GetMenuItemCount(Some(menu)))
+                    .map(|position| {
+                        windows::Win32::UI::WindowsAndMessaging::GetSubMenu(menu, position)
+                    })
+                    .find(|submenu| !submenu.is_invalid())
+                    .expect("profile submenu is present");
+            for (command, _) in PROFILE_CHOICES {
+                let flags = GetMenuState(profiles, command as u32, MF_BYCOMMAND);
+                assert_ne!(flags, u32::MAX, "profile choice is missing");
                 assert_eq!(flags & (MF_DISABLED.0 | MF_GRAYED.0), 0);
             }
         }
@@ -2923,7 +3059,10 @@ mod tests {
                     Language::En,
                     requested,
                     None,
-                    &Settings::default(),
+                    ProfileMenuState {
+                        settings: &Settings::default(),
+                        explicit_policy: false,
+                    },
                     crate::autostart::AutostartState::Disabled,
                 )
                 .unwrap();
@@ -2949,7 +3088,10 @@ mod tests {
                     Language::Fr,
                     None,
                     Some(&fixture.camera),
-                    &Settings::default(),
+                    ProfileMenuState {
+                        settings: &Settings::default(),
+                        explicit_policy: false,
+                    },
                     crate::autostart::AutostartState::Disabled,
                 )
                 .unwrap();
@@ -2965,6 +3107,327 @@ mod tests {
             }
         }
         let _ = unsafe { DestroyWindow(owner) };
+    }
+
+    #[test]
+    fn native_profile_menu_checks_only_effective_selection_in_every_language() {
+        use windows::Win32::UI::WindowsAndMessaging::{GetMenuState, GetSubMenu, MF_BYCOMMAND};
+        let owner = native_test_owner();
+        for lang in [
+            Language::En,
+            Language::Fr,
+            Language::De,
+            Language::Es,
+            Language::Ja,
+            Language::Zh,
+            Language::Ru,
+        ] {
+            for (_, selected) in PROFILE_CHOICES {
+                for explicit_policy in [false, true] {
+                    let settings = Settings {
+                        profile: selected,
+                        ..Settings::default()
+                    };
+                    let menu = build_context_menu(
+                        owner,
+                        "miccamwatch",
+                        lang,
+                        None,
+                        None,
+                        ProfileMenuState {
+                            settings: &settings,
+                            explicit_policy,
+                        },
+                        crate::autostart::AutostartState::Disabled,
+                    )
+                    .unwrap();
+                    let profiles = unsafe { GetSubMenu(menu, 7) };
+                    for (command, profile) in PROFILE_CHOICES {
+                        let flags = unsafe { GetMenuState(profiles, command as u32, MF_BYCOMMAND) };
+                        assert_ne!(flags, u32::MAX);
+                        assert_eq!(
+                            flags & MF_CHECKED.0 != 0,
+                            !explicit_policy && profile == selected
+                        );
+                        assert_eq!(flags & (MF_DISABLED.0 | MF_GRAYED.0) != 0, explicit_policy);
+                    }
+                    unsafe { DestroyMenu(menu).unwrap() };
+                }
+            }
+        }
+        unsafe { DestroyWindow(owner).unwrap() };
+    }
+
+    #[test]
+    fn explicit_config_rejects_every_profile_before_settings_io() {
+        for (_, profile) in PROFILE_CHOICES {
+            assert!(update_profile(true, profile).is_err());
+        }
+    }
+
+    struct ProfileProofState {
+        explicit_policy: bool,
+        directory: std::path::PathBuf,
+        accepted: usize,
+        rejected: usize,
+    }
+
+    unsafe extern "system" fn profile_proof_wnd_proc(
+        hwnd: HWND,
+        message: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
+        if message == WM_COMMAND {
+            let pointer =
+                unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *mut ProfileProofState;
+            if let Some(proof) = unsafe { pointer.as_mut() }
+                && let Some((_, profile)) = PROFILE_CHOICES
+                    .iter()
+                    .find(|(command, _)| *command == (wparam.0 & 0xffff))
+            {
+                // This is the production persistence/authority boundary, not an
+                // echo of the driver's requested profile. No device worker exists.
+                let result = update_profile(proof.explicit_policy, *profile);
+                if result.is_ok() {
+                    proof.accepted += 1;
+                } else {
+                    proof.rejected += 1;
+                }
+                let record = serde_json::json!({
+                    "command": wparam.0 & 0xffff,
+                    "accepted": proof.accepted,
+                    "rejected": proof.rejected,
+                    "error": result.err().map(|error| error.to_string()),
+                });
+                if let Ok(bytes) = serde_json::to_vec(&record) {
+                    let _ = std::fs::write(proof.directory.join("command.json"), bytes);
+                }
+            }
+            return LRESULT(0);
+        }
+        unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
+    }
+
+    #[test]
+    #[ignore = "hosted isolated desktop only: installer/tests/windows-tray-profiles-native.ps1"]
+    fn native_windows_tray_profiles() {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            EnableMenuItem, GetMenuState, GetSubMenu, MF_BYCOMMAND,
+        };
+        assert_eq!(std::env::var("GITHUB_ACTIONS").as_deref(), Ok("true"));
+        assert_eq!(
+            std::env::var("RUNNER_ENVIRONMENT").as_deref(),
+            Ok("github-hosted")
+        );
+        assert_eq!(
+            std::env::var("MCW_WINDOWS_PROFILE_ISOLATED").as_deref(),
+            Ok("true")
+        );
+        let directory =
+            std::path::PathBuf::from(std::env::var_os("MCW_WINDOWS_PROFILE_PROOF_DIR").unwrap());
+        let scope =
+            std::path::PathBuf::from(std::env::var_os("MCW_WINDOWS_PROFILE_SCOPE").unwrap());
+        assert!(scope.is_absolute() && directory.starts_with(&scope));
+        assert_eq!(
+            std::env::var_os("APPDATA").map(std::path::PathBuf::from),
+            Some(scope.join("roaming"))
+        );
+        assert_eq!(
+            std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from),
+            Some(scope.join("local"))
+        );
+        assert_eq!(
+            crate::settings::settings_path().unwrap(),
+            scope.join("roaming/MicCamWatch/settings.toml")
+        );
+        let config = std::env::var_os("MCW_WINDOWS_PROFILE_CONFIG").map(std::path::PathBuf::from);
+        if let Some(path) = &config {
+            assert_eq!(path, &scope.join("explicit.toml"));
+        }
+        let policy = crate::config::Policy::load(config.as_deref()).unwrap();
+        let explicit_policy = config.is_some();
+        if explicit_policy {
+            assert_eq!(policy.profile, crate::config::Profile::Strict);
+        }
+        let mode = std::env::var("MCW_WINDOWS_PROFILE_MODE").unwrap();
+        let language = std::env::var("MCW_WINDOWS_PROFILE_LANGUAGE").unwrap();
+        let lang = Language::from_code(&language).unwrap();
+        let initial = Settings::load().unwrap();
+        assert!(
+            initial.sound_enabled,
+            "unrelated preference must survive every update"
+        );
+        if mode != "select" {
+            assert_eq!(
+                initial.profile,
+                PrivacyProfile::Meeting,
+                "new process must load persisted selection"
+            );
+        }
+        let mut proof = Box::new(ProfileProofState {
+            explicit_policy,
+            directory: directory.clone(),
+            accepted: 0,
+            rejected: 0,
+        });
+        enable_dpi_awareness();
+        let class = format_wide("MicCamWatchProfileProofClass");
+        let title = format_wide("MicCamWatch isolated profile menu proof");
+        let owner = unsafe {
+            assert_ne!(
+                RegisterClassW(&WNDCLASSW {
+                    lpfnWndProc: Some(profile_proof_wnd_proc),
+                    lpszClassName: PCWSTR(class.as_ptr()),
+                    ..Default::default()
+                }),
+                0
+            );
+            let owner = CreateWindowExW(
+                WINDOW_EX_STYLE(0),
+                PCWSTR(class.as_ptr()),
+                PCWSTR(title.as_ptr()),
+                WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+                40,
+                40,
+                420,
+                140,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+            SetWindowLongPtrW(
+                owner,
+                GWLP_USERDATA,
+                (&mut *proof as *mut ProfileProofState) as isize,
+            );
+            owner
+        };
+        let expected = [
+            CMD_PROFILE_DEVELOPMENT,
+            CMD_PROFILE_PRIVATE,
+            CMD_PROFILE_BALANCED,
+            CMD_PROFILE_MEETING,
+        ];
+        let count = if mode == "select" {
+            expected.len() + 1
+        } else {
+            1
+        };
+        for step in 0..count {
+            let settings = Settings::load().unwrap();
+            let menu = build_context_menu(
+                owner,
+                "miccamwatch: isolated profile menu qualification",
+                lang,
+                None,
+                None,
+                ProfileMenuState {
+                    settings: &settings,
+                    explicit_policy,
+                },
+                crate::autostart::AutostartState::Disabled,
+            )
+            .unwrap();
+            // Native input can only reach profile persistence. In particular
+            // there is no live microphone/camera/autostart/backend tray handler.
+            unsafe {
+                for command in [
+                    CMD_DETAILS,
+                    CMD_TOGGLE_MUTE,
+                    CMD_TOGGLE_CAMERA,
+                    CMD_TOGGLE_NOTIFICATIONS,
+                    CMD_TOGGLE_AUTOSTART,
+                    CMD_EXIT,
+                ] {
+                    assert_ne!(
+                        EnableMenuItem(
+                            menu,
+                            command as u32,
+                            MF_BYCOMMAND | MF_DISABLED | MF_GRAYED
+                        )
+                        .0,
+                        -1,
+                        "inert profile fixture must disable every unrelated action"
+                    );
+                }
+            }
+            let profiles = unsafe { GetSubMenu(menu, 7) };
+            assert!(!profiles.is_invalid());
+            let states: Vec<_> = PROFILE_CHOICES.iter().map(|(command, profile)| {
+                let flags = unsafe { GetMenuState(profiles, *command as u32, MF_BYCOMMAND) };
+                assert_ne!(flags, u32::MAX);
+                assert_eq!(flags & MF_CHECKED.0 != 0, !explicit_policy && settings.profile == *profile);
+                assert_eq!(flags & (MF_DISABLED.0 | MF_GRAYED.0) != 0, explicit_policy);
+                serde_json::json!({ "command": command, "checked": flags & MF_CHECKED.0 != 0, "disabled": flags & (MF_DISABLED.0 | MF_GRAYED.0) != 0 })
+            }).collect();
+            std::fs::write(directory.join(format!("menu-{step}.json")),
+                serde_json::to_vec(&serde_json::json!({
+                    "owner": owner.0 as usize, "pid": unsafe { GetCurrentProcessId() },
+                    "menu": menu.0 as usize, "profiles": profiles.0 as usize,
+                    "profile_position": 7, "choices": states,
+                    "explicit_policy": explicit_policy, "inert": true, "language": language.as_str(),
+                })).unwrap()).unwrap();
+            let work = monitor_work_area(owner);
+            let command = unsafe {
+                let _ = SetForegroundWindow(owner);
+                TrackPopupMenu(
+                    menu,
+                    TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON,
+                    work.left + 100,
+                    work.top + 100,
+                    None,
+                    owner,
+                    None,
+                )
+                .0 as usize
+            };
+            if mode == "select" && step < expected.len() {
+                assert_eq!(
+                    command, expected[step],
+                    "real native menu must return arbitrary requested choice"
+                );
+                unsafe { SendMessageW(owner, WM_COMMAND, Some(WPARAM(command)), Some(LPARAM(0))) };
+                let reloaded = Settings::load().unwrap();
+                assert_eq!(
+                    reloaded.profile,
+                    PROFILE_CHOICES
+                        .iter()
+                        .find(|(id, _)| *id == command)
+                        .unwrap()
+                        .1
+                );
+                assert!(reloaded.sound_enabled);
+            } else {
+                assert_eq!(
+                    command, 0,
+                    "inspection must cancel without selecting disabled or unrelated actions"
+                );
+            }
+            unsafe { DestroyMenu(menu).unwrap() };
+        }
+        if explicit_policy {
+            assert_eq!(proof.accepted, 0);
+            assert_eq!(
+                proof.rejected, 4,
+                "all forged profile commands must reach and fail production guard"
+            );
+            assert_eq!(Settings::load().unwrap().profile, PrivacyProfile::Meeting);
+        } else if mode == "select" {
+            assert_eq!(proof.accepted, 4);
+            assert_eq!(proof.rejected, 0);
+        }
+        unsafe {
+            SetWindowLongPtrW(owner, GWLP_USERDATA, 0);
+            DestroyWindow(owner).unwrap();
+        }
+        std::fs::write(
+            directory.join("complete"),
+            b"profile menu persistence/authority qualified; no hardware/protection claim",
+        )
+        .unwrap();
     }
 
     struct NativeProofShellIcon(NOTIFYICONDATAW);
@@ -3210,7 +3673,10 @@ mod tests {
                 } else {
                     &fixture.camera
                 }),
-                &Settings::default(),
+                ProfileMenuState {
+                    settings: &Settings::default(),
+                    explicit_policy: false,
+                },
                 crate::autostart::AutostartState::Disabled,
             )
             .unwrap();
