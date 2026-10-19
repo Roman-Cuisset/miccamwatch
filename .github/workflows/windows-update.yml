@@ -19,6 +19,11 @@ on:
         description: Full source commit for the older release
         required: true
         type: string
+      active-tray:
+        description: Start genuine old trays in disposable hosted scope (including captured-stream EOF qualification)
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -27,102 +32,23 @@ permissions:
 jobs:
   migrate:
     runs-on: windows-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     env:
       GH_TOKEN: ${{ github.token }}
       RELEASE_VERSION: ${{ inputs.version }}
       RELEASE_SOURCE: ${{ inputs.source-digest }}
       UPGRADE_FROM: ${{ inputs.upgrade-from }}
       UPGRADE_SOURCE: ${{ inputs.upgrade-source-digest }}
+      ACTIVE_TRAY: ${{ inputs.active-tray }}
     steps:
+      - name: Check out qualification fixtures
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - name: Verify public payloads and exercise update no-op and paired repair
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Stop'
-          $repo = 'Roman-Cuisset/miccamwatch'
-          $proof = Join-Path $env:RUNNER_TEMP 'public-update-proof'
-          New-Item -ItemType Directory $proof | Out-Null
-          $env:APPDATA = Join-Path $proof 'appdata'
-          $env:LOCALAPPDATA = Join-Path $proof 'localappdata'
-          New-Item -ItemType Directory $env:APPDATA,$env:LOCALAPPDATA | Out-Null
-          if (Get-Process mcw,mcw-tray -ErrorAction SilentlyContinue) { throw 'Runner is not isolated from an existing MCW process' }
-          function Get-VerifiedPackage([string]$tag, [string]$source, [string]$directory) {
-            if ($tag -cnotmatch '^v[0-9]+\.[0-9]+\.[0-9]+$' -or $source -cnotmatch '^[0-9a-f]{40}$') { throw 'Expected explicit stable tag and full source digest' }
-            New-Item -ItemType Directory $directory | Out-Null
-            $releaseJson = gh api "repos/$repo/releases/tags/$tag"
-            if ($LASTEXITCODE -ne 0) { throw "Cannot read release $tag" }
-            $release = $releaseJson | ConvertFrom-Json
-            if ($release.draft -or $release.prerelease -or $release.tag_name -ne $tag) { throw 'Expected immutable stable release' }
-            $refJson = gh api "repos/$repo/git/ref/tags/$tag"
-            if ($LASTEXITCODE -ne 0) { throw 'Cannot resolve tag' }
-            $target = ($refJson | ConvertFrom-Json).object
-            if ($target.type -eq 'tag') {
-              $tagJson = gh api "repos/$repo/git/tags/$($target.sha)"
-              if ($LASTEXITCODE -ne 0) { throw 'Cannot resolve annotated tag' }
-              $target = ($tagJson | ConvertFrom-Json).object
-            }
-            if ($target.type -ne 'commit' -or $target.sha -ne $source) { throw 'Tag source differs from qualified source' }
-            gh release download $tag --repo $repo --pattern miccamwatch-windows-x86_64.zip --pattern SHA256SUMS --dir $directory | Write-Host
-            if ($LASTEXITCODE -ne 0) { throw 'Public download failed' }
-            foreach ($name in @('miccamwatch-windows-x86_64.zip', 'SHA256SUMS')) {
-              $file = Get-Item (Join-Path $directory $name)
-              $asset = @($release.assets | Where-Object name -eq $name)
-              $hash = (Get-FileHash $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-              if ($asset.Count -ne 1 -or $asset[0].size -ne $file.Length -or $asset[0].digest -ne "sha256:$hash") { throw "API digest/size mismatch: $name" }
-            }
-            $zip = Join-Path $directory 'miccamwatch-windows-x86_64.zip'
-            $digest = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
-            $manifest = @(Get-Content (Join-Path $directory 'SHA256SUMS') | Where-Object { $_ -cmatch '^([a-f0-9]{64})  miccamwatch-windows-x86_64\.zip$' })
-            if ($manifest.Count -ne 1 -or $manifest[0].Substring(0,64) -cne $digest) { throw 'Manifest ZIP digest mismatch' }
-            gh attestation verify $zip --repo $repo --signer-workflow "$repo/.github/workflows/release.yml" --source-ref "refs/tags/$tag" --source-digest $source --deny-self-hosted-runners | Write-Host
-            if ($LASTEXITCODE -ne 0) { throw 'Exact release provenance verification failed' }
-            $entries = [IO.Compression.ZipFile]::OpenRead($zip)
-            try {
-              $names = @($entries.Entries | ForEach-Object FullName | Sort-Object)
-              $expected = @('LICENSE','README.md','mcw-tray.exe','mcw.exe') | Sort-Object
-              if (Compare-Object $names $expected -CaseSensitive) { throw 'Unexpected ZIP entry set; refusing extraction' }
-            } finally { $entries.Dispose() }
-            $payload = Join-Path $directory 'payload'
-            Expand-Archive $zip $payload
-            return $payload
-          }
-          function Assert-VerifiedPair([string]$installed, [string]$reference) {
-            foreach ($name in @('mcw.exe','mcw-tray.exe')) {
-              if ((Get-FileHash (Join-Path $installed $name)).Hash -ne (Get-FileHash (Join-Path $reference $name)).Hash) { throw "Installed pair differs from verified public payload: $name" }
-            }
-          }
-          $old = Get-VerifiedPackage $env:UPGRADE_FROM $env:UPGRADE_SOURCE (Join-Path $proof 'old')
-          $new = Get-VerifiedPackage $env:RELEASE_VERSION $env:RELEASE_SOURCE (Join-Path $proof 'new')
-          $latest = gh api "repos/$repo/releases/latest" --jq .tag_name
-          if ($LASTEXITCODE -ne 0 -or $latest -cne $env:RELEASE_VERSION) { throw 'Expected selected candidate to be public stable latest' }
-          $cli = Join-Path $old 'mcw.exe'
-          if ((& $cli --version) -cne ('mcw ' + $env:UPGRADE_FROM.Substring(1)) -or $LASTEXITCODE -ne 0) { throw 'Old public CLI did not run' }
-          # Legacy clients do not consume GH_TOKEN. Wait for their external anonymous
-          # API prerequisite once; never retry or patch an updater after failure.
-          $quotaHeaders = @{ 'User-Agent' = 'MicCamWatch-public-migration-proof'; 'Cache-Control' = 'no-cache' }
-          $quota = Invoke-RestMethod 'https://api.github.com/rate_limit' -Headers $quotaHeaders
-          if ($quota.resources.core.remaining -lt 4) {
-            $delay = [Math]::Max(1, $quota.resources.core.reset - [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() + 2)
-            if ($delay -gt 600) { throw "Anonymous API prerequisite unavailable for $delay seconds; no update attempted" }
-            Write-Host "Anonymous API prerequisite exhausted; waiting $delay seconds for its advertised reset"
-            Start-Sleep -Seconds $delay
-            $quota = Invoke-RestMethod 'https://api.github.com/rate_limit' -Headers $quotaHeaders
-          }
-          if ($quota.resources.core.remaining -lt 4) { throw 'Anonymous API prerequisite still unavailable; no update attempted' }
-          foreach ($phase in @('update','noop','repair')) {
-            if ($phase -eq 'repair') {
-              Move-Item (Join-Path $old 'mcw-tray.exe') (Join-Path $proof 'private-tray-before-repair.exe')
-            }
-            $output = & $cli update 2>&1
-            $exit = $LASTEXITCODE
-            $output | Set-Content (Join-Path $proof "$phase.txt")
-            $output | Write-Host
-            if ($exit -ne 0) { throw "Public $phase failed: $exit" }
-            if ((& $cli --version) -cne ('mcw ' + $env:RELEASE_VERSION.Substring(1)) -or $LASTEXITCODE -ne 0) { throw 'Updated public CLI did not run' }
-            Assert-VerifiedPair $old $new
-          }
-          if (Get-Process mcw,mcw-tray -ErrorAction SilentlyContinue) { throw 'Updater unexpectedly left a resident frontend' }
-          @{ status = 'passed'; from = $env:UPGRADE_FROM; to = $env:RELEASE_VERSION; public_pair_hashes_exact = $true; noop_pair_unchanged = $true; missing_companion_repaired = $true; tray_started = $false; device_control_tested = $false; user_pc_touched = $false } | ConvertTo-Json | Set-Content (Join-Path $proof 'result.json')
+          & ./installer/tests/windows-public-update.ps1 -ActiveTray:($env:ACTIVE_TRAY -eq 'true')
       - name: Upload public migration evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -130,5 +56,7 @@ jobs:
           name: public-windows-update-proof
           if-no-files-found: error
           path: |
-            ${{ runner.temp }}/public-update-proof/*.txt
-            ${{ runner.temp }}/public-update-proof/result.json
+            ${{ runner.temp }}/public-update-proof/**/*.txt
+            ${{ runner.temp }}/public-update-proof/**/*.json
+            ${{ runner.temp }}/public-update-proof/**/*.toml
+            ${{ runner.temp }}/public-update-proof/**/SHA256SUMS
