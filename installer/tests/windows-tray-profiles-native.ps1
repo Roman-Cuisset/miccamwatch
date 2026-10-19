@@ -36,6 +36,7 @@ public static class McwProfileProof {
     [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(POINT point);
     [DllImport("user32.dll")] public static extern bool GetMenuItemRect(IntPtr owner, IntPtr menu, uint position, out RECT rect);
     [DllImport("user32.dll")] public static extern uint GetMenuState(IntPtr menu, uint item, uint flags);
+    [DllImport("user32.dll")] public static extern int GetMenuItemCount(IntPtr menu);
     [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetMenuString(IntPtr menu, uint item, System.Text.StringBuilder text, int maximum, uint flags);
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hwnd, out RECT rect);
     [DllImport("user32.dll", EntryPoint="SendMessageTimeoutW", SetLastError=true)] static extern IntPtr NativeMessage(IntPtr hwnd, uint msg, IntPtr wp, IntPtr lp, uint flags, uint timeout, out IntPtr result);
@@ -184,6 +185,28 @@ function Assert-InputTarget([IntPtr]$owner, [IntPtr]$popup) {
     $foreground = [McwProfileProof]::GetForegroundWindow()
     $null = Assert-Owner $foreground
 }
+function Focus-RowByKeyboard([IntPtr]$owner, [IntPtr]$popup, [IntPtr]$menu, [uint32]$position, [string]$traceName) {
+    Assert-InputTarget $owner $popup
+    $count = [McwProfileProof]::GetMenuItemCount($menu)
+    if ($count -le 0 -or $position -ge $count) { throw 'Owned keyboard menu target is invalid.' }
+    [McwProfileProof]::Key(0x24) # Home; do not assume disabled rows are skipped.
+    $trace = @()
+    $reached = $false
+    for ($move = 0; $move -le $count; $move++) {
+        Start-Sleep -Milliseconds 100
+        Assert-InputTarget $owner $popup
+        $flags = [McwProfileProof]::GetMenuState($menu, $position, 0x400) # MF_BYPOSITION
+        if ($flags -eq [uint32]::MaxValue -or ($flags -band 3) -ne 0) { throw 'Owned keyboard target disappeared or became disabled.' }
+        $trace += @{ move=$move; position=$position; native_flags=$flags; highlighted=(($flags -band 0x80) -ne 0) }
+        if (($flags -band 0x80) -ne 0) { $reached = $true; break } # MF_HILITE
+        if ($move -lt $count) { [McwProfileProof]::Key(0x28) } # Down, navigation only.
+    }
+    ConvertTo-Json -InputObject @($trace) -Depth 5 | Set-Content -Encoding UTF8 (Join-Path $script:runDirectory "$traceName.json")
+    if (-not $reached) {
+        Capture-Popup $popup "$traceName-failed"
+        throw 'Actual keyboard input did not highlight the requested owned menu row.'
+    }
+}
 function Click-Row([IntPtr]$owner, [IntPtr]$popup, [IntPtr]$menu, [uint32]$position) {
     Assert-InputTarget $owner $popup
     $row = New-Object McwProfileProof+RECT
@@ -271,8 +294,7 @@ function Invoke-Phase([string]$language, [string]$mode) {
             Capture-Popup $popup "root-$step"
             # Only the profile submenu is enabled on this inert surface.
             if ($mode -eq 'select' -and $step -lt 4 -and $step % 2 -eq 1) {
-                Assert-InputTarget $owner $popup
-                [McwProfileProof]::Key(0x24) # Home: first enabled root row is Profile.
+                Focus-RowByKeyboard $owner $popup $menu ([uint32]$record.profile_position) "keyboard-root-$step"
                 [McwProfileProof]::Key(0x27) # Right: real native submenu.
             } else {
                 Click-Row $owner $popup $menu ([uint32]$record.profile_position)
@@ -284,9 +306,7 @@ function Invoke-Phase([string]$language, [string]$mode) {
                 if ($step % 2 -eq 0) {
                     Click-Row $owner $submenu $profiles ([uint32]$selected)
                 } else {
-                    Assert-InputTarget $owner $submenu
-                    [McwProfileProof]::Key(0x24)
-                    for ($down = 0; $down -lt $selected; $down++) { [McwProfileProof]::Key(0x28) }
+                    Focus-RowByKeyboard $owner $submenu $profiles ([uint32]$selected) "keyboard-choice-$step"
                     [McwProfileProof]::Key(0x0d)
                 }
                 $checked = $selected
