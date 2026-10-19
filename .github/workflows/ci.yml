@@ -34,6 +34,7 @@ jobs:
       - name: Audit Rust dependencies
         run: cargo install cargo-audit --locked && cargo audit
       - run: cargo build --release --locked --features windows-tray
+        id: windows_release
       - name: Verify tray restart releases captured updater streams
         run: cargo test --lib --locked --features windows-tray updater::process::tests::native_restart_releases_captured_streams_while_successor_lives -- --ignored --exact --test-threads=1 --nocapture
       - name: Exercise real Windows top buttons and responsive layout
@@ -81,6 +82,18 @@ jobs:
           name: native-proof-windows-top
           if-no-files-found: warn
           path: ${{ runner.temp }}/native-windows-top
+      - name: Verify direct native Windows profile selection and persistence
+        if: ${{ !cancelled() && steps.windows_release.outcome == 'success' }}
+        timeout-minutes: 8
+        shell: powershell
+        run: powershell.exe -NoProfile -STA -File installer/tests/windows-tray-profiles-native.ps1 -OutputDirectory "${{ runner.temp }}/native-windows-profiles" -IsolatedDesktop
+      - name: Upload native Windows profile evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-proof-windows-profiles
+          if-no-files-found: warn
+          path: ${{ runner.temp }}/native-windows-profiles
       - name: Verify compact native Windows tray and complete copyable details
         if: ${{ !cancelled() && steps.windows_tests.outcome == 'success' }}
         shell: powershell
@@ -134,7 +147,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y pkg-config libpipewire-0.3-dev libspa-0.2-dev libclang-dev pipewire pipewire-bin gnupg dbus-x11 xvfb openbox xfce4-panel xfconf xfce4-notifyd libnotify-bin x11-utils xdotool imagemagick pulseaudio gnome-session-canberra libcanberra-pulse sound-theme-freedesktop zsh fish strace fonts-noto-cjk
+          sudo apt-get install -y pkg-config libpipewire-0.3-dev libspa-0.2-dev libclang-dev pipewire pipewire-bin gnupg dbus-x11 xvfb openbox xfce4-panel xfconf xfce4-notifyd libnotify-bin x11-utils xdotool imagemagick pulseaudio gnome-session-canberra libcanberra-pulse sound-theme-freedesktop zsh fish strace fonts-noto-cjk python3-gi
           # Hosted images can leave system directories writable by everyone.
           # Secure the fixed helper ancestry only on this disposable VM;
           # production installers retain their fail-closed ancestry checks.
@@ -711,10 +724,15 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: dbus-run-session -- xvfb-run --auto-servernum --server-args="-screen 0 1280x800x24" python3 "$RUNNER_TEMP/native-smoke.py"
+      - name: Verify direct native Linux profile selection and persistence
+        if: ${{ !cancelled() && runner.os == 'Linux' && env.MCW_RELEASE_BINARY != '' }}
+        timeout-minutes: 10
+        shell: bash
+        run: MCW_NATIVE_LINUX_ISOLATED=1 dbus-run-session -- xvfb-run -a -s '-screen 0 1280x900x24' /usr/bin/python3 -B installer/tests/native_linux_tray_width.py --profiles-only --proof "$RUNNER_TEMP/native-proof/linux-tray-profiles"
       - name: Verify compact real Linux tray menu and complete status details
         if: runner.os == 'Linux'
         shell: bash
-        run: dbus-run-session -- xvfb-run -a -s '-screen 0 1280x900x24' python3 -B installer/tests/native_linux_tray_width.py --proof "$RUNNER_TEMP/native-proof/linux-tray-width"
+        run: MCW_NATIVE_LINUX_ISOLATED=1 dbus-run-session -- xvfb-run -a -s '-screen 0 1280x900x24' python3 -B installer/tests/native_linux_tray_width.py --proof "$RUNNER_TEMP/native-proof/linux-tray-width"
       - name: Exercise native macOS menu bar and extracted package
         if: runner.os == 'macOS'
         shell: bash
