@@ -2789,6 +2789,7 @@ mod tests {
     static SHELL_CALLBACK_EVENT: AtomicU64 = AtomicU64::new(0);
     static POINTER_MOVE_COUNT: AtomicU64 = AtomicU64::new(0);
     static POINTER_POSITION: AtomicU64 = AtomicU64::new(0);
+    static POINTER_CLICK_COUNT: AtomicU64 = AtomicU64::new(0);
 
     unsafe extern "system" fn native_test_wnd_proc(
         hwnd: HWND,
@@ -2803,6 +2804,9 @@ mod tests {
         if message == windows::Win32::UI::WindowsAndMessaging::WM_MOUSEMOVE {
             POINTER_MOVE_COUNT.fetch_add(1, Ordering::Relaxed);
             POINTER_POSITION.store(lparam.0 as u64, Ordering::Relaxed);
+        }
+        if message == WM_LBUTTONUP {
+            POINTER_CLICK_COUNT.fetch_add(1, Ordering::Relaxed);
         }
         unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
     }
@@ -3007,6 +3011,7 @@ mod tests {
             serde_json::to_vec(&serde_json::json!({
                 "owner": owner.0 as usize,
                 "before_move_count": POINTER_MOVE_COUNT.load(Ordering::Relaxed),
+                "before_click_count": POINTER_CLICK_COUNT.load(Ordering::Relaxed),
             }))
             .unwrap(),
         )
@@ -3025,6 +3030,7 @@ mod tests {
             directory.join("pointer-probe-observed.json"),
             serde_json::to_vec(&serde_json::json!({
                 "move_count": POINTER_MOVE_COUNT.load(Ordering::Relaxed),
+                "click_count": POINTER_CLICK_COUNT.load(Ordering::Relaxed),
                 "x": position as u16 as i16,
                 "y": (position >> 16) as u16 as i16,
             }))
@@ -3062,6 +3068,9 @@ mod tests {
         let checked = directory.join(format!("{name}-shell-inspected"));
         let inspect = directory.join(format!("{name}-shell-inspect"));
         let input = directory.join(format!("{name}-shell-input.json"));
+        let click_inspect = directory.join(format!("{name}-shell-click-inspect"));
+        let click_output = directory.join(format!("{name}-shell-click.json"));
+        let mut click_recorded = false;
         let mut input_recorded = false;
         while !checked.exists() {
             assert!(
@@ -3079,6 +3088,18 @@ mod tests {
                 )
                 .unwrap();
                 input_recorded = true;
+            }
+            if !click_recorded && click_inspect.exists() {
+                std::fs::write(
+                    &click_output,
+                    serde_json::to_vec(&serde_json::json!({
+                        "callback_count": SHELL_CALLBACK_COUNT.load(Ordering::Relaxed),
+                        "last_callback": SHELL_CALLBACK_EVENT.load(Ordering::Relaxed),
+                    }))
+                    .unwrap(),
+                )
+                .unwrap();
+                click_recorded = true;
             }
             pump_native_proof_message();
         }

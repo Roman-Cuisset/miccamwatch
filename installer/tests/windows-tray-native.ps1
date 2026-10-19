@@ -248,11 +248,14 @@ function Confirm-FixturePointerRouting {
     $point.Y = [System.Windows.Forms.Cursor]::Position.Y
     $hit = [McwNativeProof]::WindowFromPoint($point)
     if ($hit -ne $window) { throw 'Pointer probe is not the actual window under the cursor; refusing an unrelated input target.' }
+    [McwNativeProof]::ClickLeft()
+    Start-Sleep -Milliseconds 250
     if (-not [McwNativeProof]::ScreenToClient($window, [ref]$point)) { throw 'Cannot measure pointer coordinates in owned probe.' }
     [IO.File]::WriteAllText((Join-Path $directory 'pointer-probe-inspect'), 'collect actual WM_MOUSEMOVE')
     $observed = Wait-ProofFile 'pointer-probe-observed.json'
     $script:ownedPointerRouted = $observed.move_count -gt $probe.before_move_count -and $observed.x -eq $point.X -and $observed.y -eq $point.Y
-    @{ routed=$script:ownedPointerRouted; observed=$observed; expected_client_point=@{ x=$point.X; y=$point.Y }; owned_window=$window.ToInt64() } |
+    $script:ownedClickRouted = $observed.click_count -gt $probe.before_click_count
+    @{ routed=$script:ownedPointerRouted; click_routed=$script:ownedClickRouted; observed=$observed; expected_client_point=@{ x=$point.X; y=$point.Y }; owned_window=$window.ToInt64() } |
         ConvertTo-Json -Depth 6 | Set-Content -Encoding UTF8 (Join-Path $directory 'pointer-routing.json')
     [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point -ArgumentList 0, 0
 }
@@ -355,6 +358,21 @@ function Confirm-FixtureShellTooltip([string]$name) {
         }
         ConvertTo-Json -InputObject $diagnostic -Depth 6 | Set-Content -Encoding UTF8 (Join-Path $directory "$name-shell-observed.json")
         Capture-NativeDesktop "$name-shell-desktop"
+        # Diagnostic only: a native click on this exact inert fixture icon.
+        # It is not a substitute for a tooltip or permission to control devices.
+        Confirm-FixtureOwner ([IntPtr][long]$shell.owner)
+        $cursorPoint = New-Object McwNativeProof+POINT
+        $cursorPoint.X = [System.Windows.Forms.Cursor]::Position.X
+        $cursorPoint.Y = [System.Windows.Forms.Cursor]::Position.Y
+        if ([McwNativeProof]::Shell_NotifyIconGetRect([ref]$identity, [ref]$rect) -ne 0 -or
+            $cursorPoint.X -lt $rect.Left -or $cursorPoint.X -ge $rect.Right -or
+            $cursorPoint.Y -lt $rect.Top -or $cursorPoint.Y -ge $rect.Bottom) {
+            throw 'Native diagnostic click no longer targets the owned icon.'
+        }
+        [McwNativeProof]::ClickLeft()
+        Start-Sleep -Milliseconds 250
+        [IO.File]::WriteAllText((Join-Path $directory "$name-shell-click-inspect"), 'inspect callback after native click')
+        $null = Wait-ProofFile "$name-shell-click.json"
         $script:tooltipFailures += $name
         [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point -ArgumentList 0, 0
         [IO.File]::WriteAllText((Join-Path $directory "$name-shell-inspected"), 'failed: actual popup not observed')
@@ -439,7 +457,7 @@ try {
     if ($process.ExitCode -ne 0 -or -not (Test-Path (Join-Path $directory 'complete'))) { throw "Native fixture failed ($($process.ExitCode)); see fixture logs." }
     $measurements | ConvertTo-Json -Depth 8 | Set-Content -Encoding UTF8 (Join-Path $directory 'measurements.json')
     ConvertTo-Json -InputObject @($shellMeasurements) -Depth 8 | Set-Content -Encoding UTF8 (Join-Path $directory 'shell-measurements.json')
-    @{ passed=$tooltipFailures.Count -eq 0; failed_cases=@($tooltipFailures); observed_popup_count=$shellMeasurements.Count; owned_pointer_routed=$script:ownedPointerRouted } |
+    @{ passed=$tooltipFailures.Count -eq 0; failed_cases=@($tooltipFailures); observed_popup_count=$shellMeasurements.Count; owned_pointer_routed=$script:ownedPointerRouted; owned_click_routed=$script:ownedClickRouted } |
         ConvertTo-Json -Depth 6 | Set-Content -Encoding UTF8 (Join-Path $directory 'tooltip-qualification.json')
     if ($tooltipFailures.Count -ne 0) {
         throw "Actual Explorer popup qualification failed for: $($tooltipFailures -join ', '). All reachable menu/details cases were still exercised; see tooltip-qualification.json."
