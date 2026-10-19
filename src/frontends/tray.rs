@@ -2787,6 +2787,8 @@ mod tests {
 
     static SHELL_CALLBACK_COUNT: AtomicU64 = AtomicU64::new(0);
     static SHELL_CALLBACK_EVENT: AtomicU64 = AtomicU64::new(0);
+    static POINTER_MOVE_COUNT: AtomicU64 = AtomicU64::new(0);
+    static POINTER_POSITION: AtomicU64 = AtomicU64::new(0);
 
     unsafe extern "system" fn native_test_wnd_proc(
         hwnd: HWND,
@@ -2797,6 +2799,10 @@ mod tests {
         if message == WM_TRAY_CALLBACK {
             SHELL_CALLBACK_COUNT.fetch_add(1, Ordering::Relaxed);
             SHELL_CALLBACK_EVENT.store(lparam.0 as u64, Ordering::Relaxed);
+        }
+        if message == windows::Win32::UI::WindowsAndMessaging::WM_MOUSEMOVE {
+            POINTER_MOVE_COUNT.fetch_add(1, Ordering::Relaxed);
+            POINTER_POSITION.store(lparam.0 as u64, Ordering::Relaxed);
         }
         unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
     }
@@ -2965,8 +2971,81 @@ mod tests {
         }
     }
 
-    fn qualify_native_shell_tip(directory: &std::path::Path, name: &str, data: &NOTIFYICONDATAW) {
+    fn pump_native_proof_message() {
         use windows::Win32::UI::WindowsAndMessaging::{PM_REMOVE, PeekMessageW};
+        let mut message = MSG::default();
+        if unsafe { PeekMessageW(&mut message, None, 0, 0, PM_REMOVE) }.as_bool() {
+            unsafe {
+                let _ = TranslateMessage(&message);
+                DispatchMessageW(&message);
+            }
+        } else {
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn qualify_native_pointer_input(directory: &std::path::Path, owner: HWND) {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            HWND_NOTOPMOST, HWND_TOPMOST, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_SHOWWINDOW,
+            SetWindowPos,
+        };
+        // Hosted-only, inert owned window; never a product or device control.
+        unsafe {
+            SetWindowPos(
+                owner,
+                Some(HWND_TOPMOST),
+                40,
+                40,
+                180,
+                120,
+                SWP_NOACTIVATE | SWP_SHOWWINDOW,
+            )
+        }
+        .unwrap();
+        std::fs::write(
+            directory.join("pointer-probe.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "owner": owner.0 as usize,
+                "before_move_count": POINTER_MOVE_COUNT.load(Ordering::Relaxed),
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let inspect = directory.join("pointer-probe-inspect");
+        let deadline = Instant::now() + Duration::from_secs(90);
+        while !inspect.exists() {
+            assert!(
+                Instant::now() < deadline,
+                "isolated pointer probe was not inspected"
+            );
+            pump_native_proof_message();
+        }
+        let position = POINTER_POSITION.load(Ordering::Relaxed);
+        std::fs::write(
+            directory.join("pointer-probe-observed.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "move_count": POINTER_MOVE_COUNT.load(Ordering::Relaxed),
+                "x": position as u16 as i16,
+                "y": (position >> 16) as u16 as i16,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        unsafe {
+            SetWindowPos(
+                owner,
+                Some(HWND_NOTOPMOST),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOACTIVATE | SWP_HIDEWINDOW,
+            )
+        }
+        .unwrap();
+    }
+
+    fn qualify_native_shell_tip(directory: &std::path::Path, name: &str, data: &NOTIFYICONDATAW) {
         std::fs::write(
             directory.join(format!("{name}-shell.json")),
             serde_json::to_vec(&serde_json::json!({
@@ -3001,15 +3080,7 @@ mod tests {
                 .unwrap();
                 input_recorded = true;
             }
-            let mut message = MSG::default();
-            if unsafe { PeekMessageW(&mut message, None, 0, 0, PM_REMOVE) }.as_bool() {
-                unsafe {
-                    let _ = TranslateMessage(&message);
-                    DispatchMessageW(&message);
-                }
-            } else {
-                thread::sleep(Duration::from_millis(10));
-            }
+            pump_native_proof_message();
         }
     }
 
@@ -3030,6 +3101,7 @@ mod tests {
         );
         std::fs::create_dir_all(&directory).unwrap();
         let owner = native_test_owner();
+        qualify_native_pointer_input(&directory, owner);
         // The hosted runner can be elevated above Explorer. Only this owned,
         // inert fixture callback must cross UIPI; no product/control message.
         unsafe { ChangeWindowMessageFilterEx(owner, WM_TRAY_CALLBACK, MSGFLT_ALLOW, None) }

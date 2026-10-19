@@ -38,6 +38,7 @@ public static class McwNativeProof {
     [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern IntPtr FindWindow(string cls, string title);
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hwnd, out RECT rect);
+    [DllImport("user32.dll")] public static extern bool ScreenToClient(IntPtr hwnd, ref POINT point);
     [DllImport("user32.dll")] public static extern bool GetMenuItemRect(IntPtr hwnd, IntPtr menu, uint item, out RECT rect);
     [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr hwnd, IntPtr hdc, uint flags);
     [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr hwnd, uint msg, IntPtr wparam, IntPtr lparam);
@@ -212,24 +213,52 @@ function Get-FixtureShellButton([string]$expected, $identity) {
     }
     return $null
 }
-function Confirm-FixtureShellTooltip([string]$name) {
-    $shell = Wait-ProofFile "$name-shell.json"
+function Confirm-FixtureOwner([IntPtr]$window) {
     [uint32]$ownerPid = 0
-    [void][McwNativeProof]::GetWindowThreadProcessId([IntPtr][long]$shell.owner, [ref]$ownerPid)
-    if ($ownerPid -eq 0) { throw 'Fixture shell owner is no longer alive.' }
+    [void][McwNativeProof]::GetWindowThreadProcessId($window, [ref]$ownerPid)
+    if ($ownerPid -eq 0) { throw 'Fixture owner is no longer alive.' }
     if ($null -eq $script:fixtureProcess) {
         $candidate = Get-Process -Id $ownerPid -ErrorAction Stop
         $null = $candidate.Handle
         [uint32]$confirmedPid = 0
-        [void][McwNativeProof]::GetWindowThreadProcessId([IntPtr][long]$shell.owner, [ref]$confirmedPid)
+        [void][McwNativeProof]::GetWindowThreadProcessId($window, [ref]$confirmedPid)
         if ($confirmedPid -ne $ownerPid -or $candidate.HasExited) {
             $candidate.Dispose()
             throw 'Fixture owner changed while retaining its process handle.'
         }
         $script:fixtureProcess = $candidate
     } elseif ($script:fixtureProcess.Id -ne $ownerPid -or $script:fixtureProcess.HasExited) {
-        throw 'Fixture shell owner changed between observations.'
+        throw 'Fixture owner changed between observations.'
     }
+}
+function Confirm-FixturePointerRouting {
+    $probe = Wait-ProofFile 'pointer-probe.json'
+    $window = [IntPtr][long]$probe.owner
+    Confirm-FixtureOwner $window
+    $rect = New-Object McwNativeProof+RECT
+    if (-not [McwNativeProof]::GetWindowRect($window, [ref]$rect)) { throw 'Owned pointer probe has no rectangle.' }
+    [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point -ArgumentList 0, 0
+    Start-Sleep -Milliseconds 200
+    [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point -ArgumentList ([int](($rect.Left + $rect.Right) / 2)), ([int](($rect.Top + $rect.Bottom) / 2))
+    [McwNativeProof]::RefreshMouseMove()
+    Start-Sleep -Milliseconds 1000
+    Capture-NativeDesktop 'pointer-probe-desktop'
+    $point = New-Object McwNativeProof+POINT
+    $point.X = [System.Windows.Forms.Cursor]::Position.X
+    $point.Y = [System.Windows.Forms.Cursor]::Position.Y
+    $hit = [McwNativeProof]::WindowFromPoint($point)
+    if ($hit -ne $window) { throw 'Pointer probe is not the actual window under the cursor; refusing an unrelated input target.' }
+    if (-not [McwNativeProof]::ScreenToClient($window, [ref]$point)) { throw 'Cannot measure pointer coordinates in owned probe.' }
+    [IO.File]::WriteAllText((Join-Path $directory 'pointer-probe-inspect'), 'collect actual WM_MOUSEMOVE')
+    $observed = Wait-ProofFile 'pointer-probe-observed.json'
+    $script:ownedPointerRouted = $observed.move_count -gt $probe.before_move_count -and $observed.x -eq $point.X -and $observed.y -eq $point.Y
+    @{ routed=$script:ownedPointerRouted; observed=$observed; expected_client_point=@{ x=$point.X; y=$point.Y }; owned_window=$window.ToInt64() } |
+        ConvertTo-Json -Depth 6 | Set-Content -Encoding UTF8 (Join-Path $directory 'pointer-routing.json')
+    [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point -ArgumentList 0, 0
+}
+function Confirm-FixtureShellTooltip([string]$name) {
+    $shell = Wait-ProofFile "$name-shell.json"
+    Confirm-FixtureOwner ([IntPtr][long]$shell.owner)
     $identity = New-Object McwNativeProof+NOTIFYICONIDENTIFIER
     $identity.cbSize = [Runtime.InteropServices.Marshal]::SizeOf($identity)
     $identity.hWnd = [IntPtr][long]$shell.owner
@@ -352,6 +381,7 @@ try {
     # otherwise can report a null ExitCode for a completed Start-Process.
     $null = $process.Handle
     $measurements = @()
+    Confirm-FixturePointerRouting
     Confirm-FixtureShellTooltip 'startup'
     foreach ($name in @('camera-guard-missing', 'partial-active', 'error-active', 'recovered-active', 'long-error', 'unicode-controls', 'idle-protected')) {
         Confirm-FixtureShellTooltip $name
@@ -409,7 +439,7 @@ try {
     if ($process.ExitCode -ne 0 -or -not (Test-Path (Join-Path $directory 'complete'))) { throw "Native fixture failed ($($process.ExitCode)); see fixture logs." }
     $measurements | ConvertTo-Json -Depth 8 | Set-Content -Encoding UTF8 (Join-Path $directory 'measurements.json')
     ConvertTo-Json -InputObject @($shellMeasurements) -Depth 8 | Set-Content -Encoding UTF8 (Join-Path $directory 'shell-measurements.json')
-    @{ passed=$tooltipFailures.Count -eq 0; failed_cases=@($tooltipFailures); observed_popup_count=$shellMeasurements.Count } |
+    @{ passed=$tooltipFailures.Count -eq 0; failed_cases=@($tooltipFailures); observed_popup_count=$shellMeasurements.Count; owned_pointer_routed=$script:ownedPointerRouted } |
         ConvertTo-Json -Depth 6 | Set-Content -Encoding UTF8 (Join-Path $directory 'tooltip-qualification.json')
     if ($tooltipFailures.Count -ne 0) {
         throw "Actual Explorer popup qualification failed for: $($tooltipFailures -join ', '). All reachable menu/details cases were still exercised; see tooltip-qualification.json."
