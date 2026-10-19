@@ -185,6 +185,10 @@ def main():
             child.terminate()  # Popen owns the exact native process HANDLE.
             child.wait(timeout=10)  # Do not wait again for an inherited pipe's EOF.
             raise
+        if not check and child.returncode:
+            result.setdefault("refused_controls", []).append(dict(
+                command=arguments, exit_code=child.returncode,
+                stderr=stderr.decode("utf-8", errors="replace")[:8192]))
         if check:
             assert child.returncode in allowed, f"CLI {arguments} exited {child.returncode}: {stderr.decode('utf-8', errors='replace')[:8192]}"
         return stdout

@@ -350,13 +350,15 @@ fn spawn_owner() -> Result<()> {
 }
 fn connect_owner() -> Result<()> {
     // Each caller holds the request lock through startup AND its intent RPC.
-    if call(Operation::Status).is_ok() {
-        return Ok(());
+    let owner_error = match call(Operation::Status) {
+        Ok(_) => return Ok(()),
+        Err(error) => error,
+    };
+    if windows_control::resource_conflict("microphone")? {
+        return Err(owner_error).context(
+            "native microphone ownership is busy; protection activation/release cannot proceed; another app version or operational scope may own the guard",
+        );
     }
-    ensure!(
-        !windows_control::resource_conflict("microphone")?,
-        "another operational namespace owns microphone hardware; protection activation/release cannot mutate it"
-    );
     spawn_owner()?;
     let deadline = Instant::now() + Duration::from_secs(4);
     let mut last;
@@ -552,7 +554,7 @@ pub(super) fn status(monitor: &PlatformMonitor) -> Result<MicrophoneProtectionSt
         Ok(response) => Ok(response.status),
         Err(service_error) => {
             let conflict = match windows_control::resource_conflict("microphone") {
-                Ok(true) => "; another operational namespace owns microphone hardware; this namespace cannot adopt/control that guard".to_owned(),
+                Ok(true) => "; native microphone ownership is held; this client cannot control the guard; another app version or operational scope may own it".to_owned(),
                 Ok(false) => String::new(),
                 Err(error) => format!("; native hardware ownership unknown: {error:#}"),
             };
