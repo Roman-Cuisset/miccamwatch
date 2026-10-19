@@ -478,7 +478,7 @@ class Sampler:
         if self.thread.is_alive():
             self.error = "OS sampler did not stop within 10 seconds"
         rows = self.rows
-        sustained = [row for row in rows if self.output.get("sustained_start_seconds", float("inf")) <= row["seconds"] <= self.output.get("sustained_end_seconds", -1)]
+        sustained = rows[self.output.get("sustained_sample_start_index", 0):self.output.get("sustained_sample_end_index", 0)]
         gaps = [b["seconds"] - a["seconds"] for a, b in zip(rows, rows[1:])]
         peak = max((row["product_rss_bytes"] for row in rows), default=0)
         stable = [row["product_rss_bytes"] for row in sustained]
@@ -699,7 +699,9 @@ def sustain(output, sampler, alive, pump=None):
             pump(False)
         else:
             time.sleep(.02)
-    output["sustained_start_seconds"] = time.monotonic() - sampler.started
+    with sampler.lock:
+        output["sustained_start_seconds"] = time.monotonic() - sampler.started
+        output["sustained_sample_start_index"] = len(sampler.rows)
     deadline = time.monotonic() + DURATION
     while time.monotonic() < deadline:
         assert alive(), "Product exited during sustained qualification"
@@ -709,7 +711,11 @@ def sustain(output, sampler, alive, pump=None):
             pump(True)
         else:
             time.sleep(.02)
-    output["sustained_end_seconds"] = time.monotonic() - sampler.started
+    # Clock values can tie across transitions on Windows. Freeze acquisition
+    # indices under the sampler lock before the caller stops any owned guard.
+    with sampler.lock:
+        output["sustained_end_seconds"] = time.monotonic() - sampler.started
+        output["sustained_sample_end_index"] = len(sampler.rows)
     output["sustained_duration_seconds"] = output["sustained_end_seconds"] - output["sustained_start_seconds"]
 
 

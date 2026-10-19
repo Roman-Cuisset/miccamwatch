@@ -252,9 +252,13 @@ def main():
         original = status()
         assert original["camera"]["desired_blocked"] and original["camera"]["helper_active"], "Foreign operational scope cancelled original global camera intent"
         result["foreign_operational_scope_cannot_release_owner"] = True
-        result["sustained_start_seconds"] = time.monotonic() - sampler.started
+        with sampler.lock:
+            result["sustained_start_seconds"] = time.monotonic() - sampler.started
+            result["sustained_sample_start_index"] = len(sampler.rows)
         time.sleep(20)
-        result["sustained_end_seconds"] = time.monotonic() - sampler.started
+        with sampler.lock:
+            result["sustained_end_seconds"] = time.monotonic() - sampler.started
+            result["sustained_sample_end_index"] = len(sampler.rows)
         assert status()["camera"]["desired_blocked"] and status()["microphone"]["requested"]
         previous_environment = {key: os.environ.get(key) for key in ("APPDATA", "LOCALAPPDATA", "HOME", "USERPROFILE")}
         try:
@@ -403,8 +407,7 @@ def main():
                     cleanup_errors.append("Owned guard did not stop after failed-proof cleanup")
         sampler.finish()
         for phase in result["frontend_phases"]:
-            rows = [row for row in result["samples"]
-                    if phase.get("sustained_start_seconds", float("inf")) <= row["seconds"] <= phase.get("sustained_end_seconds", -1)]
+            rows = result["samples"][phase.get("sustained_sample_start_index", 0):phase.get("sustained_sample_end_index", 0)]
             values = [row["product_rss_bytes"] for row in rows]
             required = {"microphone_guard", "camera_guard", phase["frontend_role"]}
             phase.update(
