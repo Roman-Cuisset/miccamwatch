@@ -78,8 +78,37 @@ Assert-Isolation
 $directory = [IO.Path]::GetFullPath((Join-Path $OutputDirectory ((Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + $PID)))
 [void][IO.Directory]::CreateDirectory($directory)
 # Build only the test executable. Never launch mcw, mcw-tray, a control or a broker.
-$build = @(& cargo test --locked --features windows-tray --lib --no-run --message-format=json 2> (Join-Path $directory 'build-stderr.log'))
-if ($LASTEXITCODE -ne 0) { throw 'Profile test executable build failed; see build-stderr.log.' }
+function Build-ProfileTest([string]$logDirectory) {
+    # Windows PowerShell turns native stderr into errors under ErrorAction=Stop.
+    # Capture both streams directly; only the native exit code decides success.
+    $start = New-Object System.Diagnostics.ProcessStartInfo
+    $start.FileName = (Get-Command cargo -CommandType Application).Source
+    $start.Arguments = 'test --locked --features windows-tray --lib --no-run --message-format=json'
+    $start.WorkingDirectory = (Get-Location).Path
+    $start.UseShellExecute = $false
+    $start.CreateNoWindow = $true
+    $start.RedirectStandardOutput = $true
+    $start.RedirectStandardError = $true
+    $buildProcess = [System.Diagnostics.Process]::Start($start)
+    try {
+        $stdout = $buildProcess.StandardOutput.ReadToEndAsync()
+        $stderr = $buildProcess.StandardError.ReadToEndAsync()
+        if (-not $buildProcess.WaitForExit(180000)) { throw 'Profile test build exceeded its deadline.' }
+        if (-not $stdout.Wait(5000) -or -not $stderr.Wait(5000)) { throw 'Profile build streams did not close.' }
+        $output = $stdout.GetAwaiter().GetResult()
+        [IO.File]::WriteAllText((Join-Path $logDirectory 'build-stdout.jsonl'), $output)
+        [IO.File]::WriteAllText((Join-Path $logDirectory 'build-stderr.log'), $stderr.GetAwaiter().GetResult())
+        if ($buildProcess.ExitCode -ne 0) { throw 'Profile test executable build failed; see build-stderr.log.' }
+        return $output -split '\r?\n'
+    } finally {
+        if (-not $buildProcess.HasExited) {
+            $buildProcess.Kill()
+            [void]$buildProcess.WaitForExit(5000)
+        }
+        $buildProcess.Dispose()
+    }
+}
+$build = @(Build-ProfileTest $directory)
 $executables = @($build | ForEach-Object {
     try {
         $item = $_ | ConvertFrom-Json
