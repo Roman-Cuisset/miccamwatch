@@ -136,6 +136,9 @@ def main():
     env = dict(os.environ, APPDATA=str(appdata), LOCALAPPDATA=str(localdata), HOME=str(root / "home"), USERPROFILE=str(root / "home"))
     native, backend = NativePipe(args.binary, directory), WindowsProcesses()
     result = dict(scenario="disposable_windows_zero_native_inputs", physical_device_mutations=False, audio_capture=False, proof_complete=False)
+    configuration = C.WinDLL("cfgmgr32", use_last_error=True)
+    configuration.CM_Get_Device_ID_List_SizeW.argtypes = [C.POINTER(W.ULONG), W.LPCWSTR, W.ULONG]
+    configuration.CM_Get_Device_ID_ListW.argtypes = [W.LPCWSTR, W.LPWSTR, W.ULONG, W.ULONG]
     sampler = Sampler(backend, result)
     owned = []
     attempted = {}
@@ -163,20 +166,44 @@ def main():
             assert child.returncode in allowed, f"CLI {arguments} exited {child.returncode}: {stderr.decode('utf-8', errors='replace')[:8192]}"
         return stdout
 
-    def status(environment=None):
+    def require_empty_camera_inventory():
+        # Read PnP directly, independently of the helper's pending/unknown
+        # observation. Include disabled present devices; conservatively refuse
+        # every Image-class device, including scanners, on this zero-input host.
+        for class_id in ("{ca3e7ab9-b4c3-4ae6-8251-579ef933890f}",
+                         "{6bdd1fc6-810f-11d0-bec7-08002be2092f}"):
+            length = W.ULONG()
+            code = configuration.CM_Get_Device_ID_List_SizeW(C.byref(length), class_id, 0x300)
+            assert code == 0, f"Native camera inventory size is unknown: CM error {code}"
+            assert length.value <= 1_048_576, "Native camera inventory exceeds its UTF-16 bound"
+            if length.value:
+                devices = C.create_unicode_buffer(length.value)
+                code = configuration.CM_Get_Device_ID_ListW(class_id, devices, length.value, 0x300)
+                assert code == 0, f"Native camera inventory is unknown/changed: CM error {code}"
+                assert devices[0] == "\0", "Refusing camera operation on a host with a present Camera/Image device"
+
+    def status(environment=None, pending_camera=False):
         # Status 1 means observed access, not a command failure; 2 means collector
         # degradation. Complete native protection data below must still be valid.
+        require_empty_camera_inventory()
         data = json.loads(command(["status", "--json", "--no-color"], environment=environment, allowed=(0, 1, 2)))["protection"]
         assert data["microphone_error"] is None and data["camera_error"] is None, "Native observation unavailable"
         assert data["microphone"]["endpoint_count"] == 0, "Refusing microphone mutation on a machine with input endpoints"
-        assert data["camera"]["present_total"] == 0 and data["camera"]["unknown_devices"] == 0, "Refusing camera mutation on a machine with present/unknown cameras"
+        assert data["camera"]["present_total"] == 0, "Refusing camera mutation on a machine with present cameras"
+        unknown = data["camera"]["unknown_devices"]
+        if unknown:
+            # Unknown remains non-fulfilment. Only recovery may wait for the
+            # asynchronously started helper, with independent PnP still empty.
+            assert pending_camera and unknown == 1, "Native camera status is unknown outside pending recovery"
+            result["camera_recovery_pending_observations"] = result.get("camera_recovery_pending_observations", 0) + 1
+            result["last_pending_camera_observation"] = data["camera"]
         return data
 
-    def await_state(predicate, description):
+    def await_state(predicate, description, pending_camera=False):
         deadline = time.monotonic() + 15
         while True:
-            observed = status()
-            if predicate(observed):
+            observed = status(pending_camera=pending_camera)
+            if observed["camera"]["unknown_devices"] == 0 and predicate(observed):
                 return observed
             assert time.monotonic() < deadline, description
             time.sleep(.1)
@@ -294,9 +321,10 @@ def main():
         attempted["camera"] = earliest
         # Actual production WM_COMMAND handler -> serialized camera worker ->
         # resume-only intent validation -> approved native helper. No Allow.
+        require_empty_camera_inventory()
         assert user.SendMessageTimeoutW(window, 0x111, 108, 0, 2, 5000, C.byref(returned)), C.WinError()
         resumed = await_state(lambda s: s["camera"]["desired_blocked"] and s["camera"]["helper_active"],
-                              "Tray did not restart the requested guard without Allow")
+                              "Tray did not restart the requested guard without Allow", pending_camera=True)
         new_owner = native.track_server("camera", backend, sampler, earliest)
         owned.append(new_owner)
         assert new_owner != camera_owner, "Guard recovery did not establish a new owned lifetime"
