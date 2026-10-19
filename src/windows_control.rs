@@ -98,6 +98,7 @@ unsafe extern "system" {
         template: RawHandle,
     ) -> RawHandle;
     fn ConnectNamedPipe(handle: RawHandle, overlapped: *mut Overlapped) -> i32;
+    fn WaitNamedPipeW(name: *const u16, timeout: u32) -> i32;
     fn DisconnectNamedPipe(handle: RawHandle) -> i32;
     fn GetNamedPipeClientProcessId(handle: RawHandle, pid: *mut u32) -> i32;
     fn GetNamedPipeServerProcessId(handle: RawHandle, pid: *mut u32) -> i32;
@@ -864,6 +865,41 @@ struct Reply<T> {
     value: Option<T>,
     error: Option<String>,
 }
+fn connect_pipe(name: &[u16], deadline: Instant) -> Result<Handle> {
+    loop {
+        // Identification-only impersonation; a server cannot use our authority.
+        let raw = unsafe {
+            CreateFileW(
+                name.as_ptr(),
+                0xc0000000,
+                0,
+                ptr::null(),
+                3,
+                0x40000000 | 0x00110000,
+                ptr::null_mut(),
+            )
+        };
+        if !raw.is_null() && raw as isize != -1 {
+            return Ok(Handle(raw));
+        }
+        let error = unsafe { GetLastError() };
+        if error != 231 {
+            return Err(std::io::Error::from_raw_os_error(error as i32))
+                .context("open Windows control pipe");
+        }
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .context("Windows control pipe remained busy until its connection deadline")?;
+        let timeout = remaining.as_millis().clamp(1, u32::MAX as u128) as u32;
+        if unsafe { WaitNamedPipeW(name.as_ptr(), timeout) } == 0 {
+            return Err(std::io::Error::last_os_error())
+                .context("wait for busy Windows control pipe");
+        }
+        // A different client may take the available instance first. Only
+        // connection admission repeats; no request bytes have been sent yet.
+    }
+}
+
 pub(crate) fn request<Req: Serialize, Res: DeserializeOwned>(name: &str, req: &Req) -> Result<Res> {
     request_for(name, req, &current_identity()?)
 }
@@ -874,18 +910,7 @@ fn request_for<Req: Serialize, Res: DeserializeOwned>(
 ) -> Result<Res> {
     let require_admin = name == "camera";
     let name = endpoint(name, identity)?;
-    // Identification-only impersonation; a server cannot use the client's authority.
-    let pipe = Handle::new(unsafe {
-        CreateFileW(
-            name.as_ptr(),
-            0xc0000000,
-            0,
-            ptr::null(),
-            3,
-            0x40000000 | 0x00110000,
-            ptr::null_mut(),
-        )
-    })?;
+    let pipe = connect_pipe(&name, Instant::now() + Duration::from_secs(3))?;
     peer(
         pipe.0,
         false,
@@ -1153,6 +1178,82 @@ mod tests {
         assert_eq!(result, 42);
         worker.join().unwrap().unwrap();
     }
+    #[test]
+    fn native_busy_pipe_admits_next_client_without_replaying_control() {
+        use std::sync::{Arc, mpsc};
+        #[derive(Serialize, Deserialize)]
+        enum Probe {
+            Advance,
+            Read,
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let (user, session) = identity().unwrap();
+        let identity = ControlIdentity {
+            user,
+            session,
+            scope: scope_hash(directory.path()).unwrap(),
+        };
+        let stop = Arc::new(AtomicBool::new(false));
+        let worker_stop = Arc::clone(&stop);
+        let worker_identity = identity.clone();
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let mut revision = 0u32;
+            serve_ready(
+                "microphone",
+                &worker_stop,
+                &worker_identity,
+                |probe: Probe| {
+                    if matches!(probe, Probe::Advance) {
+                        entered_tx.send(()).unwrap();
+                        release_rx.recv_timeout(Duration::from_secs(2))?;
+                        revision += 1;
+                    }
+                    Ok(revision)
+                },
+                || ready_tx.send(()).unwrap(),
+            )
+        });
+        ready_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let first_identity = identity.clone();
+        let first = std::thread::spawn(move || {
+            request_for::<_, u32>("microphone", &Probe::Advance, &first_identity)
+        });
+        entered_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let timed_out = connect_pipe(
+            &endpoint("microphone", &identity).unwrap(),
+            Instant::now() + Duration::from_millis(10),
+        );
+        let (answer_tx, answer_rx) = mpsc::channel();
+        let second = std::thread::spawn(move || {
+            answer_tx
+                .send(request_for::<_, u32>("microphone", &Probe::Read, &identity))
+                .unwrap();
+        });
+        let early = answer_rx.recv_timeout(Duration::from_millis(100));
+        release_tx.send(()).unwrap();
+        let observed = match early {
+            Ok(result) => result,
+            Err(_) => answer_rx.recv_timeout(Duration::from_secs(4)).unwrap(),
+        };
+        let advanced = first.join().unwrap();
+        second.join().unwrap();
+        stop.store(true, Ordering::Release);
+        worker.join().unwrap().unwrap();
+        assert!(
+            timed_out.is_err(),
+            "Occupied admission must respect its finite deadline"
+        );
+        assert_eq!(advanced.unwrap(), 1);
+        assert_eq!(
+            observed.unwrap(),
+            1,
+            "Busy admission must preserve exactly one control transition"
+        );
+    }
+
     #[test]
     fn native_scoped_mutex_rejects_precreated_foreign_acl() {
         let directory = tempfile::tempdir().unwrap();

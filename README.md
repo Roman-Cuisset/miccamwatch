@@ -308,6 +308,14 @@ Updater reservation errors now distinguish camera/microphone and request/resourc
 ownership. A real protected owner remains a refusal: closing its frontend first
 is not a safe workaround, because it can resolve automatic restoration.
 
+Concurrent Windows observers and controls wait at most three seconds for a busy
+native pipe using the [documented Win32 admission pattern](https://learn.microsoft.com/en-us/windows/win32/ipc/named-pipe-client).
+Only opening the connection is retried; request bytes are sent once, after the
+same peer authentication. Missing/denied endpoints fail normally, and transport
+failure never replays a possibly applied command. This does not bypass the
+separate native protection-ownership mutex or updater readiness checks.
+
+
 These fixes are not retroactively included in the published v0.18.1 artifacts.
 
 ## v0.18.1 — ZIP dependency security maintenance
