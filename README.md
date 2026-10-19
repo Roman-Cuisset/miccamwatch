@@ -281,7 +281,19 @@ The old mapped-CLI cleanup warning remains separate. See the unreleased source
 corrections below and [ROADMAP](docs/ROADMAP.md); no installed application or
 security protection has been changed by that source work.
 
-## Unreleased source — Windows tray identity and restart lifecycle
+## 0.19.0 candidate — not published
+
+This is an explicitly selected, **unpublished test candidate**, not a stable
+update. Published stable remains v0.18.1; no tag or `latest` change is made by
+building candidate artifacts. It includes direct tray profile selection on all
+platforms and the Windows corrections below. Windows Explorer tooltip popup
+rendering remains unqualified, and updating with an active protection owner is
+not fixed. Existing protection ownership and restoration refusals remain enforced.
+
+The Windows microphone owner now coordinates idle retirement with admitted
+requests. A preparing or queued control prevents retirement; a fresh
+reconciliation must still match the admission revision before shutdown. This
+does not increase request deadlines or replay possibly applied controls.
 
 The tray starts with a neutral product identity rather than asserting idle
 before its first observation. Its native tooltip contains the current bounded
