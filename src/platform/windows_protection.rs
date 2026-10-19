@@ -12,7 +12,7 @@ use std::{
     os::windows::ffi::OsStrExt,
     path::PathBuf,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{self, SyncSender},
     },
@@ -703,9 +703,74 @@ impl PlatformMonitor {
         }
     }
 }
+
+#[derive(Default)]
+struct AdmissionState {
+    retiring: bool,
+    pending: usize,
+    revision: u64,
+}
+#[derive(Default)]
+struct RequestAdmission {
+    state: Mutex<AdmissionState>,
+}
+struct RequestTicket {
+    admission: Arc<RequestAdmission>,
+}
+impl RequestAdmission {
+    fn admit(self: &Arc<Self>) -> Result<RequestTicket> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| anyhow::anyhow!("microphone admission state poisoned"))?;
+        ensure!(
+            !state.retiring,
+            "microphone owner is retiring; intent unchanged"
+        );
+        state.revision = state
+            .revision
+            .checked_add(1)
+            .context("microphone admission revision exhausted")?;
+        state.pending += 1;
+        Ok(RequestTicket {
+            admission: Arc::clone(self),
+        })
+    }
+    fn revision(&self) -> Result<u64> {
+        Ok(self
+            .state
+            .lock()
+            .map_err(|_| anyhow::anyhow!("microphone admission state poisoned"))?
+            .revision)
+    }
+    fn retire_if_idle(&self, reconciled_revision: u64) -> Result<bool> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| anyhow::anyhow!("microphone admission state poisoned"))?;
+        // A request may persist intent before the SDK apartment handles its job.
+        // Even a failed enqueue invalidates an older inactive reconciliation.
+        if state.pending != 0 || state.revision != reconciled_revision {
+            return Ok(false);
+        }
+        state.retiring = true;
+        Ok(true)
+    }
+}
+impl Drop for RequestTicket {
+    fn drop(&mut self) {
+        self.admission
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .pending -= 1;
+    }
+}
+
 struct Job {
     request: Request,
     reply: SyncSender<Result<Response>>,
+    _admission: RequestTicket,
 }
 #[derive(Default)]
 struct ReconcileBudget {
@@ -1021,15 +1086,22 @@ pub fn run_microphone_protection_service() -> Result<()> {
     let _hardware_ownership = windows_control::acquire_resource_for("microphone", &identity)?;
     let (wake, wakes) = mpsc::sync_channel(1);
     let (jobs, pending) = mpsc::sync_channel::<Job>(16);
+    let admission = Arc::new(RequestAdmission::default());
+    let worker_admission = Arc::clone(&admission);
     let stop = Arc::new(AtomicBool::new(false));
     let worker_stop = Arc::clone(&stop);
     let (ended, worker_result) = mpsc::sync_channel(1);
     let worker = thread::spawn(move || {
         let result = windows_control::serve("microphone", &worker_stop, |request| {
+            let ticket = worker_admission.admit()?;
             let request = prepare_request(request)?;
             let (reply, result) = mpsc::sync_channel(1);
-            jobs.try_send(Job { request, reply })
-                .context("microphone command queue full/stopped")?;
+            jobs.try_send(Job {
+                request,
+                reply,
+                _admission: ticket,
+            })
+            .context("microphone command queue full/stopped")?;
             result
                 .recv_timeout(Duration::from_secs(2))
                 .context("microphone owner response deadline")?
@@ -1070,9 +1142,13 @@ pub fn run_microphone_protection_service() -> Result<()> {
         }
         let dirty = wakes.try_recv().is_ok();
         if dirty || Instant::now() >= next_retry {
+            let revision = admission.revision()?;
             match owner.reconcile(dirty) {
                 Ok(active) => {
-                    if !active && started.elapsed() > Duration::from_secs(2) {
+                    if !active
+                        && started.elapsed() > Duration::from_secs(2)
+                        && admission.retire_if_idle(revision)?
+                    {
                         break;
                     }
                     next_retry = Instant::now() + Duration::from_secs(1);
@@ -1103,6 +1179,38 @@ pub fn run_microphone_protection_service() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn inactive_reconciliation_cannot_abandon_preparing_or_queued_requests() {
+        let admission = Arc::new(RequestAdmission::default());
+        let reconciled = admission.revision().unwrap();
+        let ticket = admission.admit().unwrap();
+        let admitted = admission.revision().unwrap();
+        assert!(!admission.retire_if_idle(admitted).unwrap());
+
+        let (jobs, pending) = mpsc::sync_channel(1);
+        let (reply, response) = mpsc::sync_channel(1);
+        drop(response); // A caller timeout must not retire an already queued job.
+        assert!(
+            jobs.try_send(Job {
+                request: Request {
+                    version: env!("CARGO_PKG_VERSION").into(),
+                    operation: Operation::Apply { generation: 1 },
+                },
+                reply,
+                _admission: ticket,
+            })
+            .is_ok()
+        );
+        assert!(!admission.retire_if_idle(admitted).unwrap());
+        drop(pending.recv().unwrap());
+
+        // A completed/failed request may have changed durable intent after the
+        // inactive snapshot. Require a fresh reconciliation before retiring.
+        assert!(!admission.retire_if_idle(reconciled).unwrap());
+        assert!(admission.retire_if_idle(admitted).unwrap());
+        assert!(admission.admit().is_err());
+    }
+
     #[test]
     fn desired_toggle_ignores_foreign_false_and_release_invalidates_queued_generation() {
         let mut intent = Intent::default();

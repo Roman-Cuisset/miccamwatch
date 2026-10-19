@@ -57,6 +57,10 @@ protection owner.
   newer manual intent takes precedence. Release failures remain pending rather
   than being reported as restored. No requested intent plus no owner is normal;
   owner/transport failures while protection is requested remain explicit.
+  The Windows broker does not retire while an admitted request is being prepared
+  or queued; intervening admission invalidates an earlier inactive snapshot.
+  A response timeout does not prove a requested change was unapplied, and does
+  not trigger automatic command replay.
 - **Limits:** mute is software SDK control, not capture denial. Exclusive,
   ASIO, direct-driver and hardware paths may bypass or differ from that scope.
   The CoreAudio event-context GUID is advisory; same-value `SetMute` can return
