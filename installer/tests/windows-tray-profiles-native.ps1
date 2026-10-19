@@ -229,12 +229,29 @@ function Capture-Popup([IntPtr]$popup, [string]$name) {
     if ($rect.Right - $rect.Left -gt 400 -or $rect.Left -lt $work.Left -or $rect.Top -lt $work.Top -or $rect.Right -gt $work.Right -or $rect.Bottom -gt $work.Bottom) {
         throw 'Actual profile popup exceeds its width or monitor work-area bound.'
     }
-    $bitmap = New-Object System.Drawing.Bitmap -ArgumentList ($rect.Right - $rect.Left), ($rect.Bottom - $rect.Top)
-    $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+    $image = Join-Path $script:runDirectory "$name.png"
+    $start = New-Object System.Diagnostics.ProcessStartInfo
+    $start.FileName = Join-Path $PSHOME 'powershell.exe'
+    $renderer = Join-Path $PSScriptRoot 'windows-native-menu-render.ps1'
+    $birth = $script:process.StartTime.ToUniversalTime().Ticks
+    $start.Arguments = "-NoProfile -File `"$renderer`" -Window $($popup.ToInt64()) -OwnerPid $($script:process.Id) -OwnerBirthTicks $birth -OwnerExecutable `"$executable`" -OutputPath `"$image`" -IsolatedDesktop"
+    $start.UseShellExecute = $false
+    $start.CreateNoWindow = $true
+    $start.RedirectStandardOutput = $true
+    $start.RedirectStandardError = $true
+    $renderProcess = [System.Diagnostics.Process]::Start($start)
     try {
-        $graphics.CopyFromScreen($rect.Left, $rect.Top, 0, 0, $bitmap.Size)
-        $bitmap.Save((Join-Path $script:runDirectory "$name.png"), [System.Drawing.Imaging.ImageFormat]::Png)
-    } finally { $graphics.Dispose(); $bitmap.Dispose() }
+        $stdout = $renderProcess.StandardOutput.ReadToEndAsync()
+        $stderr = $renderProcess.StandardError.ReadToEndAsync()
+        if (-not $renderProcess.WaitForExit(15000)) { throw 'Owned native menu rendering exceeded its deadline.' }
+        if (-not $stdout.Wait(2000) -or -not $stderr.Wait(2000)) { throw 'Native render streams did not close.' }
+        [IO.File]::WriteAllText((Join-Path $script:runDirectory "$name-render.stdout.log"), $stdout.GetAwaiter().GetResult())
+        [IO.File]::WriteAllText((Join-Path $script:runDirectory "$name-render.stderr.log"), $stderr.GetAwaiter().GetResult())
+        if ($renderProcess.ExitCode -ne 0 -or -not (Test-Path $image)) { throw 'Owned native menu rendering failed; inspect render logs.' }
+    } finally {
+        if (-not $renderProcess.HasExited) { $renderProcess.Kill(); [void]$renderProcess.WaitForExit(5000) }
+        $renderProcess.Dispose()
+    }
 }
 function Inspect-Choices($record, [IntPtr]$profiles, [int]$checked) {
     if (-not $record.inert -or $record.pid -ne $script:process.Id) { throw 'Fixture is not the private inert profile surface.' }
