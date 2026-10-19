@@ -42,8 +42,9 @@ Les identifiants sont stables. À chaque livraison, remplacer l'état par **En c
 | P0-CAM-TRAY | **Publié 0.17.2 et installé sur PC**. Couverture partielle distincte, captures conservées, raisons natives détaillées ; Zoom PID brut valide/report FILETIME zéro, attribution prudente maintenue. Vrai tray PC avec Ktalk actif : menu compact, détails complets, icône rouge ; infobulle résiduelle suivie dans TRAY-WIN | Moyenne | Pas de certification matérielle ; timestamp nul reste Unknown, jamais autorité de kill |
 | P0-UNIX-DIAG | **Publié 0.18.0** : captures conservées, avertissement distinct, causes dans Details, lecture inconnue distincte d'une action échouée | Moyenne | CI exacte38863239649 et release38865573731 quatre OS vertes ; limites de mesure et matérielles conservées |
 | P0-UNIX-OBS | **Publié 0.18.0, qualifié logiciellement** : inspection macOS passive sans état écrit, lecture globale fixe préautorisée, Cancel natif et disparition du helper au départ du propriétaire | Élevée | Consentement OS Accepter/Refuser avec identifiants humains non exercé ; pas de grant TCC ni preuve de capture, UAC/Polkit inchangés |
-| P0-CAM-RESUME | **Reprise réelle qualifiée sur runner zéro périphérique, source non publiée** : garde relancée depuis le vrai tray sans Allow intermédiaire ; cause IPC conservée | Élevée | CI39205263872 : cycle complet passé, nouveau helper authentifié, Block et micro préservés ; 175 tests/Clippy/build passés ; UAC humain et matériel non certifiés |
+| P0-CAM-RESUME | **Reprise réelle qualifiée sur runner zéro périphérique, source non publiée** : garde relancée depuis le vrai tray sans Allow intermédiaire ; cause IPC conservée | Élevée | CI39217101436 : cycle complet passé, nouveau helper authentifié, Block et micro préservés ; UAC humain et matériel non certifiés |
 | P0-WIN-IPC | **Corrigé et scénario natif complet passé en source** : concurrence des clients du pipe admise avec attente bornée | Moyenne | CI39205263872 : vraie libération micro après garde/tray passée ; connexion seule attend3s, pairs conservés, aucune commande rejouée ni mutex d'ownership contourné |
+| P0-WIN-OWNER-IDLE | **Corrigé et cycle du vrai broker qualifié en source** : arrêt coordonné avec les requêtes admises, sans hausse des délais ni replay | Élevée | bb70dcf, régression ciblée et contre-exemple concurrent sans SDK ; CI39217101436 `proof_complete:true`, libération et EOF réels passés. Cause unique du délai historique non certifiée ; source non publiée |
 | P1-MAC-MENU | **Publié 0.18.0, AppKit réel qualifié** : quatre profils directs cochés, marque MCW template/badges, Details au-dessus d'Exit, sept langues et `--config` prioritaire | Moyenne | IPC desktop v2 frontend/helper appariés ; captures rendues et vraies fenêtres relues, données de capture simulées explicitement |
 | P1-MAC-UX | **Demandé pour la prochaine version, non implémenté** : statut compréhensible, vraie fenêtre de consultation, tray simplifié et À propos concis | Moyenne | Retours utilisateur macOS ; fenêtre AppKit native, diagnostic honnête et revue des actions superflues sans retirer d'accès utile |
 | P1-TRAY-PROFILES | **Demandé pour tous les OS** : quatre profils directement sélectionnables dans les menus Windows, Linux et macOS ; macOS livré 0.18.0, Windows/Linux à implémenter et qualifier | Moyenne | Choix directs cochés, logique/persistance existantes, priorité `--config`, souris/clavier et sept langues sur chaque frontend natif |
@@ -427,6 +428,22 @@ une fermeture forcée Windows. L'avertissement séparé d'accès refusé au back
 `.mcw-update-*` sous `%USERPROFILE%\.cargo\bin` reste suivi dans P1-UPGRADE :
 aucun nettoyage automatique sur le PC ni récupération d'un fichier en quarantaine.
 
+### P0-WIN-OWNER-IDLE — Ne pas abandonner une commande lors de l'arrêt du broker
+
+L'ancien broker pouvait quitter sur une observation inactive alors qu'une
+commande avait déjà commencé sa préparation ou attendait dans sa file.
+Le correctifbb70dcf retient chaque admission jusqu'au traitement du job,
+exige une nouvelle réconciliation après une admission concurrente et ferme
+l'admission avant de quitter. Aucun mutex n'est retenu pendant le SDK ;
+les délais et l'ownership natif restent inchangés, sans replay automatique.
+
+**Qualification source :** contre-exemple concurrent déterministe sans SDK,
+régression permanente et Clippy passés ; CI39217101436 exerce le vrai broker
+zéro périphérique jusqu'à la libération explicite et sa disparition.
+`proof_complete:true`, aucune erreur de cleanup. La correspondance avec la
+cause unique du délai historique reste une inférence, pas une certification.
+Ce correctif ne contourne pas le Busy d'ownership de P1-UPGRADE-ACTIVE.
+
 ### P0-CAM-RESUME — Reprendre la garde caméra sans Autoriser/Rebloquer
 
 **Relevé utilisateur du18/10, sans nouvelle interrogation de son PC :**
@@ -465,6 +482,11 @@ pas établie. 173 tests ordinaires Windows et Clippy/build passés ; scénario r
 tray → perte du helper possédé → reprise sans Allow ajouté au runner isolé,
 inventaire natif obligatoirement nul. Consentement UAC humain, appareil bloqué
 physique et futures connexions physiques restent hors preuve de ce runner.
+
+**Qualification actualisée :** CI39217101436 passe le cycle complet depuis le
+vrai tray : perte du seul helper possédé, reprise sans Allow, nouveau helper
+authentifié, micro conservé puis libération explicite. `proof_complete:true`,
+aucune erreur de cleanup ; consentement UAC humain et matériel restent non exercés.
 
 
 ### P1-STARTUP-PASSIVE — Démarrage passif sûr
@@ -1206,3 +1228,5 @@ sur ces deux plateformes.
 | 2026-10-19 | CI Windows — qualification visuelle indépendante | **Commit49d72ab : condition explicite, aucun échec ignoré** | Pilote inerte sans SDK lancé si compilation/tests Windows réussis et run non annulé, même si le scénario privé de gardes échoue ; même convention que les qualifications macOS indépendantes. YAML parsé et prérequis vérifiés | Mesurer clic/callback/popup sans attendre une correction non démontrée du délai de réponse ; un résultat visuel ne blanchira pas la qualification des gardes ni le job global |
 | 2026-10-19 | P0-WIN-OWNER-IDLE — requête admise pendant la retraite du broker | **Correctif sourcebb70dcf, test ciblé et Clippy passés ; aucune hausse des délais** | L'ancien arrêt sur réconciliation inactive ne coordonnait pas la préparation/file des commandes. Ticket conservé jusqu'au traitement du job, admission fermée atomiquement avant retraite et réconciliation fraîche exigée après toute admission ; pas d'allocation par ticket, ni mutex retenu pendant le SDK. README actualisé | [INFERENCE] Cette course peut expliquer le délai de CI39213072436, mais sa cause unique n'est pas démontrée. Qualification du vrai service corrigé encore requise, pas de release publiée |
 | 2026-10-19 | P0-WIN-OWNER-IDLE — contre-exemple concurrent sans SDK | **Exécutable jetable réussi : ancien prédicat Timeout, candidat réponse77** | Déclarations réelles du mécanisme candidat, canaux/threads privés et barrières imposant exactement le même ordre : intention annulée, job admis, observation inactive puis tentative de retraite. Ancienne décision abandonne le job pendant l'attente du transport ; candidat répond avant de fermer l'admission. Test permanent couvre aussi préparation, client parti et snapshot périmé | Aucun appareil, service installé, droit admin ou API SDK accédé ; ce smoke de concurrence ne remplace pas le scénario natif hébergé |
+| 2026-10-19 | CI39215408250 — entrée native qualifiée, limites indépendantes conservées | **Déplacement et clic réels reçus, garde complète passée ; aucun popup observé** | Probe :move_count2/click_count1, client82/29 exact ; clic de la seule icône produit2 callbacks Shell, dernier514. Le manque général d'entrée ou de callbacks n'explique donc pas l'absence de popup dans ce run. Huit états restent refusés visuellement, aucun critère assoupli | Infobulle secondaire mise de côté. Ressources Windows :watch/idle quitte au warmup pour baseline et candidat, cause non établie ; qualification ressources macOS Intel aussi en échec. Linux et macOS ARM passent ; pas de succès global ni de MSI annoncé, aucune relance dédiée pour effacer ces échecs |
+| 2026-10-19 | CI39217101436 — broker corrigé qualifié et limite visuelle isolée | **Vrais cycles gardes/reprise/libération et handoff/EOF passés ; trois jobs Unix verts** | Source3e28a17 : `guards.json` indique `proof_complete:true`, aucune erreur/cleanup, nouveau helper authentifié sans Allow et micro préservé ; phases complètes800/799 échantillons. Qualification fonctionnelle des ressources et comparaison baseline/candidat réussies ; budget RAM souple toujours non atteint | Windows ne reste rouge que sur les huit popups Explorer non observés ; MSI non exercé après ce refus. Pas de hausse des délais, pas de relance des échecs anciens pour les effacer, pas de modification de l'installation utilisateur ni de release publiée |
