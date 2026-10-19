@@ -41,18 +41,12 @@ enum Command {
     Mic,
     Camera,
     Pause,
-    #[cfg(target_os = "linux")]
-    Profile,
-    #[cfg(target_os = "macos")]
     #[serde(rename = "profile_balanced")]
     ProfileBalanced,
-    #[cfg(target_os = "macos")]
     #[serde(rename = "profile_private")]
     ProfilePrivate,
-    #[cfg(target_os = "macos")]
     #[serde(rename = "profile_meeting")]
     ProfileMeeting,
-    #[cfg(target_os = "macos")]
     #[serde(rename = "profile_development")]
     ProfileDevelopment,
     #[cfg(target_os = "macos")]
@@ -69,7 +63,10 @@ impl Command {
             "mic" => Some(Self::Mic),
             "camera" => Some(Self::Camera),
             "pause" => Some(Self::Pause),
-            "profile" => Some(Self::Profile),
+            "profile_balanced" => Some(Self::ProfileBalanced),
+            "profile_private" => Some(Self::ProfilePrivate),
+            "profile_meeting" => Some(Self::ProfileMeeting),
+            "profile_development" => Some(Self::ProfileDevelopment),
             "autostart" => Some(Self::Autostart),
             "exit" => Some(Self::Exit),
             _ => None,
@@ -918,7 +915,6 @@ fn make_view(
         },
         !explicit_policy,
     );
-    #[cfg(target_os = "macos")]
     let profile = {
         let mut profile = profile;
         profile.children = Some(
@@ -1237,32 +1233,11 @@ pub fn run_tray(
                                         };
                                 })?;
                             }
-                            #[cfg(target_os = "linux")]
-                            Command::Profile => {
-                                ensure!(!explicit_policy, "{}", words(lang).config_override);
-                                settings = Settings::update(|current| {
-                                    current.profile = match current.profile {
-                                        PrivacyProfile::Balanced => PrivacyProfile::Private,
-                                        PrivacyProfile::Private => PrivacyProfile::Meeting,
-                                        PrivacyProfile::Meeting => PrivacyProfile::Development,
-                                        PrivacyProfile::Development => PrivacyProfile::Balanced,
-                                    };
-                                })?;
-                            }
-                            #[cfg(target_os = "macos")]
                             Command::ProfileBalanced
                             | Command::ProfilePrivate
                             | Command::ProfileMeeting
                             | Command::ProfileDevelopment => {
-                                ensure!(!explicit_policy, "{}", words(lang).config_override);
-                                let profile = match command {
-                                    Command::ProfileBalanced => PrivacyProfile::Balanced,
-                                    Command::ProfilePrivate => PrivacyProfile::Private,
-                                    Command::ProfileMeeting => PrivacyProfile::Meeting,
-                                    Command::ProfileDevelopment => PrivacyProfile::Development,
-                                    _ => unreachable!(),
-                                };
-                                settings = Settings::update(|current| current.profile = profile)?;
+                                settings = select_profile(command, explicit_policy, lang)?;
                             }
                             #[cfg(target_os = "macos")]
                             Command::CameraInspect => unreachable!(),
@@ -1357,6 +1332,17 @@ fn diagnostic_document(view: &View) -> String {
     }
     document
 }
+fn select_profile(command: Command, explicit_policy: bool, lang: Language) -> Result<Settings> {
+    ensure!(!explicit_policy, "{}", words(lang).config_override);
+    let profile = match command {
+        Command::ProfileBalanced => PrivacyProfile::Balanced,
+        Command::ProfilePrivate => PrivacyProfile::Private,
+        Command::ProfileMeeting => PrivacyProfile::Meeting,
+        Command::ProfileDevelopment => PrivacyProfile::Development,
+        _ => bail!("not a profile selection"),
+    };
+    Settings::update(|current| current.profile = profile)
+}
 
 // DBusMenu hosts choose their own fonts and geometry. Bound display cells, not
 // alleged pixels; native proof measures the actual XFCE GTK popup separately.
@@ -1389,6 +1375,43 @@ fn linux_menu_label(label: &str) -> String {
         result.push(visible);
     }
     result
+}
+
+#[cfg(target_os = "linux")]
+fn linux_menu_entry(entry: &MenuEntry) -> ksni::MenuItem<LinuxTray> {
+    if let Some(children) = &entry.children {
+        return ksni::menu::SubMenu {
+            label: linux_menu_label(&entry.label),
+            enabled: entry.enabled,
+            submenu: children.iter().map(linux_menu_entry).collect(),
+            ..Default::default()
+        }
+        .into();
+    }
+    let command = Command::from_name(entry.action);
+    let activate = Box::new(move |this: &mut LinuxTray| {
+        if let Some(command) = command {
+            let _ = this.actions.try_send(command);
+        }
+    });
+    if let Some(checked) = entry.checked {
+        ksni::menu::CheckmarkItem {
+            label: linux_menu_label(&entry.label),
+            enabled: entry.enabled,
+            checked,
+            activate,
+            ..Default::default()
+        }
+        .into()
+    } else {
+        ksni::menu::StandardItem {
+            label: linux_menu_label(&entry.label),
+            enabled: entry.enabled,
+            activate,
+            ..Default::default()
+        }
+        .into()
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -1455,25 +1478,8 @@ impl ksni::Tray for LinuxTray {
         }
     }
     fn menu(&self) -> Vec<ksni::MenuItem<Self>> {
-        let mut menu: Vec<ksni::MenuItem<Self>> = self
-            .view
-            .items
-            .iter()
-            .map(|entry| {
-                let command = Command::from_name(entry.action);
-                ksni::menu::StandardItem {
-                    label: linux_menu_label(&entry.label),
-                    enabled: entry.enabled,
-                    activate: Box::new(move |this: &mut Self| {
-                        if let Some(command) = command {
-                            let _ = this.actions.try_send(command);
-                        }
-                    }),
-                    ..Default::default()
-                }
-                .into()
-            })
-            .collect();
+        let mut menu: Vec<ksni::MenuItem<Self>> =
+            self.view.items.iter().map(linux_menu_entry).collect();
         menu.insert(
             menu.len().saturating_sub(1),
             ksni::menu::StandardItem {

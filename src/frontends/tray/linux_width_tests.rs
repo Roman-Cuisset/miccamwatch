@@ -33,6 +33,60 @@ fn fixture_view(lang: Language) -> View {
     )
 }
 
+fn assert_menu_bounds(menu: &[ksni::MenuItem<LinuxTray>]) {
+    for item in menu {
+        let label = match item {
+            ksni::MenuItem::Standard(item) => &item.label,
+            ksni::MenuItem::Checkmark(item) => &item.label,
+            ksni::MenuItem::SubMenu(item) => {
+                assert_menu_bounds(&item.submenu);
+                &item.label
+            }
+            _ => panic!("unexpected native menu item type"),
+        };
+        assert!(!label.chars().any(char::is_control));
+        let visible = label.replace("__", "_");
+        assert!(ratatui::text::Span::raw(&visible).width() <= 48);
+        assert!(visible.chars().count() <= 97);
+    }
+}
+
+fn require_isolated_desktop() -> Result<()> {
+    for (name, expected) in [
+        ("GITHUB_ACTIONS", "true"),
+        ("RUNNER_ENVIRONMENT", "github-hosted"),
+        ("MCW_NATIVE_LINUX_ISOLATED", "1"),
+    ] {
+        ensure!(
+            std::env::var(name).as_deref() == Ok(expected),
+            "{name} must be {expected}"
+        );
+    }
+    let root = PathBuf::from(std::env::var("MCW_NATIVE_LINUX_ROOT")?);
+    ensure!(
+        root.is_absolute() && root.is_dir(),
+        "missing isolated native root"
+    );
+    for name in [
+        "HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "XDG_STATE_HOME",
+        "XDG_RUNTIME_DIR",
+        "XDG_CACHE_HOME",
+    ] {
+        ensure!(
+            PathBuf::from(std::env::var(name)?).starts_with(&root),
+            "{name} escapes private root"
+        );
+    }
+    ensure!(
+        std::env::var("PIPEWIRE_REMOTE").as_deref() == Ok("mcw-native-no-hardware"),
+        "native fixture must not connect to the host PipeWire server"
+    );
+    Ok(())
+}
+
 #[test]
 fn native_linux_menu_bounds_preserve_complete_diagnostics() {
     for lang in [
@@ -54,15 +108,7 @@ fn native_linux_menu_bounds_preserve_complete_diagnostics() {
         };
         let menu = tray.menu();
         assert!(menu.len() <= 16);
-        for item in &menu {
-            let ksni::MenuItem::Standard(item) = item else {
-                panic!("unexpected native menu item type");
-            };
-            assert!(!item.label.chars().any(char::is_control));
-            let visible = item.label.replace("__", "_");
-            assert!(ratatui::text::Span::raw(&visible).width() <= 48);
-            assert!(visible.chars().count() <= 97);
-        }
+        assert_menu_bounds(&menu);
         let document = diagnostic_document(&original);
         for entry in &original.items {
             assert!(document.contains(entry.detail.as_deref().unwrap_or(&entry.label)));
@@ -85,6 +131,7 @@ fn native_linux_menu_bounds_preserve_complete_diagnostics() {
 #[test]
 #[ignore = "requires real XFCE StatusNotifier, X11 and notification daemon"]
 fn native_linux_tray_width() -> Result<()> {
+    require_isolated_desktop()?;
     let proof = PathBuf::from(std::env::var("MCW_LINUX_MENU_PROOF")?);
     fs::create_dir_all(&proof)?;
     let lang = if std::env::var("MCW_LINUX_MENU_CASE")? == "cjk" {
@@ -124,4 +171,105 @@ fn native_linux_tray_width() -> Result<()> {
         }
     }
     bail!("native panel proof did not select Details and Exit before its deadline")
+}
+
+fn profile_fixture_view(settings: &Settings, lang: Language, explicit_policy: bool) -> View {
+    make_view(
+        ("Isolated profile menu qualification".to_owned(), "idle"),
+        MicrophoneMuteState::Unavailable,
+        (false, None),
+        settings,
+        lang,
+        &None,
+        MenuContext {
+            lock: SessionLockState::Unknown,
+            explicit_policy,
+            inspection: &CameraInspectionUi::default(),
+        },
+    )
+}
+
+#[test]
+#[ignore = "requires explicitly isolated GitHub-hosted XFCE desktop"]
+fn native_linux_tray_profiles() -> Result<()> {
+    require_isolated_desktop()?;
+    let proof = PathBuf::from(std::env::var("MCW_LINUX_MENU_PROOF")?);
+    fs::create_dir_all(&proof)?;
+    let lang = Language::from_code(&std::env::var("MCW_LINUX_PROFILE_LANGUAGE")?)
+        .context("unsupported native proof language")?;
+    let explicit = std::env::var_os("MCW_LINUX_EXPLICIT_CONFIG").map(PathBuf::from);
+    if let Some(path) = &explicit {
+        ensure!(
+            path.starts_with(PathBuf::from(std::env::var("MCW_NATIVE_LINUX_ROOT")?)),
+            "explicit policy must remain inside the private fixture root"
+        );
+        // Parse a real private policy, without creating a hardware monitor.
+        Policy::load(Some(path.as_path()))?;
+        let before = fs::read(crate::settings::settings_path()?)?;
+        for command in [
+            Command::ProfileBalanced,
+            Command::ProfilePrivate,
+            Command::ProfileMeeting,
+            Command::ProfileDevelopment,
+        ] {
+            ensure!(
+                select_profile(command, true, lang).is_err(),
+                "explicit config accepted mutation"
+            );
+            ensure!(
+                fs::read(crate::settings::settings_path()?)? == before,
+                "refused action modified settings"
+            );
+        }
+        fs::write(
+            proof.join("backend-refused"),
+            b"all four production profile actions refused\n",
+        )?;
+    }
+    let mut settings = Settings::load()?;
+    let view = profile_fixture_view(&settings, lang, explicit.is_some());
+    fs::write(proof.join("view-0.json"), serde_json::to_vec_pretty(&view)?)?;
+    let (sender, receiver) = mpsc::sync_channel(16);
+    let ready = Arc::new(AtomicBool::new(false));
+    let mut host = DesktopHost::start(sender, ready, view)?;
+    let ready = proof.join("ready");
+    let staging = proof.join("ready.tmp");
+    fs::write(&staging, std::process::id().to_string())?;
+    fs::rename(staging, ready)?;
+    let deadline = Instant::now() + Duration::from_secs(120);
+    let mut selections = 0;
+    while Instant::now() < deadline {
+        host.check()?;
+        match receiver.recv_timeout(Duration::from_millis(100)) {
+            Ok(Command::Exit) => {
+                host.shutdown()?;
+                return Ok(());
+            }
+            Ok(
+                command @ (Command::ProfileBalanced
+                | Command::ProfilePrivate
+                | Command::ProfileMeeting
+                | Command::ProfileDevelopment),
+            ) => {
+                settings = select_profile(command, explicit.is_some(), lang)?;
+                ensure!(
+                    Settings::load()?.profile == settings.profile,
+                    "profile was not persisted"
+                );
+                let view = profile_fixture_view(&settings, lang, explicit.is_some());
+                host.update(view.clone())?;
+                selections += 1;
+                fs::write(
+                    proof.join(format!("view-{selections}.json")),
+                    serde_json::to_vec_pretty(&view)?,
+                )?;
+            }
+            Ok(command) => {
+                bail!("native profile proof selected unsafe/unexpected command: {command:?}")
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    bail!("native profile proof did not exit before its deadline")
 }
