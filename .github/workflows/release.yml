@@ -99,7 +99,10 @@ jobs:
         shell: pwsh
         run: |
           $version = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages[0].version
-          Compress-Archive -Path target/release/mcw.exe,target/release/mcw-tray.exe,README.md,LICENSE -DestinationPath miccamwatch-windows-x86_64.zip
+          $receipt = & target/release/mcw.exe __portable-receipt
+          if ($LASTEXITCODE -ne 0) { throw 'Portable ownership receipt generation failed' }
+          [IO.File]::WriteAllText((Join-Path (Get-Location) 'target/release/.miccamwatch-portable.json'), $receipt, [Text.UTF8Encoding]::new($false))
+          Compress-Archive -Path target/release/mcw.exe,target/release/mcw-tray.exe,target/release/.miccamwatch-portable.json,README.md,LICENSE -DestinationPath miccamwatch-windows-x86_64.zip
           $smoke = Join-Path $env:RUNNER_TEMP 'mcw-release-smoke'
           Expand-Archive miccamwatch-windows-x86_64.zip $smoke
           $cli = Join-Path $smoke 'mcw.exe'

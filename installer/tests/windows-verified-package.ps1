@@ -46,7 +46,11 @@ function Get-VerifiedWindowsPackage(
     $entries = [IO.Compression.ZipFile]::OpenRead($zip)
     try {
         $names = @($entries.Entries | ForEach-Object FullName | Sort-Object)
-        $expected = @('LICENSE','README.md','mcw-tray.exe','mcw.exe') | Sort-Object
+        $expected = @('LICENSE','README.md','mcw-tray.exe','mcw.exe')
+        # Historical immutable releases precede the portable ownership receipt.
+        # Only this one exact additional data entry is allowed in new packages.
+        if ($names -ccontains '.miccamwatch-portable.json') { $expected += '.miccamwatch-portable.json' }
+        $expected = $expected | Sort-Object
         if (Compare-Object $names $expected -CaseSensitive) {
             throw 'Unexpected ZIP entry set; refusing extraction'
         }

@@ -91,6 +91,12 @@ if CommandLine.arguments.contains("--cancel") {
     let result = microphoneControl("{\"operation\":\"camera_status_admin\"}")
     demand(result.ok && result.camera?.authorization == "cancelled", "native pre-authorization Cancel was not preserved")
     demand(result.camera?.state == "unknown" && result.camera?.completeInventory == false, "Cancel established global camera permission")
+    demand(result.camera?.ownedInstalled == false && result.results.isEmpty && result.controls.isEmpty,
+           "read-only Cancel acquired ownership or returned device changes")
+    demand(result.camera?.detail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false,
+           "Cancel lost the diagnostic shown by consultation")
+    let report = URL(fileURLWithPath: CommandLine.arguments.last!).deletingPathExtension().appendingPathExtension("json")
+    try JSONEncoder().encode(result.camera!).write(to: report)
     print("native Cancel exercised before any administrator request")
 }
 print("profile scope, ownership, malformed inventory and privileged input refusal passed")
@@ -176,9 +182,22 @@ def main():
             raise RuntimeError('Passive CLI requested or claimed administrator authorization')
         if observation['state'] == 'unknown' and not observation['administrator_required']:
             raise RuntimeError('Incomplete profile scope has no explicit administrator proposal')
+        if not observation['detail'].strip() or not observation.get('observed_at'):
+            raise RuntimeError('Passive inspection omitted the full point-in-time consultation diagnostic')
         if baseline != sorted(str(path.relative_to(home)) for path in home.rglob('*')):
             raise RuntimeError('Read-only inspection created user state')
         run('native-cancel', [driver, '--cancel', args.proof.resolve() / 'inspection-confirmation.png'], env=env)
+        cancelled = json.loads((args.proof / 'inspection-confirmation.json').read_text())
+        if (cancelled['authorization'], cancelled['state'], cancelled['ownedInstalled'],
+                cancelled['completeInventory']) != ('cancelled', 'unknown', False, False):
+            raise RuntimeError('Cancelled consultation diagnostic claimed effective protection or profile ownership')
+        after_cancel = json.loads(run('passive-after-cancel',
+            [args.binary.resolve(), 'camera', 'inspect', '--json'], env=env, codes=(0, 2)).stdout)
+        if (after_cancel['authorization'], after_cancel['state'], after_cancel['complete_inventory']) != (
+                'not_requested', observation['state'], observation['complete_inventory']):
+            raise RuntimeError('Cancelling consultation inspection changed the passive protection observation')
+        if baseline != sorted(str(path.relative_to(home)) for path in home.rglob('*')):
+            raise RuntimeError('Cancelling consultation inspection created control/preferences/ownership state')
         orphaned_confirmation(args.binary.resolve(), env)
         results.append(dict(name='owner-exit-retires-native-confirmation', exit=0))
         run('runner-authorized-system-inventory', [driver, '--system-scope'], env=env)

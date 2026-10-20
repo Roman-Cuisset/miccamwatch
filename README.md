@@ -281,6 +281,28 @@ The old mapped-CLI cleanup warning remains separate. See the 0.19.0 corrections
 below and [ROADMAP](docs/ROADMAP.md); no installed application or security
 protection has been changed by that source work.
 
+## 0.20.0 — Native consultation and scoped uninstall (unreleased)
+
+The macOS tray opens a singleton native consultation window with observed
+microphone/camera state, access details and diagnostics. Closing that window
+leaves the tray running; reopening the application reuses it. The simplified
+menu retains protection, pause and all four profiles, with a localized About
+window. The menu-bar mark is larger without changing its proportions or hiding
+state badges. Windows executables, the MSI shortcut and Apps entry use the
+official application icon.
+
+`mcw uninstall` follows installation provenance. Managed Unix installations and
+verified Windows portable pairs have an owned removal path; package-manager
+installations receive the appropriate manager command. Unowned standalone/app
+bundles receive explicit manual instructions and a non-success result. Settings,
+history and restoration data are retained. Windows removal is deferred: command
+acceptance is not proof of deletion; the worker records the final result.
+Foreign control ownership or an incomplete restoration refuses removal.
+
+Native qualification is tracked in [ROADMAP](docs/ROADMAP.md). These source
+changes are not a published release, and do not establish a fix for the historical
+macOS Intel stop EINVAL. Public stable remains 0.19.1.
+
 ## 0.19.1 — Windows CLI-hosted tray update correction
 
 The updater now recognizes both supported frontend hosts from the exact

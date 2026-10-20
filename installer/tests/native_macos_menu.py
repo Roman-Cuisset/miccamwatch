@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
-"""UI proof with explicitly simulated data: production AppKit menu and Details on macOS.
+"""UI proof with explicitly simulated data: production AppKit consultation/menu/About.
 
 Compiles unchanged native implementation files with a test-only entrypoint in a
-private temporary directory. Uses real NSMenu tracking/measurement and NSAlert,
-not menu mocks, Accessibility, event posting, camera/microphone, or TCC grants.
-Menu text PNGs are explicitly rendered fixtures; Details PNGs are actual native
-alert content. An optional display screenshot may require preexisting permission.
+private temporary directory. Uses real NSWindow, NSMenu tracking and NSAlert,
+not menu mocks, Accessibility, device APIs or TCC grants. Native consultation
+and About PNGs show real AppKit content; menu-text PNGs are rendered fixtures.
+An optional display screenshot uses only preexisting permission.
 """
 
 import argparse
 import json
+import os
 from pathlib import Path
 import platform
 import subprocess
@@ -32,8 +33,7 @@ func png(_ view: NSView, _ path: URL) {
     }
     try! data.write(to: path)
 }
-// A visual fixture only. All regression assertions below target the actual
-// production NSMenu, its measured intrinsic size, and its native alert action.
+// A visual fixture only. Assertions target the production native surfaces.
 final class MenuTextFixture: NSView {
     let presentedMenu: NSMenu
     init(_ menu: NSMenu) {
@@ -59,13 +59,6 @@ final class MenuTextFixture: NSView {
         }
     }
 }
-func findText(_ view: NSView) -> NSTextView? {
-    if let text = view as? NSTextView { return text }
-    for child in view.subviews {
-        if let found = findText(child) { return found }
-    }
-    return nil
-}
 let app = NSApplication.shared
 require(app.setActivationPolicy(.accessory) || app.activationPolicy() == .accessory, "accessory policy unavailable")
 app.finishLaunching()
@@ -74,7 +67,14 @@ let fixtureURL = URL(fileURLWithPath: CommandLine.arguments[1])
 let proof = URL(fileURLWithPath: CommandLine.arguments[2], isDirectory: true)
 let checkClipboard = CommandLine.arguments[3] == "1"
 let fixtureData = try! Data(contentsOf: fixtureURL)
-struct Case: Decodable { let name: String; let frame: DesktopFrame; let selected_profile: String? }
+struct Case: Decodable {
+    let name: String
+    let frame: DesktopFrame
+    let selected_profile: String?
+    let expected_text: [String]?
+    let expected_accesses: Int?
+    let omission_expected: Bool?
+}
 let cases = try! JSONDecoder().decode([Case].self, from: fixtureData)
 // Exercise the production decoder/validator, not a parallel fixture schema.
 let rawCases = try! JSONSerialization.jsonObject(with: fixtureData) as! [[String: Any]]
@@ -96,12 +96,49 @@ deepChoices[0]["children"] = [deepChoices[1]]
 deepRows[profileIndex]["children"] = deepChoices
 deep["items"] = deepRows
 require(rejects(deep), "grandchild menu accepted")
+var invalidProtection = valid
+var badProtection = valid["protection"] as! [String: Any]
+badProtection["requested"] = [true, false, true]
+invalidProtection["protection"] = badProtection
+require(rejects(invalidProtection), "unbounded protection state accepted")
+var invalidLanguage = valid
+invalidLanguage["language"] = "unsupported"
+require(rejects(invalidLanguage), "unsupported UI language accepted")
+var oversizedVersion = valid
+oversizedVersion["version"] = String(repeating: "V", count: 65)
+require(rejects(oversizedVersion), "unbounded version accepted")
+var unknownField = valid
+unknownField["details_label"] = "obsolete v2 field"
+require(rejects(unknownField), "obsolete/unknown protocol field accepted")
+var duplicateControl = valid
+duplicateControl["items"] = Array(validRows.dropLast()) + [validRows.first { ($0["action"] as? String) == "mic" }!, validRows.last!]
+require(rejects(duplicateControl), "duplicate device control accepted")
+var oversizedDiagnostic = valid
+oversizedDiagnostic["diagnostics"] = String(repeating: "D", count: 32769)
+require(rejects(oversizedDiagnostic), "unbounded expanded diagnostic accepted")
+var oversizedSummary = valid
+oversizedSummary["summary"] = String(repeating: "S", count: 2049)
+require(rejects(oversizedSummary), "expanded diagnostics leaked into compact status")
 var measurements = [[String: Any]]()
 for test in cases {
     let frame = test.frame
     let entries = frame.items!
     require(validDesktopState(frame), "fixture rejected by production protocol consumer")
-    let content = DesktopMenu(summary: frame.summary!, entries: entries, detailsLabel: frame.details_label!)
+    let consultation = DesktopConsultation()
+    let content = DesktopMenu(frame: frame, consultation: consultation)
+    if let expected = test.expected_text, let accesses = test.expected_accesses {
+        require(frame.diagnostics!.contains("Observed accesses: \(accesses)"), "producer lost total observed access count")
+        for text in expected {
+            require(frame.diagnostics!.contains(text) && content.diagnostic.contains(text),
+                    "real Rust producer lost an access identity or unabridged normal path")
+        }
+        require(frame.limited == test.omission_expected, "consumer lost explicit producer omission state")
+        let raw = rawCases.first { ($0["name"] as? String) == test.name }!["frame"]!
+        require(try! JSONSerialization.data(withJSONObject: raw).count <= 65536, "producer frame exceeds wire limit")
+        if test.omission_expected == false {
+            require(frame.diagnostics!.utf8.count > 16384, "producer did not cross old fatal field limit")
+        }
+    }
     let menu = content.menu
     func inspectRows(_ entries: [DesktopItem], _ native: NSMenu, parentEnabled: Bool = true) {
         let rows = native.items.filter { $0.representedObject != nil || $0.submenu != nil }
@@ -123,7 +160,13 @@ for test in cases {
             }
         }
     }
-    inspectRows(entries, menu)
+    let direct = entries.filter { !["header", "status", "camera_inspect", "autostart"].contains($0.action) }
+    inspectRows(direct, menu)
+    for entry in entries {
+        require(content.diagnostic.contains(entry.detail ?? entry.label), "moving a row lost its full diagnostic")
+    }
+    require(!menu.items.contains { ["header", "status", "camera_inspect", "autostart"].contains(($0.representedObject as? String) ?? "") },
+            "advanced/duplicate rows remain in tray")
     require(content.diagnostic.contains(frame.summary!), "full status summary lost")
     require(menu.size.width <= 400, "actual NSMenu intrinsic width exceeds 400 points")
     var tracked = false
@@ -157,49 +200,113 @@ for test in cases {
     window.orderFront(nil)
     png(fixture, proof.appendingPathComponent(test.name + "-menu-text-fixture.png"))
     window.orderOut(nil)
-    let details = menu.items[menu.items.count - 2]
+    let open = menu.items[0]
+    let about = menu.items[menu.items.count - 2]
+    let localized = DesktopWords(frame.language!)
     require((menu.items.last!.representedObject as? String) == "exit", "Exit must remain last")
-    require(details.title == frame.details_label!, "Details must be immediately above Exit")
-    require(details.isEnabled && details.action != nil, "Details action must be accessible, not a disabled tooltip")
-    require(details.representedObject == nil, "Details must not create a Rust/device action")
+    require(open.title == localized.open && about.title == localized.about, "localized consultation/About inaccessible")
+    require(open.representedObject == nil && about.representedObject == nil, "local UI became a Rust/device action")
+    require(NSApp.sendAction(open.action!, to: open.target, from: open), "consultation selector unavailable")
+    let nativeWindow = consultation.window
+    let identity = nativeWindow.windowNumber
+    require(nativeWindow.isVisible && nativeWindow.styleMask.contains(.resizable), "consultation is not a real resizable window")
+    require(NSApp.modalWindow == nil, "consultation must be modeless")
+    let text = consultation.text
+    require(text.string == content.diagnostic, "consultation lost full diagnostic")
+    for label in [localized.observed, localized.requested, localized.effective, localized.automatic, localized.scope] {
+        require(text.string.contains(label), "observations/request/effective/unknown explanation lost")
+    }
+    if frame.limited == true {
+        require(text.string.contains(localized.limited), "bounded projection silently omitted diagnostic text")
+    }
+    let protection = frame.protection!
+    let microphoneText: String
+    switch protection.microphone {
+    case "muted": microphoneText = localized.muted
+    case "unmuted": microphoneText = localized.unmuted
+    case "mixed": microphoneText = localized.mixed
+    default: microphoneText = localized.unknown
+    }
+    let cameraText: String
+    switch protection.camera {
+    case "owned": cameraText = localized.restricted
+    case "absent": cameraText = localized.unrestricted
+    case "system_managed": cameraText = localized.systemManaged
+    default: cameraText = localized.unknown
+    }
+    require(text.string.contains("\(localized.effective)\n\(localized.microphone): \(microphoneText)\n\(localized.camera): \(cameraText)"),
+            "consumer conflated request with effective/unknown/system-managed protection")
+    if protection.requested.allSatisfy({ $0 == nil }) {
+        require(text.string.contains("\(localized.requested)\n\(localized.microphone): \(localized.noRequest)"),
+                "unknown request was presented as known effective protection")
+    }
+    require(!text.isEditable && text.isSelectable, "consultation must be read-only and copyable")
+    require(!text.isHorizontallyResizable && text.textContainer!.widthTracksTextView, "consultation does not wrap")
+    nativeWindow.contentView!.layoutSubtreeIfNeeded()
+    require(nativeWindow.frame.width <= screen.width && nativeWindow.frame.height <= screen.height,
+            "consultation does not fit display")
+    text.layoutManager!.ensureLayout(for: text.textContainer!)
+    require(text.layoutManager!.usedRect(for: text.textContainer!).height > text.enclosingScrollView!.contentSize.height,
+            "long diagnostic did not wrap/scroll")
+    func windowCommand(_ characters: String, _ code: UInt16) -> Bool {
+        let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.command],
+            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: nativeWindow.windowNumber,
+            context: nil, characters: characters, charactersIgnoringModifiers: characters,
+            isARepeat: false, keyCode: code)!
+        return nativeWindow.performKeyEquivalent(with: event)
+    }
+    require(windowCommand("a", 0) && text.selectedRange().length == (content.diagnostic as NSString).length,
+            "consultation keyboard Select All unavailable")
+    if checkClipboard {
+        require(windowCommand("c", 8), "consultation keyboard Copy unavailable")
+        require(NSPasteboard.general.string(forType: .string) == content.diagnostic, "copy lost original diagnostic")
+        NSPasteboard.general.clearContents()
+        text.setSelectedRange(NSRange(location: 0, length: 0))
+    }
+    text.setSelectedRange(NSRange(location: 0, length: 0))
+    png(nativeWindow.contentView!, proof.appendingPathComponent(test.name + "-consultation.png"))
+    for entry in entries where ["camera_inspect", "autostart"].contains(entry.action) {
+        func findButton(_ root: NSView) -> NSButton? {
+            if let button = root as? NSButton, button.identifier?.rawValue == entry.action { return button }
+            return root.subviews.compactMap { findButton($0) }.first
+        }
+        let button = findButton(nativeWindow.contentView!)
+        require(button != nil && button!.title == entry.label && button!.isEnabled == entry.enabled,
+                "advanced control was lost instead of moved to consultation")
+        if entry.enabled { require(NSApp.sendAction(button!.action!, to: button!.target, from: button!), "advanced action unavailable") }
+    }
+    require(windowCommand("w", 13), "consultation keyboard Close unavailable")
+    require(!nativeWindow.isVisible && !menu.items.isEmpty, "closing consultation damaged retained menu")
+    require(NSApp.sendAction(open.action!, to: open.target, from: open), "reopen selector unavailable")
+    require(consultation.window === nativeWindow && nativeWindow.windowNumber == identity && nativeWindow.isVisible,
+            "reopening created a duplicate consultation")
+    require(NSApp.windows.filter { $0 === nativeWindow }.count == 1, "duplicate consultation window")
+    nativeWindow.performClose(nil)
+    let alert = content.aboutAlert()
+    require(alert.messageText == "MicCamWatch \(frame.version!)" && alert.informativeText == localized.description,
+            "About lost version or factual localized description")
     var inspected = false
     let inspect = Timer(timeInterval: 0.2, repeats: false) { _ in
-        guard let window = NSApp.modalWindow, let root = window.contentView,
-              let text = findText(root) else {
-            require(false, "native Details alert did not render selectable diagnostic text"); return
-        }
-        require(text.string == content.diagnostic, "native Details text differs from full diagnostic")
-        require(!text.isEditable && text.isSelectable, "Details must be read-only and copyable")
-        require(!text.isHorizontallyResizable && text.textContainer!.widthTracksTextView, "Details does not wrap")
-        require(window.frame.width < screen.width, "Details alert does not fit display")
-        text.layoutManager!.ensureLayout(for: text.textContainer!)
-        require(text.layoutManager!.usedRect(for: text.textContainer!).height > 260, "long diagnostic did not wrap/scroll")
-        if checkClipboard {
-            text.selectAll(nil)
-            text.copy(nil)
-            require(NSPasteboard.general.string(forType: .string) == content.diagnostic, "copy lost original diagnostic")
-            NSPasteboard.general.clearContents()
-            text.setSelectedRange(NSRange(location: 0, length: 0))
-        }
-        png(root, proof.appendingPathComponent(test.name + "-details-alert.png"))
+        guard let root = NSApp.modalWindow?.contentView else { require(false, "native About did not render"); return }
+        png(root, proof.appendingPathComponent(test.name + "-about.png"))
         inspected = true
         NSApp.abortModal()
-        window.orderOut(nil)
+        NSApp.modalWindow?.orderOut(nil)
     }
     RunLoop.main.add(inspect, forMode: .modalPanel)
     RunLoop.main.add(inspect, forMode: .common)
-    require(NSApp.sendAction(details.action!, to: details.target, from: details), "Details selector unavailable")
-    require(inspected, "Details action did not open a native alert")
+    require(NSApp.sendAction(about.action!, to: about.target, from: about), "About selector unavailable")
+    require(inspected, "About did not open native UI")
     try! content.diagnostic.write(to: proof.appendingPathComponent(test.name + "-full-diagnostic.txt"), atomically: true, encoding: .utf8)
     measurements.append(["case": test.name, "menu_width_points": menu.size.width,
                          "screen_width_points": screen.width, "visual": frame.visual!,
                          "titles": menu.items.map { $0.title },
                          "diagnostic_utf8_bytes": content.diagnostic.utf8.count,
-                         "native_menu_tracking": tracked, "native_details_copy": inspected && checkClipboard])
+                         "native_menu_tracking": tracked, "native_consultation_copy": checkClipboard,
+                         "singleton_reopen_close": true, "native_about": inspected])
 }
 // Exercise actual AppKit keyboard tracking, not direct selector forwarding.
-let keyboardContent = DesktopMenu(summary: cases[0].frame.summary!, entries: cases[0].frame.items!,
-                                  detailsLabel: cases[0].frame.details_label!)
+let keyboardContent = DesktopMenu(frame: cases[0].frame, consultation: DesktopConsultation())
 let keyboardMenu = keyboardContent.menu
 let profileRow = keyboardMenu.items.firstIndex { $0.submenu != nil }!
 let preceding = keyboardMenu.items[..<profileRow].filter { $0.isEnabled && !$0.isSeparatorItem }.count
@@ -236,7 +343,7 @@ keyboardDeadline.invalidate()
 require(!keyboardTimedOut, "keyboard navigation did not activate a direct profile choice")
 try! Data("{\"requested_action\":\"profile_meeting\",\"app_local_keyboard_tracking\":true}\n".utf8)
     .write(to: proof.appendingPathComponent("keyboard-profile.json"))
-require(verifyTrackedMenuUpdate(cases[0].frame, cases.last!.frame), "state refresh broke a tracked menu action")
+require(verifyTrackedMenuUpdate(cases[0].frame, cases.first { $0.name == "recovery" }!.frame), "state refresh broke a tracked menu action")
 for appearance in [NSAppearance.Name.aqua, .darkAqua] {
     NSApp.appearance = NSAppearance(named: appearance)
     var rendered = Set<Data>()
@@ -244,7 +351,7 @@ for appearance in [NSAppearance.Name.aqua, .darkAqua] {
         let image = desktopStatusImage(visual)
         require(image.isTemplate, "status mark must adapt to light/dark appearance")
         for scale in [1, 2] {
-            let view = NSImageView(frame: NSRect(x: 0, y: 0, width: CGFloat(22 * scale), height: CGFloat(18 * scale)))
+            let view = NSImageView(frame: NSRect(x: 0, y: 0, width: image.size.width * CGFloat(scale), height: image.size.height * CGFloat(scale)))
             view.imageScaling = .scaleAxesIndependently
             view.image = image
             view.appearance = NSAppearance(named: appearance)
@@ -263,16 +370,21 @@ TRACKING_REGRESSION = r'''
 // extension can exercise the actual delegate's private frame/update/tracking.
 private extension DesktopDelegate {
     func verifyTrackedUpdate(_ frame: DesktopFrame, _ recovery: DesktopFrame) -> Bool {
-        item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         defer { if let item = item { NSStatusBar.system.removeStatusItem(item) } }
         apply(frame)
         weak var trackedContent = menuContent
         let trackedMenu = menuContent!.menu
-        let row = trackedMenu.items.first { ($0.representedObject as? String) == "status" }!
+        let row = trackedMenu.items.first { ($0.representedObject as? String) == "mic" }!
+        let originalWindow = consultation.window
+        showConsultation()
         var delivered = false
         let update = Timer(timeInterval: 0.15, repeats: false) { _ in
             self.apply(recovery)
             require(self.item!.button!.toolTip == recovery.summary!, "status tooltip failed to recover")
+            require(self.consultation.window === originalWindow && originalWindow.isVisible,
+                    "state refresh replaced or closed the consultation window")
+            require(self.consultation.text.string == self.menuContent!.diagnostic, "visible consultation did not refresh")
             require(!self.menuContent!.diagnostic.contains("device/other-user scope"), "recovery retained stale error")
             require(!self.menuContent!.menu.items.contains { ($0.representedObject as? String) == "camera_inspect" },
                     "recovered inventory still requests administrator inspection")
@@ -283,6 +395,12 @@ private extension DesktopDelegate {
         }
         RunLoop.main.add(update, forMode: .common)
         showMenu()
+        consultation.window.performClose(nil)
+        require(item != nil && initialized && !stopping, "window close retired tray/control readiness")
+        _ = applicationShouldHandleReopen(NSApp, hasVisibleWindows: false)
+        require(consultation.window === originalWindow && originalWindow.isVisible,
+                "application reopen did not raise the existing consultation")
+        consultation.window.performClose(nil)
         return delivered
     }
 }
@@ -299,18 +417,41 @@ def require(condition, message):
 
 def fixture_cases():
     locales = (
-        ('en', 'State unknown', 'Observation incomplete', 'Session lock unknown', 'Details…'),
-        ('fr', 'État inconnu', 'Observation incomplète', 'Verrouillage inconnu', 'Détails…'),
-        ('de', 'Zustand unbekannt', 'Beobachtung unvollständig', 'Sitzungssperre unbekannt', 'Details…'),
-        ('es', 'Estado desconocido', 'Observación incompleta', 'Bloqueo de sesión desconocido', 'Detalles…'),
-        ('ja', '状態不明', '観測範囲が不完全です', 'セッションロック不明', '詳細…'),
-        ('zh', '状态未知', '观测范围不完整', '会话锁定状态未知', '详细信息…'),
-        ('ru', 'Состояние неизвестно', 'Неполное наблюдение', 'Блокировка сеанса неизвестна', 'Подробности…'),
+        ('en', 'State unknown', 'Observation incomplete', 'Session lock unknown'),
+        ('fr', 'État inconnu', 'Observation incomplète', 'Verrouillage inconnu'),
+        ('de', 'Zustand unbekannt', 'Beobachtung unvollständig', 'Sitzungssperre unbekannt'),
+        ('es', 'Estado desconocido', 'Observación incompleta', 'Bloqueo de sesión desconocido'),
+        ('ja', '状態不明', '観測範囲が不完全です', 'セッションロック不明'),
+        ('zh', '状态未知', '观测范围不完整', '会话锁定状态未知'),
+        ('ru', 'Состояние неизвестно', 'Неполное наблюдение', 'Блокировка сеанса неизвестна'),
     )
+    controls = {
+        'en': ('Mute — writable inputs', 'Approve camera restriction profile',
+               'Inspect camera profiles (admin, read-only)', 'Pause alerts (30 min)',
+               'Profile', 'Enable autostart', 'Exit', ('Balanced', 'Private', 'Meeting', 'Development')),
+        'fr': ('Couper — entrées modifiables', 'Approuver le profil de restriction caméra',
+               'Inspecter profils caméra (admin, lecture seule)', 'Suspendre les alertes (30 min)',
+               'Profil', 'Activer le démarrage automatique', 'Quitter', ('Équilibré', 'Privé', 'Réunion', 'Développement')),
+        'de': ('Stummschalten — nur schreibbare Eingänge', 'Kamerasperrprofil genehmigen',
+               'Kameraprofile prüfen (Admin, nur lesen)', 'Hinweise pausieren (30 Min.)',
+               'Profil', 'Autostart aktivieren', 'Beenden', ('Ausgewogen', 'Privat', 'Besprechung', 'Entwicklung')),
+        'es': ('Silenciar — solo entradas modificables', 'Aprobar perfil de restricción de cámara',
+               'Perfiles de cámara (admin, solo lectura)', 'Pausar alertas (30 min)',
+               'Perfil', 'Activar inicio automático', 'Salir', ('Equilibrado', 'Privado', 'Reunión', 'Desarrollo')),
+        'ja': ('ミュート — 書き込み可能な入力', 'カメラ制限プロファイルを承認',
+               'カメラプロファイル（管理者・読み取り専用）', '通知を一時停止 (30 分)',
+               'プロファイル', '自動起動を有効化', '終了', ('バランス', 'プライベート', '会議', '開発')),
+        'zh': ('静音 — 仅可写输入', '批准摄像头限制描述文件',
+               '检查摄像头配置（管理员；只读）', '暂停提醒 (30 分钟)',
+               '配置', '启用自动启动', '退出', ('平衡', '隐私', '会议', '开发')),
+        'ru': ('Выключить звук — только доступные для записи входы', 'Одобрить профиль ограничения камеры',
+               'Профили камер (админ, только чтение)', 'Приостановить уведомления (30 мин)',
+               'Профиль', 'Включить автозапуск', 'Выход', ('Сбалансированный', 'Приватный', 'Встреча', 'Разработка')),
+    }
     cases = []
     observed = ('Camera restriction status unknown: Current-user profiles contain no camera restriction; '
                 'device/other-user scope is not readable, so effective status is unknown. ')
-    for lang, unknown, degraded, lock, details in locales:
+    for lang, unknown, degraded, lock in locales:
         prefix = unknown + ': ' + observed
         diagnostic = prefix + 'W' * (16384 - len(prefix.encode()))
         activity = 'corespeechd: MIC ACTIVE — ' + degraded
@@ -319,26 +460,46 @@ def fixture_cases():
                  dict(action='status', label=activity, detail=summary, enabled=True),
                  dict(action='header', label=unknown, detail=diagnostic, enabled=False),
                  dict(action='header', label=lock, detail=lock + '; automatic controls unavailable', enabled=False)]
-        items.extend(dict(action=action, label=label, enabled=enabled) for action, label, enabled in (
-            ('mic', 'Mute — writable inputs', True),
-            ('camera', 'Approve camera restriction profile', True),
-            ('camera_inspect', 'Inspect camera restrictions (administrator approval; read-only)', True),
-            ('pause', 'Pause alerts (30 min)', True)))
-        choices = [dict(action='profile_' + name.lower(), label=name,
-                        enabled=True, checked=name == 'Meeting')
-                   for name in ('Balanced', 'Private', 'Meeting', 'Development')]
-        items.append(dict(action='profile', label='Profile: Meeting', enabled=True, children=choices))
+        mic, camera, inspect, pause, profile, autostart, exit_label, profiles = controls[lang]
+        items.extend(dict(action=action, label=label, enabled=True) for action, label in (
+            ('mic', mic), ('camera', camera), ('camera_inspect', inspect), ('pause', pause)))
+        choices = [dict(action='profile_' + name, label=label,
+                        enabled=True, checked=name == 'meeting')
+                   for name, label in zip(('balanced', 'private', 'meeting', 'development'), profiles)]
+        items.append(dict(action='profile', label=profile + ': ' + profiles[2], enabled=True, children=choices))
         items.extend(dict(action=action, label=label, enabled=True)
-                     for action, label in (('autostart', 'Enable autostart'), ('exit', 'Exit')))
+                     for action, label in (('autostart', autostart), ('exit', exit_label)))
         cases.append(dict(name=lang, selected_profile='profile_meeting',
                           frame=dict(kind='state', summary=summary,
-                                     visual='partial', items=items, details_label=details)))
+                                     visual='partial', items=items, language=lang, version='0.20.0-ui-fixture',
+                                     protection=dict(microphone='mixed', camera='unknown', requested=[True, True],
+                                                     microphone_on_lock=False, camera_on_lock=False))))
     for name, label in (('unbroken', 'W' * 16384),
                         ('wide-graphemes', ('界👩🏽‍💻e\u0301' * 600)[:6000])):
         case = json.loads(json.dumps(cases[0]))
         case['name'] = name
         case['frame']['items'][2] = dict(action='header', label=label, enabled=False)
         require(len(label.encode()) <= 16384, 'stress fixture exceeds protocol bound')
+        cases.append(case)
+    for name, visual, mic, camera, requested in (
+            ('idle-unprotected', 'idle', 'unmuted', 'absent', [False, False]),
+            ('active-protected', 'active', 'muted', 'owned', [True, True]),
+            ('system-managed', 'active', 'unmuted', 'system_managed', [None, None]),
+            ('unknown-protection', 'error', 'unknown', 'unknown', [None, None])):
+        case = json.loads(json.dumps(cases[0]))
+        case['name'] = name
+        case['frame']['visual'] = visual
+        case['frame']['protection'].update(microphone=mic, camera=camera, requested=requested)
+        if visual == 'idle':
+            case['frame']['summary'] = 'MIC: No observed capture · CAM: No observed capture'
+        elif camera != 'unknown':
+            case['frame']['summary'] = 'MIC: ACTIVE · CAM: No observed capture\n\ncorespeechd: MIC ACTIVE'
+        if camera != 'unknown':
+            case['frame']['items'] = [row for index, row in enumerate(case['frame']['items'])
+                                     if index not in (2, 3) and row['action'] != 'camera_inspect']
+            status = next(row for row in case['frame']['items'] if row['action'] == 'status')
+            status.update(label=case['frame']['summary'],
+                          detail=case['frame']['summary'] + '\n' + 'Point-in-time device observation. ' * 180)
         cases.append(case)
     for selected in ('Private', 'Development'):
         case = json.loads(json.dumps(cases[0]))
@@ -363,6 +524,7 @@ def fixture_cases():
     recovery['selected_profile'] = 'profile_balanced'
     recovery['frame']['summary'] = 'corespeechd: MIC ACTIVE'
     recovery['frame']['visual'] = 'active'
+    recovery['frame']['protection'].update(microphone='unmuted', camera='absent', requested=[False, False])
     recovery['frame']['items'] = [
         row for index, row in enumerate(recovery['frame']['items'])
         if index not in (2, 3) and row['action'] != 'camera_inspect']
@@ -374,6 +536,11 @@ def fixture_cases():
     for choice in profile['children']:
         choice['checked'] = choice['action'] == 'profile_balanced'
     cases.append(recovery)
+    for case in cases:
+        frame = case['frame']
+        frame['diagnostics'] = frame['summary']
+        frame['summary'] = frame['summary'].splitlines()[0]
+        frame['limited'] = False
     return cases
 
 
@@ -390,9 +557,33 @@ def main():
     native = repo / 'native'
     cases = fixture_cases()
     fixtures = proof / 'diagnostic-frames.json'
-    fixtures.write_text(json.dumps(cases, ensure_ascii=False, indent=2) + '\n')
     with tempfile.TemporaryDirectory(prefix='mcw-native-menu-') as directory:
         work = Path(directory)
+        # Build/run only the ignored pure producer fixture: no monitor or
+        # microphone/camera/autostart mutations. Its settings roots are private.
+        home = work / 'home'
+        home.mkdir()
+        producer_frames = work / 'rust-producer-frames.json'
+        producer_env = dict(os.environ, HOME=str(home),
+                            CARGO_HOME=os.environ.get('CARGO_HOME', str(Path.home() / '.cargo')),
+                            RUSTUP_HOME=os.environ.get('RUSTUP_HOME', str(Path.home() / '.rustup')),
+                            XDG_CONFIG_HOME=str(home / 'config'), XDG_DATA_HOME=str(home / 'data'),
+                            XDG_STATE_HOME=str(home / 'state'), XDG_RUNTIME_DIR=str(home / 'runtime'),
+                            MCW_NATIVE_MENU_FRAMES=str(producer_frames))
+        producer = subprocess.run(
+            ['cargo', 'test', '--lib',
+             'frontends::tray::menu_tests::native_consultation_producer_frames',
+             '--', '--ignored', '--exact'], cwd=repo, env=producer_env,
+            capture_output=True, text=True, timeout=900)
+        (proof / 'rust-producer.stdout').write_text(producer.stdout)
+        (proof / 'rust-producer.stderr').write_text(producer.stderr)
+        (proof / 'rust-producer.exit').write_text(str(producer.returncode) + '\n')
+        require(producer.returncode == 0 and producer_frames.is_file(),
+                'real Rust producer fixture failed: ' + producer.stdout + producer.stderr)
+        produced = json.loads(producer_frames.read_text())
+        require(len(produced) == 3, 'real Rust producer cases missing')
+        cases.extend(produced)
+        fixtures.write_text(json.dumps(cases, ensure_ascii=False, indent=2) + '\n')
         # Keep production declarations unchanged; replace only its CLI entrypoint.
         capture = (native / 'macos_capture.swift').read_text()
         declarations, separator, _ = capture.partition('let arguments = Array(CommandLine.arguments.dropFirst())')
@@ -425,22 +616,26 @@ def main():
                 enabled = parent_enabled and row['enabled']
                 if 'children' in row:
                     yield from dispatched(row['children'], enabled)
-                elif enabled:
+                elif enabled and row['action'] not in ('header', 'status', 'camera_inspect', 'autostart'):
                     yield dict(kind='action', action=row['action'])
-        expected = [event for case in cases for event in dispatched(case['frame']['items'])]
+        expected = []
+        for case in cases:
+            expected.extend(dispatched(case['frame']['items']))
+            expected.extend(dict(kind='action', action=row['action']) for row in case['frame']['items']
+                            if row['action'] in ('camera_inspect', 'autostart') and row['enabled'])
         expected += [dict(kind='action', action='profile_meeting'),
-                     dict(kind='ready', protocol=2), dict(kind='action', action='status')]
-        require(events == expected, 'native dispatch changed direct action IDs or emitted a Details/device action')
+                     dict(kind='ready', protocol=3), dict(kind='action', action='mic')]
+        require(events == expected, 'native dispatch lost retained controls or consultation/About emitted a device action')
     (proof / 'scope.txt').write_text(
         'Real production AppKit NSMenu intrinsic width and menu tracking; real enabled action dispatch; '
         'Simulated input data only; no claim of hardware capture coverage. '
-        'real local Details NSAlert rendering, wrapping, scrolling and full-text copy. '
-        'Menu-text PNGs are rendered visual fixtures, not screenshots of the tracked menu. '
-        'Details-alert PNGs are actual NSAlert content snapshots. '
+        'Real modeless consultation window: full-text wrapping/scrolling/copy, close, singleton reopen and refresh; '
+        'localized native About with factual description and version in seven languages. '
+        'Consultation/About PNGs are actual AppKit content snapshots; menu-text PNGs are rendered fixtures. '
         'App-local keyboard navigation selects a direct profile through real NSMenu tracking. '
         'No Accessibility/global-event-posting/TCC grants or capture/device actions. '
         'Native tracked-menu screen capture is optional and uses only existing authorization.\n')
-    print('PASS native AppKit width, full Details, live menu updates; clipboard exercised=' + str(args.isolated_clipboard))
+    print('PASS native consultation, singleton reopen/close, localized About, simplified menu and retained controls; clipboard exercised=' + str(args.isolated_clipboard))
 
 
 if __name__ == '__main__':

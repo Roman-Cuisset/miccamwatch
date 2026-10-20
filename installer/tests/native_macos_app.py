@@ -232,6 +232,9 @@ def main():
                     report['accessibility'] = accessibility.stderr.decode().strip()
 
                 def tray_processes():
+                    launcher = str(app / 'Contents/MacOS/MicCamWatch')
+                    require(not any(path == launcher for _, _, path in processes()),
+                            'LaunchServices wrapper remained resident instead of retiring for ordinary Finder reopen')
                     owners = [pid for pid, _, path in processes() if path == str(cli)]
                     require(len(owners) == 1, f'exactly one sandbox Rust tray owner required: {owners}')
                     owner = owners[0]
@@ -247,20 +250,43 @@ def main():
                     return owner, helpers[0]
 
                 def finder_open(name, duplicate=False):
-                    launch = ['/usr/bin/open', '-n', '-a', app]
+                    launch = ['/usr/bin/open', '-a', app]
                     for key in ('HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_STATE_HOME',
                                 'XDG_RUNTIME_DIR', 'LANG', 'LC_ALL'):
                         launch.extend(['--env', key + '=' + env[key]])
                     record(name, launch, env=env)
                     until(running, name + ': app never reached native readiness')
+                    until(lambda: not any(path == str(app / 'Contents/MacOS/MicCamWatch')
+                                          for _, _, path in processes()),
+                          name + ': native launcher did not retire')
                     record(name + '-readiness', [cli, 'tray', 'status'], env=env)
                     owner, helper = tray_processes()
+                    if native_exit:
+                        record(name + '-native-consultation', [driver, 'window', helper])
                     if duplicate:
+                        if native_exit:
+                            record(name + '-native-window-close', [driver, 'close-window', helper])
+                            require(running() and tray_processes() == (owner, helper),
+                                    'closing consultation changed tray/control lifetime')
                         record('duplicate-finder-open', launch, env=env)
                         time.sleep(3)
                         require(running() and tray_processes() == (owner, helper),
                                 'duplicate start replaced original owner/helper or left a resident wrapper')
                         report['duplicate_preserved_owner'] = 'passed'
+                        if native_exit:
+                            record(name + '-ordinary-window-reopen', [driver, 'window', helper])
+                            record(name + '-ordinary-window-close', [driver, 'close-window', helper])
+                        forced = [launch[0], '-n', *launch[1:]]
+                        record('forced-duplicate-finder-open', forced, env=env)
+                        time.sleep(3)
+                        require(running() and tray_processes() == (owner, helper),
+                                'forced duplicate launch replaced original frontend or left a wrapper')
+                        report['ordinary_finder_reopen_preserved_owner'] = 'passed'
+                        if native_exit:
+                            record(name + '-native-window-reopen', [driver, 'window', helper])
+                            report['native_consultation_close_singleton_reopen'] = 'passed'
+                        else:
+                            report['native_consultation_close_singleton_reopen'] = 'unavailable: existing Accessibility authorization required'
                     return owner, helper
 
                 def quit_app(name, state_env=env):
@@ -467,6 +493,16 @@ def main():
 
                 report['moved_bundle_reopen'] = 'passed'
                 unchanged_state('before-owned-app-removal')
+                before_uninstall_app, before_uninstall_home = snapshot(app), snapshot(home)
+                uninstall = record('bundle-uninstall-manual-procedure', [cli, 'uninstall'], env=env, codes=(2,))
+                require(str(app).encode() in uninstall.stdout + uninstall.stderr,
+                        'manual uninstall did not identify this exact app bundle')
+                require(app.is_dir() and snapshot(app) == before_uninstall_app and
+                        snapshot(home) == before_uninstall_home,
+                        'manual uninstall modified the sealed bundle or user state')
+                record('bundle-uninstall-preserved-seal', ['codesign', '--verify', '--deep', '--strict', app])
+                unchanged_state('manual-bundle-uninstall-refusal')
+                report['bundle_uninstall_exact_manual_procedure_and_preservation'] = 'passed'
                 require(app.is_relative_to(work) and not app.is_symlink(),
                         'refusing removal outside the authenticated sandbox')
                 record('remove-owned-app-seal', ['codesign', '--verify', '--deep', '--strict', app])

@@ -166,6 +166,17 @@ def smoke(args):
                 "Package-owned mcw update attempted internet networking before refusal")
         require(not re.search(r'execve\("[^"\n]*/curl"', trace),
                 "Package-owned mcw update invoked the network updater")
+        if tuple(map(int, args.version.split("."))) >= (0, 20, 0):
+            before_uninstall_request = hashlib.sha256(Path("/usr/bin/mcw").read_bytes()).hexdigest()
+            delegation = record(proof, "uninstall-manager-delegation", ["strace", "-f", "-e", "trace=network,execve",
+                                "-o", str(proof / "uninstall.strace"), "mcw", "uninstall"], (2,))
+            require(b"sudo pacman -R -- miccamwatch" in delegation.stderr,
+                    "Consumer uninstall did not report the exact native package owner")
+            require(hashlib.sha256(Path("/usr/bin/mcw").read_bytes()).hexdigest() == before_uninstall_request,
+                    "Consumer uninstall mutated a manager-owned executable")
+            trace = (proof / "uninstall.strace").read_text()
+            require(not re.search(r"\b(?:socket|connect)\([^\n]*AF_INET", trace),
+                    "Manager-owned uninstall attempted internet networking")
     finally:
         if daemon.poll() is None:
             os.killpg(daemon.pid, signal.SIGTERM)

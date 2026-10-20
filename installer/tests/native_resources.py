@@ -896,7 +896,7 @@ def fetch_baseline(root, key, metadata):
     assert actual == HASHES[key], "Public immutable baseline archive hash mismatch"
     extracted = root / "baseline"
     extracted.mkdir()
-    names = {"mcw", "mcw.exe", "mcw-tray.exe", "mcw-camera-helper"}
+    names = {"mcw", "mcw.exe", "mcw-tray.exe", "mcw-camera-helper", ".miccamwatch-portable.json"}
     # Never extract paths, links or archive executables beyond this allowlist.
     if extension == "zip":
         with zipfile.ZipFile(archive) as package:

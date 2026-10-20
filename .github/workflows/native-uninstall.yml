@@ -1,0 +1,149 @@
+name: Native installation-scoped uninstall
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'src/uninstall/**'
+      - 'src/uninstall.rs'
+      - 'src/autostart*'
+      - 'src/autostart/**'
+      - 'src/updater*'
+      - 'src/updater/**'
+      - 'src/privacy/macos.rs'
+      - 'src/platform/macos/control.rs'
+      - 'installer/tests/native_uninstall.py'
+      - 'installer/tests/windows_uninstall_lock.py'
+      - '.github/workflows/native-uninstall.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  unix:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '15.0'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - name: Install native Linux build prerequisites
+        if: runner.os == 'Linux'
+        run: |
+          test "$GITHUB_ACTIONS" = true
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libpipewire-0.3-dev libspa-0.2-dev libclang-dev pipewire-bin
+      - name: Build genuine native payloads
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then
+            cargo build --release --locked --features linux-camera-helper
+            cargo install --locked --offline --path . --root "$RUNNER_TEMP/mcw-cargo-uninstall" --features linux-camera-helper
+          else
+            cargo build --release --locked
+            cargo install --locked --offline --path . --root "$RUNNER_TEMP/mcw-cargo-uninstall"
+          fi
+      - name: Exercise actual removal and byte-preserving refusals
+        shell: bash
+        run: |
+          test "$GITHUB_ACTIONS" = true
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          python3 -B installer/tests/native_uninstall.py --binary "$GITHUB_WORKSPACE/target/release/mcw" --repository "$GITHUB_WORKSPACE" --cargo-install "$RUNNER_TEMP/mcw-cargo-uninstall" --proof "$RUNNER_TEMP/uninstall-proof/result.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: uninstall-${{ matrix.os }}
+          path: ${{ runner.temp }}/uninstall-proof/result.json
+          if-no-files-found: error
+
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - run: cargo build --release --locked --features windows-tray
+      - run: cargo install --locked --offline --path . --root "$env:RUNNER_TEMP/mcw-cargo-uninstall" --features windows-tray
+      - name: Build genuine per-user MSI
+        shell: pwsh
+        run: |
+          dotnet tool restore
+          if ($LASTEXITCODE -ne 0) { throw 'WiX tool restore failed' }
+          $version = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages[0].version
+          dotnet wix build installer/miccamwatch.wxs -d Version=$version -d Executable=target/release/mcw.exe -d TrayExecutable=target/release/mcw-tray.exe -o target/mcw-uninstall-fixture.msi
+          if ($LASTEXITCODE -ne 0) { throw 'Native MSI fixture build failed' }
+      - name: Exercise real ordinary-token worker and protection ownership
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') { throw 'Disposable hosted runner required' }
+          foreach ($name in @('AudioEndpointBuilder', 'Audiosrv')) {
+            $service = Get-Service $name -ErrorAction Stop
+            if ($service.Status -ne 'Running') {
+              Set-Service $name -StartupType Manual
+              Start-Service $name -ErrorAction Stop
+            }
+          }
+          $proof = Join-Path $env:RUNNER_TEMP 'uninstall-proof'
+          New-Item -ItemType Directory $proof -Force | Out-Null
+          $python = (Get-Command python).Source
+          $binary = Join-Path $env:GITHUB_WORKSPACE 'target/release/mcw.exe'
+          $fixture = Join-Path $env:GITHUB_WORKSPACE 'installer/tests/native_uninstall.py'
+          $cargo = Join-Path $env:RUNNER_TEMP 'mcw-cargo-uninstall'
+          $msi = Join-Path $env:GITHUB_WORKSPACE 'target/mcw-uninstall-fixture.msi'
+          $result = Join-Path $proof 'result.json'
+          $finished = Join-Path $proof 'finished'
+          $log = Join-Path $proof 'private-runner.log'
+          $wrapper = Join-Path $proof 'ordinary-token.ps1'
+          $body = @"
+          `$ErrorActionPreference = 'Stop'
+          `$env:GITHUB_ACTIONS = 'true'
+          `$env:RUNNER_ENVIRONMENT = 'github-hosted'
+          `$env:PATH = '$($env:PATH.Replace("'", "''"))'
+          try {
+            & '$($python.Replace("'", "''"))' -B '$($fixture.Replace("'", "''"))' --binary '$($binary.Replace("'", "''"))' --repository '$($env:GITHUB_WORKSPACE.Replace("'", "''"))' --cargo-install '$($cargo.Replace("'", "''"))' --msi '$($msi.Replace("'", "''"))' --proof '$($result.Replace("'", "''"))' *> '$($log.Replace("'", "''"))'
+            [IO.File]::WriteAllText('$($finished.Replace("'", "''"))', [string]`$LASTEXITCODE)
+          } catch {
+            [IO.File]::WriteAllText('$($finished.Replace("'", "''"))', '1')
+            throw
+          }
+          "@
+          [IO.File]::WriteAllText($wrapper, $body)
+          # The ordinary Windows Task Scheduler LIMITED token is the product's
+          # required user context, not an uninstall elevation/ACL bypass.
+          $scheduler = New-Object -ComObject 'Schedule.Service'
+          $scheduler.Connect()
+          $folder = $scheduler.GetFolder('\')
+          $definition = $scheduler.NewTask(0)
+          $definition.Principal.UserId = "$env:USERDOMAIN\$env:USERNAME"
+          $definition.Principal.LogonType = 3
+          $definition.Principal.RunLevel = 0
+          $definition.Settings.ExecutionTimeLimit = 'PT15M'
+          $action = $definition.Actions.Create(0)
+          $action.Path = (Get-Command powershell.exe).Source
+          $action.Arguments = '-NoProfile -File "' + $wrapper + '"'
+          $name = 'MCW-Uninstall-Disposable-' + [guid]::NewGuid().ToString('N')
+          try {
+            $task = $folder.RegisterTaskDefinition($name, $definition, 6, $definition.Principal.UserId, $null, 3)
+            $null = $task.Run($null)
+            $deadline = (Get-Date).AddMinutes(15)
+            while (-not (Test-Path $finished)) {
+              if ((Get-Date) -gt $deadline) { throw 'Ordinary-token fixture did not finish; no process was killed' }
+              Start-Sleep -Milliseconds 200
+            }
+            if ((Get-Content $finished -Raw).Trim() -ne '0') { throw 'Native uninstall fixture failed; private logs remain only on the disposable runner' }
+            if (-not (Test-Path $result)) { throw 'Native proof report missing' }
+          } finally {
+            $folder.DeleteTask($name, 0)
+          }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: uninstall-windows
+          path: ${{ runner.temp }}/uninstall-proof/result.json
+          if-no-files-found: error

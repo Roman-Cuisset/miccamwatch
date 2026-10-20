@@ -278,6 +278,15 @@ class Qualification:
         self.native_menu()
         self.retained(snapshot)
         preserved = self.registration()
+        if tuple(map(int, version.split("."))) >= (0, 20, 0):
+            before_uninstall_request = digest(self.binary.resolve(strict=True))
+            delegation = self.mcw("consumer-uninstall-manager-delegation", "uninstall", codes=(2,))
+            require(b"brew uninstall --formula miccamwatch" in delegation.stderr,
+                    "Consumer uninstall did not report the exact Homebrew procedure")
+            require(self.binary.is_file() and digest(self.binary.resolve(strict=True)) == before_uninstall_request,
+                    "Consumer uninstall mutated the manager-owned executable")
+            require(self.registration() == preserved, "Manager delegation changed autostart")
+            self.retained(snapshot)
         self.brew("native-uninstall", "uninstall", self.formula)
         self.installed = False
         require(not self.binary.exists() and not selected.exists(), "Package-owned executable/link remained after uninstall")

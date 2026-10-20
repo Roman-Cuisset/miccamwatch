@@ -19,8 +19,12 @@ guard AXIsProcessTrusted() else {
     stop("UNAVAILABLE: smoke driver needs preexisting Accessibility permission to click the real Exit menu; no permission was requested", code: 77)
 }
 if CommandLine.arguments.count == 2 && CommandLine.arguments[1] == "accessibility" { exit(0) }
-guard CommandLine.arguments.count == 3, CommandLine.arguments[1] == "quit",
-      let pid = Int32(CommandLine.arguments[2]) else { stop("usage: app-smoke gui | accessibility | quit HELPER_PID") }
+guard CommandLine.arguments.count == 3,
+      ["quit", "window", "close-window"].contains(CommandLine.arguments[1]),
+      let pid = Int32(CommandLine.arguments[2]) else {
+    stop("usage: app-smoke gui | accessibility | quit|window|close-window HELPER_PID")
+}
+let operation = CommandLine.arguments[1]
 func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
     var result: CFTypeRef?
     return AXUIElementCopyAttributeValue(element, name as CFString, &result) == .success ? result : nil
@@ -35,6 +39,33 @@ func descendants(_ element: AXUIElement, depth: Int = 0) -> [AXUIElement] {
 let application = AXUIElementCreateApplication(pid)
 AXUIElementSetMessagingTimeout(application, 3)
 let deadline = Date().addingTimeInterval(15)
+if operation != "quit" {
+    while Date() < deadline {
+        let windows = attribute(application, kAXWindowsAttribute) as? [AXUIElement] ?? []
+        let consultation = windows.filter { (attribute($0, kAXTitleAttribute) as? String) == "MicCamWatch" }
+        if consultation.count == 1 {
+            let window = consultation[0]
+            guard (attribute(window, kAXRoleAttribute) as? String) == kAXWindowRole else {
+                stop("consultation is not a native window")
+            }
+            guard descendants(window).contains(where: {
+                (attribute($0, kAXRoleAttribute) as? String) == kAXTextAreaRole
+            }) else { stop("consultation has no readable native snapshot document") }
+            if operation == "close-window" {
+                guard let close = attribute(window, kAXCloseButtonAttribute),
+                      CFGetTypeID(close) == AXUIElementGetTypeID(),
+                      AXUIElementPerformAction(close as! AXUIElement, kAXPressAction as CFString) == .success else {
+                    stop("native consultation close button unavailable")
+                }
+            }
+            print("{\"native_consultation\":\"\(operation)\",\"window_count\":1,\"helper_pid\":\(pid)}")
+            exit(0)
+        }
+        if consultation.count > 1 { stop("duplicate native consultation windows") }
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+    }
+    stop("native consultation window never became accessible")
+}
 var pressed = false
 while Date() < deadline {
     var roots = [application]

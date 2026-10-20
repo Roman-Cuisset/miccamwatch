@@ -1,0 +1,65 @@
+name: Native Windows application branding
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'build.rs'
+      - 'dotnet-tools.json'
+      - 'installer/miccamwatch.ico'
+      - 'installer/miccamwatch.rc'
+      - 'installer/miccamwatch.wxs'
+      - 'installer/tests/windows-brand-native.ps1'
+      - 'site/assets/mark.svg'
+      - '.github/workflows/windows-brand.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  shell-brand:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - name: Build actual CLI and tray application resources
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') { throw 'Disposable hosted runner required' }
+          $logs = Join-Path $env:RUNNER_TEMP 'windows-brand-build'
+          New-Item -ItemType Directory -Path $logs | Out-Null
+          cargo build --release --locked --features windows-tray --bin mcw --bin mcw-tray 2>&1 | Tee-Object -FilePath (Join-Path $logs 'cargo-build.log')
+          if ($LASTEXITCODE -ne 0) { throw 'Actual Windows application build failed' }
+      - name: Restore pinned WiX and build real per-user MSI
+        shell: pwsh
+        run: |
+          $logs = Join-Path $env:RUNNER_TEMP 'windows-brand-build'
+          # dotnet-tools.json pins WiX 5.0.2 with rollForward disabled.
+          dotnet tool restore 2>&1 | Tee-Object -FilePath (Join-Path $logs 'wix-restore.log')
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned WiX tool restore failed' }
+          $metadata = cargo metadata --locked --no-deps --format-version 1
+          if ($LASTEXITCODE -ne 0) { throw 'Package version resolution failed' }
+          $version = (($metadata | ConvertFrom-Json).packages | Where-Object name -eq 'miccamwatch').version
+          if (-not $version) { throw 'MicCamWatch package version missing' }
+          dotnet wix build installer/miccamwatch.wxs -d Version=$version -d Executable=target/release/mcw.exe -d TrayExecutable=target/release/mcw-tray.exe -o target/mcw-brand-fixture.msi 2>&1 | Tee-Object -FilePath (Join-Path $logs 'wix-build.log')
+          if ($LASTEXITCODE -ne 0) { throw 'Real per-user MSI build failed' }
+      - name: Render actual installed Shell and Apps icons
+        # Windows PowerShell supplies the .NET Framework System.Drawing assembly
+        # for the native COM/GDI renderer. No application is launched by this proof.
+        shell: powershell
+        run: powershell.exe -NoProfile -STA -File installer/tests/windows-brand-native.ps1 -MsiPath "${{ github.workspace }}/target/mcw-brand-fixture.msi" -OutputDirectory "${{ runner.temp }}/windows-brand-proof" -IsolatedRunner
+      - name: Retain native bitmaps, visual sheet, receipts and failure evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-windows-brand-shell
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            ${{ runner.temp }}/windows-brand-proof
+            ${{ runner.temp }}/windows-brand-build
+            target/mcw-brand-fixture.msi
+            target/mcw-brand-fixture.wixpdb
