@@ -1,4 +1,4 @@
-param([switch]$ActiveTray)
+param([switch]$ActiveTray, [switch]$CurrentRepairOnly)
 
 $ErrorActionPreference = 'Stop'
 # This fixture must never start products or native probes on a developer/user PC.
@@ -10,6 +10,11 @@ $proof = Join-Path $env:RUNNER_TEMP 'public-update-proof'
 $report = [ordered]@{
     status = 'failed'; from = $env:UPGRADE_FROM; to = $env:RELEASE_VERSION
     active_tray_requested = [bool]$ActiveTray; tray_started = $false
+    mode = $(if ($CurrentRepairOnly) { 'current-repair-only' } else { 'upgrade-and-independent-repair' })
+    requested_phases = $(if ($CurrentRepairOnly) { @('repair','noop') } else { @('upgrade','noop','repair') })
+    skipped_phases = @(if ($CurrentRepairOnly) {
+        @{ name = 'upgrade'; reason = 'Current-repair-only mode excludes legacy-client upgrade; no old-client upgrade coverage is claimed' }
+    })
     device_control_tested = $false; user_pc_touched = $false
     phases = @(); errors = @(); cleanup = @()
 }
@@ -21,6 +26,7 @@ function Save-Report {
 }
 Save-Report
 try {
+    if ($CurrentRepairOnly -and -not $ActiveTray) { throw 'Current-repair-only requires an active verified older tray' }
     . (Join-Path $PSScriptRoot 'windows-verified-package.ps1')
     $repo = 'Roman-Cuisset/miccamwatch'
     $env:APPDATA = Join-Path $proof 'appdata'
@@ -230,6 +236,9 @@ public sealed class PublicUpdateCapture : IDisposable {
     }
     $old = Get-VerifiedWindowsPackage $repo $env:UPGRADE_FROM $env:UPGRADE_SOURCE (Join-Path $proof 'old')
     $new = Get-VerifiedWindowsPackage $repo $env:RELEASE_VERSION $env:RELEASE_SOURCE (Join-Path $proof 'new')
+    if ($CurrentRepairOnly -and [version]($env:UPGRADE_FROM.Substring(1)) -ge [version]($env:RELEASE_VERSION.Substring(1))) {
+        throw 'Current-repair-only requires a verified upgrade-from release older than the current release'
+    }
     $latest = gh api "repos/$repo/releases/latest" --jq .tag_name
     if ($LASTEXITCODE -ne 0 -or $latest -cne $env:RELEASE_VERSION) { throw 'Selected release must be public stable latest' }
     Assert-Version (Join-Path $old 'mcw.exe') $env:UPGRADE_FROM 'old-version'
@@ -244,7 +253,10 @@ public sealed class PublicUpdateCapture : IDisposable {
         $quota = Invoke-RestMethod 'https://api.github.com/rate_limit' -Headers $quotaHeaders
     }
     if ($quota.resources.core.remaining -lt 4) { throw 'Anonymous API prerequisite unavailable; no update attempted' }
-    foreach ($scenario in @('upgrade','repair')) {
+    # Opt-in current-client qualification reuses mixed-pair repair, then no-op
+    # with its live successor; it does not rerun the captured legacy EOF defect.
+    $scenarios = if ($CurrentRepairOnly) { @('repair') } else { @('upgrade','repair') }
+    foreach ($scenario in $scenarios) {
         $install = Join-Path $proof "$scenario-install"
         [void](New-Item -ItemType Directory $install)
         if ($scenario -eq 'upgrade') {
@@ -309,10 +321,13 @@ public sealed class PublicUpdateCapture : IDisposable {
                 throw "$scenario core transaction succeeded but captured stdout/stderr EOF failed; no retry or manufactured EOF"
             }
             $phase.status = 'passed'
-            if ($scenario -eq 'upgrade') {
+            if ($scenario -eq 'upgrade' -or $CurrentRepairOnly) {
                 $noop = [ordered]@{ name = 'noop'; status = 'failed'; core_success = $false; before = (Get-PairHashes $install) }
                 $report.phases += $noop
                 $existing = if ($ActiveTray) { Get-Owner $tray } else { $null }
+                if ($ActiveTray -and ($null -eq $existing -or $existing.Pid -ne $successor.Pid -or [PublicUpdateNative]::WaitForSingleObject($successor.Handle, 0) -ne 258)) {
+                    throw 'Same-version no-op must begin with the exact live update successor'
+                }
                 $noop.original_tray = Owner-Evidence $existing
                 $run = Invoke-Captured $cli 'update' 'noop'
                 $noop.process = $run.Evidence
@@ -336,8 +351,8 @@ public sealed class PublicUpdateCapture : IDisposable {
         } catch {
             $report.errors += "$scenario`: $($_.Exception.Message)"
             $_ | Out-String | Add-Content (Join-Path $proof 'failures.txt')
-            if ($scenario -eq 'upgrade' -and @($report.phases | Where-Object { $_.name -eq 'noop' }).Count -eq 0) {
-                $report.phases += @{ name = 'noop'; status = 'skipped'; reason = 'Upgrade did not pass, including EOF; never relaunch a failed updater' }
+            if (($scenario -eq 'upgrade' -or $CurrentRepairOnly) -and @($report.phases | Where-Object { $_.name -eq 'noop' }).Count -eq 0) {
+                $report.phases += @{ name = 'noop'; status = 'skipped'; reason = "$scenario did not pass, including EOF; never relaunch a failed updater" }
             }
         } finally {
             # Evidence was frozen before this cleanup. Closing a successor here can

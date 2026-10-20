@@ -277,18 +277,21 @@ the shell's accessible icon name contradicted active captures, and captured
 updater output did not reach EOF after tray restart. The captured workstation
 exit/stdout was unavailable after its timeout; the new paired files, native tray
 and unchanged protections were verified read-only without rerunning update.
-The old mapped-CLI cleanup warning remains separate. See the unreleased source
-corrections below and [ROADMAP](docs/ROADMAP.md); no installed application or
-security protection has been changed by that source work.
+The old mapped-CLI cleanup warning remains separate. See the 0.19.0 corrections
+below and [ROADMAP](docs/ROADMAP.md); no installed application or security
+protection has been changed by that source work.
 
-## 0.19.0 candidate — not published
+## v0.19.0 — Direct tray profiles and Windows lifecycle fixes
 
-This is an explicitly selected, **unpublished test candidate**, not a stable
-update. Published stable remains v0.18.1; no tag or `latest` change is made by
-building candidate artifacts. It includes direct tray profile selection on all
-platforms and the Windows corrections below. Windows Explorer tooltip popup
-rendering remains unqualified, and updating with an active protection owner is
-not fixed. Existing protection ownership and restoration refusals remain enforced.
+Version 0.19.0 adds four direct, checked tray profile choices on Windows and
+Linux, joining macOS: Balanced, Private, Meeting and Development. The Windows
+parent caption shows the selected localized profile; an explicit `--config`
+remains authoritative instead of presenting a saved preference as effective.
+The Windows corrections below preserve protection ownership and restoration
+refusals: a healthy tray with inactive protection can be replaced or repaired,
+but active/requested protection, foreign ownership and pending/unknown
+restoration still refuse replacement before the tray is stopped. Updating never
+implicitly unmutes a microphone or performs camera Allow.
 
 The Windows microphone owner now coordinates idle retirement with admitted
 requests. A preparing or queued control prevents retirement; a fresh
@@ -308,14 +311,14 @@ requirements are unchanged. Native proof exercises captured caller EOF while a
 successor remains alive; actual tray and Explorer/UIA checks run only on a
 disposable hosted Windows desktop. Qualification status is recorded in ROADMAP.
 
-Hosted qualification now exercises genuine public-old trays through the native
-candidate replacement and mixed-pair repair transactions, without manual Exit.
-It also checks refusal before shutdown while native ownership is held, and
-helper retirement after explicit release while the tray remains open. These
-native transaction proofs do not claim public acquisition of an unpublished
-candidate. Immutable public 0.18.0/0.18.1 updaters completed their real active-tray
-transactions but failed captured-stream EOF; the source restart fix is not
-retroactively present in those published clients.
+Hosted native qualification passed genuine public-old tray replacement and
+mixed-pair repair with healthy, inactive protection, without manual Exit. It
+also passed refusal before tray shutdown while native ownership was held, and
+helper retirement after explicit release while the tray remained open. These
+native transaction proofs are not a public download/upgrade qualification for
+0.19.0. Immutable public 0.18.0/0.18.1 invoking updaters completed their real
+active-tray transactions but failed captured-stream EOF: replacing their files
+does not retroactively fix the already-running old client's restart code.
 
 
 When camera Block remains requested but its elevated guard is unavailable, the
@@ -348,8 +351,22 @@ same peer authentication. Missing/denied endpoints fail normally, and transport
 failure never replays a possibly applied command. This does not bypass the
 separate native protection-ownership mutex or updater readiness checks.
 
+The [native product qualification](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/39312572930)
+passed its functional scenarios on all four platforms; the Windows job still
+failed the strict Explorer popup observation. The separate [pre-publication
+packaging run](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/39379984562)
+passed Windows, Linux and both macOS architectures without publishing a release.
+Windows user feedback is positive, but does not qualify specific popup behavior:
+Windows UIA/Explorer popup automation remains unqualified.
 
-These fixes are not retroactively included in the published v0.18.1 artifacts.
+Windows EXE/MSI artifacts are unsigned; macOS apps are ad-hoc sealed, not
+Developer ID signed or notarized. Checksums and provenance do not replace
+platform signing, antivirus clearance or user authorization. No physical
+microphone/camera enforcement certification is claimed. Before upgrading a
+protected installation, explicitly release protection through its matching
+version and complete owned restoration; do not kill its guard or close the
+frontend as a workaround. These fixes are not retroactively included in old
+published clients.
 
 ## v0.18.1 — ZIP dependency security maintenance
 
@@ -755,7 +772,7 @@ mcw --config policy.toml config validate
 
 `mcw tray` keeps the monitor in the Windows notification area. Its menu controls microphone mute, camera privacy, one-hour notification pause, the active profile, and autostart. The tray runs as a single per-user instance; the CLI can inspect or stop it. A left or right click on the icon opens the menu; a double click raises a toast with the current summary.
 
-In unreleased source, Windows and Linux join macOS with four direct, checked
+In v0.19.0, Windows and Linux join macOS with four direct, checked
 profile choices: Balanced, Private, Meeting and Development. Selection uses the
 existing saved preferences and survives a tray restart. An explicit `--config`
 keeps authority: profile choices are disabled and no saved preference is

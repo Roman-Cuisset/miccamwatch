@@ -24,6 +24,11 @@ on:
         required: true
         default: false
         type: boolean
+      current-repair-only:
+        description: Qualify current CLI repair of an active verified older tray and successor no-op; skip legacy-client upgrade
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -40,6 +45,7 @@ jobs:
       UPGRADE_FROM: ${{ inputs.upgrade-from }}
       UPGRADE_SOURCE: ${{ inputs.upgrade-source-digest }}
       ACTIVE_TRAY: ${{ inputs.active-tray }}
+      CURRENT_REPAIR_ONLY: ${{ inputs.current-repair-only }}
     steps:
       - name: Check out qualification fixtures
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -48,7 +54,7 @@ jobs:
       - name: Verify public payloads and exercise update no-op and paired repair
         shell: pwsh
         run: |
-          & ./installer/tests/windows-public-update.ps1 -ActiveTray:($env:ACTIVE_TRAY -eq 'true')
+          & ./installer/tests/windows-public-update.ps1 -ActiveTray:($env:ACTIVE_TRAY -eq 'true') -CurrentRepairOnly:($env:CURRENT_REPAIR_ONLY -eq 'true')
       - name: Upload public migration evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
