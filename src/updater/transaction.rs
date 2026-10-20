@@ -658,7 +658,7 @@ mod tests {
                 System::Threading::{
                     OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
                     PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, QueryFullProcessImageNameW,
-                    TerminateProcess, WaitForInputIdle, WaitForSingleObject,
+                    TerminateProcess, WaitForSingleObject,
                 },
                 UI::WindowsAndMessaging::{
                     FindWindowW, GetWindowThreadProcessId, SMTO_ABORTIFHUNG, SMTO_BLOCK,
@@ -895,12 +895,9 @@ mod tests {
                 Ok(Some(tray))
             }
             fn ready(&self) -> Result<()> {
-                ensure!(
-                    unsafe { WaitForInputIdle(self.handle(), 15000) } == 0,
-                    "exact tray never reached an idle input loop"
-                );
-                // A window alone is not readiness. Require its message loop to answer
-                // without using the mutating shutdown message as a readiness probe.
+                // A console-subsystem CLI host can own a responsive GUI without
+                // supporting process-wide WaitForInputIdle. Authenticate the HWND
+                // and require its message loop to answer without a mutating probe.
                 let class = wide(Path::new("MicCamWatchTrayClass"));
                 let window = unsafe { FindWindowW(PCWSTR(class.as_ptr()), PCWSTR::null()) }?;
                 let mut pid = 0;
@@ -1132,7 +1129,7 @@ mod tests {
             "kind": "native-active-tray-transaction",
             "public_candidate_acquisition_proven": false,
             "previous": previous, "candidate": candidate,
-            "readiness": "exact owned_running_tray, idle input loop, responsive WM_NULL, two-second live observation",
+            "readiness": "exact owned_running_tray, authenticated responsive WM_NULL, two-second live observation",
             "lease_fixture": "real global microphone resource lease on a different owned thread; not a genuine protection helper",
             "limits": [
                 "No candidate public release acquisition or mcw update routing is exercised",

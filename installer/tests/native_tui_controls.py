@@ -208,18 +208,26 @@ class NativeTerminal:
                     self.process.terminate(force=True)
                 else:
                     import signal
+                    macos = os.uname().sysname == "Darwin"
                     try:
-                        os.killpg(self.process.pid, signal.SIGTERM)
+                        if macos:
+                            # Own the unreaped direct child, not every SDK helper
+                            # sharing its group and possibly different credentials.
+                            self.process.terminate()
+                        else:
+                            os.killpg(self.process.pid, signal.SIGTERM)
                     except ProcessLookupError:
                         pass  # Exit may race the signal; wait must still reap it.
                     try:
                         self.process.wait(timeout=20)
                     except subprocess.TimeoutExpired:
-                        # wait timed out without reaping this owned session
-                        # leader. No other thread polls/waits, so its group ID
+                        # The unreaped child's PID (and Linux session group ID)
                         # cannot be reused between this signal and final reap.
                         try:
-                            os.killpg(self.process.pid, signal.SIGKILL)
+                            if macos:
+                                self.process.kill()
+                            else:
+                                os.killpg(self.process.pid, signal.SIGKILL)
                         except ProcessLookupError:
                             pass
                         self.process.wait(timeout=20)
