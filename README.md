@@ -281,6 +281,27 @@ The old mapped-CLI cleanup warning remains separate. See the 0.19.0 corrections
 below and [ROADMAP](docs/ROADMAP.md); no installed application or security
 protection has been changed by that source work.
 
+## 0.19.1 — Windows CLI-hosted tray update correction (unreleased)
+
+The updater now recognizes both supported frontend hosts from the exact
+installation: `mcw-tray.exe` and `mcw.exe tray`. It retains that process handle
+and cooperatively retires the old frontend before replacing either executable.
+Restart preserves the original raw Windows arguments, working directory and
+Unicode environment, including relative `--config` paths and language overrides.
+Unreadable launch context or a different canonical application-data namespace
+refuses before shutdown; protected/native ownership checks remain unchanged.
+
+This addresses a missing case in 0.19.0's qualification, which exercised the
+companion but not the CLI-hosted tray. A user update left an older CLI frontend
+mapped in the retained backup while the new pair was already installed. Such an
+already-renamed process is not automatically adopted or killed by the new matcher.
+It requires an explicit one-time exit and start of the matching installed frontend;
+never execute or restore the backup. Existing invoking updaters keep their own
+code, so downloading a new package does not retroactively repair their handoff.
+
+Source verification and qualification status are recorded in ROADMAP. No installed
+user tray, SDK protection, autostart or backup has been changed by this source fix.
+
 ## v0.19.0 — Direct tray profiles and Windows lifecycle fixes
 
 Version 0.19.0 adds four direct, checked tray profile choices on Windows and

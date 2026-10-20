@@ -152,6 +152,232 @@ windows::core::link!("ntdll.dll" "system" fn NtQueryInformationProcess(
     return_length: *mut u32,
 ) -> NTSTATUS);
 
+// Keep launch data lossless for the updater; collector presentation may still use
+// a lossy String. The caller owns and authenticates this retained process handle.
+pub(crate) fn with_process_command_line<T>(
+    process: HANDLE,
+    extract: impl FnOnce(&[u16]) -> T,
+) -> Result<T> {
+    let mut length = 0;
+    unsafe {
+        let _ = NtQueryInformationProcess(process, 60, ptr::null_mut(), 0, &mut length);
+    }
+    anyhow::ensure!(
+        length as usize >= size_of::<UNICODE_STRING>() && length <= 131072,
+        "cannot determine running tray command line size"
+    );
+    let mut buffer = vec![0u8; length as usize];
+    let status = unsafe {
+        NtQueryInformationProcess(process, 60, buffer.as_mut_ptr().cast(), length, &mut length)
+    };
+    anyhow::ensure!(
+        status.0 == 0,
+        "cannot read running tray command line: {status:?}"
+    );
+    let value = unsafe { ptr::read_unaligned(buffer.as_ptr().cast::<UNICODE_STRING>()) };
+    let start = value.buffer as usize;
+    let base = buffer.as_ptr() as usize;
+    anyhow::ensure!(
+        value.length > 0
+            && value.length.is_multiple_of(2)
+            && start.is_multiple_of(std::mem::align_of::<u16>())
+            && start >= base
+            && start
+                .checked_add(value.length as usize)
+                .is_some_and(|end| end <= base + buffer.len()),
+        "invalid running tray command line"
+    );
+    let command = unsafe { slice::from_raw_parts(value.buffer, value.length as usize / 2) };
+    anyhow::ensure!(
+        !command.contains(&0),
+        "running tray command line contains NUL"
+    );
+    Ok(extract(command))
+}
+
+pub(crate) fn process_launch_directory_environment(
+    process: HANDLE,
+) -> Result<(std::path::PathBuf, Vec<u16>)> {
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    use windows::Win32::System::Diagnostics::Debug::ReadProcessMemory;
+
+    #[repr(C)]
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    struct RemoteString {
+        length: u16,
+        maximum_length: u16,
+        buffer: usize,
+    }
+    #[repr(C)]
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    struct Parameters {
+        maximum_length: u32,
+        length: u32,
+        flags: u32,
+        debug_flags: u32,
+        console_handle: usize,
+        console_flags: u32,
+        standard_input: usize,
+        standard_output: usize,
+        standard_error: usize,
+        current_directory: RemoteString,
+        current_directory_handle: usize,
+        dll_path: RemoteString,
+        image_path: RemoteString,
+        command_line: RemoteString,
+        environment: usize,
+    }
+    fn read_remote(process: HANDLE, address: usize, bytes: &mut [u8]) -> Result<()> {
+        anyhow::ensure!(
+            address != 0 && address.checked_add(bytes.len()).is_some(),
+            "invalid running tray launch-context address"
+        );
+        let mut read = 0;
+        unsafe {
+            ReadProcessMemory(
+                process,
+                address as *const _,
+                bytes.as_mut_ptr().cast(),
+                bytes.len(),
+                Some(&mut read),
+            )
+        }
+        .context("cannot read running tray launch context")?;
+        anyhow::ensure!(
+            read == bytes.len(),
+            "incomplete running tray launch context"
+        );
+        Ok(())
+    }
+    fn read_value<T: Copy>(process: HANDLE, address: usize) -> Result<T> {
+        let mut value = std::mem::MaybeUninit::<T>::uninit();
+        let bytes =
+            unsafe { slice::from_raw_parts_mut(value.as_mut_ptr().cast::<u8>(), size_of::<T>()) };
+        read_remote(process, address, bytes)?;
+        Ok(unsafe { value.assume_init() })
+    }
+
+    anyhow::ensure!(
+        cfg!(target_arch = "x86_64"),
+        "tray launch capture requires the x64 package"
+    );
+    let mut wow64 = 0usize;
+    let mut length = 0;
+    let status = unsafe {
+        NtQueryInformationProcess(
+            process,
+            26,
+            (&mut wow64 as *mut usize).cast(),
+            size_of::<usize>() as u32,
+            &mut length,
+        )
+    };
+    anyhow::ensure!(
+        status.0 == 0 && wow64 == 0,
+        "cross-bitness tray launch capture is unsupported"
+    );
+
+    // ProcessBasicInformation and these native-width PEB/RTL prefixes describe
+    // the same architecture as the exact installed binaries (the x64 package).
+    let mut basic = [0usize; 6];
+    let mut length = 0;
+    let status = unsafe {
+        NtQueryInformationProcess(
+            process,
+            0,
+            basic.as_mut_ptr().cast(),
+            std::mem::size_of_val(&basic) as u32,
+            &mut length,
+        )
+    };
+    anyhow::ensure!(
+        status.0 == 0 && basic[1] != 0,
+        "cannot locate running tray process parameters"
+    );
+    let parameters_slot = basic[1]
+        .checked_add(4 * size_of::<usize>())
+        .context("running tray process-parameters address overflow")?;
+    let parameters_address: usize = read_value(process, parameters_slot)?;
+    anyhow::ensure!(
+        parameters_address != 0,
+        "running tray process parameters are absent"
+    );
+    let parameters: Parameters = read_value(process, parameters_address)?;
+    anyhow::ensure!(
+        parameters.flags & 1 != 0
+            && parameters.length as usize >= size_of::<Parameters>()
+            && parameters.maximum_length >= parameters.length,
+        "unsupported running tray process parameters"
+    );
+    let directory = parameters.current_directory;
+    anyhow::ensure!(
+        directory.length > 0
+            && directory.length.is_multiple_of(2)
+            && directory.length <= directory.maximum_length
+            && directory.buffer != 0,
+        "invalid running tray working directory"
+    );
+    let mut directory_units = vec![0u16; directory.length as usize / 2];
+    read_remote(process, directory.buffer, unsafe {
+        slice::from_raw_parts_mut(
+            directory_units.as_mut_ptr().cast(),
+            directory.length as usize,
+        )
+    })?;
+    anyhow::ensure!(
+        !directory_units.contains(&0),
+        "running tray working directory contains NUL"
+    );
+    let path = std::path::PathBuf::from(std::ffi::OsString::from_wide(&directory_units));
+    anyhow::ensure!(
+        path.is_absolute(),
+        "running tray working directory is not absolute"
+    );
+    // Read page-bounded chunks so a terminator near the allocation's end never
+    // requires reading the next (possibly unmapped) page. Remote pointers are
+    // addresses for ReadProcessMemory only, never locally dereferenced.
+    let mut address = parameters.environment;
+    anyhow::ensure!(
+        address != 0 && address.is_multiple_of(2),
+        "invalid running tray environment"
+    );
+    let mut environment = Vec::new();
+    let mut page = [0u8; 4096];
+    while environment.len() < 524288 {
+        let count = (4096 - address % 4096).min((524288 - environment.len()) * 2);
+        read_remote(process, address, &mut page[..count])?;
+        for bytes in page[..count].as_chunks::<2>().0 {
+            let unit = u16::from_le_bytes([bytes[0], bytes[1]]);
+            if unit == 0 && environment.last() == Some(&0) {
+                environment.push(0);
+                anyhow::ensure!(
+                    read_value::<Parameters>(process, parameters_address)? == parameters,
+                    "running tray launch context changed during inspection"
+                );
+                read_remote(process, parameters.current_directory.buffer, unsafe {
+                    slice::from_raw_parts_mut(
+                        directory_units.as_mut_ptr().cast(),
+                        parameters.current_directory.length as usize,
+                    )
+                })?;
+                anyhow::ensure!(
+                    directory_units
+                        .iter()
+                        .copied()
+                        .eq(path.as_os_str().encode_wide()),
+                    "running tray working directory changed during inspection"
+                );
+                return Ok((path, environment));
+            }
+            environment.push(unit);
+        }
+        address = address
+            .checked_add(count)
+            .context("running tray environment address overflow")?;
+    }
+    anyhow::bail!("running tray environment exceeds the capture limit")
+}
+
 pub struct PlatformMonitor {
     enumerator: IMMDeviceEnumerator,
     policy: Policy,
@@ -1549,51 +1775,11 @@ fn process_modules(pid: u32) -> Vec<String> {
 
 fn process_command_line(pid: u32) -> Option<String> {
     let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()? };
-    let mut return_length = 0u32;
-    let _ = unsafe {
-        NtQueryInformationProcess(
-            process,
-            60, // ProcessCommandLineInformation
-            ptr::null_mut(),
-            0,
-            &mut return_length,
-        )
-    };
-    if return_length == 0 {
-        let _ = unsafe { CloseHandle(process) };
-        return None;
-    }
-
-    let mut buffer = vec![0u8; return_length as usize];
-    let status = unsafe {
-        NtQueryInformationProcess(
-            process,
-            60,
-            buffer.as_mut_ptr().cast(),
-            return_length,
-            &mut return_length,
-        )
-    };
+    let command = with_process_command_line(process, String::from_utf16_lossy);
     let _ = unsafe { CloseHandle(process) };
-
-    if status.0 != 0 || buffer.len() < size_of::<UNICODE_STRING>() {
-        return None;
-    }
-
-    let unicode_str = unsafe { &*(buffer.as_ptr() as *const UNICODE_STRING) };
-    let char_count = (unicode_str.length / 2) as usize;
-    if unicode_str.buffer.is_null() || char_count == 0 {
-        return None;
-    }
-
-    let slice = unsafe { slice::from_raw_parts(unicode_str.buffer, char_count) };
-    let cmd = String::from_utf16_lossy(slice);
-    let trimmed = cmd.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_owned())
-    }
+    let command = command.ok()?;
+    let trimmed = command.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_owned())
 }
 
 fn wide_array_string(value: &[u16]) -> String {

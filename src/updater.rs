@@ -113,14 +113,10 @@ pub fn update() -> Result<()> {
         });
     }
     // Identify ownership after staging, then wait on that exact process handle.
-    let running = if tray.try_exists()? {
-        process::owned_running_tray(&tray)?
-    } else {
-        None
-    };
+    let running = process::installed_running_tray(&current, &tray)?;
     let was_running = running.is_some();
     let count = replacements.len();
-    let mut operations = transaction::NativeOperations::new(replacements, running, tray);
+    let mut operations = transaction::NativeOperations::new(replacements, running);
     let outcome = transaction::apply(&mut operations, count, was_running);
     let recovery_backup_remains = outcome.is_err()
         && operations
@@ -134,8 +130,9 @@ pub fn update() -> Result<()> {
             retained.display()
         );
     } else {
-        // A mapped old CLI may remain until this updater exits. Do not launch a
-        // self-deleting helper executable just to clean up its backup.
+        // The updating CLI itself may remain mapped until it exits. Every old
+        // tray frontend was already retired using its retained process handle.
+        // Do not launch a self-deleting helper just to clean up this backup.
         let retained = stage.path().to_owned();
         if let Err(error) = stage.close() {
             eprintln!(

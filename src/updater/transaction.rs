@@ -155,19 +155,16 @@ impl ProtectionReservation {
 pub struct NativeOperations {
     pub replacements: Vec<Replacement>,
     pub running: Option<super::process::RunningTray>,
-    pub tray: PathBuf,
     reservation: Option<ProtectionReservation>,
 }
 impl NativeOperations {
     pub fn new(
         replacements: Vec<Replacement>,
         running: Option<super::process::RunningTray>,
-        tray: PathBuf,
     ) -> Self {
         Self {
             replacements,
             running,
-            tray,
             reservation: None,
         }
     }
@@ -235,7 +232,10 @@ impl Operations for NativeOperations {
             self.reservation.is_none(),
             "tray restart requires released protection reservation"
         );
-        super::process::restart(&self.tray)
+        self.running
+            .as_ref()
+            .context("cannot restart a tray that was not running before update")?
+            .restart()
     }
 }
 
@@ -586,7 +586,6 @@ mod tests {
                     running_cli: false,
                 }],
                 None,
-                target.clone(),
             );
             apply(&mut ops, 1, false).unwrap_err();
             assert_eq!(std::fs::read(&target)?, b"old");
@@ -609,7 +608,6 @@ mod tests {
                     running_cli: false,
                 }],
                 None,
-                target.clone(),
             );
             apply(&mut ops, 1, false).unwrap_err();
             assert_eq!(std::fs::read(&target)?, b"old");
@@ -629,7 +627,6 @@ mod tests {
                 running_cli: false,
             }],
             None,
-            target.clone(),
         );
         apply(&mut ops, 1, false)?;
         assert_eq!(std::fs::read(&target)?, b"new");
@@ -646,6 +643,7 @@ mod tests {
             fs,
             os::windows::{
                 ffi::OsStringExt,
+                fs::OpenOptionsExt,
                 io::{AsRawHandle, FromRawHandle, OwnedHandle},
                 process::CommandExt,
             },
@@ -1196,12 +1194,41 @@ mod tests {
             fs::write(data.join("blocked-camera-devices.json"), br#"{"blocked":[],"restore_on_arrival":[],"desired_blocked":false,"intent_generation":0}"#)?;
             let initial_state = snapshot(&root)?;
             let mut layout_errors = Vec::new();
-            for (label, cli_source, cli_version) in [
-                ("old-pair-to-candidate", &previous, &old_version),
+            for (label, cli_source, cli_version, cli_host, missing_companion) in [
+                (
+                    "old-pair-to-candidate",
+                    &previous,
+                    &old_version,
+                    false,
+                    false,
+                ),
                 (
                     "candidate-cli-old-tray-repair",
                     &candidate,
                     &candidate_version,
+                    false,
+                    false,
+                ),
+                (
+                    "old-cli-host-to-candidate",
+                    &previous,
+                    &old_version,
+                    true,
+                    false,
+                ),
+                (
+                    "candidate-cli-host-old-tray-repair",
+                    &candidate,
+                    &candidate_version,
+                    true,
+                    false,
+                ),
+                (
+                    "candidate-cli-host-missing-tray-repair",
+                    &candidate,
+                    &candidate_version,
+                    true,
+                    true,
                 ),
             ] {
                 let layout = root.join(label);
@@ -1209,15 +1236,30 @@ mod tests {
                 let stage = layout.join("stage");
                 fs::create_dir_all(&installed)?;
                 fs::create_dir(&stage)?;
+                let launch_directory = layout.join("launch cwd");
+                fs::create_dir_all(launch_directory.join("policy files"))?;
+                let relative_policy = Path::new("policy files").join("custom 日本.toml");
+                let policy_bytes = b"profile = \"strict\"\nlanguage = \"de\"\ntrust_policy = \"offline\"\naction = \"alert\"\n";
+                fs::write(launch_directory.join(&relative_policy), policy_bytes)?;
+                ensure!(
+                    fs::canonicalize(&launch_directory)?
+                        != fs::canonicalize(std::env::current_dir()?)?,
+                    "launch and updater working directories must differ"
+                );
                 fs::copy(cli_source.join("mcw.exe"), installed.join("mcw.exe"))?;
-                fs::copy(
-                    previous.join("mcw-tray.exe"),
-                    installed.join("mcw-tray.exe"),
-                )?;
+                let companion = installed.join("mcw-tray.exe");
+                if !missing_companion {
+                    fs::copy(previous.join("mcw-tray.exe"), &companion)?;
+                }
                 for name in ["mcw.exe", "mcw-tray.exe"] {
                     fs::copy(candidate.join(name), stage.join(name))?;
                 }
-                let target = installed.join("mcw-tray.exe");
+                let target = if cli_host {
+                    installed.join("mcw.exe")
+                } else {
+                    companion.clone()
+                };
+                let repair = cli_version == &candidate_version;
                 let mut fixture = Fixture {
                     target: target.clone(),
                     child: None,
@@ -1227,7 +1269,10 @@ mod tests {
                 };
                 let mut evidence = serde_json::json!({
                     "layout": label, "installed": installed,
-                    "initial_cli_version": cli_version, "initial_tray_version": old_version,
+                    "initial_cli_version": cli_version,
+                    "initial_tray_version": if missing_companion { None } else { Some(&old_version) },
+                    "frontend_host": if cli_host { "cli" } else { "companion" },
+                    "launch_directory": launch_directory, "updater_directory": std::env::current_dir()?,
                     "target_version": candidate_version, "result": "failed"
                 });
                 let attempt = (|| -> Result<()> {
@@ -1235,7 +1280,15 @@ mod tests {
                         snapshot(&root)? == initial_state,
                         "private state changed before fresh layout"
                     );
-                    let child = Command::new(&target)
+                    let mut command = Command::new(&target);
+                    if cli_host {
+                        command
+                            .arg("--config")
+                            .arg(&relative_policy)
+                            .args(["--lang", "fr", "tray"]);
+                    }
+                    let child = command
+                        .current_dir(&launch_directory)
                         .stdin(Stdio::null())
                         .stdout(fs::File::create(layout.join("old-tray.stdout"))?)
                         .stderr(fs::File::create(layout.join("old-tray.stderr"))?)
@@ -1250,25 +1303,46 @@ mod tests {
                         snapshot(&root)? == initial_state,
                         "old tray changed private durable state"
                     );
-                    let mut ops =
-                        NativeOperations::new(
-                            ["mcw-tray.exe", "mcw.exe"]
-                                .into_iter()
-                                .map(|name| Replacement {
-                                    staged: stage.join(name),
-                                    target: installed.join(name),
-                                    backup: stage.join(format!("previous-{name}")),
-                                    had_original: true,
-                                    running_cli: false,
-                                })
-                                .collect(),
-                            Some(super::super::process::owned_running_tray(&target)?.context(
-                                "ready old tray no longer accepted by ownership matcher",
-                            )?),
-                            target.clone(),
-                        );
+                    ensure!(
+                        super::super::process::installed_running_tray(
+                            &stage.join("mcw.exe"),
+                            &stage.join("mcw-tray.exe"),
+                        )
+                        .is_err(),
+                        "another installation adopted this fixture's tray owner"
+                    );
+                    ensure!(
+                        fixture.tray.as_ref().context("old tray missing")?.alive()?,
+                        "foreign installation inspection stopped the owner"
+                    );
+                    evidence["foreign_installation_refused_without_stop"] = serde_json::json!(true);
+                    let running = super::super::process::installed_running_tray(
+                        &installed.join("mcw.exe"),
+                        &companion,
+                    )?
+                    .context("ready frontend was not accepted as an installed tray host")?;
+                    let original_context = running.launch_context(&target)?;
+                    let mut ops = NativeOperations::new(
+                        ["mcw-tray.exe", "mcw.exe"]
+                            .into_iter()
+                            .filter(|name| !repair || *name != "mcw.exe")
+                            .map(|name| Replacement {
+                                staged: stage.join(name),
+                                target: installed.join(name),
+                                backup: stage.join(format!("previous-{name}")),
+                                had_original: name != "mcw-tray.exe" || !missing_companion,
+                                running_cli: false,
+                            })
+                            .collect(),
+                        Some(running),
+                    );
+                    let count = ops.replacements.len();
                     let original_cli = fs::read(installed.join("mcw.exe"))?;
-                    let original_tray = fs::read(&target)?;
+                    let original_tray = if missing_companion {
+                        None
+                    } else {
+                        Some(fs::read(&companion)?)
+                    };
                     let mut held = HeldLease::acquire()?;
                     ensure!(
                         fixture
@@ -1279,7 +1353,7 @@ mod tests {
                         "old tray died before refusal attempt"
                     );
                     fixture.restart_possible = true;
-                    let refusal = match apply(&mut ops, 2, true) {
+                    let refusal = match apply(&mut ops, count, true) {
                         Err(error) => error,
                         Ok(()) => {
                             bail!("real other-thread resource lease did not refuse replacement")
@@ -1300,12 +1374,20 @@ mod tests {
                         "reservation refusal killed the retained old tray"
                     );
                     ensure!(
-                        super::super::process::owned_running_tray(&target)?.is_some(),
+                        super::super::process::installed_running_tray(
+                            &installed.join("mcw.exe"),
+                            &companion
+                        )?
+                        .is_some(),
                         "refusal lost exact tray ownership"
                     );
                     ensure!(
                         fs::read(installed.join("mcw.exe"))? == original_cli
-                            && fs::read(&target)? == original_tray,
+                            && if missing_companion {
+                                !companion.try_exists()?
+                            } else {
+                                Some(fs::read(&companion)?) == original_tray
+                            },
                         "refusal changed installed bytes"
                     );
                     for replacement in &ops.replacements {
@@ -1332,11 +1414,57 @@ mod tests {
                     );
                     evidence["refusal_preserved_files_tray_state"] = serde_json::json!(true);
                     held.release()?;
+                    if cli_host && !repair {
+                        // Deny deletion of only our genuine staged CLI. The tray
+                        // swap must roll back, then restart the original CLI host
+                        // with its original launch context before a later apply.
+                        let staged_cli = fs::OpenOptions::new()
+                            .read(true)
+                            .share_mode(1)
+                            .open(stage.join("mcw.exe"))?;
+                        let rollback = apply(&mut ops, count, true);
+                        drop(staged_cli);
+                        ensure!(
+                            rollback.is_err(),
+                            "locked staged CLI did not force rollback"
+                        );
+                        ensure!(
+                            wait_child(fixture.child.as_mut().context("old child missing")?, 5)?
+                                .success()
+                                && !fixture.tray.as_ref().context("old tray missing")?.alive()?,
+                            "rollback did not retire the exact old frontend cooperatively"
+                        );
+                        ensure!(
+                            fs::read(installed.join("mcw.exe"))? == original_cli
+                                && Some(fs::read(&companion)?) == original_tray
+                                && snapshot(&root)? == initial_state,
+                            "native rollback did not preserve the original pair and preferences"
+                        );
+                        fixture.tray = None;
+                        fixture.await_tray(None)?;
+                        let restored = fixture
+                            .tray
+                            .as_ref()
+                            .context("rollback successor missing")?;
+                        ensure!(
+                            restored.running.launch_context(&target)? == original_context,
+                            "rollback restarted a different frontend launch context"
+                        );
+                        evidence["rollback_successor_pid"] = serde_json::json!(restored.pid);
+                        evidence["native_rollback_preserved_pair_context_state"] =
+                            serde_json::json!(true);
+                        ops.running = super::super::process::installed_running_tray(
+                            &installed.join("mcw.exe"),
+                            &companion,
+                        )?;
+                        ensure!(ops.running.is_some(), "rollback successor was not retained");
+                        fs::copy(candidate.join("mcw-tray.exe"), stage.join("mcw-tray.exe"))?;
+                    }
                     ensure!(
                         fixture.tray.as_ref().context("old tray missing")?.alive()?,
                         "old tray must still be alive immediately before positive apply"
                     );
-                    apply(&mut ops, 2, true)?;
+                    apply(&mut ops, count, true)?;
                     ensure!(
                         wait_child(fixture.child.as_mut().context("old child missing")?, 5)?
                             .success(),
@@ -1352,6 +1480,15 @@ mod tests {
                     let successor = fixture.tray.as_ref().context("successor handle missing")?;
                     evidence["successor_pid"] = serde_json::json!(successor.pid);
                     evidence["successor_exact_image_ready"] = serde_json::json!(true);
+                    ensure!(
+                        successor.running.launch_context(&target)? == original_context,
+                        "successor changed frontend arguments, working directory, or environment"
+                    );
+                    ensure!(
+                        fs::read(launch_directory.join(&relative_policy))? == policy_bytes,
+                        "update changed the explicit custom policy"
+                    );
+                    evidence["launch_context_preserved"] = serde_json::json!(true);
                     for name in ["mcw.exe", "mcw-tray.exe"] {
                         ensure!(
                             fs::read(installed.join(name))? == fs::read(candidate.join(name))?,
@@ -1359,9 +1496,19 @@ mod tests {
                         );
                     }
                     ensure!(
-                        fs::read(stage.join("previous-mcw.exe"))? == original_cli
-                            && fs::read(stage.join("previous-mcw-tray.exe"))? == original_tray,
-                        "transaction backups do not preserve the actual original pair"
+                        if repair {
+                            !stage.join("previous-mcw.exe").try_exists()?
+                        } else {
+                            fs::read(stage.join("previous-mcw.exe"))? == original_cli
+                        },
+                        "CLI backup does not reflect actual replacement"
+                    );
+                    ensure!(
+                        match &original_tray {
+                            Some(bytes) => fs::read(stage.join("previous-mcw-tray.exe"))? == *bytes,
+                            None => !stage.join("previous-mcw-tray.exe").try_exists()?,
+                        },
+                        "companion backup does not preserve the actual original installation"
                     );
                     ensure!(
                         snapshot(&root)? == initial_state,
@@ -1502,7 +1649,6 @@ mod tests {
         let target = temp.path().join("mcw-tray.exe");
         std::fs::write(&target, b"new")?;
         let mut ops = NativeOperations {
-            tray: target.clone(),
             running: None,
             reservation: None,
             replacements: vec![Replacement {

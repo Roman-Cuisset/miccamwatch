@@ -2,14 +2,15 @@ use anyhow::{Context, Result, bail};
 use std::{
     ffi::OsString,
     os::windows::ffi::{OsStrExt, OsStringExt},
-    path::Path,
+    path::{Path, PathBuf},
 };
 use windows::{
     Win32::{
         Foundation::{CloseHandle, HANDLE, HWND, LPARAM, WAIT_OBJECT_0, WAIT_TIMEOUT, WPARAM},
         System::Threading::{
-            CREATE_NO_WINDOW, CreateProcessW, DETACHED_PROCESS, OpenProcess, PROCESS_INFORMATION,
-            PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
+            CREATE_NO_WINDOW, CREATE_UNICODE_ENVIRONMENT, CreateProcessW, DETACHED_PROCESS,
+            OpenProcess, PROCESS_INFORMATION, PROCESS_NAME_WIN32,
+            PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_VM_READ,
             QueryFullProcessImageNameW, STARTUPINFOW, WaitForSingleObject,
         },
         UI::WindowsAndMessaging::{
@@ -24,6 +25,15 @@ pub struct RunningTray {
     process: HANDLE,
     window: HWND,
     pid: u32,
+    launch: Option<LaunchContext>,
+}
+
+#[derive(PartialEq, Eq)]
+pub struct LaunchContext {
+    target: PathBuf,
+    command: Vec<u16>,
+    directory: Option<PathBuf>,
+    environment: Option<Vec<u16>>,
 }
 impl Drop for RunningTray {
     fn drop(&mut self) {
@@ -35,6 +45,62 @@ impl Drop for RunningTray {
 
 fn wide(path: &std::ffi::OsStr) -> Vec<u16> {
     path.encode_wide().chain(Some(0)).collect()
+}
+fn environment_value<'a>(environment: &'a [u16], name: &str) -> Result<&'a [u16]> {
+    // Windows variable names used here are ASCII; values remain raw UTF-16.
+    let mut found = None;
+    for entry in environment
+        .split(|unit| *unit == 0)
+        .filter(|entry| !entry.is_empty())
+    {
+        let Some(separator) = entry.iter().position(|unit| *unit == b'=' as u16) else {
+            bail!("invalid running tray environment entry");
+        };
+        if entry[..separator].len() == name.len()
+            && entry[..separator]
+                .iter()
+                .zip(name.bytes())
+                .all(|(left, right)| {
+                    ascii_environment_unit(*left) == ascii_environment_unit(right as u16)
+                })
+        {
+            if found.is_some() {
+                bail!("duplicate running tray environment variable");
+            }
+            found = Some(&entry[separator + 1..]);
+        }
+    }
+    found.context("running tray application-data namespace is unavailable")
+}
+
+fn ascii_environment_unit(unit: u16) -> u16 {
+    if (b'A' as u16..=b'Z' as u16).contains(&unit) {
+        unit + 32
+    } else {
+        unit
+    }
+}
+
+fn ensure_launch_namespace(environment: &[u16]) -> Result<()> {
+    // Reservations inspect this updater's namespace. Never stop a frontend whose
+    // dormant requests/preferences live elsewhere, even when its image matches.
+    for name in ["APPDATA", "LOCALAPPDATA"] {
+        let captured = environment_value(environment, name)?;
+        let current =
+            std::env::var_os(name).context("updater application-data namespace is unavailable")?;
+        let captured = PathBuf::from(OsString::from_wide(captured));
+        let current = PathBuf::from(current);
+        if !captured.is_absolute()
+            || !current.is_absolute()
+            || crate::windows_control::scope_hash(&captured.join("MicCamWatch"))?
+                != crate::windows_control::scope_hash(&current.join("MicCamWatch"))?
+        {
+            bail!(
+                "running tray uses a different {name} namespace; installation unchanged; no process was stopped"
+            );
+        }
+    }
+    Ok(())
 }
 
 pub fn owned_running_tray(target: &Path) -> Result<Option<RunningTray>> {
@@ -51,7 +117,7 @@ pub fn owned_running_tray(target: &Path) -> Result<Option<RunningTray>> {
     }
     let process = unsafe {
         OpenProcess(
-            PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
+            PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE | PROCESS_VM_READ,
             false,
             pid,
         )
@@ -61,6 +127,7 @@ pub fn owned_running_tray(target: &Path) -> Result<Option<RunningTray>> {
         process,
         window,
         pid,
+        launch: None,
     };
     let mut image = [0u16; 32768];
     let mut length = image.len() as u32;
@@ -88,6 +155,26 @@ pub fn owned_running_tray(target: &Path) -> Result<Option<RunningTray>> {
     Ok(Some(running))
 }
 
+pub fn installed_running_tray(cli: &Path, companion: &Path) -> Result<Option<RunningTray>> {
+    // Both are supported frontend hosts. A missing companion must not hide an
+    // installed CLI-hosted tray during same-version companion repair.
+    for target in [companion, cli] {
+        if target.try_exists()?
+            && let Some(mut running) = owned_running_tray(target)?
+        {
+            running.launch = Some(running.launch_context(target)?);
+            return Ok(Some(running));
+        }
+    }
+    let class = wide(std::ffi::OsStr::new("MicCamWatchTrayClass"));
+    if unsafe { FindWindowW(PCWSTR(class.as_ptr()), PCWSTR::null()) }.is_ok() {
+        bail!(
+            "running tray does not belong to this installed CLI or companion; installation unchanged; no process was stopped"
+        );
+    }
+    Ok(None)
+}
+
 fn same_target(image: &Path, target: &Path) -> Result<bool> {
     let image = std::fs::canonicalize(image).context("cannot resolve running tray executable")?;
     let target =
@@ -97,6 +184,29 @@ fn same_target(image: &Path, target: &Path) -> Result<bool> {
 }
 
 impl RunningTray {
+    pub fn launch_context(&self, target: &Path) -> Result<LaunchContext> {
+        let (directory, environment) =
+            crate::platform::process_launch_directory_environment(self.process)
+                .context("cannot preserve running tray launch context; installation unchanged")?;
+        ensure_launch_namespace(&environment)?;
+        Ok(LaunchContext {
+            target: target.to_owned(),
+            command: crate::platform::with_process_command_line(self.process, |command| {
+                command.to_vec()
+            })
+            .context("cannot preserve running tray arguments; installation unchanged")?,
+            directory: Some(directory),
+            environment: Some(environment),
+        })
+    }
+
+    pub fn restart(&self) -> Result<()> {
+        self.launch
+            .as_ref()
+            .context("running tray launch context was not captured before shutdown")?
+            .restart()
+    }
+
     pub fn stop(&self) -> Result<()> {
         if unsafe { WaitForSingleObject(self.process, 0) } == WAIT_OBJECT_0 {
             return Ok(());
@@ -144,53 +254,73 @@ impl RunningTray {
     }
 }
 
+#[cfg(test)]
 pub fn restart(target: &Path) -> Result<()> {
-    // Command with NUL stdio still inherits unrelated inheritable handles,
-    // including the updater caller's original pipes. Match spawn_owner: none.
-    let mut command: Vec<u16> = std::iter::once(b'"' as u16)
-        .chain(target.as_os_str().encode_wide())
-        .chain([b'"' as u16, 0])
-        .collect();
-    if command[1..command.len() - 2]
-        .iter()
-        .any(|unit| *unit == 0 || *unit == b'"' as u16)
-    {
-        return Err(super::transaction::io_error(
-            "restart previously running tray",
-            target,
-            std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid executable path"),
-        ));
+    LaunchContext {
+        target: target.to_owned(),
+        command: std::iter::once(b'"' as u16)
+            .chain(target.as_os_str().encode_wide())
+            .chain([b'"' as u16])
+            .collect(),
+        directory: None,
+        environment: None,
     }
-    let startup = STARTUPINFOW {
-        cb: std::mem::size_of::<STARTUPINFOW>() as u32,
-        ..Default::default()
-    };
-    let mut process = PROCESS_INFORMATION::default();
-    unsafe {
-        if CreateProcessW(
-            PCWSTR::null(),
-            Some(PWSTR(command.as_mut_ptr())),
-            None,
-            None,
-            false,
-            DETACHED_PROCESS | CREATE_NO_WINDOW,
-            None,
-            PCWSTR::null(),
-            &startup,
-            &mut process,
-        )
-        .is_err()
+    .restart()
+}
+
+impl LaunchContext {
+    fn restart(&self) -> Result<()> {
+        // Command with NUL stdio still inherits unrelated inheritable handles,
+        // including the updater caller's original pipes. Match spawn_owner: none.
+        let target = &self.target;
+        let application = wide(target.as_os_str());
+        let directory = self.directory.as_ref().map(|path| wide(path.as_os_str()));
+        let mut command = self.command.clone();
+        command.push(0);
+        if application[..application.len() - 1]
+            .iter()
+            .any(|unit| *unit == 0 || *unit == b'"' as u16)
+            || self.command.contains(&0)
         {
             return Err(super::transaction::io_error(
                 "restart previously running tray",
                 target,
-                std::io::Error::last_os_error(),
+                std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid executable path"),
             ));
         }
-        let _ = CloseHandle(process.hThread);
-        let _ = CloseHandle(process.hProcess);
+        let startup = STARTUPINFOW {
+            cb: std::mem::size_of::<STARTUPINFOW>() as u32,
+            ..Default::default()
+        };
+        let mut process = PROCESS_INFORMATION::default();
+        unsafe {
+            if CreateProcessW(
+                PCWSTR(application.as_ptr()),
+                Some(PWSTR(command.as_mut_ptr())),
+                None,
+                None,
+                false,
+                DETACHED_PROCESS | CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT,
+                self.environment.as_ref().map(|block| block.as_ptr().cast()),
+                directory
+                    .as_ref()
+                    .map_or(PCWSTR::null(), |path| PCWSTR(path.as_ptr())),
+                &startup,
+                &mut process,
+            )
+            .is_err()
+            {
+                return Err(super::transaction::io_error(
+                    "restart previously running tray",
+                    target,
+                    std::io::Error::last_os_error(),
+                ));
+            }
+            let _ = CloseHandle(process.hThread);
+            let _ = CloseHandle(process.hProcess);
+        }
+        Ok(())
     }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -207,12 +337,35 @@ mod tests {
     };
 
     #[test]
-    fn restart_reports_launch_failure() -> Result<()> {
-        let directory = tempfile::tempdir()?;
-        let missing = directory.path().join("missing-successor.exe");
-        let message = restart(&missing).unwrap_err().to_string();
-        assert!(message.contains("restart previously running tray"));
-        assert!(message.contains(&missing.display().to_string()));
+    #[cfg(target_arch = "x86_64")]
+    fn native_launch_snapshot_matches_process_context() -> Result<()> {
+        windows::core::link!("kernel32.dll" "system" fn GetCommandLineW() -> PCWSTR);
+        let process = unsafe { windows::Win32::System::Threading::GetCurrentProcess() };
+        let (directory, environment) =
+            crate::platform::process_launch_directory_environment(process)?;
+        anyhow::ensure!(
+            directory.canonicalize()? == std::env::current_dir()?.canonicalize()?,
+            "native working-directory snapshot differs from the current process"
+        );
+        for name in ["APPDATA", "LOCALAPPDATA"] {
+            let expected =
+                std::env::var_os(name).context("test application-data namespace absent")?;
+            anyhow::ensure!(
+                environment_value(&environment, name)?
+                    .iter()
+                    .copied()
+                    .eq(expected.encode_wide()),
+                "native namespace snapshot differs from the current process"
+            );
+        }
+        let native_command = unsafe { GetCommandLineW() };
+        let arguments_match = crate::platform::with_process_command_line(process, |observed| {
+            observed == unsafe { native_command.as_wide() }
+        })?;
+        anyhow::ensure!(
+            arguments_match,
+            "native command-line snapshot differs from GetCommandLineW"
+        );
         Ok(())
     }
 
@@ -498,16 +651,55 @@ fn main() {
     #[test]
     fn ownership_requires_exact_installed_target() -> Result<()> {
         let temp = tempfile::tempdir()?;
-        let a = temp.path().join("a");
-        let b = temp.path().join("b");
-        std::fs::create_dir(&a)?;
-        std::fs::create_dir(&b)?;
-        let installed = a.join("mcw-tray.exe");
-        let other = b.join("mcw-tray.exe");
-        std::fs::write(&installed, b"owned")?;
-        std::fs::write(&other, b"other")?;
-        assert!(same_target(&installed, &installed)?);
-        assert!(!same_target(&other, &installed)?);
+        let installed_root = temp.path().join("installed");
+        let foreign_root = temp.path().join("foreign");
+        let backup_root = installed_root.join(".mcw-update-test");
+        std::fs::create_dir_all(&backup_root)?;
+        std::fs::create_dir(&foreign_root)?;
+        for name in ["mcw.exe", "mcw-tray.exe"] {
+            let installed = installed_root.join(name);
+            let foreign = foreign_root.join(name);
+            std::fs::write(&installed, b"owned")?;
+            std::fs::write(&foreign, b"other")?;
+            assert!(same_target(&installed, &installed)?);
+            assert!(!same_target(&foreign, &installed)?);
+            let previous = backup_root.join(format!("previous-{name}"));
+            std::fs::rename(&installed, &previous)?;
+            std::fs::write(&installed, b"successor")?;
+            assert!(!same_target(&previous, &installed)?);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn namespace_uses_canonical_identity_and_refuses_a_different_data_root() -> Result<()> {
+        fn environment(appdata: &Path, localappdata: &Path) -> Vec<u16> {
+            let mut block = Vec::new();
+            for (name, path) in [("APPDATA=", appdata), ("LOCALAPPDATA=", localappdata)] {
+                block.extend(name.encode_utf16());
+                block.extend(path.as_os_str().encode_wide());
+                block.push(0);
+            }
+            block.push(0);
+            block
+        }
+        let appdata = PathBuf::from(std::env::var_os("APPDATA").context("APPDATA required")?);
+        let localappdata =
+            PathBuf::from(std::env::var_os("LOCALAPPDATA").context("LOCALAPPDATA required")?);
+        ensure_launch_namespace(&environment(&appdata.join("."), &localappdata.join(".")))?;
+        let different = tempfile::tempdir()?;
+        assert!(ensure_launch_namespace(&environment(&appdata, different.path())).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn environment_lookup_is_lossless_and_rejects_ambiguous_names() -> Result<()> {
+        let mut block: Vec<u16> = "=C:=C:\\work\0localappdata=".encode_utf16().collect();
+        block.extend([0xd800, 0, 0]);
+        assert_eq!(environment_value(&block, "LOCALAPPDATA")?, &[0xd800]);
+        block.pop();
+        block.extend("LOCALAPPDATA=other\0\0".encode_utf16());
+        assert!(environment_value(&block, "LOCALAPPDATA").is_err());
         Ok(())
     }
 }

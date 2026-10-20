@@ -288,7 +288,7 @@ fn validate_identity(identity: &ControlIdentity) -> Result<()> {
     );
     Ok(())
 }
-fn scope_hash(directory: &std::path::Path) -> Result<String> {
+pub(crate) fn scope_hash(directory: &std::path::Path) -> Result<String> {
     let mut ancestor = directory.to_owned();
     let mut missing = Vec::new();
     while !ancestor.exists() {
