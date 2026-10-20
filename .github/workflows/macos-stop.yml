@@ -1,0 +1,78 @@
+name: Native macOS stop diagnosis
+
+on:
+  workflow_dispatch:
+    inputs:
+      phase:
+        description: Immutable public0191 diagnosis (no Rust build), or integrated source qualification
+        type: choice
+        required: true
+        default: baseline
+        options:
+          - baseline
+          - candidate
+      cycles:
+        description: Bounded lifecycle cycles (1-40); first failure aborts without retry
+        type: string
+        required: true
+        default: "8"
+
+permissions:
+  contents: read
+
+jobs:
+  native-stop:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-intel
+            architecture: x86_64
+          - runner: macos-15
+            architecture: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    env:
+      MCW_STOP_PHASE: ${{ inputs.phase }}
+      MCW_STOP_CYCLES: ${{ inputs.cycles }}
+      EXPECTED_ARCH: ${{ matrix.architecture }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Require disposable native architecture
+        shell: bash
+        run: |
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$(uname -m)" = "$EXPECTED_ARCH"
+          test "$(id -u)" != 0
+          /usr/bin/sw_vers
+          /usr/bin/xcrun --show-sdk-version
+      # Baseline deliberately does NOT build any feature source. The fixture
+      # downloads public v0.19.1 only, and checks both pinned SHA and manifest.
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        if: inputs.phase == 'candidate'
+      - name: Build integrated source candidate
+        if: inputs.phase == 'candidate'
+        run: cargo build --release --locked
+      - name: Diagnose genuine public0191 first stop
+        if: inputs.phase == 'baseline'
+        shell: bash
+        run: |
+          python3 -B installer/tests/native_macos_stop.py \
+            --proof "$RUNNER_TEMP/macos-stop-baseline" \
+            --cycles "$MCW_STOP_CYCLES" --disposable-runner
+      - name: Qualify real source consumer stop reopen and peer exit
+        if: inputs.phase == 'candidate'
+        shell: bash
+        run: |
+          python3 -B installer/tests/native_macos_stop.py \
+            --candidate "$GITHUB_WORKSPACE/target/release/mcw" \
+            --proof "$RUNNER_TEMP/macos-stop-candidate" \
+            --cycles "$MCW_STOP_CYCLES" --disposable-runner
+      - name: Preserve first failure and native syscall evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: macos-stop-${{ inputs.phase }}-${{ matrix.architecture }}
+          if-no-files-found: error
+          retention-days: 14
+          path: ${{ runner.temp }}/macos-stop-${{ inputs.phase }}
