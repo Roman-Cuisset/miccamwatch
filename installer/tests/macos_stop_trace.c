@@ -4,7 +4,6 @@
  */
 #include <sys/socket.h>
 #include <sys/stat.h>
-#include <sys/syscall.h>
 #include <sys/uio.h>
 #include <unistd.h>
 #include <errno.h>
@@ -12,6 +11,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+extern ssize_t real_write_nocancel(int, const void *, size_t) __asm("_write$NOCANCEL");
 static int trace_fd = -1;
 static void trace(const char *operation, int fd, long long result, int error) {
     int saved = errno;
@@ -21,7 +21,7 @@ static void trace(const char *operation, int fd, long long result, int error) {
                          "{\"operation\":\"%s\",\"fd\":%d,\"result\":%lld,\"errno\":%d}\n",
                          operation, fd, result, error);
         if (n > 0 && (size_t)n < sizeof(line))
-            (void)syscall(SYS_write, trace_fd, line, (size_t)n);
+            (void)real_write_nocancel(trace_fd, line, (size_t)n);
     }
     errno = saved;
 }
@@ -123,17 +123,16 @@ static ssize_t traced_recvmsg(int fd, struct msghdr *message, int flags) {
 INTERPOSE(traced_recvmsg, recvmsg);
 /* Rust/libSystem can bind cancellation entry points directly. Cover both, without
  * changing their cancellation semantics or replacing syscall return values. */
-extern int real_connect_nocancel(int, const struct sockaddr *, socklen_t) __asm("connect$NOCANCEL");
+extern int real_connect_nocancel(int, const struct sockaddr *, socklen_t) __asm("_connect$NOCANCEL");
 static int traced_connect_nocancel(int fd, const struct sockaddr *address, socklen_t length) {
     RETURN_TRACE("connect_nocancel", fd, real_connect_nocancel(fd, address, length), int);
 }
 INTERPOSE(traced_connect_nocancel, real_connect_nocancel);
-extern ssize_t real_read_nocancel(int, void *, size_t) __asm("read$NOCANCEL");
+extern ssize_t real_read_nocancel(int, void *, size_t) __asm("_read$NOCANCEL");
 static ssize_t traced_read_nocancel(int fd, void *buffer, size_t length) {
     RETURN_TRACE("read_nocancel", fd, real_read_nocancel(fd, buffer, length), ssize_t);
 }
 INTERPOSE(traced_read_nocancel, real_read_nocancel);
-extern ssize_t real_write_nocancel(int, const void *, size_t) __asm("write$NOCANCEL");
 static ssize_t traced_write_nocancel(int fd, const void *buffer, size_t length) {
     RETURN_TRACE("write_nocancel", fd, real_write_nocancel(fd, buffer, length), ssize_t);
 }
