@@ -148,6 +148,69 @@ impl Store {
     }
 }
 
+/// Prepared before any frontend shutdown. The retained ownership lock prevents
+/// another MCW command from changing this registration during removal.
+pub(crate) struct UninstallRegistration {
+    store: Store,
+    bytes: Option<Vec<u8>>,
+    record: Option<Vec<u8>>,
+    owned: bool,
+}
+
+impl UninstallRegistration {
+    pub(crate) fn prepare(current: &Path) -> Result<Self> {
+        let store = Store::open()?;
+        let snapshot = store.snapshot()?;
+        let owned = snapshot.registration.as_ref().is_some_and(|entry| {
+            entry.executable == current && entry.version == env!("CARGO_PKG_VERSION")
+        });
+        #[cfg(target_os = "macos")]
+        if owned {
+            let native = Native::open()?;
+            let _ = native.owned_loaded(&store.path, snapshot.registration.as_ref().unwrap())?;
+        }
+        Ok(Self {
+            store,
+            bytes: snapshot.bytes,
+            record: snapshot.record,
+            owned,
+        })
+    }
+
+    pub(crate) fn remove(&self) -> Result<()> {
+        if !self.owned {
+            // Other installations and external registrations remain untouched.
+            return Ok(());
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let snapshot = self.store.snapshot()?;
+            if snapshot.bytes != self.bytes || snapshot.record != self.record {
+                bail!("autostart changed during uninstall; registration was preserved");
+            }
+            let native = Native::open()?;
+            let entry = snapshot.registration.as_ref().unwrap();
+            if native.owned_loaded(&self.store.path, entry)? {
+                native.bootout(&self.store.path, entry)?;
+            }
+        }
+        self.store
+            .target
+            .replace(&self.store.name, self.bytes.as_deref(), None)?;
+        self.store
+            .state
+            .replace(RECORD, self.record.as_deref(), None)
+    }
+
+    pub(crate) fn inherit_across_exec(&self) -> Result<()> {
+        if unsafe { libc::fcntl(self.store._lock.as_raw_fd(), libc::F_SETFD, 0) } == -1 {
+            return Err(std::io::Error::last_os_error())
+                .context("cannot retain autostart ownership across uninstall");
+        }
+        Ok(())
+    }
+}
+
 pub fn state() -> Result<AutostartState> {
     let store = Store::open()?;
     let registration = store.snapshot()?.registration;
@@ -723,7 +786,7 @@ impl Directory {
         Ok(Some(bytes))
     }
 
-    fn lock(&self, name: &str) -> Result<File> {
+    pub(crate) fn lock(&self, name: &str) -> Result<File> {
         let name = c_name(OsStr::new(name))?;
         let fd = unsafe {
             libc::openat(

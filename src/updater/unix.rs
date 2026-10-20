@@ -159,11 +159,68 @@ pub fn update() -> Result<()> {
     Err(error).context("cannot hand off the update to /bin/sh; installation was not changed")
 }
 
+pub(crate) struct ManagedUninstall {
+    staging: Staging,
+    prefix: PathBuf,
+}
+
+pub(crate) fn prepare_managed_uninstall(current: &Path) -> Result<ManagedUninstall> {
+    ordinary_user()?;
+    #[cfg(target_os = "linux")]
+    root_camera_installation_absent()?;
+    let installation = Installation::inspect_at(current)?;
+    let prefix = match installation {
+        Installation::Managed { prefix } => prefix,
+        #[cfg(target_os = "macos")]
+        Installation::Portable(_) => bail!(
+            "standalone macOS executable has no installer receipt; use the exact standalone removal procedure reported by mcw uninstall"
+        ),
+    };
+    let staging = Staging::new(&prefix)?;
+    staging.write("install.sh", INSTALLER.as_bytes())?;
+    staging.write(
+        "update.sh",
+        br#"#!/bin/sh
+set -eu
+stage=$1
+prefix=$2
+cleanup() {
+    rm -f "$stage/install.sh" "$stage/update.sh"
+    rmdir "$stage"
+}
+trap cleanup 0
+trap 'exit 130' INT
+trap 'exit 143' TERM HUP
+/bin/sh "$stage/install.sh" --uninstall --prefix "$prefix"
+"#,
+    )?;
+    Ok(ManagedUninstall { staging, prefix })
+}
+
+impl ManagedUninstall {
+    pub(crate) fn execute(self) -> Result<u8> {
+        std::io::stdout().flush()?;
+        // Replacing this process removes its mapped executable before the
+        // installer's existing running-target guard; no PID exclusion exists.
+        let error = Command::new("/bin/sh")
+            .arg(self.staging.path.join("update.sh"))
+            .arg(&self.staging.path)
+            .arg(&self.prefix)
+            .stdin(Stdio::inherit())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .exec();
+        Err(error).context(
+            "cannot hand off uninstall to the receipt-owning installer; payloads were preserved",
+        )
+    }
+}
+
 #[cfg(target_os = "linux")]
 fn root_camera_installation_absent() -> Result<()> {
     use std::os::unix::fs::MetadataExt;
 
-    const GUIDANCE: &str = "User installation was preserved. First explicitly restore with the old matching mcw camera allow, then have an administrator run the reviewed root helper installer --uninstall. After root removal, retry the user update; afterward explicitly set up the matching same-version root helper if wanted. mcw update never elevates, calls camera APIs or removes the root helper.";
+    const GUIDANCE: &str = "User installation was preserved. First explicitly restore with the old matching mcw camera allow, then have an administrator run the reviewed root helper installer --uninstall. After root removal, retry the user update or uninstall. User installation operations never elevate, call camera mutation APIs or remove the root helper; only explicitly set up a matching same-version helper afterward if keeping MCW.";
     // Metadata and directory names only: do not read privileged evidence or call
     // camera status. Allowed state cannot prove an empty restoration journal.
     for directory in [

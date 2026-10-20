@@ -307,7 +307,9 @@ pub fn camera_capability() -> &'static str {
     "Manually approved macOS Restrictions profile (allowCamera=false); no silent action while locked, no per-app permission changes, no proven physical cutoff"
 }
 pub fn camera_detail() -> Result<String> {
-    let lock = OperationLock::acquire("camera")?;
+    let lock = OperationLock::try_acquire("camera").context(
+        "camera observation unavailable: native ownership is busy or cannot be inspected",
+    )?;
     let owned = load(&lock.directory.join("camera.json"))?;
     let status = camera_request("camera_status", owned.as_ref(), None)?;
     let pending = owned.as_ref().map(|p| {
@@ -318,9 +320,31 @@ pub fn camera_detail() -> Result<String> {
     Ok(format!("{}{}", status.detail, pending))
 }
 pub fn camera_state() -> Result<CameraPrivacyState> {
-    let lock = OperationLock::acquire("camera")?;
+    let lock = OperationLock::try_acquire("camera").context(
+        "camera observation unavailable: native ownership is busy or cannot be inspected",
+    )?;
     let owned = load(&lock.directory.join("camera.json"))?;
     established_state(&camera_request("camera_status", owned.as_ref(), None)?)
+}
+
+pub(crate) fn reserve_uninstall() -> Result<OperationLock> {
+    let lock = OperationLock::try_acquire("camera")?;
+    let owned = load(&lock.directory.join("camera.json"))?;
+    if owned
+        .as_ref()
+        .is_some_and(|profile| profile.intent == "install")
+    {
+        bail!(
+            "uninstall refused: camera protection is requested; explicitly run mcw camera allow and complete profile removal in System Settings > General > Device Management"
+        );
+    }
+    let status = camera_request("camera_status", owned.as_ref(), None)?;
+    if status.owned_installed || established_state(&status)? != CameraPrivacyState::Allowed {
+        bail!(
+            "uninstall refused: camera restoration is pending or unknown; run mcw camera allow, resolve Device Management approval and inspect the status before retrying"
+        );
+    }
+    Ok(lock)
 }
 pub fn set_camera_state(state: CameraPrivacyState) -> Result<()> {
     let lock = OperationLock::acquire("camera")?;

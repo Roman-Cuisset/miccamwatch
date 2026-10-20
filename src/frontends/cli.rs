@@ -68,6 +68,15 @@ pub enum Command {
         #[arg(long, hide = true)]
         bootstrap: String,
     },
+    #[cfg(windows)]
+    #[command(name = "__uninstall-worker", hide = true)]
+    UninstallWorker {
+        parent_pid: u32,
+        parent_created: u64,
+    },
+    #[cfg(windows)]
+    #[command(name = "__portable-receipt", hide = true)]
+    PortableReceipt,
     /// Show capture access active right now
     Status(Options),
     /// Print access start and stop events until Ctrl+C
@@ -78,6 +87,8 @@ pub enum Command {
     Explain(ExplainOptions),
     /// Download and install the latest GitHub release
     Update,
+    /// Remove this owned installation or show its package-manager removal command
+    Uninstall,
     /// Run self-diagnostics and report system compatibility
     Doctor(OutputOptions),
     /// Windows persistent microphone protection; supported Unix microphone mute
@@ -136,6 +147,9 @@ pub enum Command {
 pub enum TrayCommand {
     /// Run the notification-area service in this process
     Run,
+    /// Open or reopen the native consultation window without another frontend
+    #[cfg(target_os = "macos")]
+    Open,
     /// Stop the running notification-area service
     Stop,
     /// Report whether the notification-area service is running
@@ -556,6 +570,25 @@ fn command_help(name: &str, root: bool, lang: Language) -> Option<&'static str> 
             "検証済みリリースで管理対象のインストールを更新",
             "使用已验证发行文件更新受管安装",
             "Обновить управляемую установку проверенными файлами выпуска",
+        ],
+        "uninstall" => [
+            "Remove this owned installation while preserving user data",
+            "Retirer cette installation gérée en conservant les données utilisateur",
+            "Diese eigene Installation entfernen und Benutzerdaten behalten",
+            "Retirar esta instalación gestionada conservando los datos del usuario",
+            "ユーザーデータを保持してこの管理対象インストールを削除",
+            "移除此受管安装并保留用户数据",
+            "Удалить эту управляемую установку, сохранив данные пользователя",
+        ],
+        #[cfg(target_os = "macos")]
+        "open" => [
+            "Open the native consultation window without a duplicate frontend",
+            "Ouvrir la fenêtre native sans créer de doublon",
+            "Natives Übersichtsfenster ohne zweite Instanz öffnen",
+            "Abrir la ventana nativa sin duplicar la aplicación",
+            "重複起動せずにネイティブの確認ウィンドウを開く",
+            "打开原生查看窗口，不重复启动",
+            "Открыть нативное окно без второго экземпляра",
         ],
         #[cfg(not(windows))]
         "mute" => [

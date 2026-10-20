@@ -25,6 +25,14 @@ pub(crate) struct InstallationLock {
 }
 
 pub(crate) fn lock_installation(current: &Path) -> Result<InstallationLock> {
+    installation_lock(current, false)
+}
+
+pub(crate) fn try_lock_installation(current: &Path) -> Result<InstallationLock> {
+    installation_lock(current, true)
+}
+
+fn installation_lock(current: &Path, nonblocking: bool) -> Result<InstallationLock> {
     let directory = current
         .parent()
         .context("executable has no installation directory")?;
@@ -46,8 +54,17 @@ pub(crate) fn lock_installation(current: &Path) -> Result<InstallationLock> {
             path.display()
         );
     }
-    file.lock()
-        .with_context(|| format!("failed to acquire installation lock {}", path.display()))?;
+    if nonblocking {
+        file.try_lock().with_context(|| {
+            format!(
+                "installation lock is busy or unavailable at {}; operation refused",
+                path.display()
+            )
+        })?;
+    } else {
+        file.lock()
+            .with_context(|| format!("failed to acquire installation lock {}", path.display()))?;
+    }
     Ok(InstallationLock {
         _file: file,
         directory: directory.to_owned(),
@@ -212,6 +229,46 @@ pub fn disable() -> Result<()> {
     Ok(())
 }
 
+pub(crate) struct UninstallRegistration {
+    current: PathBuf,
+    task: Option<TaskRegistration>,
+    run: Option<(String, bool)>,
+}
+
+impl UninstallRegistration {
+    pub(crate) fn prepare(current: &Path, lock: &InstallationLock) -> Result<Self> {
+        if current.parent() != Some(lock.directory.as_path()) {
+            bail!("uninstall does not own this installation lock");
+        }
+        Ok(Self {
+            current: current.to_owned(),
+            task: registered_task()?,
+            run: run_registration()?,
+        })
+    }
+
+    pub(crate) fn remove(self) -> Result<()> {
+        if registered_task()? != self.task || run_registration()? != self.run {
+            bail!("autostart changed during uninstall; registration was preserved");
+        }
+        if self
+            .task
+            .as_ref()
+            .is_some_and(|task| task.owned_by(&self.current))
+        {
+            checked_schtasks(&["/Delete", "/TN", TASK_NAME, "/F"])?;
+        }
+        if self
+            .run
+            .as_ref()
+            .is_some_and(|(command, _)| owned_command(command, &self.current))
+        {
+            remove_run_value()?;
+        }
+        Ok(())
+    }
+}
+
 fn launch_command(executable: &Path) -> String {
     let arguments = if executable
         .file_name()
@@ -241,6 +298,7 @@ fn needs_repoint(registered: &str, desired: &str, enabled: bool) -> bool {
     enabled && !registered.eq_ignore_ascii_case(desired)
 }
 
+#[derive(PartialEq, Eq)]
 struct TaskRegistration {
     command: String,
     enabled: bool,

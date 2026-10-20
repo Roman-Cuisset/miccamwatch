@@ -26,6 +26,7 @@ pub mod privacy;
 #[path = "privacy/linux.rs"]
 pub mod privacy;
 pub mod settings;
+pub mod uninstall;
 #[cfg(windows)]
 pub mod updater;
 #[cfg(any(target_os = "linux", target_os = "macos"))]

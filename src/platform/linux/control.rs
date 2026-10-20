@@ -996,6 +996,19 @@ struct Store {
     _lock: File,
 }
 
+/// Reserve the same journal lock used by all mute/restore operations, without
+/// connecting to PipeWire or changing any native state.
+pub(crate) fn reserve_uninstall() -> Result<File> {
+    let store = Store::open()?;
+    let journal = store.load()?;
+    if journal.lock_active || !journal.entries.is_empty() {
+        bail!(
+            "uninstall refused: microphone protection or original-state restoration remains; explicitly run mcw unmute and resolve pending restoration first"
+        );
+    }
+    Ok(store._lock)
+}
+
 impl Store {
     fn open() -> Result<Self> {
         let root = env::var_os("XDG_STATE_HOME")

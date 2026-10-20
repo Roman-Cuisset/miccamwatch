@@ -91,7 +91,130 @@ struct View {
     summary: String,
     visual: &'static str,
     items: Vec<MenuEntry>,
+    #[cfg(target_os = "macos")]
+    diagnostics: String,
+    #[cfg(target_os = "macos")]
+    limited: bool,
+    #[cfg(target_os = "macos")]
+    language: &'static str,
+    #[cfg(target_os = "macos")]
+    version: &'static str,
+    #[cfg(target_os = "macos")]
+    protection: DesktopProtection,
+    #[cfg(target_os = "linux")]
     details_label: &'static str,
+}
+#[cfg(target_os = "macos")]
+#[derive(Clone, Serialize)]
+struct DesktopProtection {
+    microphone: &'static str,
+    camera: &'static str,
+    requested: [Option<bool>; 2],
+    microphone_on_lock: bool,
+    camera_on_lock: bool,
+}
+
+#[cfg(target_os = "macos")]
+const DESKTOP_TEXT_BUDGET: usize = 48_000;
+#[cfg(target_os = "macos")]
+const DESKTOP_DIAGNOSTIC_LIMIT: usize = 32_768;
+#[cfg(target_os = "macos")]
+const DESKTOP_OMISSION: &str =
+    "\n[… more text omitted by bounded desktop transport; this field is incomplete.]";
+
+// Count JSON-escaped content, not just UTF-8: control characters can expand six
+// times. The remaining 17 KiB of a frame covers the bounded protocol structure.
+#[cfg(target_os = "macos")]
+fn desktop_text_cost(text: &str) -> usize {
+    text.bytes()
+        .map(|byte| match byte {
+            b'"' | b'\\' | b'\x08' | b'\x0c' | b'\n' | b'\r' | b'\t' => 2,
+            0..=31 => 6,
+            _ => 1,
+        })
+        .sum()
+}
+
+#[cfg(target_os = "macos")]
+fn project_desktop_text(
+    text: &mut String,
+    limit: usize,
+    budget: &mut usize,
+    remaining: &mut usize,
+) -> bool {
+    *remaining -= 1;
+    // Every later field retains room for its own explicit omission notice.
+    let available = limit.min(budget.saturating_sub(*remaining * 128));
+    let original_cost = desktop_text_cost(text);
+    if original_cost <= available {
+        *budget -= original_cost;
+        return false;
+    }
+    let prefix_budget = available.saturating_sub(desktop_text_cost(DESKTOP_OMISSION));
+    let mut used = 0;
+    let mut end = 0;
+    for (offset, character) in text.char_indices() {
+        let cost = match character {
+            '"' | '\\' | '\u{08}' | '\u{0c}' | '\n' | '\r' | '\t' => 2,
+            '\u{00}'..='\u{1f}' => 6,
+            _ => character.len_utf8(),
+        };
+        if used + cost > prefix_budget {
+            break;
+        }
+        used += cost;
+        end = offset + character.len_utf8();
+    }
+    text.truncate(end);
+    text.push_str(DESKTOP_OMISSION);
+    *budget -= desktop_text_cost(text);
+    true
+}
+
+#[cfg(target_os = "macos")]
+fn bound_desktop_view(view: &mut View) {
+    fn field_count(entries: &[MenuEntry]) -> usize {
+        entries
+            .iter()
+            .map(|entry| {
+                1 + usize::from(entry.detail.is_some())
+                    + entry.children.as_deref().map_or(0, field_count)
+            })
+            .sum()
+    }
+    fn labels(entries: &mut [MenuEntry], budget: &mut usize, remaining: &mut usize) -> bool {
+        let mut limited = false;
+        for entry in entries {
+            limited |= project_desktop_text(&mut entry.label, 1024, budget, remaining);
+            if let Some(children) = &mut entry.children {
+                limited |= labels(children, budget, remaining);
+            }
+        }
+        limited
+    }
+    fn details(entries: &mut [MenuEntry], budget: &mut usize, remaining: &mut usize) -> bool {
+        let mut limited = false;
+        for entry in entries {
+            if let Some(detail) = &mut entry.detail {
+                limited |= project_desktop_text(detail, 8192, budget, remaining);
+            }
+            if let Some(children) = &mut entry.children {
+                limited |= details(children, budget, remaining);
+            }
+        }
+        limited
+    }
+    let mut budget = DESKTOP_TEXT_BUDGET;
+    let mut remaining = 2 + field_count(&view.items);
+    view.limited |= project_desktop_text(&mut view.summary, 2048, &mut budget, &mut remaining);
+    view.limited |= labels(&mut view.items, &mut budget, &mut remaining);
+    view.limited |= project_desktop_text(
+        &mut view.diagnostics,
+        DESKTOP_DIAGNOSTIC_LIMIT,
+        &mut budget,
+        &mut remaining,
+    );
+    view.limited |= details(&mut view.items, &mut budget, &mut remaining);
 }
 
 fn uid() -> u32 {
@@ -99,15 +222,17 @@ fn uid() -> u32 {
 }
 fn runtime_dir() -> Result<PathBuf> {
     let path = crate::settings::data_dir()?.join("tray-runtime");
-    fs::create_dir_all(path.parent().context("tray runtime parent unavailable")?)?;
+    fs::create_dir_all(path.parent().context("tray runtime parent unavailable")?)
+        .context("tray control: create runtime parent")?;
     let mut builder = fs::DirBuilder::new();
     std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
     match builder.create(&path) {
         Ok(()) => {}
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-        Err(error) => return Err(error.into()),
+        Err(error) => return Err(error).context("tray control: create runtime directory"),
     }
-    let metadata = fs::symlink_metadata(&path)?;
+    let metadata =
+        fs::symlink_metadata(&path).context("tray control: inspect runtime directory")?;
     ensure!(
         metadata.is_dir()
             && !metadata.file_type().is_symlink()
@@ -174,7 +299,10 @@ fn read_frame(reader: &mut impl BufRead, limit: usize) -> Result<Option<Vec<u8>>
         }
     }
 }
-fn control(command: &[u8]) -> Result<Option<String>> {
+#[path = "control_peer.rs"]
+mod control_peer;
+
+fn connect_control() -> Result<Option<UnixStream>> {
     let path = socket_path()?;
     match fs::symlink_metadata(&path) {
         Ok(metadata) => ensure!(
@@ -184,9 +312,9 @@ fn control(command: &[u8]) -> Result<Option<String>> {
             "tray socket ownership or permissions are unsafe"
         ),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error.into()),
+        Err(error) => return Err(error).context("tray control: inspect socket"),
     }
-    let mut stream = match UnixStream::connect(path) {
+    let stream = match UnixStream::connect(path) {
         Ok(stream) => stream,
         Err(error)
             if matches!(
@@ -196,19 +324,136 @@ fn control(command: &[u8]) -> Result<Option<String>> {
         {
             return Ok(None);
         }
-        Err(error) => return Err(error.into()),
+        Err(error) => return Err(error).context("tray control: connect socket"),
     };
-    verify_peer(&stream)?;
-    stream.set_read_timeout(Some(if command == b"stop\n" {
-        Duration::from_secs(45)
-    } else {
-        Duration::from_secs(1)
-    }))?;
-    stream.set_write_timeout(Some(Duration::from_secs(1)))?;
-    stream.write_all(command)?;
-    let frame = read_frame(&mut BufReader::new(stream), 64)?
+    verify_peer(&stream).context("tray control: authenticate peer")?;
+    control_deadline(&stream, false)?;
+    stream
+        .set_write_timeout(Some(Duration::from_secs(1)))
+        .context("tray control: set write timeout")?;
+    Ok(Some(stream))
+}
+
+fn control_deadline(stream: &UnixStream, stopping: bool) -> Result<()> {
+    stream
+        .set_read_timeout(Some(Duration::from_secs(if stopping { 45 } else { 1 })))
+        .context("tray control: set read timeout")
+}
+
+fn control(command: &[u8]) -> Result<Option<String>> {
+    let Some(mut stream) = connect_control()? else {
+        return Ok(None);
+    };
+    control_deadline(&stream, command == b"stop\n")?;
+    stream
+        .write_all(command)
+        .context("tray control: write command")?;
+    let frame = read_frame(&mut BufReader::new(stream), 64)
+        .context("tray control: read acknowledgment")?
         .context("tray closed control connection before acknowledgment")?;
-    Ok(Some(String::from_utf8(frame)?))
+    Ok(Some(
+        String::from_utf8(frame).context("tray control: decode acknowledgment")?,
+    ))
+}
+
+#[derive(Serialize, Deserialize)]
+struct ControlNamespace {
+    protocol: u8,
+    pid: u32,
+    config: PathBuf,
+    data: PathBuf,
+}
+
+fn canonical_namespace(mut path: PathBuf) -> Result<PathBuf> {
+    let mut missing = Vec::new();
+    loop {
+        match fs::canonicalize(&path) {
+            Ok(mut resolved) => {
+                for component in missing.into_iter().rev() {
+                    resolved.push(component);
+                }
+                return Ok(resolved);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                missing.push(
+                    path.file_name()
+                        .context("cannot resolve tray namespace")?
+                        .to_os_string(),
+                );
+                ensure!(path.pop(), "cannot resolve tray namespace ancestor");
+            }
+            Err(error) => return Err(error).context("cannot resolve tray namespace"),
+        }
+    }
+}
+
+impl ControlNamespace {
+    fn current() -> Result<Self> {
+        Ok(Self {
+            protocol: 1,
+            pid: std::process::id(),
+            config: canonical_namespace(crate::settings::config_dir()?)?,
+            data: canonical_namespace(crate::settings::data_dir()?)?,
+        })
+    }
+}
+
+fn owned_control(command: &[u8], wait_for_exit: bool) -> Result<Option<String>> {
+    let current = ControlNamespace::current()?;
+    let executable = std::env::current_exe().context("cannot locate this tray installation")?;
+    let Some(mut stream) = connect_control()? else {
+        return Ok(None);
+    };
+    stream
+        .write_all(b"owner\n")
+        .context("tray control: request owner namespace")?;
+    let peer = control_peer::PeerProcess::retain(&stream)?;
+    let mut reader = BufReader::new(stream);
+    let frame = read_frame(&mut reader, 32_768)
+        .context("tray control: read owner namespace")?
+        .context(
+            "running tray cannot prove its installation; exit that tray via its menu and retry",
+        )?;
+    let owner: ControlNamespace =
+        serde_json::from_slice(&frame).context("tray control: invalid owner namespace")?;
+    ensure!(
+        owner.protocol == 1
+            && owner.pid == peer.pid()
+            && owner.config == current.config
+            && owner.data == current.data,
+        "another configuration/data namespace owns the tray; no stop or removal permitted"
+    );
+    peer.verify_image(&executable)?;
+    control_deadline(reader.get_ref(), command == b"stop\n")?;
+    reader
+        .get_mut()
+        .write_all(command)
+        .context("tray control: write owned command")?;
+    let frame = read_frame(&mut reader, 64)
+        .context("tray control: read owned acknowledgment")?
+        .context("owned tray closed control connection before acknowledgment")?;
+    let reply = String::from_utf8(frame).context("tray control: decode owned acknowledgment")?;
+    if wait_for_exit && reply == "stopped" {
+        peer.wait_exit(Duration::from_secs(45))?;
+    }
+    Ok(Some(reply))
+}
+
+pub(crate) fn stop_current_installation() -> Result<bool> {
+    match owned_control(b"stop\n", true)? {
+        None => Ok(false),
+        Some(reply) if reply == "stopped" => Ok(true),
+        Some(reply) => bail!("owned tray shutdown was not acknowledged: {reply}"),
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub fn open_running() -> Result<bool> {
+    match owned_control(b"open\n", false)? {
+        None => Ok(false),
+        Some(reply) if reply == "opened" => Ok(true),
+        Some(reply) => bail!("owned tray window request was not acknowledged: {reply}"),
+    }
 }
 /// A successful probe means the native status service, not just a process, is registered.
 pub fn is_running() -> bool {
@@ -229,6 +474,8 @@ struct Lifecycle {
     finished: Arc<AtomicBool>,
     clean_shutdown: Arc<AtomicBool>,
     server_exit: Arc<AtomicBool>,
+    #[cfg(target_os = "macos")]
+    open_requested: Arc<AtomicBool>,
     server: Option<thread::JoinHandle<()>>,
 }
 impl Lifecycle {
@@ -266,6 +513,10 @@ impl Lifecycle {
         let finished = Arc::new(AtomicBool::new(false));
         let clean_shutdown = Arc::new(AtomicBool::new(false));
         let server_exit = Arc::new(AtomicBool::new(false));
+        #[cfg(target_os = "macos")]
+        let open_requested = Arc::new(AtomicBool::new(false));
+        #[cfg(target_os = "macos")]
+        let server_open = open_requested.clone();
         let flags = (
             ready.clone(),
             stop.clone(),
@@ -281,14 +532,37 @@ impl Lifecycle {
                             verify_peer(&stream)?;
                             stream.set_read_timeout(Some(Duration::from_millis(250)))?;
                             stream.set_write_timeout(Some(Duration::from_millis(250)))?;
-                            let frame = read_frame(&mut BufReader::new(stream.try_clone()?), 16)?
-                                .context("empty tray command")?;
+                            let mut reader = BufReader::new(stream.try_clone()?);
+                            let mut frame =
+                                read_frame(&mut reader, 16)?.context("empty tray command")?;
+                            if frame == b"owner" {
+                                serde_json::to_writer(&mut stream, &ControlNamespace::current()?)?;
+                                stream.write_all(b"\n")?;
+                                // This new handshake includes kernel/image verification,
+                                // not merely the legacy one-frame status/stop request.
+                                stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+                                frame = read_frame(&mut reader, 16)?
+                                    .context("missing authenticated tray command")?;
+                            }
                             match frame.as_slice() {
                                 b"ping" => Ok(if flags.0.load(Ordering::Acquire) {
                                     "ready\n"
                                 } else {
                                     "starting\n"
                                 }),
+                                #[cfg(target_os = "macos")]
+                                b"open" => {
+                                    if flags.1.load(Ordering::Acquire)
+                                        || flags.2.load(Ordering::Acquire)
+                                    {
+                                        Ok("stopping\n")
+                                    } else {
+                                        // Coalesce duplicate launches even while AppKit
+                                        // initializes; its loop consumes this after start.
+                                        server_open.store(true, Ordering::Release);
+                                        Ok("opened\n")
+                                    }
+                                }
                                 b"stop" => {
                                     flags.1.store(true, Ordering::Release);
                                     // Main loop retires readiness after accepting stop.
@@ -333,6 +607,8 @@ impl Lifecycle {
             finished,
             clean_shutdown,
             server_exit,
+            #[cfg(target_os = "macos")]
+            open_requested,
             server: Some(server),
         })
     }
@@ -373,6 +649,7 @@ struct Words {
     done: &'static str,
     lock_unknown: &'static str,
     lock_status: &'static str,
+    #[cfg(target_os = "linux")]
     details: &'static str,
     camera_inspect: &'static str,
     inspecting: &'static str,
@@ -403,6 +680,7 @@ fn words(lang: Language) -> Words {
             done: "Applied",
             lock_unknown: "Session lock unknown; automatic controls unavailable",
             lock_status: "Session lock unknown",
+            #[cfg(target_os = "linux")]
             details: "Details…",
             camera_inspect: "Inspect camera profiles (admin, read-only)",
             inspecting: "Read-only camera inspection awaiting administrator approval / running…",
@@ -431,6 +709,7 @@ fn words(lang: Language) -> Words {
             done: "Appliqué",
             lock_unknown: "Verrouillage inconnu ; contrôles automatiques indisponibles",
             lock_status: "Verrouillage inconnu",
+            #[cfg(target_os = "linux")]
             details: "Détails…",
             camera_inspect: "Inspecter profils caméra (admin, lecture seule)",
             inspecting: "Inspection caméra en lecture seule : autorisation administrateur en attente / en cours…",
@@ -459,6 +738,7 @@ fn words(lang: Language) -> Words {
             done: "Angewendet",
             lock_unknown: "Sitzungssperre unbekannt; automatische Steuerung nicht verfügbar",
             lock_status: "Sitzungssperre unbekannt",
+            #[cfg(target_os = "linux")]
             details: "Details…",
             camera_inspect: "Kameraprofile prüfen (Admin, nur lesen)",
             inspecting: "Nur lesende Kameraprüfung wartet auf Administratorfreigabe / läuft…",
@@ -487,6 +767,7 @@ fn words(lang: Language) -> Words {
             done: "Aplicado",
             lock_unknown: "Bloqueo de sesión desconocido; controles automáticos no disponibles",
             lock_status: "Bloqueo de sesión desconocido",
+            #[cfg(target_os = "linux")]
             details: "Detalles…",
             camera_inspect: "Perfiles de cámara (admin, solo lectura)",
             inspecting: "Inspección de cámara de solo lectura: esperando aprobación de administrador / en curso…",
@@ -515,6 +796,7 @@ fn words(lang: Language) -> Words {
             done: "適用済み",
             lock_unknown: "セッションロック不明・自動制御は利用できません",
             lock_status: "セッションロック不明",
+            #[cfg(target_os = "linux")]
             details: "詳細…",
             camera_inspect: "カメラプロファイル（管理者・読み取り専用）",
             inspecting: "読み取り専用カメラ調査：管理者承認待ち／実行中…",
@@ -543,6 +825,7 @@ fn words(lang: Language) -> Words {
             done: "已应用",
             lock_unknown: "会话锁定状态未知；自动控制不可用",
             lock_status: "会话锁定状态未知",
+            #[cfg(target_os = "linux")]
             details: "详细信息…",
             camera_inspect: "检查摄像头配置（管理员；只读）",
             inspecting: "只读摄像头检查：等待管理员授权／进行中…",
@@ -571,6 +854,7 @@ fn words(lang: Language) -> Words {
             done: "Применено",
             lock_unknown: "Блокировка сеанса неизвестна; автоматическое управление недоступно",
             lock_status: "Блокировка сеанса неизвестна",
+            #[cfg(target_os = "linux")]
             details: "Подробности…",
             camera_inspect: "Профили камер (админ, только чтение)",
             inspecting: "Проверка камеры только для чтения: ожидание разрешения администратора / выполняется…",
@@ -692,6 +976,60 @@ fn observation_status(snapshot: &Snapshot, lang: Language) -> (String, &'static 
     } else if summary.is_empty() {
         summary.push_str(words(lang).idle);
     }
+    #[cfg(target_os = "macos")]
+    {
+        let accesses = std::mem::take(&mut summary);
+        for resource in [
+            crate::model::Resource::Microphone,
+            crate::model::Resource::Camera,
+        ] {
+            let activity = if snapshot
+                .accesses
+                .iter()
+                .any(|a| a.resource == resource && a.activity == Activity::Active)
+            {
+                lang.state_str(None, Activity::Active)
+            } else if snapshot
+                .accesses
+                .iter()
+                .any(|a| a.resource == resource && a.activity == Activity::Ready)
+            {
+                lang.state_str(None, Activity::Ready)
+            } else if unavailable || snapshot.observation_gaps.contains(&resource) {
+                words(lang).state_unknown
+            } else {
+                words(lang).idle
+            };
+            if !summary.is_empty() {
+                summary.push_str(" · ");
+            }
+            let _ = write!(summary, "{}: {activity}", lang.resource(resource));
+        }
+        if unavailable || partial {
+            let _ = write!(summary, " — {}", words(lang).degraded);
+        }
+        let _ = write!(
+            summary,
+            "\n\nObserved accesses: {}\n{accesses}",
+            snapshot.accesses.len()
+        );
+        for access in &snapshot.accesses {
+            let _ = write!(
+                summary,
+                "\n\n{} — PID: {:?}; {:?}; {:?}",
+                access.application, access.pid, access.confidence, access.enforcement
+            );
+            if let Some(device) = &access.device {
+                let _ = write!(summary, "\n{device}");
+            }
+            if let Some(executable) = &access.executable {
+                let _ = write!(summary, "\n{executable}");
+            }
+            for evidence in &access.evidence {
+                let _ = write!(summary, "\n{}: {}", evidence.source, evidence.detail);
+            }
+        }
+    }
     for health in &snapshot.collectors {
         if health.state != CollectorState::Healthy {
             let _ = write!(
@@ -718,6 +1056,8 @@ fn observation_status(snapshot: &Snapshot, lang: Language) -> (String, &'static 
 
 #[derive(Default)]
 struct CameraInspectionUi {
+    #[cfg(target_os = "macos")]
+    system_managed: bool,
     inventory_incomplete: bool,
     administrator_required: bool,
     running: bool,
@@ -789,6 +1129,8 @@ struct MenuContext<'a> {
     lock: SessionLockState,
     explicit_policy: bool,
     inspection: &'a CameraInspectionUi,
+    #[cfg(target_os = "macos")]
+    requested: [Option<bool>; 2],
 }
 
 fn make_view(
@@ -804,8 +1146,15 @@ fn make_view(
         lock,
         explicit_policy,
         inspection,
+        #[cfg(target_os = "macos")]
+        requested,
     } = context;
     let (summary, visual) = status;
+    #[cfg(target_os = "macos")]
+    let (summary, diagnostics) = {
+        let compact = summary.lines().next().unwrap_or(&summary).to_owned();
+        (compact, summary)
+    };
     let (camera_blocked, camera_error) = camera;
     let text = words(lang);
     let visual = if camera_error.is_some() && visual != "error" {
@@ -948,13 +1297,50 @@ fn make_view(
         &text,
     ));
     items.push(entry("exit", text.exit, true));
-    View {
+    let view = View {
         kind: "state",
         summary,
+        #[cfg(target_os = "macos")]
+        diagnostics,
+        #[cfg(target_os = "macos")]
+        limited: false,
         visual,
+        #[cfg(target_os = "macos")]
+        language: lang.code(),
+        #[cfg(target_os = "macos")]
+        version: env!("CARGO_PKG_VERSION"),
+        #[cfg(target_os = "macos")]
+        protection: DesktopProtection {
+            microphone: match mute {
+                MicrophoneMuteState::Muted => "muted",
+                MicrophoneMuteState::Unmuted => "unmuted",
+                MicrophoneMuteState::Mixed => "mixed",
+                MicrophoneMuteState::Unavailable => "unknown",
+            },
+            camera: if camera_error.is_some() {
+                "unknown"
+            } else if inspection.system_managed {
+                "system_managed"
+            } else if camera_blocked {
+                "owned"
+            } else {
+                "absent"
+            },
+            requested,
+            microphone_on_lock: settings.mute_on_lock,
+            camera_on_lock: settings.block_camera_on_lock,
+        },
+        #[cfg(target_os = "linux")]
         details_label: text.details,
         items,
-    }
+    };
+    #[cfg(target_os = "macos")]
+    let view = {
+        let mut bounded = view;
+        bound_desktop_view(&mut bounded);
+        bounded
+    };
+    view
 }
 
 pub fn run_tray(
@@ -964,6 +1350,7 @@ pub fn run_tray(
     mut settings: Settings,
     explicit_policy: bool,
     eventlog: bool,
+    #[cfg(target_os = "macos")] initial_window: bool,
 ) -> Result<()> {
     let lifecycle = Lifecycle::acquire()?;
     let (sender, actions) = mpsc::sync_channel(32);
@@ -974,14 +1361,7 @@ pub fn run_tray(
     let initial = make_view(
         (words(lang).degraded.to_owned(), "error"),
         MicrophoneMuteState::Unavailable,
-        (
-            false,
-            if cfg!(target_os = "linux") {
-                Some(words(lang).degraded)
-            } else {
-                None
-            },
-        ),
+        (false, Some(words(lang).degraded)),
         &settings,
         lang,
         &None,
@@ -989,6 +1369,8 @@ pub fn run_tray(
             lock: SessionLockState::Unknown,
             explicit_policy,
             inspection: &inspection.ui,
+            #[cfg(target_os = "macos")]
+            requested: [None; 2],
         },
     );
     let mut host = DesktopHost::start(sender, lifecycle.ready.clone(), initial)?;
@@ -1020,12 +1402,20 @@ pub fn run_tray(
     let mut camera_pending_target = None;
     let mut camera_error: Option<String> = None;
     let mut lock = SessionLockState::Unknown;
+    #[cfg(target_os = "macos")]
+    let mut requested = [None; 2];
+    #[cfg(target_os = "macos")]
+    let mut show_initial_window = initial_window;
     let outcome = (|| -> Result<()> {
         loop {
             if lifecycle.stop.load(Ordering::Acquire) {
                 break;
             }
             host.check()?;
+            #[cfg(target_os = "macos")]
+            if lifecycle.open_requested.swap(false, Ordering::AcqRel) {
+                host.show_window()?;
+            }
             #[cfg(target_os = "macos")]
             if inspection.poll() {
                 // Diagnostic completion never changes controls or manual action feedback.
@@ -1111,6 +1501,20 @@ pub fn run_tray(
                         }
                     }
                 }
+                #[cfg(target_os = "macos")]
+                if matches!(
+                    mute,
+                    MicrophoneMuteState::Unavailable | MicrophoneMuteState::Mixed
+                ) {
+                    match monitor.microphone_control_detail() {
+                        Ok(detail) => {
+                            let _ = write!(summary, "\n\n{detail}");
+                        }
+                        Err(error) => {
+                            let _ = write!(summary, "\n\n{}: {error:#}", words(lang).unavailable);
+                        }
+                    }
+                }
                 if let Some(error) = settings_error {
                     let _ = write!(
                         summary,
@@ -1134,6 +1538,8 @@ pub fn run_tray(
                 match crate::privacy::camera_state() {
                     Ok(state) => {
                         camera_blocked = state == crate::privacy::CameraPrivacyState::Blocked;
+                        inspection.ui.system_managed =
+                            state == crate::privacy::CameraPrivacyState::SystemManaged;
                         camera_error = None;
                         inspection.ui.inventory_incomplete = false;
                         if camera_pending_target == Some(camera_blocked) {
@@ -1160,12 +1566,24 @@ pub fn run_tray(
                         lock,
                         explicit_policy,
                         inspection: &inspection.ui,
+                        #[cfg(target_os = "macos")]
+                        requested,
                     },
                 ))?;
+                #[cfg(target_os = "macos")]
+                if show_initial_window {
+                    host.show_window()?;
+                    show_initial_window = false;
+                }
             }
             match actions.recv_timeout(Duration::from_millis(100)) {
                 Ok(Command::Exit) => break,
                 Ok(command) => {
+                    #[cfg(target_os = "macos")]
+                    if matches!(command, Command::Status) {
+                        host.show_window()?;
+                        continue;
+                    }
                     #[cfg(target_os = "macos")]
                     if matches!(command, Command::CameraInspect) {
                         if let Err(error) = inspection.start(lang) {
@@ -1183,7 +1601,7 @@ pub fn run_tray(
                         match command {
                             Command::Status => {
                                 #[cfg(target_os = "macos")]
-                                crate::notify::notify_message("MicCamWatch", &summary)?;
+                                host.show_window()?;
                                 #[cfg(target_os = "linux")]
                                 crate::notify::notify_message(
                                     "MicCamWatch",
@@ -1206,12 +1624,17 @@ pub fn run_tray(
                                 )?;
                             }
                             Command::Mic => {
+                                #[cfg(target_os = "macos")]
+                                {
+                                    requested[0] = Some(mute != MicrophoneMuteState::Muted);
+                                }
                                 monitor.toggle_microphone_mute()?;
                             }
                             Command::Camera => {
                                 #[cfg(target_os = "macos")]
                                 {
                                     camera_pending_target = Some(!camera_blocked);
+                                    requested[1] = Some(!camera_blocked);
                                     camera_blocked = crate::privacy::toggle_camera()?
                                         == crate::privacy::CameraPrivacyState::Blocked;
                                     camera_pending_target = None;
@@ -1275,6 +1698,8 @@ pub fn run_tray(
                             lock,
                             explicit_policy,
                             inspection: &inspection.ui,
+                            #[cfg(target_os = "macos")]
+                            requested,
                         },
                     ))?;
                 }
@@ -1595,7 +2020,7 @@ impl DesktopHost {
                             .send(action)
                             .context("tray action receiver closed")?;
                     } else {
-                        if event.kind == "ready" && event.protocol == Some(2) {
+                        if event.kind == "ready" && event.protocol == Some(3) {
                             readiness.store(true, Ordering::Release);
                         }
                         if event.kind == "error" || event.kind == "stopped" {
@@ -1627,7 +2052,7 @@ impl DesktopHost {
         {
             DesktopEvent {
                 kind,
-                protocol: Some(2),
+                protocol: Some(3),
                 ..
             } if kind == "ready" => Ok(host),
             event => bail!(
@@ -1638,13 +2063,19 @@ impl DesktopHost {
     }
     fn update(&mut self, view: View) -> Result<()> {
         let mut frame = serde_json::to_vec(&view)?;
-        ensure!(
+        debug_assert!(
             frame.len() <= FRAME_LIMIT,
-            "tray state exceeds native frame limit"
+            "bounded desktop projection exceeded frame budget"
         );
         frame.push(b'\n');
         let stdin = self.stdin.as_mut().context("AppKit helper input closed")?;
         stdin.write_all(&frame)?;
+        stdin.flush()?;
+        Ok(())
+    }
+    fn show_window(&mut self) -> Result<()> {
+        let stdin = self.stdin.as_mut().context("AppKit helper input closed")?;
+        stdin.write_all(b"{\"kind\":\"show\"}\n")?;
         stdin.flush()?;
         Ok(())
     }
@@ -1740,7 +2171,10 @@ mod menu_tests {
         let (summary, visual) = observation_status(&snapshot, Language::En);
         assert_eq!(visual, "partial");
         let (first, detail) = summary.split_once('\n').unwrap();
+        #[cfg(target_os = "linux")]
         assert!(first.contains("corespeechd"));
+        #[cfg(target_os = "macos")]
+        assert!(first.contains("MIC: ACTIVE") && summary.contains("corespeechd"));
         assert!(detail.contains("coremediaio_video"));
         assert!(detail.contains(snapshot.collectors[0].detail.as_deref().unwrap()));
         snapshot.collectors[0].state = CollectorState::Healthy;
@@ -1758,7 +2192,189 @@ mod menu_tests {
         snapshot.collectors[0].state = CollectorState::Unavailable;
         let (summary, visual) = observation_status(&snapshot, Language::En);
         assert_eq!(visual, "error");
-        assert!(summary.lines().next().unwrap().contains("corespeechd"));
+        assert!(summary.contains("corespeechd"));
+        #[cfg(target_os = "macos")]
+        assert!(summary.lines().next().unwrap().contains("MIC: ACTIVE"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn consultation_keeps_requested_effective_and_observation_independent() {
+        let settings = Settings::default();
+        let mut inspection = CameraInspectionUi::default();
+        let state = make_view(
+            observation_status(&observed(), Language::En),
+            MicrophoneMuteState::Mixed,
+            (false, Some("device-wide profile inventory unavailable")),
+            &settings,
+            Language::En,
+            &Some("Partial action: original control state retained".into()),
+            MenuContext {
+                lock: SessionLockState::Unknown,
+                explicit_policy: false,
+                inspection: &inspection,
+                requested: [Some(true), Some(true)],
+            },
+        );
+        assert_eq!(state.protection.requested, [Some(true), Some(true)]);
+        assert_eq!(state.protection.microphone, "mixed");
+        assert_eq!(state.protection.camera, "unknown");
+        assert!(state.summary.contains("MIC: ACTIVE"));
+        assert!(state.items.iter().any(
+            |item| item.detail.as_deref() == Some("device-wide profile inventory unavailable")
+        ));
+        assert!(
+            state
+                .items
+                .iter()
+                .any(|item| item.label.contains("original control state retained"))
+        );
+        let frame = serde_json::to_value(&state).unwrap();
+        assert_eq!(frame["language"], "en");
+        assert_eq!(frame["protection"]["camera"], "unknown");
+        assert_eq!(
+            frame["protection"]["requested"],
+            serde_json::json!([true, true])
+        );
+        assert!(frame.get("details_label").is_none());
+        inspection.system_managed = true;
+        let managed = make_view(
+            observation_status(&observed(), Language::En),
+            MicrophoneMuteState::Unmuted,
+            (false, None),
+            &settings,
+            Language::En,
+            &None,
+            MenuContext {
+                lock: SessionLockState::Unlocked,
+                explicit_policy: false,
+                inspection: &inspection,
+                requested: [None; 2],
+            },
+        );
+        assert_eq!(managed.protection.camera, "system_managed");
+        assert_eq!(managed.protection.requested, [None; 2]);
+        let mut snapshot = observed();
+        snapshot.accesses.clear();
+        snapshot.collectors[0].state = CollectorState::Healthy;
+        let (idle, visual) = observation_status(&snapshot, Language::En);
+        assert_eq!(visual, "idle");
+        assert!(
+            idle.lines()
+                .next()
+                .unwrap()
+                .contains("MIC: No observed capture")
+        );
+        snapshot.observation_gaps.push(Resource::Camera);
+        let (unknown, visual) = observation_status(&snapshot, Language::En);
+        assert_eq!(visual, "partial");
+        assert!(
+            unknown
+                .lines()
+                .next()
+                .unwrap()
+                .contains("CAM: State unknown")
+        );
+    }
+
+    // Invoked only by the isolated native AppKit fixture. Its output is the
+    // actual production make_view projection, not a second hand-authored schema.
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "writes producer frames for the disposable native AppKit fixture"]
+    fn native_consultation_producer_frames() {
+        let output = std::env::var_os("MCW_NATIVE_MENU_FRAMES")
+            .expect("native fixture must provide its private output path");
+        let mut cases = Vec::new();
+        for (name, count, escaped) in [
+            ("producer-long-accesses", 20, false),
+            ("producer-omitted-details", 100, false),
+            ("producer-json-escaped", 20, true),
+        ] {
+            let mut snapshot = observed();
+            snapshot.collectors[0].state = CollectorState::Healthy;
+            let template = snapshot.accesses[0].clone();
+            snapshot.accesses = (0..count).map(|index| {
+                let mut access = template.clone();
+                access.key = format!("fixture-client-{index:03}");
+                access.application = format!("fixture-client-{index:03}");
+                access.pid = Some(1000 + index);
+                let component = if escaped {
+                    "\u{1}\t\\\"界".repeat(150)
+                } else {
+                    "p".repeat(840)
+                };
+                access.executable = Some(format!(
+                    "/Applications/client-{index:03}/{component}.app/Contents/MacOS/client-{index:03}"
+                ));
+                access.evidence = vec![crate::model::Evidence::new(
+                    crate::model::EvidenceKind::LiveApi, "fixture-live-api",
+                    format!("Client {index:03} is visible; no physical capture proof is asserted."),
+                )];
+                access
+            }).collect();
+            let expected_text = snapshot
+                .accesses
+                .iter()
+                .map(|access| {
+                    if count == 20 && !escaped {
+                        access.executable.clone().unwrap()
+                    } else {
+                        access.application.clone()
+                    }
+                })
+                .collect::<Vec<_>>();
+            let feedback =
+                escaped.then(|| format!("Action failed: {}", "\u{1}\n\t\\\"界".repeat(10_000)));
+            let camera_error = escaped.then(|| "Camera inventory: \u{1}\n\\\"界".repeat(3000));
+            let inspection = CameraInspectionUi {
+                inventory_incomplete: escaped,
+                detail: escaped.then(|| "Inspection remains read-only: \u{1}\n\\\"界".repeat(3000)),
+                ..Default::default()
+            };
+            let view = make_view(
+                observation_status(&snapshot, Language::En),
+                MicrophoneMuteState::Unmuted,
+                (false, camera_error.as_deref()),
+                &Settings::default(),
+                Language::En,
+                &feedback,
+                MenuContext {
+                    lock: SessionLockState::Unlocked,
+                    explicit_policy: false,
+                    inspection: &inspection,
+                    requested: [None; 2],
+                },
+            );
+            assert!(view.summary.len() <= 2048);
+            assert!(view.diagnostics.len() <= DESKTOP_DIAGNOSTIC_LIMIT);
+            assert!(
+                view.diagnostics
+                    .contains(&format!("Observed accesses: {count}"))
+            );
+            assert!(
+                expected_text
+                    .iter()
+                    .all(|text| view.diagnostics.contains(text))
+            );
+            assert_eq!(view.limited, count > 20 || escaped);
+            if !view.limited {
+                assert!(
+                    view.diagnostics.len() > 16_384,
+                    "fixture must cross the original rejection boundary"
+                );
+            }
+            assert!(serde_json::to_vec(&view).unwrap().len() <= FRAME_LIMIT);
+            cases.push(serde_json::json!({
+                "name": name,
+                "frame": view,
+                "selected_profile": "profile_balanced",
+                "expected_text": expected_text,
+                "expected_accesses": count,
+                "omission_expected": count > 20 || escaped,
+            }));
+        }
+        std::fs::write(output, serde_json::to_vec_pretty(&cases).unwrap()).unwrap();
     }
 }
 

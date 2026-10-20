@@ -120,14 +120,14 @@ pub fn apply(ops: &mut impl Operations, count: usize, was_running: bool) -> Resu
     Ok(())
 }
 
-struct ProtectionReservation {
+pub(crate) struct ProtectionReservation {
     _microphone_request: crate::windows_control::ResourceLease,
     _camera_request: crate::windows_control::ResourceLease,
     _microphone: crate::windows_control::ResourceLease,
     _camera: crate::windows_control::ResourceLease,
 }
 impl ProtectionReservation {
-    fn acquire() -> Result<Self> {
+    pub(crate) fn acquire() -> Result<Self> {
         let camera_request = crate::windows_control::acquire_request_lock("camera").context(
             "cannot reserve camera control requests; a pending operation may still own them",
         )?;

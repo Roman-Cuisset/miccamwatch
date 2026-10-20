@@ -1,12 +1,19 @@
-// Finder's native entrypoint. No shell, runtime, environment rewriting or
-// resident wrapper: the existing Rust tray owns its normal lifecycle/lock.
+// Finder's short-lived native entrypoint. The outer LaunchServices application
+// must retire: its Rust child has no AppleEvent loop. A later ordinary Finder
+// reopen can then launch this entrypoint and authenticate `tray open` again.
+// Rust and its one AppKit helper remain the only resident frontend owners.
 #include <mach-o/dyld.h>
 #include <errno.h>
 #include <limits.h>
 #include <stdio.h>
+#include <spawn.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
+
+extern char **environ;
 
 int main(void) {
     char executable[PATH_MAX];
@@ -26,8 +33,31 @@ int main(void) {
         return 1;
     }
     strcpy(separator, "/mcw");
-    // Ignore LaunchServices' arguments. The app has exactly one launch mode.
-    execl(resolved, "mcw", "tray", "run", (char *)NULL);
-    perror("MicCamWatch: cannot start bundled mcw");
-    return 1;
+    // Ignore LaunchServices' arguments; never rewrite the user's environment.
+    char *arguments[] = {"mcw", "tray", "open", NULL};
+    pid_t child;
+    int error = posix_spawn(&child, resolved, NULL, NULL, arguments, environ);
+    if (error != 0) {
+        fprintf(stderr, "MicCamWatch: cannot start bundled mcw: %s\n", strerror(error));
+        return 1;
+    }
+    // Report an observed early child refusal rather than treating spawn as
+    // frontend readiness. A running tray is intentionally not waited for:
+    // authenticated `tray status` remains the native readiness authority.
+    for (int attempt = 0; attempt < 15; ++attempt) {
+        int status = 0;
+        pid_t result = waitpid(child, &status, WNOHANG);
+        if (result == child) {
+            if (WIFEXITED(status)) return WEXITSTATUS(status);
+            fprintf(stderr, "MicCamWatch: bundled mcw terminated during launch\n");
+            return 1;
+        }
+        if (result < 0 && errno != EINTR) {
+            perror("MicCamWatch: cannot observe bundled mcw launch");
+            return 1;
+        }
+        struct timespec delay = {.tv_sec = 0, .tv_nsec = 20000000};
+        while (nanosleep(&delay, &delay) != 0 && errno == EINTR) {}
+    }
+    return 0;
 }

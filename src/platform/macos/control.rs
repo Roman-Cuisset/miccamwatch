@@ -115,6 +115,14 @@ pub(crate) struct OperationLock {
 }
 impl OperationLock {
     pub fn acquire(name: &str) -> Result<Self> {
+        Self::acquire_mode(name, false)
+    }
+
+    pub(crate) fn try_acquire(name: &str) -> Result<Self> {
+        Self::acquire_mode(name, true)
+    }
+
+    fn acquire_mode(name: &str, nonblocking: bool) -> Result<Self> {
         let directory = crate::settings::data_dir()?.join("macos-controls");
         let mut builder = fs::DirBuilder::new();
         builder.recursive(true).mode(0o700);
@@ -132,7 +140,8 @@ impl OperationLock {
             .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
             .open(directory.join(format!("{name}.lock")))?;
         loop {
-            if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } == 0 {
+            let flags = libc::LOCK_EX | if nonblocking { libc::LOCK_NB } else { 0 };
+            if unsafe { libc::flock(file.as_raw_fd(), flags) } == 0 {
                 break;
             }
             let error = std::io::Error::last_os_error();
@@ -141,6 +150,14 @@ impl OperationLock {
             }
         }
         Ok(Self { file, directory })
+    }
+
+    pub(crate) fn inherit_across_exec(&self) -> Result<()> {
+        if unsafe { libc::fcntl(self.file.as_raw_fd(), libc::F_SETFD, 0) } == -1 {
+            return Err(std::io::Error::last_os_error())
+                .context("cannot retain protection reservation across uninstall");
+        }
+        Ok(())
     }
 }
 impl Drop for OperationLock {
@@ -201,6 +218,20 @@ fn load(path: &Path) -> Result<Journal> {
         }),
         Err(error) => Err(error.into()),
     }
+}
+
+pub(crate) fn reserve_uninstall() -> Result<OperationLock> {
+    let lock = OperationLock::try_acquire("microphone")?;
+    let directory = crate::autostart::Directory::open(&lock.directory, false)?;
+    // Validate the journal's file type/ownership before the existing parser.
+    let _ = directory.file(std::ffi::OsStr::new("microphone.json"))?;
+    let journal = load(&lock.directory.join("microphone.json"))?;
+    if journal.lock_active || journal.restore_pending || !journal.originals.is_empty() {
+        bail!(
+            "uninstall refused: microphone protection or pending restoration remains; explicitly run mcw unmute and resolve restoration first"
+        );
+    }
+    Ok(lock)
 }
 fn remember(journal: &mut Journal, controls: &[MuteControl]) {
     for control in controls.iter().filter(|c| c.writable) {

@@ -1,4 +1,4 @@
-mod control;
+pub(crate) mod control;
 mod pipewire;
 mod procfs;
 mod signature;

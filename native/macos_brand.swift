@@ -7,7 +7,10 @@ func mcwBrandImage(size: CGFloat, menuBar: Bool = false) -> NSImage {
         guard let context = NSGraphicsContext.current?.cgContext else { return false }
         context.saveGState()
         defer { context.restoreGState() }
-        context.scaleBy(x: rect.width / 48, y: rect.height / 48)
+        // The menu has no rounded tile: remove its outer padding, not the glyph.
+        let canvas: CGFloat = menuBar ? 40 : 48
+        context.scaleBy(x: rect.width / canvas, y: rect.height / canvas)
+        if menuBar { context.translateBy(x: -4, y: -4) }
         if !menuBar {
             context.setFillColor(NSColor(srgbRed: 204 / 255, green: 237 / 255, blue: 206 / 255, alpha: 1).cgColor)
             context.addPath(CGPath(roundedRect: CGRect(x: 0, y: 0, width: 48, height: 48),

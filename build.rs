@@ -37,6 +37,17 @@ fn main() {
         compile_macos_helper();
     }
     println!("cargo:rerun-if-changed=build.rs");
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        println!("cargo:rerun-if-changed=installer/miccamwatch.rc");
+        println!("cargo:rerun-if-changed=installer/miccamwatch.ico");
+        embed_resource::compile_for(
+            "installer/miccamwatch.rc",
+            ["mcw", "mcw-tray"],
+            embed_resource::NONE,
+        )
+        .manifest_required()
+        .expect("cannot embed the MicCamWatch application icon");
+    }
     if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows")
         || env::var("CARGO_CFG_TARGET_ENV").as_deref() != Ok("msvc")
     {

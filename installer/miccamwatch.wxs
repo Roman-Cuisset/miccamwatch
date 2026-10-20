@@ -8,6 +8,9 @@
     <SummaryInformation Description="MicCamWatch Windows privacy monitor" />
     <MajorUpgrade DowngradeErrorMessage="A newer version of MicCamWatch is already installed." />
     <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+    <SetProperty Id="ARPINSTALLLOCATION" Value="[INSTALLFOLDER]" After="CostFinalize" />
+    <Icon Id="MicCamWatchIcon" SourceFile="installer/miccamwatch.ico" />
+    <Property Id="ARPPRODUCTICON" Value="MicCamWatchIcon" />
 
     <StandardDirectory Id="LocalAppDataFolder">
       <Directory Id="ProgramsFolder" Name="Programs">
@@ -35,7 +38,9 @@
                 Name="MicCamWatch"
                 Description="MicCamWatch Privacy Control Center"
                 WorkingDirectory="INSTALLFOLDER"
-                Advertise="no">
+                Advertise="no"
+                Icon="MicCamWatchIcon"
+                IconIndex="0">
                 <ShortcutProperty Key="System.AppUserModel.ID" Value="MicCamWatch.MicCamWatch" />
               </Shortcut>
             </File>

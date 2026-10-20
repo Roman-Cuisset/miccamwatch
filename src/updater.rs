@@ -10,9 +10,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-mod download;
-mod process;
-mod transaction;
+pub(crate) mod download;
+pub(crate) mod process;
+pub(crate) mod transaction;
 
 pub(crate) fn stop_installed_tray() -> Result<bool> {
     let current = env::current_exe().context("failed to locate mcw executable")?;
@@ -32,6 +32,7 @@ pub fn update() -> Result<()> {
     let current = env::current_exe().context("failed to locate the installed mcw executable")?;
     let installation_lock = crate::autostart::lock_installation(&current)?;
     let tray = current.with_file_name("mcw-tray.exe");
+    crate::uninstall::windows::validate_update_receipt(&current, &tray)?;
     let releases = self_update::backends::github::Update::configure()
         .repo_owner("Roman-Cuisset")
         .repo_name("miccamwatch")
@@ -94,14 +95,33 @@ pub fn update() -> Result<()> {
     }
     let staged_cli = stage.path().join("mcw.exe");
     validate_pe(&staged_cli)?;
+    let receipt_name = crate::uninstall::windows::RECEIPT;
+    let staged_receipt = stage.path().join(receipt_name);
+    let receipt_cli = if comparison == Ordering::Less {
+        &staged_cli
+    } else {
+        &current
+    };
+    let receipt_bytes =
+        crate::uninstall::windows::receipt_bytes(receipt_cli, &staged_tray, version)?;
+    fs::write(&staged_receipt, receipt_bytes)?;
     validate_cli_version(&staged_cli, version, stage.path())?;
-    let mut replacements = vec![transaction::Replacement {
-        staged: staged_tray,
-        target: tray.clone(),
-        backup: stage.path().join("previous-mcw-tray.exe"),
-        had_original: tray.try_exists()?,
-        running_cli: false,
-    }];
+    let mut replacements = vec![
+        transaction::Replacement {
+            staged: staged_receipt,
+            target: current.with_file_name(receipt_name),
+            backup: stage.path().join("previous-portable-receipt.json"),
+            had_original: current.with_file_name(receipt_name).try_exists()?,
+            running_cli: false,
+        },
+        transaction::Replacement {
+            staged: staged_tray,
+            target: tray.clone(),
+            backup: stage.path().join("previous-mcw-tray.exe"),
+            had_original: tray.try_exists()?,
+            running_cli: false,
+        },
+    ];
     if comparison == Ordering::Less {
         // Same-version repair verifies the paired package but leaves this CLI untouched.
         replacements.push(transaction::Replacement {

@@ -20,7 +20,7 @@ impl std::fmt::Display for HexDigest<'_> {
 }
 /// Asset URLs and digests are borrowed from the one selected API response. No
 /// tag/latest lookup occurs here, even when repairing a same-version companion.
-pub(super) fn stage_package(release: &Release, stage: &Path) -> Result<()> {
+pub(crate) fn stage_package(release: &Release, stage: &Path) -> Result<()> {
     let package = exact_asset(release, PACKAGE)?;
     let sums = exact_asset(release, SUMS)?;
     let api_checksum = required_digest(package)?;

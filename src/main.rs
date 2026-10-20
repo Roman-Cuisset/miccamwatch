@@ -15,7 +15,7 @@ use miccamwatch::{
         cli::{AutostartCommand, LockPolicyCommand, NotificationCommand, TrayCommand},
         tray, tui,
     },
-    updater,
+    uninstall, updater,
 };
 use miccamwatch::{
     collector::CaptureScope,
@@ -55,7 +55,29 @@ fn run() -> Result<u8> {
             privacy::run_camera_protection_service(bootstrap)?;
             return Ok(0);
         }
+        Command::UninstallWorker {
+            parent_pid,
+            parent_created,
+        } => return uninstall::run_worker(*parent_pid, *parent_created),
+        Command::PortableReceipt => {
+            println!("{}", uninstall::portable_receipt()?);
+            return Ok(0);
+        }
         _ => {}
+    }
+    if matches!(&cli.command, Command::Uninstall) {
+        return uninstall::run();
+    }
+    #[cfg(target_os = "macos")]
+    if matches!(
+        &cli.command,
+        Command::Tray {
+            command: Some(TrayCommand::Open),
+            ..
+        }
+    ) && tray::open_running()?
+    {
+        return Ok(0);
     }
     #[cfg(unix)]
     let tray_eventlog = match &cli.command {
@@ -257,6 +279,22 @@ fn run() -> Result<u8> {
                     settings,
                     cli.config.is_some(),
                     tray_eventlog,
+                    #[cfg(target_os = "macos")]
+                    false,
+                )?;
+                Ok(0)
+            }
+            #[cfg(target_os = "macos")]
+            TrayCommand::Open => {
+                let monitor = PlatformMonitor::new(policy.clone())?;
+                tray::run_tray(
+                    monitor,
+                    policy,
+                    lang,
+                    settings,
+                    cli.config.is_some(),
+                    tray_eventlog,
+                    true,
                 )?;
                 Ok(0)
             }
@@ -309,9 +347,13 @@ fn run() -> Result<u8> {
             Ok(0)
         }
         #[cfg(windows)]
-        Command::MicrophoneGuard | Command::CameraGuard { .. } => {
-            unreachable!("guard dispatched before configuration")
+        Command::MicrophoneGuard
+        | Command::CameraGuard { .. }
+        | Command::UninstallWorker { .. }
+        | Command::PortableReceipt => {
+            unreachable!("internal command dispatched before configuration")
         }
+        Command::Uninstall => unreachable!("uninstall dispatched before configuration"),
         #[cfg(target_os = "macos")]
         Command::Camera { command } => {
             let state = match command {
