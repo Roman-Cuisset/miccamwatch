@@ -82,6 +82,12 @@ jobs:
             --candidate "$GITHUB_WORKSPACE/target/release/mcw" \
             --proof "$RUNNER_TEMP/macos-stop-candidate" \
             --cycles "$MCW_STOP_CYCLES" --disposable-runner
+      - name: Render real consultation and menu-bar controls
+        if: inputs.phase == 'candidate'
+        shell: bash
+        run: |
+          python3 -B installer/tests/native_macos_menu.py \
+            --proof "$RUNNER_TEMP/macos-stop-candidate/menu" --isolated-clipboard
       - name: Preserve first failure and native syscall evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

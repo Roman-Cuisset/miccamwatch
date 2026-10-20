@@ -373,6 +373,30 @@ private extension DesktopDelegate {
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         defer { if let item = item { NSStatusBar.system.removeStatusItem(item) } }
         apply(frame)
+        let previousAppearance = NSApp.appearance
+        var statusGeometry = [[String: Any]]()
+        for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+            NSApp.appearance = NSAppearance(named: appearance)
+            for visual in ["idle", "ready", "active", "partial", "error"] {
+                guard let button = item?.button else { require(false, "native status button unavailable"); return false }
+                button.appearance = NSAppearance(named: appearance)
+                button.image = desktopStatusImage(visual)
+                button.needsDisplay = true
+                RunLoop.main.run(until: Date().addingTimeInterval(0.03))
+                guard let image = button.image else { require(false, "native status image unavailable"); return false }
+                require(button.bounds.width >= image.size.width && button.bounds.height >= image.size.height,
+                        "real menu-bar button clips the mark or its badge")
+                png(button, proof.appendingPathComponent("\(appearance.rawValue)-\(visual)-native-status-button.png"))
+                statusGeometry.append(["appearance": appearance.rawValue, "visual": visual,
+                                       "buttonWidth": button.bounds.width, "buttonHeight": button.bounds.height,
+                                       "imageWidth": image.size.width, "imageHeight": image.size.height])
+            }
+        }
+        try! JSONSerialization.data(withJSONObject: statusGeometry, options: [.prettyPrinted, .sortedKeys])
+            .write(to: proof.appendingPathComponent("native-status-button-geometry.json"))
+        item?.button?.appearance = nil
+        NSApp.appearance = previousAppearance
+        apply(frame)
         weak var trackedContent = menuContent
         let trackedMenu = menuContent!.menu
         let row = trackedMenu.items.first { ($0.representedObject as? String) == "mic" }!
