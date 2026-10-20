@@ -299,8 +299,13 @@ It requires an explicit one-time exit and start of the matching installed fronte
 never execute or restore the backup. Existing invoking updaters keep their own
 code, so downloading a new package does not retroactively repair their handoff.
 
-Source verification and qualification status are recorded in ROADMAP. No installed
-user tray, SDK protection, autostart or backup has been changed by this source fix.
+[Version 0.19.1 is published](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.19.1).
+The five native Windows transaction layouts passed; public assets, named hashes
+and signed source/workflow provenance were verified. Windows EXE/MSI files remain
+unsigned. A macOS Intel tray-stop EINVAL in the first release attempt remains
+open despite the successful unchanged-source retry; details are in ROADMAP.
+No installed user tray, SDK protection, autostart or backup has been changed
+by this source fix or publication.
 
 ## v0.19.0 — Direct tray profiles and Windows lifecycle fixes
 
