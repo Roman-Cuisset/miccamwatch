@@ -23,6 +23,7 @@ import sys
 import tarfile
 import tempfile
 import time
+import types
 import urllib.request
 
 BASELINE = "v0.19.1"
@@ -159,13 +160,215 @@ def metadata(path):
                 mode=oct(stat.S_IMODE(info.st_mode)), socket=stat.S_ISSOCK(info.st_mode))
 
 
+def resource_context(binary, env, proof, report, run, client_handles):
+    """Reuse the production native resource measurement, never synthesized rows.
+
+    The sole measurement adapter is a traced stop client; safety adapters remove
+    forced-kill fallback from failure cleanup. Every returned result is from the
+    real consumer process. Original 25ms/2s/20s sampling constants are untouched.
+    """
+    import native_resources as resources
+
+    resource_proof = proof / "resource-context"
+    resource_proof.mkdir(mode=0o700)
+    resource_report = dict(
+        schema_version=1, host=dict(os="macos", os_version=platform.platform(),
+                                   arch=platform.machine(), python_version=platform.python_version()),
+        baseline=dict(label="baseline", **report["provenance"]), candidate=None, runs=[],
+        requested_modes=["status", "watch", "top", "tray"],
+        functional_gate="all_measured_products",
+        privacy=dict(raw_status_events_terminal_clipboard_published=False, hardware_actions=False,
+                     notifications_sound_history_lock_policy=False, autostart_enabled=False),
+        excluded_processes=["qualification Python sampler/PTY server", "desktop/window/session servers",
+                            "tray readiness/stop control probes"],
+        ram_policy=dict(target_bytes=resources.BUDGET, policy="soft_optimization_target",
+                        acceptable_reference_bytes=30_000_000, reference_is_hard_cutoff=False,
+                        above_target_fails_functional_suite=False),
+        metric_limits=[
+            "Uses native_resources.MacProcesses, Sampler, measure, sustain and qualify unchanged for observations.",
+            "Requested 25ms sampling; actual gaps and >50ms gaps remain in every measured row.",
+            "All observed product descendants included; short-lived descendants between samples can be missed.",
+            "Concurrent peak sums RSS at each observation, not independent per-PID highwaters; shared mappings may be double counted.",
+            "macOS OS RSS highwater unavailable; proc_pid_rusage v4 lifetime physical footprint is a separate metric, never RSS.",
+            "CPU excludes time before first observation and may miss final CPU; sampler overhead excluded but perturbs scheduling.",
+            "No cache purge; version/settings probes precede fixed status/status/status/watch/top/top-burst/tray order.",
+            "Status accepts explicit collector degradation; watch has no ready handshake and idle may emit zero documents.",
+            "Top readiness is rendered Quit; tray readiness is control protocol, not icon painting or physical device readiness.",
+            "Burst sends 8 read-only refresh keys/second, alternating terminal resize, with 200ms output-consumer delay.",
+            "Safety-only deviations: forced-kill fallback disabled; original stop-client 20s deadline retained.",
+            "The earlier public0161 seven-profile history is not replayed; no0161 archive is downloaded.",
+            "No physical-device/event latency, capture, permission, clipboard, lock transition, sound or autostart qualification.",
+        ])
+    report["resource_context"] = dict(
+        status="failed", measured_binary="same immutable public0191 as provenance",
+        suite="real status x3, watch, top, top burst, tray",
+        sampling_interval_seconds=resources.INTERVAL, warmup_seconds=resources.WARMUP,
+        sustained_seconds=resources.DURATION, first_failure=None)
+    # One context suite, not eight repetitions of the already-passing plain loop.
+    report["cycles"].append(dict(index=0, status="failed", profile="resource-context"))
+    children = []
+    terminals = []
+    authority = Processes()
+    original_environment = os.environ.copy()
+    original_subprocess = resources.subprocess
+    original_terminal = resources.NativeTerminal
+    original_sampler = resources.Sampler
+    original_stop_owned = resources.stop_owned
+    backend = resources.MacProcesses()
+
+    def owned_popen(*args, **kwargs):
+        process = subprocess.Popen(*args, **kwargs)
+        children.append(process)
+        def refuse_forced_kill():
+            raise RuntimeError("Resource failure cleanup requested forced kill; refused")
+        process.kill = refuse_forced_kill
+        return process
+
+    def observed_run(argv, *positional, **kwargs):
+        arguments = [str(value) for value in argv]
+        if arguments == [str(binary), "tray", "stop"]:
+            require(not positional, "Unexpected positional native stop subprocess arguments")
+            require(kwargs.get("stdout") == subprocess.PIPE and kwargs.get("stderr") == subprocess.PIPE,
+                    "Original stop diagnostic transport changed")
+            # The original consumer's 20-second process deadline is not enlarged.
+            # run() preserves original bytes/code and does not kill on timeout.
+            code, stdout, stderr = run("resource-context-stop", arguments, traced=True,
+                                       timeout=kwargs["timeout"], preserve_timeout=True)
+            return subprocess.CompletedProcess(argv, code, stdout, stderr)
+        # Same actual process transport and outcomes, but a timeout is preserved
+        # without subprocess.run's implicit kill. Current non-stop calls are
+        # only real status/version/settings probes.
+        require(not positional, "Unexpected positional resource subprocess arguments")
+        timeout = kwargs.pop("timeout", None)
+        check = kwargs.pop("check", False)
+        process = owned_popen(argv, **kwargs)
+        stdout, stderr = process.communicate(timeout=timeout)
+        result = subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
+        if check:
+            result.check_returncode()
+        return result
+
+    def observed_check_output(argv, **kwargs):
+        require("stdout" not in kwargs, "Unexpected check_output stdout override")
+        return observed_run(argv, stdout=subprocess.PIPE, check=True, **kwargs).stdout
+
+    class ObservedSampler(original_sampler):
+        def track(self, row, process_handle=None):
+            key = (row["pid"], row["identity"])
+            fresh = key not in self.tracked
+            super().track(row, process_handle)
+            if fresh:
+                owned = authority.get(row["pid"])
+                if owned is not None:
+                    birth = ":".join(str(value) for value in owned["birth"])
+                    if birth != row["identity"]:
+                        report["resource_context"].setdefault("exit_filter_registration_gaps", []).append(
+                            dict(pid=row["pid"], sampled_birth=row["identity"], reason="birth changed"))
+                    else:
+                        try:
+                            authority.retain(owned)
+                        except (ProcessLookupError, AssertionError):
+                            if authority.get(row["pid"]) == owned:
+                                raise
+                            # Short status/SDK children can exit between the real
+                            # sampler observation and added diagnostic retention.
+                            # Keep the measurement row unchanged and expose gap.
+                            report["resource_context"].setdefault("exit_filter_registration_gaps", []).append(
+                                dict(pid=row["pid"], sampled_birth=row["identity"], reason="exited during registration"))
+
+    class CooperativeTerminal(original_terminal):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            children.append(self.process)
+            terminals.append(self)
+
+        def close(self):
+            # Successful Q already exited. A failed Q remains failed; never
+            # turn it into a pass through another input, TERM or KILL.
+            if self.process.poll() is None:
+                raise RuntimeError("Owned terminal remains after failed Quit; no signal sent")
+            os.close(self.master)
+            terminals.remove(self)
+
+    def cooperative_stop_owned(process, sampler):
+        if process.poll() is None:
+            if sampler.output["mode"] != "watch":
+                # A failing tray control is not retried or bypassed. Keep exact
+                # handles and leave teardown to the disposable hosted runner.
+                raise RuntimeError("Owned non-watch process remains after failure; no signal sent")
+            # Existing real watch shutdown is Ctrl-C, bounded to its unreaped
+            # direct Popen child. There is no forced-kill fallback.
+            process.send_signal(__import__("signal").SIGINT)
+            process.wait(timeout=15)
+        sampler.cleanup_descendants()
+
+    try:
+        os.environ.clear()
+        os.environ.update(env)
+        resources.subprocess = types.SimpleNamespace(
+            **{name: getattr(subprocess, name) for name in dir(subprocess)
+               if name not in ("run", "Popen", "check_output")},
+            run=observed_run, Popen=owned_popen, check_output=observed_check_output)
+        resources.NativeTerminal = CooperativeTerminal
+        resources.Sampler = ObservedSampler
+        resources.stop_owned = cooperative_stop_owned
+        resources.qualify(binary, backend, resource_report["baseline"], resource_report,
+                          resource_proof, "immutable_public0191_original_resource_order_with_stop_syscalls",
+                          True, reference_only=False)
+        require(resource_report["baseline"]["version"] == "mcw 0.19.1",
+                "Resource context substituted a different product version")
+        resource_report["completed"] = True
+        report["resource_context"]["status"] = "passed"
+        report["cycles"][-1]["status"] = "passed"
+    except Exception as error:
+        resource_report["completed"] = False
+        failed = next((row for row in resource_report["runs"] if row.get("functional") == "failed"), None)
+        primary = failed.get("error") if failed else str(error)
+        resource_report["operational_error"] = primary
+        report["resource_context"]["first_failure"] = dict(
+            type="measured-functional-failure" if failed else type(error).__name__, message=primary,
+            mode=failed.get("mode") if failed else None,
+            profile=failed.get("profile") if failed else None,
+            stop_control_exit_code=failed.get("stop_control_exit_code") if failed else None,
+            stop_control_error=failed.get("stop_control_error") if failed else None)
+        if failed and failed.get("cleanup_error"):
+            report["resource_context"]["cleanup_error"] = dict(type=type(error).__name__, message=str(error))
+        raise
+    finally:
+        resources.subprocess = original_subprocess
+        resources.NativeTerminal = original_terminal
+        resources.Sampler = original_sampler
+        resources.stop_owned = original_stop_owned
+        os.environ.clear()
+        os.environ.update(original_environment)
+        resources.save(resource_proof, resource_report)
+        backend.close()
+        deadline = time.monotonic() + 8
+        while not authority.exited() and time.monotonic() < deadline:
+            time.sleep(.05)
+        report["resource_context"]["owned_process_handles"] = list(authority.owned.values())
+        report["resource_context"]["all_exit_events_observed"] = authority.exited()
+        report["resource_context_live_processes"] = [process.pid for process in children + client_handles
+                                                    if process.poll() is None]
+        report["resource_context_live_processes"] += [
+            row["pid"] for row in authority.owned.values() if not row["exit_observed"]
+            and row["pid"] not in report["resource_context_live_processes"]]
+        authority.close()
+        report["resource_context"]["terminal_descriptors_retained"] = [terminal.master for terminal in terminals]
+    require(not report["resource_context_live_processes"],
+            "Resource context retains live owned peers; no forced kill sent")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--proof", type=Path, required=True)
     parser.add_argument("--candidate", type=Path, help="Source-built real candidate; omit for pinned public0191")
     parser.add_argument("--cycles", type=int, default=8)
+    parser.add_argument("--resource-context", action="store_true",
+                        help="Measure public0191 through real status/watch/top/burst/tray history and 25ms sampler once")
     parser.add_argument("--disposable-runner", action="store_true", required=True)
     args = parser.parse_args()
+    require(not (args.resource_context and args.candidate), "Resource diagnosis requires immutable public0191, not source candidate")
     require(platform.system() == "Darwin", "macOS native runner required")
     require(os.environ.get("GITHUB_ACTIONS") == "true" and os.environ.get("RUNNER_ENVIRONMENT") == "github-hosted",
             "Only disposable GitHub-hosted runners are supported")
@@ -194,7 +397,7 @@ def main():
     def save():
         (proof / "stop.json").write_text(json.dumps(report, indent=2) + "\n")
 
-    def run(name, argv, *, traced=False, timeout=60):
+    def run(name, argv, *, traced=False, timeout=60, preserve_timeout=False):
         child_env = env.copy()
         fd = None
         descriptors = ()
@@ -223,6 +426,8 @@ def main():
             if traced:
                 report["cycles"][-1]["stop_client"] = row
             if row["timed_out"]:
+                if preserve_timeout:
+                    raise subprocess.TimeoutExpired([str(arg) for arg in argv], timeout, output=stdout, stderr=stderr)
                 raise AssertionError(name + ": bounded client deadline exceeded; no kill sent")
             if traced:
                 operations = [json.loads(line) for line in trace_path.read_text().splitlines()]
@@ -267,7 +472,16 @@ def main():
         require(code == 0, "Native stop interposer compilation failed")
         code, _, _ = run("aqua-session", ["/bin/launchctl", "print", "gui/" + str(os.getuid())])
         require(code == 0, "Logged-in native Aqua session unavailable")
-        for cycle in range(args.cycles):
+        if args.resource_context:
+            report["mode"] = "immutable-public0191-resource-context"
+            # Match native_resources.isolate() safe settings exactly, including
+            # its default profile; source candidate defaults are not substituted.
+            context_settings = SAFE.replace(b'profile = "development"\n', b"")
+            settings.write_bytes(context_settings)
+            resource_context(binary, env, proof, report, run, client_handles)
+            require(settings.read_bytes() == context_settings and settings.stat().st_ino == safe_identity,
+                    "Resource measurement changed private safety preferences")
+        for cycle in range(0 if args.resource_context else args.cycles):
             label = f"cycle-{cycle:02d}"
             row = dict(index=cycle, status="failed", dwell_seconds=20 if cycle == 0 else 1)
             report["cycles"].append(row)
@@ -334,7 +548,8 @@ def main():
             save()
         report["status"] = "passed"
     except Exception as error:
-        report["first_failure"] = dict(type=type(error).__name__, message=str(error))
+        report["first_failure"] = report.get("resource_context", {}).get("first_failure") or dict(
+            type=type(error).__name__, message=str(error))
         save()
     finally:
         # Not a proof retry: a separate direct protocol request, authenticated
@@ -380,6 +595,8 @@ def main():
                         report.setdefault("outstanding_owned_clients", []).append(dict(pid=client.pid))
             require(not report.get("outstanding_owned_clients"),
                     "Owned diagnostic client remains; sandbox retained without forced kill")
+            require(not report.get("resource_context_live_processes"),
+                    "Resource context retains live owned processes; sandbox retained without forced kill")
             shutil.rmtree(work)
             report["sandbox_cleanup"] = "removed owned private tree after bounded cooperative exit"
         except Exception as error:
