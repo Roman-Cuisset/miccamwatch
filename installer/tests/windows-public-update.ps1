@@ -1,4 +1,8 @@
-param([switch]$ActiveTray, [switch]$CurrentRepairOnly)
+param(
+    [switch]$ActiveTray,
+    [switch]$CurrentRepairOnly,
+    [ValidateSet('companion','cli')][string]$Frontend = 'companion'
+)
 
 $ErrorActionPreference = 'Stop'
 # This fixture must never start products or native probes on a developer/user PC.
@@ -10,6 +14,9 @@ $proof = Join-Path $env:RUNNER_TEMP 'public-update-proof'
 $report = [ordered]@{
     status = 'failed'; from = $env:UPGRADE_FROM; to = $env:RELEASE_VERSION
     active_tray_requested = [bool]$ActiveTray; tray_started = $false
+    frontend = $Frontend
+    launch_context_tested = $false
+    policy_semantics_tested = $false
     mode = $(if ($CurrentRepairOnly) { 'current-repair-only' } else { 'upgrade-and-independent-repair' })
     requested_phases = $(if ($CurrentRepairOnly) { @('repair','noop') } else { @('upgrade','noop','repair') })
     skipped_phases = @(if ($CurrentRepairOnly) {
@@ -21,12 +28,16 @@ $report = [ordered]@{
 $captures = [Collections.Generic.List[object]]::new()
 $owners = [Collections.Generic.List[object]]::new()
 $settings = $null
+$policyFile = $null
 function Save-Report {
     $report | ConvertTo-Json -Depth 12 | Set-Content (Join-Path $proof 'result.json')
 }
 Save-Report
 try {
-    if ($CurrentRepairOnly -and -not $ActiveTray) { throw 'Current-repair-only requires an active verified older tray' }
+    if ($CurrentRepairOnly -and -not $ActiveTray) { throw 'Current-repair-only requires an active selected frontend and verified older companion' }
+    if ($Frontend -eq 'cli' -and (-not $CurrentRepairOnly -or -not $ActiveTray)) {
+        throw 'CLI frontend qualification requires current-repair-only and active-tray; legacy-client coverage is unchanged'
+    }
     . (Join-Path $PSScriptRoot 'windows-verified-package.ps1')
     $repo = 'Roman-Cuisset/miccamwatch'
     $env:APPDATA = Join-Path $proof 'appdata'
@@ -59,6 +70,11 @@ public static class PublicUpdateNative {
     [DllImport("user32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern int GetClassNameW(IntPtr window, StringBuilder name, int count);
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr window, out uint pid);
     [DllImport("user32.dll", SetLastError=true)] public static extern IntPtr SendMessageTimeoutW(IntPtr window, uint message, UIntPtr wparam, IntPtr lparam, uint flags, uint timeout, out UIntPtr result);
+    [DllImport("user32.dll", SetLastError=true)] public static extern bool PostMessageW(IntPtr window, uint message, UIntPtr wparam, IntPtr lparam);
+    [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int GetMenuStringW(IntPtr menu, uint item, StringBuilder text, int count, uint flags);
+    [DllImport("user32.dll")] static extern int GetMenuItemCount(IntPtr menu);
+    [DllImport("user32.dll")] static extern IntPtr GetSubMenu(IntPtr menu, int position);
+    [DllImport("user32.dll")] static extern uint GetMenuState(IntPtr menu, uint item, uint flags);
     [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool QueryFullProcessImageNameW(IntPtr process, uint flags, StringBuilder path, ref uint size);
     [DllImport("kernel32.dll", SetLastError=true)] public static extern uint WaitForSingleObject(IntPtr process, uint timeout);
     [DllImport("kernel32.dll", SetLastError=true)] public static extern bool TerminateProcess(IntPtr process, uint code);
@@ -82,6 +98,52 @@ public static class PublicUpdateNative {
         if (!QueryFullProcessImageNameW(process, 0, path, ref size)) throw new System.ComponentModel.Win32Exception();
         return System.IO.Path.GetFullPath(path.ToString());
     }
+    // Read the actual native popup of the authenticated process, without selecting
+    // any command. MN_GETHMENU retrieves its menu; no remote memory is accessed.
+    public static IntPtr PopupWindow(uint expectedPid) {
+        IntPtr popup = IntPtr.Zero;
+        bool multiple = false;
+        if (!EnumWindows((window, parameter) => {
+            var name = new StringBuilder(256);
+            GetClassNameW(window, name, name.Capacity);
+            uint pid; GetWindowThreadProcessId(window, out pid);
+            if (pid == expectedPid && name.ToString() == "#32768") {
+                if (popup != IntPtr.Zero) multiple = true;
+                popup = window;
+            }
+            return true;
+        }, IntPtr.Zero)) throw new System.ComponentModel.Win32Exception();
+        if (multiple) throw new InvalidOperationException("Multiple owned native popups");
+        return popup;
+    }
+    public static string[] ProfileMenu(uint expectedPid) {
+        var popup = PopupWindow(expectedPid);
+        if (popup == IntPtr.Zero) return null;
+        UIntPtr result;
+        if (SendMessageTimeoutW(popup, 0x01e1, UIntPtr.Zero, IntPtr.Zero, 3, 1000, out result) == IntPtr.Zero)
+            throw new InvalidOperationException("Owned native menu query timed out");
+        var menu = new IntPtr(unchecked((long)result.ToUInt64()));
+        if (menu == IntPtr.Zero) throw new InvalidOperationException("Owned popup has no menu");
+        for (int index = 0; index < GetMenuItemCount(menu); index++) {
+            var profiles = GetSubMenu(menu, index);
+            if (profiles == IntPtr.Zero) continue;
+            var label = new StringBuilder(1024);
+            if (GetMenuStringW(menu, (uint)index, label, label.Capacity, 0x400) == 0)
+                throw new InvalidOperationException("Profile label unavailable");
+            var observed = new List<string> { label.ToString() };
+            foreach (uint command in new uint[] { 109, 110, 111, 112 }) {
+                uint flags = GetMenuState(profiles, command, 0);
+                if (flags == uint.MaxValue || (flags & 3) != 3)
+                    throw new InvalidOperationException("Explicit policy profile choice is not disabled");
+                var choice = new StringBuilder(1024);
+                if (GetMenuStringW(profiles, command, choice, choice.Capacity, 0) == 0)
+                    throw new InvalidOperationException("Profile choice unavailable");
+                observed.Add(choice.ToString());
+            }
+            return observed.ToArray();
+        }
+        throw new InvalidOperationException("Owned menu has no profile submenu");
+    }
 }
 // Event readers retain partial logs even when a published restart inherits pipes.
 // No PowerShell callback runs on a thread without a runspace.
@@ -90,12 +152,14 @@ public sealed class PublicUpdateCapture : IDisposable {
     readonly object gate = new object();
     readonly StringBuilder stdout = new StringBuilder(), stderr = new StringBuilder();
     public volatile bool StdoutEof, StderrEof;
-    public PublicUpdateCapture(string image, string arguments) {
+    public PublicUpdateCapture(string image, string arguments) : this(image, arguments, null) {}
+    public PublicUpdateCapture(string image, string arguments, string directory) {
         Process = new Process();
         Process.StartInfo = new ProcessStartInfo(image, arguments) {
             UseShellExecute = false, CreateNoWindow = true,
             RedirectStandardOutput = true, RedirectStandardError = true
         };
+        if (directory != null) Process.StartInfo.WorkingDirectory = directory;
         Process.OutputDataReceived += (sender, value) => { lock(gate) { if (value.Data == null) StdoutEof = true; else stdout.AppendLine(value.Data); } };
         Process.ErrorDataReceived += (sender, value) => { lock(gate) { if (value.Data == null) StderrEof = true; else stderr.AppendLine(value.Data); } };
         if (!Process.Start()) throw new InvalidOperationException("Process did not start");
@@ -122,6 +186,7 @@ public sealed class PublicUpdateCapture : IDisposable {
     }
     function Assert-Preferences {
         if ((Get-FileHash $settings).Hash -cne $settingsHash) { throw 'Public operation changed private preferences' }
+        if ($null -ne $policyFile -and (Get-FileHash $policyFile).Hash -cne $policyHash) { throw 'Public operation changed explicit policy' }
     }
     function Get-PairHashes([string]$Install) {
         $hashes = [ordered]@{}
@@ -137,7 +202,7 @@ public sealed class PublicUpdateCapture : IDisposable {
     }
     function Invoke-Captured([string]$Image, [string]$Arguments, [string]$Name, [int]$Seconds = 180) {
         $capture = [PublicUpdateCapture]::new($Image, $Arguments)
-        $captures.Add([pscustomobject]@{ Capture = $capture; Name = $Name; Image = [IO.Path]::GetFullPath($Image) })
+        $captures.Add([pscustomobject]@{ Capture = $capture; Name = $Name; Image = [IO.Path]::GetFullPath($Image); Role = 'command' })
         $actualImage = [PublicUpdateNative]::Image($capture.Process.Handle)
         if (-not [string]::Equals($actualImage, [IO.Path]::GetFullPath($Image), [StringComparison]::OrdinalIgnoreCase)) { throw 'Captured child image differs from exact executable' }
         $exited = $capture.Process.WaitForExit($Seconds * 1000)
@@ -198,7 +263,7 @@ public sealed class PublicUpdateCapture : IDisposable {
     }
     function Assert-OneTray($Owner) {
         $matching = 0
-        foreach ($process in [Diagnostics.Process]::GetProcessesByName('mcw-tray')) {
+        foreach ($process in [Diagnostics.Process]::GetProcessesByName([IO.Path]::GetFileNameWithoutExtension($Owner.Image))) {
             try {
                 $image = [PublicUpdateNative]::Image($process.Handle)
                 if ([string]::Equals($image, $Owner.Image, [StringComparison]::OrdinalIgnoreCase)) { $matching++ }
@@ -206,10 +271,49 @@ public sealed class PublicUpdateCapture : IDisposable {
         }
         if ($matching -ne 1) { throw "Expected one exact-image tray process, found $matching" }
     }
+    function Assert-LaunchContext($Owner) {
+        # Observe effective language and explicit-policy behavior in the real UI;
+        # neither a copied argv string nor unchanged TOML alone qualifies this.
+        $current = Get-Owner $Owner.Image
+        if ($null -eq $current -or $current.Pid -ne $Owner.Pid -or $current.Window -ne $Owner.Window) { throw 'Launch-context owner changed' }
+        if ([PublicUpdateNative]::PopupWindow($Owner.Pid) -ne [IntPtr]::Zero) { throw 'Unexpected existing owned popup' }
+        if (-not [PublicUpdateNative]::PostMessageW($Owner.Window, 0x8001, [UIntPtr]::Zero, [IntPtr]0x205)) { throw 'Could not open owned tray menu' }
+        try {
+            $deadline = [DateTime]::UtcNow.AddSeconds(5)
+            do {
+                $observed = [PublicUpdateNative]::ProfileMenu($Owner.Pid)
+                if ($null -ne $observed) { break }
+                Start-Sleep -Milliseconds 50
+            } while ([DateTime]::UtcNow -lt $deadline)
+            $expected = @('Profil — Défini par --config','Équilibré','Privé','Réunion','Développement')
+            if ($null -eq $observed -or ($observed | ConvertTo-Json -Compress) -cne ($expected | ConvertTo-Json -Compress)) {
+                throw 'Effective French language / explicit-policy disabled profile menu differs'
+            }
+            return @{ profile_label = $observed[0]; choices = @($observed[1..4]); all_choices_disabled = $true; language = 'fr'; explicit_policy = $true }
+        } finally {
+            [UIntPtr]$reply = [UIntPtr]::Zero
+            if ([PublicUpdateNative]::SendMessageTimeoutW($Owner.Window, 0x1f, [UIntPtr]::Zero, [IntPtr]::Zero, 3, 5000, [ref]$reply) -eq [IntPtr]::Zero) {
+                throw 'Owned menu cancellation timed out'
+            }
+            $deadline = [DateTime]::UtcNow.AddSeconds(5)
+            while ([PublicUpdateNative]::PopupWindow($Owner.Pid) -ne [IntPtr]::Zero) {
+                if ([DateTime]::UtcNow -ge $deadline) { throw 'Owned menu remained open after cancellation' }
+                Start-Sleep -Milliseconds 50
+            }
+        }
+    }
+    function Assert-LiveEof($Run, $Owner) {
+        if (-not $Run.Evidence.stdout_eof_at_deadline -or -not $Run.Evidence.stderr_eof_at_deadline) { throw 'Captured streams missed EOF deadline' }
+        $current = Get-Owner $Owner.Image
+        if ($null -eq $current -or $current.Pid -ne $Owner.Pid -or $current.Window -ne $Owner.Window -or [PublicUpdateNative]::WaitForSingleObject($Owner.Handle, 0) -ne 258) {
+            throw 'EOF must be observed with the exact successor still alive, before any cleanup'
+        }
+        return @{ owner = (Owner-Evidence $Owner); stdout_eof = $Run.Capture.StdoutEof; stderr_eof = $Run.Capture.StderrEof; before_cleanup = $true }
+    }
     function Retain-ImageProcesses([string]$Image) {
         # Retain exact private-install children even if failed startup never made
         # a HWND. These handles are cleanup authority, never a readiness signal.
-        foreach ($process in [Diagnostics.Process]::GetProcessesByName('mcw-tray')) {
+        foreach ($process in [Diagnostics.Process]::GetProcessesByName([IO.Path]::GetFileNameWithoutExtension($Image))) {
             $keep = $false
             try {
                 $handle = $process.Handle
@@ -241,6 +345,28 @@ public sealed class PublicUpdateCapture : IDisposable {
     }
     $latest = gh api "repos/$repo/releases/latest" --jq .tag_name
     if ($LASTEXITCODE -ne 0 -or $latest -cne $env:RELEASE_VERSION) { throw 'Selected release must be public stable latest' }
+    $report.verified_public_pairs = @{ older = (Get-PairHashes $old); current = (Get-PairHashes $new) }
+    if ($Frontend -eq 'cli') {
+        $launchDirectory = Join-Path $proof 'cli launch context'
+        $policyDirectory = Join-Path $launchDirectory 'policy files'
+        [void](New-Item -ItemType Directory $policyDirectory -Force)
+        $policyFile = Join-Path $policyDirectory 'custom policy.toml'
+        @'
+profile = "conservative"
+language = "de"
+action = "alert"
+'@ | Set-Content -Encoding utf8NoBOM $policyFile
+        $policyHash = (Get-FileHash $policyFile).Hash
+        Copy-Item $policyFile (Join-Path $proof 'explicit-policy-before.toml')
+        $frontendArguments = '--config "policy files/custom policy.toml" --lang fr tray'
+        $report.launch_context = @{
+            arguments = $frontendArguments; working_directory = $launchDirectory
+            updater_working_directory = [Environment]::CurrentDirectory
+            policy_path = $policyFile; policy_sha256 = $policyHash
+            policy_language = 'de'; explicit_language_override = 'fr'
+            coverage = 'Actual localized native profile menu and disabled explicit-policy controls; policy classification semantics are not exercised'
+        }
+    }
     Assert-Version (Join-Path $old 'mcw.exe') $env:UPGRADE_FROM 'old-version'
     Assert-Version (Join-Path $new 'mcw.exe') $env:RELEASE_VERSION 'new-version'
     # Legacy clients do not consume GH_TOKEN. Wait only BEFORE any updater attempt.
@@ -268,24 +394,38 @@ public sealed class PublicUpdateCapture : IDisposable {
         }
         $cli = Join-Path $install 'mcw.exe'
         $tray = Join-Path $install 'mcw-tray.exe'
+        $frontendImage = if ($Frontend -eq 'cli') { $cli } else { $tray }
         $original = $null
         try {
             if ($ActiveTray) {
-                $trayCapture = [PublicUpdateCapture]::new($tray, '')
+                $trayCapture = if ($Frontend -eq 'cli') {
+                    [PublicUpdateCapture]::new($frontendImage, $frontendArguments, $launchDirectory)
+                } else {
+                    [PublicUpdateCapture]::new($frontendImage, '')
+                }
                 $started = $trayCapture.Process
-                $captures.Add([pscustomobject]@{ Capture = $trayCapture; Name = "$scenario-original-tray"; Image = $tray })
+                $captures.Add([pscustomobject]@{ Capture = $trayCapture; Name = "$scenario-original-tray"; Image = $frontendImage; Role = 'frontend' })
                 $report.tray_started = $true
-                $original = Wait-Owner $tray
+                $original = Wait-Owner $frontendImage
                 if ($original.Pid -ne $started.Id) { throw 'Ready tray is not the exact child started by this fixture' }
                 Assert-OneTray $original
+                $originalContext = if ($Frontend -eq 'cli') { Assert-LaunchContext $original } else { $null }
             }
             $before = Get-PairHashes $install
             $phase = [ordered]@{
                 name = $scenario; status = 'failed'; before = $before
                 original_tray = (Owner-Evidence $original); core_success = $false
+                frontend = $Frontend; original_effective_context = $originalContext
                 refusal_preserves_pair_and_original = $false
             }
             $report.phases += $phase
+            if ($Frontend -eq 'cli') {
+                if ($before['mcw.exe'] -cne (Get-FileHash (Join-Path $new 'mcw.exe')).Hash -or $before['mcw-tray.exe'] -cne (Get-FileHash (Join-Path $old 'mcw-tray.exe')).Hash) {
+                    throw 'CLI-hosted repair must use the real current caller/frontend and verified older companion'
+                }
+                $phase.current_cli_hosts_original_and_calls_update = $true
+                $phase.older_companion_requires_repair = $true
+            }
             $run = Invoke-Captured $cli 'update' $scenario
             $phase.process = $run.Evidence
             $phase.after = Get-PairHashes $install
@@ -295,7 +435,7 @@ public sealed class PublicUpdateCapture : IDisposable {
             if ($run.Evidence.exit_code -ne 0) {
                 if (($before | ConvertTo-Json -Compress) -cne ($phase.after | ConvertTo-Json -Compress)) { throw "$scenario refusal changed installed bytes" }
                 if ($ActiveTray) {
-                    $still = Get-Owner $tray
+                    $still = Get-Owner $frontendImage
                     if ($null -eq $still -or $still.Pid -ne $original.Pid -or [PublicUpdateNative]::WaitForSingleObject($original.Handle, 0) -ne 258) { throw "$scenario refusal lost the original tray" }
                     Assert-OneTray $still
                     $phase.tray_after = Owner-Evidence $still
@@ -308,10 +448,15 @@ public sealed class PublicUpdateCapture : IDisposable {
             if ($ActiveTray) {
                 $phase.old_child_gone = ([PublicUpdateNative]::WaitForSingleObject($original.Handle, 15000) -eq 0)
                 if (-not $phase.old_child_gone) { throw "$scenario old tray child did not exit" }
-                $successor = Wait-Owner $tray
+                $successor = Wait-Owner $frontendImage
                 if ($successor.Pid -eq $original.Pid) { throw "$scenario did not create a distinct successor" }
                 Assert-OneTray $successor
                 $phase.tray_after = Owner-Evidence $successor
+                if ($Frontend -eq 'cli') {
+                    $phase.effective_context_after = Assert-LaunchContext $successor
+                    $phase.effective_context_unchanged = $true
+                    $report.launch_context_tested = $true
+                }
             } elseif (@([PublicUpdateNative]::Windows()).Count -ne 0 -or (Test-MCWProcesses)) {
                 throw "$scenario unexpectedly left a resident frontend in no-tray mode"
             }
@@ -320,12 +465,13 @@ public sealed class PublicUpdateCapture : IDisposable {
             if (-not $run.Evidence.stdout_eof_at_deadline -or -not $run.Evidence.stderr_eof_at_deadline) {
                 throw "$scenario core transaction succeeded but captured stdout/stderr EOF failed; no retry or manufactured EOF"
             }
+            if ($ActiveTray) { $phase.eof_with_live_successor = Assert-LiveEof $run $successor }
             $phase.status = 'passed'
             if ($scenario -eq 'upgrade' -or $CurrentRepairOnly) {
                 $noop = [ordered]@{ name = 'noop'; status = 'failed'; core_success = $false; before = (Get-PairHashes $install) }
                 $report.phases += $noop
-                $existing = if ($ActiveTray) { Get-Owner $tray } else { $null }
-                if ($ActiveTray -and ($null -eq $existing -or $existing.Pid -ne $successor.Pid -or [PublicUpdateNative]::WaitForSingleObject($successor.Handle, 0) -ne 258)) {
+                $existing = if ($ActiveTray) { Get-Owner $frontendImage } else { $null }
+                if ($ActiveTray -and ($null -eq $existing -or $existing.Pid -ne $successor.Pid -or $existing.Window -ne $successor.Window -or [PublicUpdateNative]::WaitForSingleObject($successor.Handle, 0) -ne 258)) {
                     throw 'Same-version no-op must begin with the exact live update successor'
                 }
                 $noop.original_tray = Owner-Evidence $existing
@@ -336,16 +482,21 @@ public sealed class PublicUpdateCapture : IDisposable {
                 Assert-VerifiedWindowsPair $install $new
                 if (-not $run.Evidence.process_exited_within_deadline -or $run.Evidence.exit_code -ne 0) { throw 'Same-version no-op failed' }
                 if ($ActiveTray) {
-                    $after = Get-Owner $tray
-                    if ($null -eq $after -or $after.Pid -ne $existing.Pid -or [PublicUpdateNative]::WaitForSingleObject($existing.Handle, 0) -ne 258) { throw 'Same-version no-op replaced the matching tray' }
+                    $after = Get-Owner $frontendImage
+                    if ($null -eq $after -or $after.Pid -ne $existing.Pid -or $after.Window -ne $existing.Window -or [PublicUpdateNative]::WaitForSingleObject($existing.Handle, 0) -ne 258) { throw 'Same-version no-op replaced the matching tray' }
                     Assert-OneTray $after
                     $noop.tray_after = Owner-Evidence $after
                     $noop.existing_matching_tray_preserved = $true
+                    if ($Frontend -eq 'cli') {
+                        $noop.effective_context_after = Assert-LaunchContext $after
+                        $noop.effective_context_unchanged = $true
+                    }
                 } elseif (@([PublicUpdateNative]::Windows()).Count -ne 0 -or (Test-MCWProcesses)) { throw 'No-op unexpectedly started a frontend' }
                 Assert-Preferences
                 $noop.preferences_unchanged = $true
                 $noop.core_success = $true
                 if (-not $run.Evidence.stdout_eof_at_deadline -or -not $run.Evidence.stderr_eof_at_deadline) { throw 'No-op captured stdout/stderr EOF failed' }
+                if ($ActiveTray) { $noop.eof_with_same_live_successor = Assert-LiveEof $run $after }
                 $noop.status = 'passed'
             }
         } catch {
@@ -360,7 +511,7 @@ public sealed class PublicUpdateCapture : IDisposable {
             Save-Report
             # A timed-out updater cannot race cleanup or the independent repair.
             foreach ($entry in $captures) {
-                if ($null -ne $entry.Capture -and $entry.Image -eq $cli -and [PublicUpdateNative]::WaitForSingleObject($entry.Capture.Process.Handle, 0) -eq 258) {
+                if ($entry.Role -eq 'command' -and $null -ne $entry.Capture -and $entry.Image -eq $cli -and [PublicUpdateNative]::WaitForSingleObject($entry.Capture.Process.Handle, 0) -eq 258) {
                     $handle = $entry.Capture.Process.Handle
                     if (-not [string]::Equals([PublicUpdateNative]::Image($handle), $entry.Image, [StringComparison]::OrdinalIgnoreCase)) { throw 'Timed-out updater cleanup image changed' }
                     if (-not [PublicUpdateNative]::TerminateProcess($handle, 1) -or [PublicUpdateNative]::WaitForSingleObject($handle, 15000) -ne 0) { throw 'Timed-out updater owned-handle cleanup failed' }
@@ -368,8 +519,8 @@ public sealed class PublicUpdateCapture : IDisposable {
                 }
             }
             try {
-                Retain-ImageProcesses $tray
-                $resident = Get-Owner $tray
+                Retain-ImageProcesses $frontendImage
+                $resident = Get-Owner $frontendImage
                 if ($null -ne $resident) { Stop-Owner $resident }
             } catch {
                 $report.errors += "cleanup $scenario`: $($_.Exception.Message)"
@@ -412,6 +563,7 @@ public sealed class PublicUpdateCapture : IDisposable {
     }
     foreach ($owner in $owners) { $owner.Process.Dispose() }
     if ($null -ne $settings -and (Test-Path $settings)) { Copy-Item $settings (Join-Path $proof 'preferences-after.toml') }
+    if ($null -ne $policyFile -and (Test-Path $policyFile)) { Copy-Item $policyFile (Join-Path $proof 'explicit-policy-after.toml') }
     Save-Report
 }
 if ($report.status -ne 'passed') { throw 'Public update proof cleanup failed; inspect retained evidence' }
