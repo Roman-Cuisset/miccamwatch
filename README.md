@@ -334,6 +334,13 @@ Updater reservation errors now distinguish camera/microphone and request/resourc
 ownership. A real protected owner remains a refusal: closing its frontend first
 is not a safe workaround, because it can resolve automatic restoration.
 
+Microphone control failures preserve the original IPC error when native ownership
+is busy. An occupied global lease alone does not identify a different operational
+namespace or missing administrator rights: an incompatible guard version is also
+possible. Version compatibility and ownership checks remain enforced. Release
+protection explicitly through its matching version before changing binaries;
+terminating the guard process is not a substitute for release.
+
 Concurrent Windows observers and controls wait at most three seconds for a busy
 native pipe using the [documented Win32 admission pattern](https://learn.microsoft.com/en-us/windows/win32/ipc/named-pipe-client).
 Only opening the connection is retried; request bytes are sent once, after the

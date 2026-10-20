@@ -1,7 +1,7 @@
 # Roadmap technique MicCamWatch
 
 Dernière mise à jour : **2026-10-19**. Responsable : lead architecture/développement.
-Base publiée : [v0.18.1 stable/latest](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.18.1), source `034d2c1e5cd5a2f06bf40fc69d0b15bed83defcc` ; [CI exacte avant tag](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/39027055886) et [release native](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/39028452282) vertes ; neuf assets/digests et huit attestations exactes vérifiés. Dépendances ZIP corrigées, SBOM public vérifié. Migrations publiques Windows/Unix, Pages et qualification native Arch0.18.1 réussies. Le18/10, l'utilisateur rapporte sa mise à jour PC vers0.18.1 après Exit manuel du tray ; aucune nouvelle intervention ou observation de cette installation par l'assistant. État des protections non réobservé depuis le relevé du14/10. Recettes externes non publiées.
+Base publiée : [v0.18.1 stable/latest](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.18.1), source `034d2c1e5cd5a2f06bf40fc69d0b15bed83defcc` ; [CI exacte avant tag](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/39027055886) et [release native](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/39028452282) vertes ; neuf assets/digests et huit attestations exactes vérifiés. Dépendances ZIP corrigées, SBOM public vérifié. Migrations publiques Windows/Unix, Pages et qualification native Arch0.18.1 réussies. Le18/10, l'utilisateur rapporte sa mise à jour PC vers0.18.1 après Exit manuel du tray ; lecture du conflit et libération explicite du micro le19/10 consignées ci-dessous. Les relevés historiques ne décrivent pas un état courant. Recettes externes non publiées.
 
 **Candidat0.19.0 non publié livré, explicitement choisi par l'utilisateur :**
 paquets actualisés du commit `62b550ed5b13eecf680722b90460ba133e37305a` disponibles dans
@@ -437,6 +437,19 @@ son occupation seule ne prouve pas un « autre namespace ». Ne pas transformer
 la coexistence de versions en manque UAC ; l'utilisateur signale la garde
 caméra active après approbation. Aucune commande SDK, arrêt, mutation de fichier
 d'intention, clipboard ou autostart pendant ce diagnostic.
+
+**Libération demandée ensuite par l'utilisateur :** commande unique
+`C:\Users\stcui\.cargo\bin\mcw.exe unmute`, exit0 ; réponse observée :
+protection micro désactivée, SDK ACTIVÉ, un endpoint. Caméra inchangée.
+Ce relevé ponctuel n'est ni une preuve de capture en réunion ni un état courant ;
+aucune réactivation de protection ou expérience de pointeur ensuite sur son PC.
+
+**Diagnostic corrigé en source3aff04f :** l'échec IPC initial est conservé
+lors du refus d'activation/libération pour ownership occupé. Le mutex seul
+n'affirme plus « autre namespace ». CI39312572930 exerce le refus réel d'un
+client de portée étrangère : exit2, cause pipe absente conservée, propriétaire
+initial toujours protégé et aucun contrôle adopté. Ce scénario ne rejoue pas
+le conflit entre deux versions sur le PC et n'autorise aucun takeover de garde.
 
 
 **Acceptation :** sur Windows jetable, exercer le vrai `mcw update` avec le vrai
@@ -1285,3 +1298,4 @@ Les sept rendus Windows ont été relus, dont les choix désactivés sous `--con
 | 2026-10-19 | P1-UPGRADE-ACTIVE — vrais anciens trays remplacés sans Exit manuel | **Preuve native passée**, sourcef65fc19/CI39306824376 | Deux layouts réels0181→019 et CLI019/compagnon0181 : ancien child vivant immédiatement avant apply, refus d'un lease global détenu sur autre thread préservant bytes/tray/état ; après libération du seul lease de fixture, vraie transaction passe, anciens PIDs8032/9992 sortis coopérativement, successeurs2764/9844 authentifiés et fermés proprement ; paire et backups exacts, préférences/état privé inchangés | Pas de mutation SDK/protection, pas de faux numéro ; fixture native n'est ni l'acquisition publique019 ni son CLI installé mappé. Aucun changement de l'algorithme d'ownership justifié par ces résultats |
 | 2026-10-19 | P1-UPGRADE-ACTIVE — retraite réelle des helpers avec tray ouvert | **guards.json proof_complete:true, cleanup sans erreur** | Même CI : contrôle Exit protégé conservé puis nouvelle fenêtre privée active pendant Allow/unmute explicites sur hôte zéro périphérique. Tous les vrais handles de gardes sortis ; trois observations espacées conservent le tray vivant, les services inactifs et les deux mutex natifs disponibles. Reprise caméra sans Allow intermédiaire et micro préservé restent passés | Un booléen helper_active:false n'était pas utilisé comme disponibilité du verrou ; pas de contrôle matériel physique ni d'UAC humain, PC utilisateur/micro en réunion inchangés |
 | 2026-10-19 | Mise à jour publique avec tray actif — diagnostic EOF distinct | **Deux cœurs de transaction réussis, workflow conservé en échec EOF** |39306851493 : vrais0180→0181 et CLI0181/ancien compagnon0180, sorties updater0 dans la borne, anciennes instances sorties, une instance suivante exacte, paire publique attestée et préférences préservées. À10s après exit, stdout_eof:false et stderr_eof:false dans les deux phases. No-op skipped après échec, aucune tentative rejouée ; nettoyage coopératif des seuls successeurs après enregistrement des preuves | Ce n'est pas un nouveau Busy dû au tray seul. Ancien EOF immuable déjà corrigé en source019 mais non rétroactivement ; ne pas publier une preuve globale verte ni forger une release pour tester l'acquisition du candidat. La cause exacte du refus historique protégé reste non attribuée |
+| 2026-10-19 | Diagnostic micro — version incompatible ≠ autre namespace prouvé | **Corrigé3aff04f et refus natif qualifié** | CI39312572930 : guards.json proof_complete:true, refus unmute exit2 conservant open Windows control pipe/os error2 ; protection d'origine préservée, release explicite avec tray ouvert et vraie retraite des helpers passent, cleanup sans erreur. Local :14 régressions transactionnelles et Clippy passent. Aucun nouveau scénario permanent, seules les sorties des refus existants sont archivées | Trois Unix verts ; Windows échoue uniquement sur le popup Shell déjà non qualifié. Pas de bypass de version/ownership ni de replay du conflit sur le PC ; paquet62b550e livré antérieurement ne contient pas encore ce correctif |
