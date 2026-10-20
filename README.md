@@ -281,7 +281,7 @@ The old mapped-CLI cleanup warning remains separate. See the 0.19.0 corrections
 below and [ROADMAP](docs/ROADMAP.md); no installed application or security
 protection has been changed by that source work.
 
-## 0.19.1 — Windows CLI-hosted tray update correction (unreleased)
+## 0.19.1 — Windows CLI-hosted tray update correction
 
 The updater now recognizes both supported frontend hosts from the exact
 installation: `mcw-tray.exe` and `mcw.exe tray`. It retains that process handle
