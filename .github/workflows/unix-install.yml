@@ -21,7 +21,7 @@ on:
     inputs:
       version:
         description: Public release to install
-        default: v0.19.0
+        default: v0.19.1
         required: true
         type: string
       upgrade-from:
