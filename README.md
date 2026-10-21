@@ -1,5 +1,10 @@
 # miccamwatch
 
+[![Build](https://github.com/Roman-Cuisset/miccamwatch/actions/workflows/ci.yml/badge.svg)](https://github.com/Roman-Cuisset/miccamwatch/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/Roman-Cuisset/miccamwatch)](https://github.com/Roman-Cuisset/miccamwatch/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/Roman-Cuisset/miccamwatch/total)](https://github.com/Roman-Cuisset/miccamwatch/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 `mcw` monitors microphone and camera access using platform-specific evidence. Windows uses native capture and privacy APIs; Linux and macOS 15+ provide native monitoring, desktop frontends and scoped controls with narrower evidence. It supports high-contrast terminal colors, seven display languages, policy-driven trust validation, JSONL history and native event notifications. Detailed evidence remains in English for stable machine-readable diagnostics. Distribution covers Windows ZIP/MSI, Linux x64 and macOS Apple Silicon/Intel CLI archives and native application disk images; previous release tags and assets remain immutable.
 
 ## macOS camera activity
