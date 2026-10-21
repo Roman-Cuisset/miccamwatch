@@ -512,7 +512,8 @@ def main():
                 time.sleep(.2)
             require(ready, "Native frontend did not become ready")
             peers.discover(active.pid)
-            require(len(peers.owned) >= 2, "Real GUI helper peer not observed")
+            require(any(peer["parent"] == active.pid and Path(peer["executable"]).name == "MicCamWatchHelper"
+                        for peer in peers.owned.values()), "Real AppKit helper child not observed")
             row["socket_before_stop"] = metadata(sockpath)
             require(row["socket_before_stop"]["socket"] and row["socket_before_stop"]["uid"] == os.getuid()
                     and row["socket_before_stop"]["mode"] == "0o600", "Unsafe control socket")
@@ -522,7 +523,20 @@ def main():
                     code, _, _ = run(label + f"-reopen-{reopen}", [binary, "tray", "open"], traced=True, timeout=10)
                     require(code == 0 and active.poll() is None, "Real consumer reopen failed")
                     peers.discover(active.pid)
-                    require(set(peers.owned) == original, "Reopen created another persistent frontend peer")
+                    # Observation helpers can be born during a normal refresh.
+                    # They are not duplicate frontends: require retained kernel
+                    # exit evidence, rather than treating every birth as persistent.
+                    newcomers = set(peers.owned) - original
+                    row["reopen_peer_observations"] = [peers.owned[pid] for pid in sorted(newcomers)]
+                    deadline = time.monotonic() + 5
+                    while newcomers:
+                        peers.drain()
+                        newcomers = {pid for pid in newcomers if not peers.owned[pid]["exit_observed"]}
+                        require(active.poll() is None, "Frontend exited during consumer reopen")
+                        require(not newcomers or time.monotonic() < deadline,
+                                "Reopen left another persistent frontend peer")
+                        if newcomers:
+                            time.sleep(.02)
                 row["consumer_reopen"] = "passed"
             time.sleep(row["dwell_seconds"])
             code, _, _ = run(label + "-ready-before-stop", [binary, "tray", "status"])
