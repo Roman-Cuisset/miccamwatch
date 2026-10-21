@@ -69,6 +69,15 @@ jobs:
         run: |
           test "$GITHUB_ACTIONS" = true
           test "$RUNNER_ENVIRONMENT" = github-hosted
+          # Historical mcw also validates executable ancestors. Harden only this
+          # disposable runner's user-owned Cellar; never relax the product guard.
+          cellar="$(brew --cellar)"
+          test -d "$cellar"
+          test ! -L "$cellar"
+          test "$(stat -f %u "$cellar")" = "$(id -u)"
+          stat -f 'Cellar before: %N uid=%u gid=%g mode=%OLp' "$cellar"
+          chmod go-w "$cellar"
+          stat -f 'Cellar prepared: %N uid=%u gid=%g mode=%OLp' "$cellar"
           python3 -B distribution/homebrew/native_qualification.py \
             --disposable-machine \
             --architecture "$EXPECTED_ARCH" \

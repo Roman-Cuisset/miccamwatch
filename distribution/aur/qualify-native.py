@@ -162,7 +162,7 @@ def smoke(args):
         refusal = record(proof, "update-refusal", ["strace", "-f", "-e", "trace=network,execve",
                          "-o", str(proof / "update.strace"), "mcw", "update"], (1, 2))
         trace = (proof / "update.strace").read_text()
-        require(not re.search(r"\b(?:socket|connect)\([^\n]*AF_INET", trace),
+        require(not re.search(r"\b(?:connect|bind|sendto|sendmsg|sendmmsg)\([^\n]*AF_INET", trace),
                 "Package-owned mcw update attempted internet networking before refusal")
         require(not re.search(r'execve\("[^"\n]*/curl"', trace),
                 "Package-owned mcw update invoked the network updater")
@@ -175,7 +175,8 @@ def smoke(args):
             require(hashlib.sha256(Path("/usr/bin/mcw").read_bytes()).hexdigest() == before_uninstall_request,
                     "Consumer uninstall mutated a manager-owned executable")
             trace = (proof / "uninstall.strace").read_text()
-            require(not re.search(r"\b(?:socket|connect)\([^\n]*AF_INET", trace),
+            # pacman/libcurl may probe IPv6 with socket(); only actual endpoint I/O is forbidden.
+            require(not re.search(r"\b(?:connect|bind|sendto|sendmsg|sendmmsg)\([^\n]*AF_INET", trace),
                     "Manager-owned uninstall attempted internet networking")
     finally:
         if daemon.poll() is None:
