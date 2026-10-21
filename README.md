@@ -299,6 +299,14 @@ history and restoration data are retained. Windows removal is deferred: command
 acceptance is not proof of deletion; the worker records the final result.
 Foreign control ownership or an incomplete restoration refuses removal.
 
+TLS dependencies resolve to `rustls-webpki 0.103.16`, `webpki-roots 1.0.10`
+and `webpki-root-certs 1.0.10`, addressing
+[RUSTSEC-2026-0382](https://rustsec.org/advisories/RUSTSEC-2026-0382),
+[0381](https://rustsec.org/advisories/RUSTSEC-2026-0381) and
+[0383](https://rustsec.org/advisories/RUSTSEC-2026-0383). The audit still reports
+three maintenance warnings for the Linux D-Bus dependency stack; no advisory is
+ignored or suppressed.
+
 Native qualification is tracked in [ROADMAP](docs/ROADMAP.md). These source
 changes are not a published release, and do not establish a fix for the historical
 macOS Intel stop EINVAL. Public stable remains 0.19.1.
