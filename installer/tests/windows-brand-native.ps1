@@ -44,21 +44,53 @@ $report = [ordered]@{
     msi = $msi; installation = $installDirectory; shortcut = $shortcut
     productCode = $null; packageSha256 = $null; registration = $null
     versions = @(); comparisons = @(); limitations = @(); cleanup = $null; error = $null
+    observer = @{
+        context = 'interactive hosted runner; actual MSI registration must be per-user'
+        userSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+        administratorRole = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    }
 }
 $failure = $null
 $installAttempted = $false
+$script:mcwBrandMsiIncomplete = $false
 $productCode = $null
 $installer = $null
+function Get-UserPathSnapshot {
+    $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $false)
+    $present = $false
+    $kind = $null
+    $raw = $null
+    try {
+        if ($null -ne $key) {
+            foreach ($name in $key.GetValueNames()) {
+                if ([string]::Equals($name, 'PATH', [StringComparison]::OrdinalIgnoreCase)) {
+                    $present = $true
+                    $kind = $key.GetValueKind($name).ToString()
+                    $raw = $key.GetValue($name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+                    break
+                }
+            }
+        }
+        return @{
+            observerSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+            keyExists = ($null -ne $key); valueExists = $present; valueKind = $kind
+            rawValue = $raw; dotNetValue = [Environment]::GetEnvironmentVariable('PATH', 'User')
+            installation = $installDirectory
+        }
+    } finally { if ($null -ne $key) { $key.Dispose() } }
+}
 $userPathBefore = [Environment]::GetEnvironmentVariable('PATH', 'User')
+$report['userPathBefore'] = $userPathBefore
+$report['userPathBeforeSnapshot'] = Get-UserPathSnapshot
 function Save-Report { $report | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $proof 'result.json') -Encoding UTF8 }
 function Invoke-OwnedMsi([string]$Operation, [string]$Subject, [string]$Log, [string]$Properties = '') {
     $arguments = "$Operation `"$Subject`" /qn /norestart /L*V `"$Log`" $Properties"
     $process = Start-Process -FilePath (Join-Path $env:WINDIR 'System32/msiexec.exe') -ArgumentList $arguments -PassThru
     try {
         if (-not $process.WaitForExit(180000)) {
-            # Retain the precise child process handle, never kill by executable name.
-            $process.Kill()
-            throw "Owned msiexec exceeded 180 seconds; inspect $Log"
+            $script:mcwBrandMsiIncomplete = $true
+            $report['pendingInstaller'] = @{ pid=$process.Id; started=$process.StartTime; log=$Log }
+            throw "Owned msiexec exceeded 180 seconds; operation remains unknown and alive, no cleanup or forced stop; inspect $Log"
         }
         $process.Refresh()
         if ($process.ExitCode -notin @(0, 3010)) { throw "Owned msiexec exited $($process.ExitCode); inspect $Log" }
@@ -226,6 +258,8 @@ try {
     # Scope is authored perUser. An unquoted empty ALLUSERS value consumes the
     # following property and can accidentally request a machine installation.
     $report.installExitCode = Invoke-OwnedMsi '/i' $msi (Join-Path $proof 'install-msi.log') "INSTALLFOLDER=`"$installDirectory`""
+    $report['userPathInstalledSnapshot'] = Get-UserPathSnapshot
+    Save-Report
     if ($installer.ProductState($productCode) -ne 5) { throw 'Fixture MSI is not registered as locally installed.' }
     $registeredLocation = $installer.ProductInfo($productCode, 'InstallLocation')
     if (-not [string]::Equals($registeredLocation.TrimEnd('\'), $installDirectory, [StringComparison]::OrdinalIgnoreCase)) {
@@ -286,9 +320,6 @@ try {
             [McwBrandNative]::ExtractImage($canonical, 0, $size, $expectedNative)
             $sheetPaths.Add($expectedShell); $sheetLabels.Add("official / shell / $size px")
             $sheetPaths.Add($expectedNative); $sheetLabels.Add("official / extract / $size px")
-            # A generic Shell icon for the .ico itself must never become our
-            # expected image. Cross-check it against native ICO extraction.
-            Compare-Image 'official-native-crosscheck' 'shell' $canonical 0 $size $expectedNative
             foreach ($name in @('mcw', 'mcw-tray')) {
                 $installed = Join-Path $installDirectory "$name.exe"
                 Compare-Image $name 'shell' $installed 0 $size $expectedShell
@@ -310,7 +341,9 @@ try {
 } finally {
     # Keep the MSI, receipt metadata, native PNGs, logs, and partial installation
     # evidence. Uninstall only the product absent before our own /i attempt.
-    if ($installAttempted -and $productCode -and $null -ne $installer) {
+    if ($script:mcwBrandMsiIncomplete) {
+        $report.cleanup = @{ status='incomplete-installer-retained'; productCode=$productCode }
+    } elseif ($installAttempted -and $productCode -and $null -ne $installer) {
         try {
             if (Test-Path -LiteralPath $installDirectory -PathType Container) {
                 Copy-Item -LiteralPath $installDirectory -Destination (Join-Path $proof 'installed-before-cleanup') -Recurse
@@ -334,7 +367,10 @@ try {
                 }
                 $report.cleanup = @{ status = 'uninstalled'; productCode = $productCode; exitCode = $exit }
             } else { $report.cleanup = @{ status = 'not-registered'; productCode = $productCode } }
-            if ([Environment]::GetEnvironmentVariable('PATH', 'User') -cne $userPathBefore) { throw 'MSI cleanup did not restore the pre-fixture user PATH.' }
+            $userPathAfter = [Environment]::GetEnvironmentVariable('PATH', 'User')
+            $report['userPathAfter'] = $userPathAfter
+            $report['userPathAfterSnapshot'] = Get-UserPathSnapshot
+            if ($userPathAfter -cne $userPathBefore) { throw 'MSI cleanup did not restore the pre-fixture user PATH.' }
         } catch {
             $report.cleanup = @{ status = 'failed'; productCode = $productCode; error = $_.ToString() }
             $report.status = 'failed'

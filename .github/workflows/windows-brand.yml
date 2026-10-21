@@ -1,46 +1,93 @@
-name: Windows hosted interactive-session prerequisites
+name: Windows retained native payload diagnostics
 
 on:
   workflow_dispatch:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
-  native-context:
+  interactive-icons:
     runs-on: windows-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - name: Read existing desktop and RDP capabilities without changing policy
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: native-windows-brand-shell
+          run-id: 39625449451
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/previous-native
+      - name: Exercise actual interactive images without rebuilding unchanged payload
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') { throw 'Disposable hosted runner required' }
+          $previous = Join-Path $env:RUNNER_TEMP 'previous-native'
+          New-Item -ItemType Directory -Path 'target/release' -Force | Out-Null
+          foreach ($name in @('mcw.exe','mcw-tray.exe')) { Copy-Item -LiteralPath (Join-Path $previous "_temp/windows-brand-proof/installed-before-cleanup/$name") -Destination (Join-Path 'target/release' $name) }
+          $msi = Join-Path $env:GITHUB_WORKSPACE 'target/mcw-brand-fixture.msi'
+          Copy-Item -LiteralPath (Join-Path $previous 'miccamwatch/miccamwatch/target/mcw-brand-fixture.msi') -Destination $msi
+          if ((Get-FileHash $msi -Algorithm SHA256).Hash -cne 'F37927EA1681738F0FDF49377F210812F1C0B8BF80489FB01900A3C59F5CCB66') { throw 'Retained exact MSI hash mismatch' }
+          & powershell.exe -NoProfile -NonInteractive -STA -File installer/tests/windows-brand-native.ps1 -MsiPath $msi -OutputDirectory (Join-Path $env:RUNNER_TEMP 'reused-interactive-proof') -IsolatedRunner
+          if ($LASTEXITCODE -ne 0) { throw 'Actual interactive branding assertion failed; original evidence retained' }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: reused-interactive-branding
+          path: ${{ runner.temp }}/reused-interactive-proof
+          if-no-files-found: error
+          retention-days: 7
+  ordinary-frontend:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: native-windows-brand-shell
+          run-id: 39625449451
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/previous-native
+      - name: Capture console backend and installer-service prerequisite
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') { throw 'Disposable hosted runner required' }
-          $proof = Join-Path $env:RUNNER_TEMP 'interactive-prerequisites'
-          New-Item -ItemType Directory -Path $proof | Out-Null
-          $policy = Get-ItemProperty 'HKLM:/SYSTEM/CurrentControlSet/Control/Terminal Server'
-          $listener = Get-ItemProperty 'HKLM:/SYSTEM/CurrentControlSet/Control/Terminal Server/WinStations/RDP-Tcp'
-          $control = [Type]::GetTypeFromProgID('MsRdpClient10NotSafeForScripting')
-          $certificates = @(Get-ChildItem 'Cert:/LocalMachine/Remote Desktop' -ErrorAction SilentlyContinue | ForEach-Object { @{subject=$_.Subject;thumbprint=$_.Thumbprint;notAfter=$_.NotAfter;certificate=[Convert]::ToBase64String($_.RawData)} })
-          @{
-            terminalService=(Get-Service TermService | Select-Object Status,StartType,Name)
-            installerService=(Get-Service msiserver | Select-Object Status,StartType,Name)
-            denyConnections=$policy.fDenyTSConnections
-            port=$listener.PortNumber
-            nlaRequired=$listener.UserAuthentication
-            activeXAvailable=($null -ne $control)
-            controlClsid=$(if ($control) { $control.GUID.ToString() } else { $null })
-            certificates=$certificates
-            listeners=@(Get-NetTCPConnection -LocalPort $listener.PortNumber -State Listen -ErrorAction SilentlyContinue | Select-Object LocalAddress,LocalPort,OwningProcess)
-            remoteDesktopGroup=(Get-LocalGroup -SID 'S-1-5-32-555' | Select-Object Name,SID)
-          } | ConvertTo-Json -Depth 8 | Out-File -LiteralPath (Join-Path $proof 'capabilities.json') -Encoding utf8
-          & quser.exe *> (Join-Path $proof 'sessions.log')
-      - name: Retain read-only native capability evidence
+          $stage = Join-Path ([Environment]::GetFolderPath('CommonDocuments')) ('MicCamWatch-retained-probe-' + [guid]::NewGuid().ToString('N'))
+          New-Item -ItemType Directory -Path $stage | Out-Null
+          "MCW_RETAINED_PROOF=$stage" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          foreach ($directory in @('installer/tests','target/release')) { New-Item -ItemType Directory -Path (Join-Path $stage $directory) -Force | Out-Null }
+          foreach ($name in @('windows_frontend_probe.py','native_uninstall.py')) { Copy-Item -LiteralPath (Join-Path 'installer/tests' $name) -Destination (Join-Path $stage $name) }
+          Copy-Item -LiteralPath 'installer/tests/windows-brand-native.ps1' -Destination (Join-Path $stage 'installer/tests/windows-brand-native.ps1')
+          Copy-Item -LiteralPath 'installer/miccamwatch.ico' -Destination (Join-Path $stage 'installer/miccamwatch.ico')
+          $previous = Join-Path $env:RUNNER_TEMP 'previous-native'
+          foreach ($name in @('mcw.exe','mcw-tray.exe')) { Copy-Item -LiteralPath (Join-Path $previous "_temp/windows-brand-proof/installed-before-cleanup/$name") -Destination (Join-Path $stage "target/release/$name") }
+          $msi = Join-Path $stage 'target/mcw-brand-fixture.msi'
+          Copy-Item -LiteralPath (Join-Path $previous 'miccamwatch/miccamwatch/target/mcw-brand-fixture.msi') -Destination $msi
+          if ((Get-FileHash $msi -Algorithm SHA256).Hash -cne 'F37927EA1681738F0FDF49377F210812F1C0B8BF80489FB01900A3C59F5CCB66') { throw 'Retained exact MSI hash mismatch' }
+          Get-Service msiserver | Select-Object Status,StartType | ConvertTo-Json | Out-File -LiteralPath (Join-Path $stage 'installer-before.json') -Encoding utf8
+          if ((Get-Service msiserver).Status -ne 'Running') { Start-Service msiserver -ErrorAction Stop }
+          Get-Service msiserver | Select-Object Status,StartType | ConvertTo-Json | Out-File -LiteralPath (Join-Path $stage 'installer-started.json') -Encoding utf8
+          $python = (Get-Command python).Source
+          $wrapper = Join-Path $stage 'ordinary.ps1'
+          $body = @"
+          `$ErrorActionPreference = 'Continue'
+          `$env:RUNNER_TEMP = '$($stage.Replace("'", "''"))'
+          & '$($python.Replace("'", "''"))' -u -B '$(Join-Path $stage 'windows_frontend_probe.py')' --payload '$(Join-Path $stage 'target/release')' --proof '$(Join-Path $stage 'frontend-proof')'
+          Get-Service msiserver | Select-Object Status,StartType | ConvertTo-Json | Out-File -LiteralPath '$(Join-Path $stage 'installer-at-consumer.json')' -Encoding utf8
+          & powershell.exe -NoProfile -NonInteractive -STA -File '$(Join-Path $stage 'installer/tests/windows-brand-native.ps1')' -MsiPath '$msi' -OutputDirectory '$(Join-Path $stage 'batch-msi-proof')' -IsolatedRunner
+          exit `$LASTEXITCODE
+          "@
+          [IO.File]::WriteAllText($wrapper,$body)
+          & $python -u -B installer/tests/windows_ordinary.py --script $wrapper --working-directory $stage --timeout 420 --report (Join-Path $stage 'launcher.json')
+          if ($LASTEXITCODE -ne 0) { throw 'Ordinary consumer diagnostic failed; original outputs retained' }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: windows-interactive-prerequisites
-          path: ${{ runner.temp }}/interactive-prerequisites
+          name: retained-ordinary-consumer
+          path: ${{ env.MCW_RETAINED_PROOF }}
           if-no-files-found: error
           retention-days: 7
+          include-hidden-files: true
