@@ -1,4 +1,4 @@
-name: Windows shared ordinary-session launcher diagnostic
+name: Windows hosted interactive-session prerequisites
 
 on:
   workflow_dispatch:
@@ -12,33 +12,35 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - name: Exercise shared launcher with actual native namespaces
+      - name: Read existing desktop and RDP capabilities without changing policy
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') { throw 'Disposable hosted runner required' }
-          $stage = Join-Path ([Environment]::GetFolderPath('CommonDocuments')) ('MicCamWatch-context-' + [guid]::NewGuid().ToString('N'))
-          New-Item -ItemType Directory -Path $stage | Out-Null
-          "MCW_CONTEXT_PROOF=$stage" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          $probe = Join-Path $stage 'probe.py'
-          Copy-Item -LiteralPath 'installer/tests/windows_context_probe.py' -Destination $probe
-          $python = (Get-Command python).Source
-          $ordinary = Join-Path $stage 'ordinary.json'
-          $wrapper = Join-Path $stage 'ordinary.ps1'
-          $body = @"
-          `$ErrorActionPreference = 'Continue'
-          & '$($python.Replace("'", "''"))' -B '$($probe.Replace("'", "''"))' | Out-File -LiteralPath '$($ordinary.Replace("'", "''"))' -Encoding utf8
-          exit `$LASTEXITCODE
-          "@
-          [IO.File]::WriteAllText($wrapper,$body)
-          & $python -u -B installer/tests/windows_ordinary.py --script $wrapper --working-directory $stage --timeout 180 --report (Join-Path $stage 'launcher.json')
-          if ($LASTEXITCODE -ne 0) { throw 'Shared launcher diagnostic failed; original native evidence retained' }
-      - name: Retain exact native namespace evidence
+          $proof = Join-Path $env:RUNNER_TEMP 'interactive-prerequisites'
+          New-Item -ItemType Directory -Path $proof | Out-Null
+          $policy = Get-ItemProperty 'HKLM:/SYSTEM/CurrentControlSet/Control/Terminal Server'
+          $listener = Get-ItemProperty 'HKLM:/SYSTEM/CurrentControlSet/Control/Terminal Server/WinStations/RDP-Tcp'
+          $control = [Type]::GetTypeFromProgID('MsRdpClient10NotSafeForScripting')
+          $certificates = @(Get-ChildItem 'Cert:/LocalMachine/Remote Desktop' -ErrorAction SilentlyContinue | ForEach-Object { @{subject=$_.Subject;thumbprint=$_.Thumbprint;notAfter=$_.NotAfter;certificate=[Convert]::ToBase64String($_.RawData)} })
+          @{
+            terminalService=(Get-Service TermService | Select-Object Status,StartType,Name)
+            installerService=(Get-Service msiserver | Select-Object Status,StartType,Name)
+            denyConnections=$policy.fDenyTSConnections
+            port=$listener.PortNumber
+            nlaRequired=$listener.UserAuthentication
+            activeXAvailable=($null -ne $control)
+            controlClsid=$(if ($control) { $control.GUID.ToString() } else { $null })
+            certificates=$certificates
+            listeners=@(Get-NetTCPConnection -LocalPort $listener.PortNumber -State Listen -ErrorAction SilentlyContinue | Select-Object LocalAddress,LocalPort,OwningProcess)
+            remoteDesktopGroup=(Get-LocalGroup -SID 'S-1-5-32-555' | Select-Object Name,SID)
+          } | ConvertTo-Json -Depth 8 | Out-File -LiteralPath (Join-Path $proof 'capabilities.json') -Encoding utf8
+          & quser.exe *> (Join-Path $proof 'sessions.log')
+      - name: Retain read-only native capability evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: windows-native-context
-          path: ${{ env.MCW_CONTEXT_PROOF }}
+          name: windows-interactive-prerequisites
+          path: ${{ runner.temp }}/interactive-prerequisites
           if-no-files-found: error
           retention-days: 7
-          include-hidden-files: true
