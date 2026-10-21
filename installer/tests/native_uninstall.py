@@ -7,6 +7,7 @@ Windows uses the exact packaging receipt producer and real CLI/tray processes.
 No path, user, PID, device or application-data contents enter the proof report.
 Private command/frontend output and the first failure are retained beside the
 sanitized report, including failures before any native scenario completes.
+Unix sockets use compact data namespaces; adversarial install paths stay intact.
 """
 import argparse
 import ctypes
@@ -392,15 +393,15 @@ def unix_cases(args, root, proof):
         nonlocal install_count
         sandbox = producer.Sandbox(root, name, "bash", "/bin/bash")
         sandbox.env["XDG_STATE_HOME"] = str(sandbox.home / "state")
-        if platform.system() == "Darwin":
-            # Keep the real socket below sockaddr_un.sun_path's 104-byte limit,
-            # while retaining the adversarial install prefix and shell paths.
-            data = root / "d" / str(install_count)
-            install_count += 1
-            data.mkdir(parents=True, mode=0o700)
-            sandbox.env["XDG_DATA_HOME"] = str(data)
-            require(len(os.fsencode(data / "MicCamWatch/tray-runtime/control.sock")) < 104,
-                    "managed Mac fixture socket path is too long")
+        # Both Unix tray implementations enforce a 104-byte socket-path limit,
+        # including uninstall preflight when no frontend is running. Keep this
+        # namespace compact without weakening the adversarial installation path.
+        data = root / "d" / str(install_count)
+        install_count += 1
+        data.mkdir(parents=True, mode=0o700)
+        sandbox.env["XDG_DATA_HOME"] = str(data)
+        require(len(os.fsencode(data / "MicCamWatch/tray-runtime/control.sock")) < 104,
+                "managed Unix fixture socket path is too long")
         env, _ = producer.fixture_environment(sandbox, {
             f"{producer.RELEASE_ROOT}/{tag}/{asset}": str(archive),
             f"{producer.RELEASE_ROOT}/{tag}/SHA256SUMS": str(sums)})

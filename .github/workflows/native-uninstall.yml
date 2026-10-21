@@ -14,6 +14,7 @@ on:
       - 'src/platform/macos/control.rs'
       - 'installer/tests/native_uninstall.py'
       - 'installer/tests/windows_uninstall_lock.py'
+      - 'installer/tests/windows_ordinary.py'
       - '.github/workflows/native-uninstall.yml'
 
 permissions:
@@ -137,7 +138,6 @@ jobs:
           $cargo = Join-Path $env:RUNNER_TEMP 'mcw-cargo-uninstall'
           $msi = Join-Path $env:GITHUB_WORKSPACE 'target/mcw-uninstall-fixture.msi'
           $result = Join-Path $proof 'result.json'
-          $finished = Join-Path $proof 'finished'
           $log = Join-Path $proof 'private-runner.log'
           [IO.File]::WriteAllText($log, "Ordinary-token qualification has not started.`n")
           [IO.File]::WriteAllText($result, '{"platform":"Windows","status":"not_started"}')
@@ -158,64 +158,32 @@ jobs:
           } catch {
             (`$_ | Out-String) | Add-Content -LiteralPath '$($log.Replace("'", "''"))'
             `$_.ScriptStackTrace | Add-Content -LiteralPath '$($log.Replace("'", "''"))'
-          } finally {
-            # Publish the exit marker atomically; a partially written marker
-            # must not masquerade as the fixture's first failure.
-            [IO.File]::WriteAllText('$($finished.Replace("'", "''")).tmp', [string]`$exitCode)
-            [IO.File]::Move('$($finished.Replace("'", "''")).tmp', '$($finished.Replace("'", "''"))')
           }
           exit `$exitCode
           "@
           [IO.File]::WriteAllText($wrapper, $body)
-          # The ordinary Windows Task Scheduler LIMITED token is the product's
-          # required user context, not an uninstall elevation/ACL bypass.
-          $scheduler = New-Object -ComObject 'Schedule.Service'
-          $scheduler.Connect()
-          $folder = $scheduler.GetFolder('\')
-          $definition = $scheduler.NewTask(0)
-          $definition.Principal.UserId = "$env:USERDOMAIN\$env:USERNAME"
-          $definition.Principal.LogonType = 3
-          $definition.Principal.RunLevel = 0
-          # Never let Task Scheduler forcibly terminate the wrapper/debuggees.
-          $definition.Settings.ExecutionTimeLimit = 'PT0S'
-          $definition.Settings.AllowHardTerminate = $false
-          $action = $definition.Actions.Create(0)
-          $action.Path = (Get-Command powershell.exe).Source
-          $action.Arguments = '-NoProfile -File "' + $wrapper + '"'
-          $name = 'MCW-Uninstall-Disposable-' + [guid]::NewGuid().ToString('N')
-          $registered = $false
-          $failed = $false
+          # RunLevel=LIMITED alone can still be elevated on hosted images.
+          # The shared SDK launcher requires an observed ordinary same-user,
+          # same-session token, without changing UAC, policy, accounts or ACLs.
+          $launcher = Join-Path $env:GITHUB_WORKSPACE 'installer/tests/windows_ordinary.py'
+          $launcherReport = Join-Path $proof 'private-launcher.json'
+          $launcherLog = Join-Path $proof 'private-launcher-runner.log'
           try {
-            $task = $folder.RegisterTaskDefinition($name, $definition, 6, $definition.Principal.UserId, $null, 3)
-            $registered = $true
-            $null = $task.Run($null)
-            $deadline = (Get-Date).AddMinutes(15)
-            while (-not (Test-Path $finished)) {
-              if ((Get-Date) -gt $deadline) { throw 'Ordinary-token fixture did not finish; no process was killed' }
-              Start-Sleep -Milliseconds 200
-            }
-            if ((Get-Content $finished -Raw).Trim() -ne '0') { throw 'Native uninstall fixture failed; private evidence will be uploaded' }
+            & $python -u -B $launcher --script $wrapper --working-directory $env:GITHUB_WORKSPACE --timeout 900 --report $launcherReport *> $launcherLog
+            if ($LASTEXITCODE -ne 0) { throw 'Ordinary-token launcher or native fixture did not complete successfully; private evidence will be uploaded' }
             if (-not (Test-Path $result)) { throw 'Native proof report missing' }
             $report = Get-Content -LiteralPath $result -Raw | ConvertFrom-Json
             if ($report.status -ne 'passed') { throw 'Native fixture exited without completed proof' }
           } catch {
-            $failed = $true
             ($_ | Out-String) | Add-Content -LiteralPath $log
             $_.ScriptStackTrace | Add-Content -LiteralPath $log
             $report = Get-Content -LiteralPath $result -Raw | ConvertFrom-Json
             if ($report.status -eq 'not_started') {
-              [IO.File]::WriteAllText($result, '{"platform":"Windows","status":"failed","first_failure":{"type":"OrdinaryTokenFixtureError","details_file":"private-runner.log"}}')
+              $details = if (Test-Path $launcherReport) { 'private-launcher.json' } else { 'private-runner.log' }
+              $failure = @{ platform = 'Windows'; status = 'failed'; first_failure = @{ type = 'OrdinaryTokenFixtureError'; details_file = $details } }
+              [IO.File]::WriteAllText($result, ($failure | ConvertTo-Json -Depth 4))
             }
             throw 'Native Windows qualification failed; inspect the uploaded private evidence'
-          } finally {
-            if ($registered) {
-              try {
-                $folder.DeleteTask($name, 0)
-              } catch {
-                ($_ | Out-String) | Add-Content -LiteralPath $log
-                if (-not $failed) { throw 'Qualification task registration cleanup failed; inspect the uploaded private evidence' }
-              }
-            }
           }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()

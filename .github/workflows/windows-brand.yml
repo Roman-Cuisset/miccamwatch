@@ -12,6 +12,7 @@ on:
       - 'installer/miccamwatch.rc'
       - 'installer/miccamwatch.wxs'
       - 'installer/tests/windows-brand-native.ps1'
+      - 'installer/tests/windows_ordinary.py'
       - 'site/assets/mark.svg'
       - '.github/workflows/windows-brand.yml'
 
@@ -47,10 +48,24 @@ jobs:
           dotnet wix build installer/miccamwatch.wxs -d Version=$version -d Executable=target/release/mcw.exe -d TrayExecutable=target/release/mcw-tray.exe -o target/mcw-brand-fixture.msi 2>&1 | Tee-Object -FilePath (Join-Path $logs 'wix-build.log')
           if ($LASTEXITCODE -ne 0) { throw 'Real per-user MSI build failed' }
       - name: Render actual installed Shell and Apps icons
-        # Windows PowerShell supplies the .NET Framework System.Drawing assembly
-        # for the native COM/GDI renderer. No application is launched by this proof.
+        # Share the token-checking ordinary-user launcher with uninstall qualification.
+        # LIMITED alone can still be elevated on a hosted runner.
         shell: powershell
-        run: powershell.exe -NoProfile -STA -File installer/tests/windows-brand-native.ps1 -MsiPath "${{ github.workspace }}/target/mcw-brand-fixture.msi" -OutputDirectory "${{ runner.temp }}/windows-brand-proof" -IsolatedRunner
+        run: |
+          if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') { throw 'Disposable hosted runner required' }
+          $proof = Join-Path $env:RUNNER_TEMP 'windows-brand-proof'
+          New-Item -ItemType Directory -Path $proof -Force | Out-Null
+          $fixture = Join-Path $env:GITHUB_WORKSPACE 'installer/tests/windows-brand-native.ps1'
+          $msi = Join-Path $env:GITHUB_WORKSPACE 'target/mcw-brand-fixture.msi'
+          $wrapper = Join-Path $proof 'ordinary-brand.ps1'
+          $body = @(
+            "`$ErrorActionPreference = 'Stop'"
+            ". '$($fixture.Replace("'", "''"))' -MsiPath '$($msi.Replace("'", "''"))' -OutputDirectory '$($proof.Replace("'", "''"))' -IsolatedRunner"
+            'exit 0'
+          ) -join [Environment]::NewLine
+          [IO.File]::WriteAllText($wrapper, $body)
+          python -B installer/tests/windows_ordinary.py --script $wrapper --working-directory $env:GITHUB_WORKSPACE --timeout 900 --report (Join-Path $proof 'ordinary-launcher.json')
+          if ($LASTEXITCODE -ne 0) { throw 'Ordinary-user Shell proof failed or remained incomplete; inspect retained native evidence' }
       - name: Retain native bitmaps, visual sheet, receipts and failure evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

@@ -221,8 +221,6 @@ try {
         (Test-Path -LiteralPath $shortcut) -or (Test-Path -LiteralPath (Join-Path ([Environment]::GetFolderPath('CommonPrograms')) 'MicCamWatch.lnk'))) {
         throw 'Existing MCW registration/shortcut: refusing fixture installation.'
     }
-    $arpPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\$productCode"
-    if (Test-Path -LiteralPath $arpPath) { throw 'Fixture Apps registration already exists.' }
     Save-Report
     $installAttempted = $true
     # Scope is authored perUser. An unquoted empty ALLUSERS value consumes the
@@ -233,12 +231,15 @@ try {
     if (-not [string]::Equals($registeredLocation.TrimEnd('\'), $installDirectory, [StringComparison]::OrdinalIgnoreCase)) {
         throw "MSI InstallLocation did not resolve to the retained fixture path: $registeredLocation"
     }
-    $arp = Get-ItemProperty -LiteralPath $arpPath
-    if ($arp.DisplayName -ne 'MicCamWatch' -or $arp.WindowsInstaller -ne 1 -or
-        -not [string]::Equals($arp.InstallLocation.TrimEnd('\'), $installDirectory, [StringComparison]::OrdinalIgnoreCase)) {
-        throw 'Actual installed Apps registration does not identify this fixture installation.'
+    # Query MSI's authoritative assignment and icon instead of assuming a
+    # generic HKCU Uninstall registry location.
+    $assignment = [string]$installer.ProductInfo($productCode, 'AssignmentType')
+    $registeredName = [string]$installer.ProductInfo($productCode, 'ProductName')
+    $report['msiAssignmentType'] = $assignment
+    if ($assignment -cne '0' -or $registeredName -ne 'MicCamWatch') {
+        throw 'Actual Windows Installer registration is not the owned per-user product.'
     }
-    $displayIcon = [Environment]::ExpandEnvironmentVariables([string]$arp.DisplayIcon)
+    $displayIcon = [Environment]::ExpandEnvironmentVariables([string]$installer.ProductInfo($productCode, 'ProductIcon'))
     $iconIndex = 0
     $iconFile = $displayIcon.Trim('"')
     if ($displayIcon -match '^\s*"?(.+?)"?\s*,\s*(-?\d+)\s*$') {
@@ -248,10 +249,10 @@ try {
         throw "Apps DisplayIcon cannot be resolved to an actual installed icon: $displayIcon"
     }
     $report.registration = [ordered]@{
-        registryPath = $arpPath; displayName = $arp.DisplayName; displayVersion = $arp.DisplayVersion
-        installLocation = $arp.InstallLocation; displayIcon = $displayIcon; resolvedIcon = $iconFile
-        iconIndex = $iconIndex; uninstallString = $arp.UninstallString
-        msiLocalPackage = $installer.ProductInfo($productCode, 'LocalPackage')
+        provider = 'Windows Installer'; assignmentType = $assignment; displayName = $registeredName
+        displayVersion = $installer.ProductInfo($productCode, 'VersionString')
+        installLocation = $registeredLocation; displayIcon = $displayIcon; resolvedIcon = $iconFile
+        iconIndex = $iconIndex; msiLocalPackage = $installer.ProductInfo($productCode, 'LocalPackage')
     }
     if (-not (Test-Path -LiteralPath $shortcut -PathType Leaf)) { throw 'Actual user Start Menu shortcut was not installed.' }
     $shell = New-Object -ComObject WScript.Shell
@@ -314,8 +315,8 @@ try {
             if (Test-Path -LiteralPath $installDirectory -PathType Container) {
                 Copy-Item -LiteralPath $installDirectory -Destination (Join-Path $proof 'installed-before-cleanup') -Recurse
             }
-            if (Test-Path -LiteralPath $arpPath) {
-                Get-ItemProperty -LiteralPath $arpPath | ConvertTo-Json -Depth 8 |
+            if ($null -ne $report.registration) {
+                $report.registration | ConvertTo-Json -Depth 8 |
                     Set-Content -LiteralPath (Join-Path $proof 'installed-Apps-registration.json') -Encoding UTF8
             }
         } catch {
@@ -328,7 +329,7 @@ try {
             $state = $installer.ProductState($productCode)
             if ($state -ne -1) {
                 $exit = Invoke-OwnedMsi '/x' $productCode (Join-Path $proof 'uninstall-msi.log')
-                if ($installer.ProductState($productCode) -ne -1 -or (Test-Path -LiteralPath $shortcut) -or (Test-Path -LiteralPath $arpPath)) {
+                if ($installer.ProductState($productCode) -ne -1 -or (Test-Path -LiteralPath $shortcut)) {
                     throw 'Owned MSI uninstall did not remove its registration/shortcut.'
                 }
                 $report.cleanup = @{ status = 'uninstalled'; productCode = $productCode; exitCode = $exit }
