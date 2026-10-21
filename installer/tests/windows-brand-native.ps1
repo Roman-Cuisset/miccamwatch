@@ -225,7 +225,9 @@ try {
     if (Test-Path -LiteralPath $arpPath) { throw 'Fixture Apps registration already exists.' }
     Save-Report
     $installAttempted = $true
-    $report.installExitCode = Invoke-OwnedMsi '/i' $msi (Join-Path $proof 'install-msi.log') "INSTALLFOLDER=`"$installDirectory`" ALLUSERS= MSIINSTALLPERUSER=1"
+    # Scope is authored perUser. An unquoted empty ALLUSERS value consumes the
+    # following property and can accidentally request a machine installation.
+    $report.installExitCode = Invoke-OwnedMsi '/i' $msi (Join-Path $proof 'install-msi.log') "INSTALLFOLDER=`"$installDirectory`""
     if ($installer.ProductState($productCode) -ne 5) { throw 'Fixture MSI is not registered as locally installed.' }
     $registeredLocation = $installer.ProductInfo($productCode, 'InstallLocation')
     if (-not [string]::Equals($registeredLocation.TrimEnd('\'), $installDirectory, [StringComparison]::OrdinalIgnoreCase)) {
