@@ -53,19 +53,36 @@ jobs:
         shell: powershell
         run: |
           if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') { throw 'Disposable hosted runner required' }
-          $proof = Join-Path $env:RUNNER_TEMP 'windows-brand-proof'
-          New-Item -ItemType Directory -Path $proof -Force | Out-Null
-          $fixture = Join-Path $env:GITHUB_WORKSPACE 'installer/tests/windows-brand-native.ps1'
-          $msi = Join-Path $env:GITHUB_WORKSPACE 'target/mcw-brand-fixture.msi'
-          $wrapper = Join-Path $proof 'ordinary-brand.ps1'
+          $stage = Join-Path ([Environment]::GetFolderPath('CommonDocuments')) ('MicCamWatch-brand-' + [Guid]::NewGuid().ToString('N'))
+          if (Test-Path -LiteralPath $stage) { throw 'Native staging directory must be new' }
+          New-Item -ItemType Directory -Path $stage | Out-Null
+          # A genuine standard user cannot rely on the administrator's private checkout.
+          # Preserve the fixture's exact repository layout and original built payloads.
+          foreach ($relative in @('installer/tests/windows-brand-native.ps1', 'installer/miccamwatch.ico', 'target/mcw-brand-fixture.msi', 'target/release/mcw.exe', 'target/release/mcw-tray.exe')) {
+            $destination = Join-Path $stage $relative
+            New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
+            Copy-Item -LiteralPath (Join-Path $env:GITHUB_WORKSPACE $relative) -Destination $destination
+          }
+          $fixture = Join-Path $stage 'installer/tests/windows-brand-native.ps1'
+          $msi = Join-Path $stage 'target/mcw-brand-fixture.msi'
+          $proof = Join-Path $stage 'proof'
+          $wrapper = Join-Path $stage 'ordinary-brand.ps1'
           $body = @(
             "`$ErrorActionPreference = 'Stop'"
+            "`$env:GITHUB_ACTIONS = 'true'"
+            "`$env:RUNNER_ENVIRONMENT = 'github-hosted'"
+            "`$env:RUNNER_TEMP = '$($stage.Replace("'", "''"))'"
             ". '$($fixture.Replace("'", "''"))' -MsiPath '$($msi.Replace("'", "''"))' -OutputDirectory '$($proof.Replace("'", "''"))' -IsolatedRunner"
             'exit 0'
           ) -join [Environment]::NewLine
           [IO.File]::WriteAllText($wrapper, $body)
-          python -B installer/tests/windows_ordinary.py --script $wrapper --working-directory $env:GITHUB_WORKSPACE --timeout 900 --report (Join-Path $proof 'ordinary-launcher.json')
-          if ($LASTEXITCODE -ne 0) { throw 'Ordinary-user Shell proof failed or remained incomplete; inspect retained native evidence' }
+          try {
+            python -B installer/tests/windows_ordinary.py --script $wrapper --working-directory $stage --timeout 900 --report (Join-Path $stage 'ordinary-launcher.json')
+            if ($LASTEXITCODE -ne 0) { throw 'Ordinary-user Shell proof failed or remained incomplete; inspect retained native evidence' }
+          } finally {
+            # Snapshot failures as well as success; never stop a live fixture to collect it.
+            Copy-Item -LiteralPath $stage -Destination (Join-Path $env:RUNNER_TEMP 'windows-brand-proof') -Recurse -ErrorAction Continue
+          }
       - name: Retain native bitmaps, visual sheet, receipts and failure evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
