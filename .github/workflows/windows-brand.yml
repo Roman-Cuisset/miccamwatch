@@ -68,18 +68,25 @@ jobs:
           $taskName = 'MicCamWatch-context-' + [guid]::NewGuid().ToString('N')
           $task = $folder.RegisterTaskDefinition($taskName,$definition,2,$definition.Principal.UserId,$password,1,$null)
           $password = $null
-          $instance = $task.Run($null)
-          $deadline = [DateTime]::UtcNow.AddSeconds(180)
-          $result = $null
-          do {
-            Start-Sleep -Milliseconds 200
-            $resultPath = Join-Path $stage 'bootstrap-result.json'
-            if (Test-Path -LiteralPath $resultPath) { $result = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json }
-            if ([DateTime]::UtcNow -ge $deadline) { throw 'Native task deadline; task/profile/processes retained without stopping' }
-          } while (-not $result -or $result.status -notin @('completed','refused_or_failed','incomplete'))
-          $task = $folder.GetTask($taskName)
-          @{task_name=$taskName;state=$task.State;last_task_result=$task.LastTaskResult;account_sid=$user.SID.Value;retention='owned account/task and any live shell retained until VM teardown'} | ConvertTo-Json | Out-File -LiteralPath (Join-Path $stage 'scheduler.json') -Encoding utf8
-          if ($result.status -ne 'completed' -or $result.script_exit_code -ne 0) { throw 'Ordinary task diagnostic failed; original bootstrap evidence retained' }
+          $before = $task.LastRunTime
+          try {
+            $instance = $task.Run($null)
+            $deadline = [DateTime]::UtcNow.AddSeconds(60)
+            $result = $null
+            do {
+              Start-Sleep -Milliseconds 200
+              $task = $folder.GetTask($taskName)
+              $resultPath = Join-Path $stage 'bootstrap-result.json'
+              if (Test-Path -LiteralPath $resultPath) { $result = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json }
+              if ($task.LastRunTime -gt $before -and $task.State -eq 3 -and $task.LastTaskResult -ne 0) { throw ('Task ended before bootstrap: native result ' + $task.LastTaskResult) }
+              if ([DateTime]::UtcNow -ge $deadline) { throw 'Native task deadline; task/profile/processes retained without stopping' }
+            } while (-not $result -or $result.status -notin @('completed','refused_or_failed','incomplete'))
+            if ($result.status -ne 'completed' -or $result.script_exit_code -ne 0) { throw 'Ordinary task diagnostic failed; original bootstrap evidence retained' }
+          } finally {
+            $task = $folder.GetTask($taskName)
+            @{task_name=$taskName;state=$task.State;last_task_result=$task.LastTaskResult;last_run_time=$task.LastRunTime;account_sid=$user.SID.Value;retention='owned account/task and any live shell retained until VM teardown'} | ConvertTo-Json | Out-File -LiteralPath (Join-Path $stage 'scheduler.json') -Encoding utf8
+            [IO.File]::WriteAllText((Join-Path $stage 'task.xml'),$task.Xml)
+          }
       - name: Retain exact native namespace evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
