@@ -70,7 +70,7 @@ jobs:
           $password = $null
           $before = $task.LastRunTime
           try {
-            $instance = $task.Run($null)
+            Start-ScheduledTask -TaskName $taskName -TaskPath '\'
             $deadline = [DateTime]::UtcNow.AddSeconds(60)
             $result = $null
             do {
@@ -86,6 +86,11 @@ jobs:
             $task = $folder.GetTask($taskName)
             @{task_name=$taskName;state=$task.State;last_task_result=$task.LastTaskResult;last_run_time=$task.LastRunTime;account_sid=$user.SID.Value;retention='owned account/task and any live shell retained until VM teardown'} | ConvertTo-Json | Out-File -LiteralPath (Join-Path $stage 'scheduler.json') -Encoding utf8
             [IO.File]::WriteAllText((Join-Path $stage 'task.xml'),$task.Xml)
+            Get-ScheduledTaskInfo -TaskName $taskName -TaskPath '\' | Select-Object LastRunTime,LastTaskResult,NumberOfMissedRuns | ConvertTo-Json | Out-File -LiteralPath (Join-Path $stage 'scheduler-cim.json') -Encoding utf8
+            $channel = Get-WinEvent -ListLog 'Microsoft-Windows-TaskScheduler/Operational' -ErrorAction SilentlyContinue
+            if ($channel -and $channel.IsEnabled) {
+              Get-WinEvent -FilterHashtable @{LogName=$channel.LogName;StartTime=[DateTime]::Now.AddMinutes(-10)} -ErrorAction SilentlyContinue | Where-Object Message -like ('*' + $taskName + '*') | Select-Object TimeCreated,Id,LevelDisplayName,Message | ConvertTo-Json -Depth 6 | Out-File -LiteralPath (Join-Path $stage 'task-events.json') -Encoding utf8
+            }
           }
       - name: Retain exact native namespace evidence
         if: always()
