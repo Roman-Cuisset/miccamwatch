@@ -4,6 +4,8 @@
 Only the fresh fixture identity receives SeBatchLogonRight. Task Scheduler loads
 its real profile in its own noninteractive session; the bootstrap verifies its
 actual SID/session/elevation and actual Explorer before running the fixture.
+The experimental interactive provider instead validates the existing real login
+Explorer using the same image/SID/session/elevation checks; it creates no shell.
 Existing accounts, namespace ACLs, UAC and device permissions are untouched.
 No token privilege is adjusted and no task/process/account is forcibly removed.
 
@@ -312,17 +314,26 @@ def bootstrap(configuration):
         os.environ.update(config["workflow_environment"])
         require(os.environ.get("GITHUB_ACTIONS") == "true" and os.environ.get("RUNNER_ENVIRONMENT") == "github-hosted", "bootstrap is not a disposable hosted fixture")
         save(report_path, report)
-        require(not api.find_window("Shell_TrayWnd", None), "foreign Explorer shell found on the new private desktop")
         explorer_image = Path(os.environ["SystemRoot"]) / "explorer.exe"
-        with report_path.with_suffix(".explorer.log").open("wb") as shell_output:
-            shell = subprocess.Popen([str(explorer_image)], stdin=subprocess.DEVNULL,
-                                     stdout=shell_output, stderr=shell_output)
-        report["explorer_launch_pid"] = shell.pid
-        save(report_path, report)
-        deadline = time.monotonic() + min(config["timeout"], 45)
-        while not (window := api.find_window("Shell_TrayWnd", None)):
-            require(time.monotonic() < deadline, f"real Explorer did not establish Shell_TrayWnd (launch exit {shell.poll()}); no shell was mocked or killed")
-            time.sleep(.1)
+        if config.get("existing_interactive_shell", False):
+            require(expected[1] > 0 and report["window_station"].casefold() == "winsta0",
+                    "existing interactive shell requires the real nonzero WinSta0 login")
+            deadline = time.monotonic() + min(config["timeout"], 45)
+            while not (window := api.find_window("Shell_TrayWnd", None)):
+                require(time.monotonic() < deadline,
+                        "real interactive logon did not establish Explorer; no replacement shell was launched")
+                time.sleep(.1)
+        else:
+            require(not api.find_window("Shell_TrayWnd", None), "foreign Explorer shell found on the new private desktop")
+            with report_path.with_suffix(".explorer.log").open("wb") as shell_output:
+                shell = subprocess.Popen([str(explorer_image)], stdin=subprocess.DEVNULL,
+                                         stdout=shell_output, stderr=shell_output)
+            report["explorer_launch_pid"] = shell.pid
+            save(report_path, report)
+            deadline = time.monotonic() + min(config["timeout"], 45)
+            while not (window := api.find_window("Shell_TrayWnd", None)):
+                require(time.monotonic() < deadline, f"real Explorer did not establish Shell_TrayWnd (launch exit {shell.poll()}); no shell was mocked or killed")
+                time.sleep(.1)
         window_pid = bind(api.user, "GetWindowThreadProcessId", W.DWORD, [W.HWND, C.POINTER(W.DWORD)])
         open_process = bind(api.kernel, "OpenProcess", W.HANDLE, [W.DWORD, W.BOOL, W.DWORD])
         image_name = bind(api.kernel, "QueryFullProcessImageNameW", W.BOOL,
