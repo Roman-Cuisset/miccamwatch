@@ -540,8 +540,11 @@ impl Lifecycle {
                                 stream.write_all(b"\n")?;
                                 // This new handshake includes kernel/image verification,
                                 // not merely the legacy one-frame status/stop request.
-                                stream.set_read_timeout(Some(Duration::from_secs(5)))?;
-                                frame = read_frame(&mut reader, 16)?
+                                stream
+                                    .set_read_timeout(Some(Duration::from_secs(5)))
+                                    .context("set authenticated command timeout")?;
+                                frame = read_frame(&mut reader, 16)
+                                    .context("read authenticated tray command")?
                                     .context("missing authenticated tray command")?;
                             }
                             match frame.as_slice() {
@@ -584,8 +587,11 @@ impl Lifecycle {
                                 _ => bail!("invalid tray command"),
                             }
                         })();
-                        if let Ok(reply) = reply {
-                            let _ = stream.write_all(reply.as_bytes());
+                        match reply {
+                            Ok(reply) => {
+                                let _ = stream.write_all(reply.as_bytes());
+                            }
+                            Err(error) => eprintln!("MicCamWatch tray control: {error:#}"),
                         }
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {

@@ -8,6 +8,7 @@
 #include <sys/uio.h>
 #include <sys/time.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 #include <errno.h>
 #include <stdint.h>
@@ -19,10 +20,13 @@ static int trace_fd = -1;
 static void trace(const char *operation, int fd, long long result, int error) {
     int saved = errno;
     if (trace_fd >= 0) {
+        struct timespec now = {0};
+        (void)clock_gettime(CLOCK_MONOTONIC, &now);
         char line[192];
         int n = snprintf(line, sizeof(line),
-                         "{\"operation\":\"%s\",\"fd\":%d,\"result\":%lld,\"errno\":%d}\n",
-                         operation, fd, result, error);
+                         "{\"operation\":\"%s\",\"fd\":%d,\"result\":%lld,\"errno\":%d,\"monotonic_ns\":%llu}\n",
+                         operation, fd, result, error,
+                         (unsigned long long)now.tv_sec * 1000000000ULL + (unsigned long long)now.tv_nsec);
         if (n > 0 && (size_t)n < sizeof(line))
             (void)real_write_nocancel(trace_fd, line, (size_t)n);
     }
