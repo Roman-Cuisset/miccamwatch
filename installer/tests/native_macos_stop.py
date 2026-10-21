@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Disposable macOS stop diagnosis and real consumer lifecycle regression.
 
-Baseline is immutable public v0.19.1, not rebuilt source or latest. Only stop
-clients receive DYLD_INSERT_LIBRARIES; the real GUI and status clients do not.
+Baseline is immutable public v0.19.1, not rebuilt source or latest. Stop clients
+and candidate reopen clients receive DYLD_INSERT_LIBRARIES; GUI/status do not.
 First failure ends the loop, remains failed, and is never retried as a proof.
 No capture, protection, autostart, clipboard, TCC, SIP or Gatekeeper changes.
 """
@@ -515,7 +515,7 @@ def main():
             if args.candidate:
                 original = set(peers.owned)
                 for reopen in range(3):
-                    code, _, _ = run(label + f"-reopen-{reopen}", [binary, "tray", "open"], timeout=10)
+                    code, _, _ = run(label + f"-reopen-{reopen}", [binary, "tray", "open"], traced=True, timeout=10)
                     require(code == 0 and active.poll() is None, "Real consumer reopen failed")
                     peers.discover(active.pid)
                     require(set(peers.owned) == original, "Reopen created another persistent frontend peer")

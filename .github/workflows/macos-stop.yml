@@ -52,6 +52,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         if: inputs.phase == 'candidate'
       - name: Build integrated source candidate
+        id: candidate_build
         if: inputs.phase == 'candidate'
         run: cargo build --release --locked
       - name: Prepare resource-context terminal parser
@@ -83,7 +84,7 @@ jobs:
             --proof "$RUNNER_TEMP/macos-stop-candidate" \
             --cycles "$MCW_STOP_CYCLES" --disposable-runner
       - name: Render real consultation and menu-bar controls
-        if: inputs.phase == 'candidate'
+        if: ${{ !cancelled() && inputs.phase == 'candidate' && steps.candidate_build.outcome == 'success' }}
         shell: bash
         run: |
           python3 -B installer/tests/native_macos_menu.py \

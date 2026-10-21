@@ -1,10 +1,13 @@
-/* Stop-client-only Darwin diagnostic. Never inspects buffers, addresses or paths.
+/* Control-client-only Darwin diagnostic. Logs timeout parameters, never capture
+ * buffers, addresses or paths.
  * Compile: xcrun clang -dynamiclib -O2 macos_stop_trace.c -o stop-trace.dylib
  * MCW_STOP_TRACE_FD must be an inherited, private, already-open descriptor.
  */
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/uio.h>
+#include <sys/time.h>
+#include <string.h>
 #include <unistd.h>
 #include <errno.h>
 #include <stdint.h>
@@ -56,7 +59,25 @@ INTERPOSE(traced_connect, connect);
 static int traced_setsockopt(int fd, int level, int option, const void *value, socklen_t length) {
     const char *operation = level == SOL_SOCKET && option == SO_RCVTIMEO ? "setsockopt_read_timeout" :
         level == SOL_SOCKET && option == SO_SNDTIMEO ? "setsockopt_write_timeout" : "setsockopt";
-    RETURN_TRACE(operation, fd, setsockopt(fd, level, option, value, length), int);
+    struct timeval timeout = {0};
+    int decoded = level == SOL_SOCKET && (option == SO_RCVTIMEO || option == SO_SNDTIMEO)
+        && value != NULL && length == sizeof(timeout);
+    if (decoded) memcpy(&timeout, value, sizeof(timeout));
+    int result = setsockopt(fd, level, option, value, length);
+    int saved = errno;
+    trace(operation, fd, result, result < 0 ? saved : 0);
+    if (level == SOL_SOCKET && (option == SO_RCVTIMEO || option == SO_SNDTIMEO) && trace_fd >= 0) {
+        char line[256];
+        int n = snprintf(line, sizeof(line),
+            "{\"operation\":\"timeout_parameters\",\"fd\":%d,\"length\":%u,\"expected_length\":%zu,"
+            "\"decoded\":%s,\"seconds\":%lld,\"microseconds\":%lld}\n",
+            fd, (unsigned)length, sizeof(timeout), decoded ? "true" : "false",
+            (long long)timeout.tv_sec, (long long)timeout.tv_usec);
+        if (n > 0 && (size_t)n < sizeof(line))
+            (void)real_write_nocancel(trace_fd, line, (size_t)n);
+    }
+    errno = saved;
+    return result;
 }
 INTERPOSE(traced_setsockopt, setsockopt);
 static int traced_getsockopt(int fd, int level, int option, void *value, socklen_t *length) {
