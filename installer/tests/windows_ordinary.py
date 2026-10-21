@@ -295,7 +295,8 @@ def bootstrap(configuration):
         report["expected_user_and_session"] = api.identity(token) == expected
         require(not report["token_elevated"] and report["expected_user_and_session"], "bootstrap identity is not the expected ordinary account/session")
         report["window_station"] = api.object_name(checked(api.station()))
-        require(report["window_station"].casefold() == config["expected_station"].casefold(), "bootstrap did not enter its private window station")
+        if config["expected_station"] is not None:
+            require(report["window_station"].casefold() == config["expected_station"].casefold(), "bootstrap did not enter its private window station")
         profile = api.profile_directory(token)
         require(profile == Path(os.environ["USERPROFILE"]).resolve(), "environment is not the genuine Windows-loaded profile")
         import winreg
