@@ -1,6 +1,6 @@
 # miccamwatch
 
-[![Build](https://github.com/Roman-Cuisset/miccamwatch/actions/workflows/build.yml/badge.svg)](https://github.com/Roman-Cuisset/miccamwatch/actions/workflows/build.yml)
+[![Build](https://github.com/Roman-Cuisset/miccamwatch/actions/workflows/ci.yml/badge.svg)](https://github.com/Roman-Cuisset/miccamwatch/actions/workflows/ci.yml)
 [![Latest release](https://img.shields.io/github/v/release/Roman-Cuisset/miccamwatch)](https://github.com/Roman-Cuisset/miccamwatch/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/Roman-Cuisset/miccamwatch/total)](https://github.com/Roman-Cuisset/miccamwatch/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
