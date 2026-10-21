@@ -238,6 +238,27 @@ def _windows_cases(args, root, proof):
             import traceback
             traceback.print_exc(file=sys.stderr)
 
+    import re
+
+    def remove_portable(cli, env):
+        accepted = run([cli, "uninstall"], env)
+        completion = re.search(r"Completion is recorded in (.+?result\.json)", accepted.stdout)
+        require(completion is not None, "accepted deferred operation did not identify its completion record")
+        result = Path(completion.group(1))
+        require(result.is_relative_to(Path(env["TEMP"])) and result.parent.name.startswith(".mcw-uninstall-"),
+                "worker completion record escaped the isolated temporary namespace")
+        wait_result(result)
+
+    directory, cli, env, preferences, sentinel = install("successful removal without frontend")
+    before = data_snapshot(preferences, sentinel)
+    remove_portable(cli, env)
+    require(not cli.exists() and not (directory / "mcw-tray.exe").exists()
+            and not (directory / ".miccamwatch-portable.json").exists(),
+            "deferred removal without a frontend left verified payloads behind")
+    require(before == data_snapshot(preferences, sentinel), "removal without a frontend changed retained user data")
+    proof["windows_actual_deferred_pair_removal_without_frontend"] = True
+    save_proof(args, proof)
+
     directory, cli, env, preferences, sentinel = install("successful removal")
     before = data_snapshot(preferences, sentinel)
     import winreg
@@ -260,16 +281,14 @@ def _windows_cases(args, root, proof):
     try:
         deadline = time.monotonic() + 20
         while not user.FindWindowW("MicCamWatchTrayClass", None):
-            require(tray.poll() is None and time.monotonic() < deadline, "owned native tray did not become ready")
+            exit_code = tray.poll()
+            if exit_code is not None or time.monotonic() >= deadline:
+                proof["windows_owned_tray_readiness_failure"] = {
+                    "pid": tray.pid, "exit_code": exit_code, "log": "private-tray-output.log"}
+                save_proof(args, proof)
+                raise AssertionError("owned native tray did not become ready")
             time.sleep(.05)
-        import re
-        accepted = run([cli, "uninstall"], env)
-        completion = re.search(r"Completion is recorded in (.+?result\.json)", accepted.stdout)
-        require(completion is not None, "accepted deferred operation did not identify its completion record")
-        result = Path(completion.group(1))
-        require(result.is_relative_to(Path(env["TEMP"])) and result.parent.name.startswith(".mcw-uninstall-"),
-                "worker completion record escaped the isolated temporary namespace")
-        wait_result(result)
+        remove_portable(cli, env)
         tray.wait(timeout=20)
         require(not cli.exists() and not (directory / "mcw-tray.exe").exists()
                 and not (directory / ".miccamwatch-portable.json").exists(), "verified pair/receipt survived successful worker removal")

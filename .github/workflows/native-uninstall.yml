@@ -2,6 +2,12 @@ name: Native installation-scoped uninstall
 
 on:
   workflow_dispatch:
+    inputs:
+      platform:
+        description: "Native subset; pull requests and default dispatch keep the full matrix"
+        type: choice
+        default: all
+        options: [all, windows, unix]
   pull_request:
     paths:
       - 'src/uninstall/**'
@@ -22,6 +28,7 @@ permissions:
 
 jobs:
   unix:
+    if: inputs.platform != 'windows'
     strategy:
       fail-fast: false
       matrix:
@@ -104,6 +111,7 @@ jobs:
           include-hidden-files: true
 
   windows:
+    if: inputs.platform != 'unix'
     runs-on: windows-latest
     timeout-minutes: 40
     steps:
