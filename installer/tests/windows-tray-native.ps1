@@ -22,11 +22,24 @@ public static class McwNativeProof {
     [StructLayout(LayoutKind.Sequential)] public struct MOUSEINPUT { public int dx, dy; public uint mouseData, dwFlags, time; public UIntPtr extra; }
     [StructLayout(LayoutKind.Sequential)] public struct INPUT { public uint type; public MOUSEINPUT mouse; }
     [DllImport("user32.dll", SetLastError=true)] public static extern uint SendInput(uint count, INPUT[] input, int size);
-    public static void RefreshMouseMove() {
-        var right = new INPUT { type = 0, mouse = new MOUSEINPUT { dx = 1, dwFlags = 0x2001 } };
-        var left = new INPUT { type = 0, mouse = new MOUSEINPUT { dx = -1, dwFlags = 0x2001 } };
-        if (SendInput(2, new[] { right, left }, Marshal.SizeOf(typeof(INPUT))) != 2)
-            throw new InvalidOperationException("Native mouse move input was rejected.");
+    [DllImport("user32.dll")] private static extern int GetSystemMetrics(int index);
+    public static void MovePointerTo(int x, int y) {
+        int left = GetSystemMetrics(76), top = GetSystemMetrics(77);
+        int width = GetSystemMetrics(78), height = GetSystemMetrics(79);
+        if (width <= 0 || height <= 0 || x < left || x >= (long)left + width ||
+            y < top || y >= (long)top + height)
+            throw new InvalidOperationException("Native mouse target is outside the virtual desktop.");
+        // Inject the entry itself, not SetCursorPos followed by a same-batch
+        // right/left jiggle. That path moved/clicked the owned Win32 probe in
+        // CI39467142185 but never produced an Explorer overflow hover popup.
+        // Normalize to the pixel center on the entire physical virtual desktop.
+        var move = new INPUT { type = 0, mouse = new MOUSEINPUT {
+            dx = (int)((((long)x - left) * 65536 + 32768) / width),
+            dy = (int)((((long)y - top) * 65536 + 32768) / height),
+            dwFlags = 0xE001 // MOVE | MOVE_NOCOALESCE | VIRTUALDESK | ABSOLUTE
+        } };
+        if (SendInput(1, new[] { move }, Marshal.SizeOf(typeof(INPUT))) != 1)
+            throw new InvalidOperationException("Native absolute mouse input was rejected.");
     }
     public static void ClickLeft() {
         var down = new INPUT { type = 0, mouse = new MOUSEINPUT { dwFlags = 0x0002 } };
@@ -73,10 +86,16 @@ finally { [void][McwNativeProof]::CloseDesktop($desktop) }
 $threadDesktop = [McwNativeProof]::DesktopName([McwNativeProof]::GetThreadDesktop([McwNativeProof]::GetCurrentThreadId()))
 $directory = [IO.Path]::GetFullPath((Join-Path $OutputDirectory ((Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + $PID)))
 [void][IO.Directory]::CreateDirectory($directory)
+# Frozen baseline: CI39467142185/job118781365240, artifact12286652966
+# (SHA256 a466841a4bd5e036361925aca2291339c4e4b2eb5385c4d1552a96e6a7b39dda).
+# Its tooltip-qualification.json failed all eight cases with zero real popups,
+# despite successful owned pointer/click routing. Keep that failure separate
+# from this absolute-entry qualification; an accessible icon is never a pass.
+# https://github.com/Roman-Cuisset/miccamwatch/actions/runs/39467142185/artifacts/12286652966
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 try {
     $principal = New-Object Security.Principal.WindowsPrincipal -ArgumentList $identity
-    @{ elevated=$principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator); interactive=[Environment]::UserInteractive; input_desktop=$inputDesktop; thread_desktop=$threadDesktop; mouse_hover_milliseconds=[McwNativeProof]::MouseHoverTime() } |
+    @{ elevated=$principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator); interactive=[Environment]::UserInteractive; input_desktop=$inputDesktop; thread_desktop=$threadDesktop; mouse_hover_milliseconds=[McwNativeProof]::MouseHoverTime(); pointer_entry='SendInput absolute virtual-desktop pixel center' } |
         ConvertTo-Json | Set-Content -Encoding UTF8 (Join-Path $directory 'driver-context.json')
 } finally { $identity.Dispose() }
 if ($inputDesktop -ne $threadDesktop -or $inputDesktop -eq 'Winlogon') {
@@ -86,6 +105,8 @@ $previous = $env:MCW_WINDOWS_NATIVE_PROOF_DIR
 $env:MCW_WINDOWS_NATIVE_PROOF_DIR = $directory
 $process = $null
 $fixtureProcess = $null
+$fixtureWindow = [IntPtr]::Zero
+$details = $null
 $previousCursor = [System.Windows.Forms.Cursor]::Position
 $shellMeasurements = @()
 $tooltipFailures = @()
@@ -204,8 +225,7 @@ function Get-FixtureShellButton([string]$expected, $identity) {
                 if ($button.Current.IsOffscreen -or $bounds.IsEmpty -or $bounds.Width -le 0 -or $bounds.Height -le 0) { continue }
                 # Open the actual flyout through pointer input so Explorer
                 # enters its native mouse/focus path, not UIA keyboard mode.
-                [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point -ArgumentList ([int]($bounds.X + $bounds.Width / 2)), ([int]($bounds.Y + $bounds.Height / 2))
-                [McwNativeProof]::RefreshMouseMove()
+                [McwNativeProof]::MovePointerTo([int]($bounds.X + $bounds.Width / 2), [int]($bounds.Y + $bounds.Height / 2))
                 [McwNativeProof]::ClickLeft()
                 return $null
             }
@@ -230,6 +250,7 @@ function Confirm-FixtureOwner([IntPtr]$window) {
     } elseif ($script:fixtureProcess.Id -ne $ownerPid -or $script:fixtureProcess.HasExited) {
         throw 'Fixture owner changed between observations.'
     }
+    $script:fixtureWindow = $window
 }
 function Confirm-FixturePointerRouting {
     $probe = Wait-ProofFile 'pointer-probe.json'
@@ -237,10 +258,9 @@ function Confirm-FixturePointerRouting {
     Confirm-FixtureOwner $window
     $rect = New-Object McwNativeProof+RECT
     if (-not [McwNativeProof]::GetWindowRect($window, [ref]$rect)) { throw 'Owned pointer probe has no rectangle.' }
-    [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point -ArgumentList 0, 0
+    [McwNativeProof]::MovePointerTo(0, 0)
     Start-Sleep -Milliseconds 200
-    [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point -ArgumentList ([int](($rect.Left + $rect.Right) / 2)), ([int](($rect.Top + $rect.Bottom) / 2))
-    [McwNativeProof]::RefreshMouseMove()
+    [McwNativeProof]::MovePointerTo([int](($rect.Left + $rect.Right) / 2), [int](($rect.Top + $rect.Bottom) / 2))
     Start-Sleep -Milliseconds 1000
     Capture-NativeDesktop 'pointer-probe-desktop'
     $point = New-Object McwNativeProof+POINT
@@ -257,7 +277,7 @@ function Confirm-FixturePointerRouting {
     $script:ownedClickRouted = $observed.click_count -gt $probe.before_click_count
     @{ routed=$script:ownedPointerRouted; click_routed=$script:ownedClickRouted; observed=$observed; expected_client_point=@{ x=$point.X; y=$point.Y }; owned_window=$window.ToInt64() } |
         ConvertTo-Json -Depth 6 | Set-Content -Encoding UTF8 (Join-Path $directory 'pointer-routing.json')
-    [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point -ArgumentList 0, 0
+    [McwNativeProof]::MovePointerTo(0, 0)
 }
 function Confirm-FixtureShellTooltip([string]$name) {
     $shell = Wait-ProofFile "$name-shell.json"
@@ -282,10 +302,9 @@ function Confirm-FixtureShellTooltip([string]$name) {
     if ($bounds.IsEmpty -or $bounds.Width -le 0 -or $bounds.Height -le 0) { throw 'Fixture shell icon has no visible bounds.' }
     # Leave the last tooltip before entering the next icon/status. This forces
     # Explorer to show freshly updated native text rather than a stale hover.
-    [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point -ArgumentList 0, 0
+    [McwNativeProof]::MovePointerTo(0, 0)
     Start-Sleep -Milliseconds 200
-    [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point -ArgumentList ([int]($bounds.X + $bounds.Width / 2)), ([int]($bounds.Y + $bounds.Height / 2))
-    [McwNativeProof]::RefreshMouseMove()
+    [McwNativeProof]::MovePointerTo([int]($bounds.X + $bounds.Width / 2), [int]($bounds.Y + $bounds.Height / 2))
     Start-Sleep -Milliseconds 1000
     Capture-NativeDesktop "$name-shell-hover"
     [IO.File]::WriteAllText((Join-Path $directory "$name-shell-inspect"), 'inspect native callbacks')
@@ -374,7 +393,7 @@ function Confirm-FixtureShellTooltip([string]$name) {
         [IO.File]::WriteAllText((Join-Path $directory "$name-shell-click-inspect"), 'inspect callback after native click')
         $null = Wait-ProofFile "$name-shell-click.json"
         $script:tooltipFailures += $name
-        [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point -ArgumentList 0, 0
+        [McwNativeProof]::MovePointerTo(0, 0)
         [IO.File]::WriteAllText((Join-Path $directory "$name-shell-inspected"), 'failed: actual popup not observed')
         return
     }
@@ -386,7 +405,7 @@ function Confirm-FixtureShellTooltip([string]$name) {
         native_input=$inputEvidence;
         shell_rect=@{left=$rect.Left; top=$rect.Top; right=$rect.Right; bottom=$rect.Bottom}
     }
-    [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point -ArgumentList 0, 0
+    [McwNativeProof]::MovePointerTo(0, 0)
     [IO.File]::WriteAllText((Join-Path $directory "$name-shell-inspected"), 'passed: actual Explorer tooltip and screenshot')
 }
 try {
@@ -467,11 +486,29 @@ try {
     $env:MCW_WINDOWS_NATIVE_PROOF_DIR = $previous
     [System.Windows.Forms.Cursor]::Position = $previousCursor
     if ($fixtureProcess) {
-        if (-not $fixtureProcess.HasExited) { $fixtureProcess.Kill(); $fixtureProcess.WaitForExit() }
+        if (-not $fixtureProcess.HasExited) {
+            # Close only HWNDs already obtained from this retained fixture.
+            # Never kill the process or target a product/SDK process by name.
+            $windows = @($fixtureWindow)
+            if ($details) { $windows = @([IntPtr][long]$details.window) + $windows }
+            foreach ($window in $windows) {
+                [uint32]$windowPid = 0
+                [void][McwNativeProof]::GetWindowThreadProcessId($window, [ref]$windowPid)
+                if ($window -ne [IntPtr]::Zero -and $windowPid -eq $fixtureProcess.Id -and -not $fixtureProcess.HasExited) {
+                    [void][McwNativeProof]::PostMessage($window, 0x001f, [IntPtr]::Zero, [IntPtr]::Zero) # WM_CANCELMODE
+                    [void][McwNativeProof]::PostMessage($window, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero) # WM_CLOSE
+                }
+            }
+            if (-not $fixtureProcess.WaitForExit(5000)) {
+                Write-Warning "Owned fixture PID $($fixtureProcess.Id) remains alive after bounded WM_CLOSE cleanup; preserving it and failed evidence at $directory. No force-kill attempted."
+            }
+        }
         $fixtureProcess.Dispose()
     }
     if ($process) {
-        if (-not $process.HasExited) { $process.Kill(); $process.WaitForExit() }
+        if (-not $process.HasExited -and -not $process.WaitForExit(5000)) {
+            Write-Warning "Cargo PID $($process.Id) remains alive after bounded cleanup; preserving it and failed evidence at $directory. No force-kill attempted."
+        }
         $process.Dispose()
     }
     if ($previousDpi -and $previousDpi -ne [IntPtr]::Zero) {
