@@ -210,7 +210,12 @@ try {
     $report.productCode = $productCode
     # Refuse rather than upgrade/remove any existing MCW or replace a shortcut.
     $related = $installer.RelatedProducts($properties['UpgradeCode'])
-    try { $relatedCount = $related.Count }
+    try {
+        # PS5 can return null for .Count on this COM StringList. Invoke the
+        # authoritative getter; never interpret an unreadable list as empty.
+        $relatedCount = $related.GetType().InvokeMember('Count', [Reflection.BindingFlags]::GetProperty, $null, $related, $null)
+        if ($relatedCount -isnot [int]) { throw 'Related MSI product count is unreadable; refusing fixture installation.' }
+    }
     finally { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($related) }
     if ($installer.ProductState($productCode) -ne -1 -or $relatedCount -ne 0 -or
         (Test-Path -LiteralPath $shortcut) -or (Test-Path -LiteralPath (Join-Path ([Environment]::GetFolderPath('CommonPrograms')) 'MicCamWatch.lnk'))) {
