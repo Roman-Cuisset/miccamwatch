@@ -12,7 +12,6 @@ on:
       - 'installer/miccamwatch.rc'
       - 'installer/miccamwatch.wxs'
       - 'installer/tests/windows-brand-native.ps1'
-      - 'installer/tests/windows_ordinary.py'
       - 'site/assets/mark.svg'
       - '.github/workflows/windows-brand.yml'
 
@@ -48,41 +47,16 @@ jobs:
           dotnet wix build installer/miccamwatch.wxs -d Version=$version -d Executable=target/release/mcw.exe -d TrayExecutable=target/release/mcw-tray.exe -o target/mcw-brand-fixture.msi 2>&1 | Tee-Object -FilePath (Join-Path $logs 'wix-build.log')
           if ($LASTEXITCODE -ne 0) { throw 'Real per-user MSI build failed' }
       - name: Render actual installed Shell and Apps icons
-        # Share the token-checking ordinary-user launcher with uninstall qualification.
-        # LIMITED alone can still be elevated on a hosted runner.
+        # Branding uses the real interactive hosted desktop, not a batch session.
+        # MSI AssignmentType proves per-user scope independently of runner elevation.
         shell: powershell
         run: |
           if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') { throw 'Disposable hosted runner required' }
-          $stage = Join-Path ([Environment]::GetFolderPath('CommonDocuments')) ('MicCamWatch-brand-' + [Guid]::NewGuid().ToString('N'))
-          if (Test-Path -LiteralPath $stage) { throw 'Native staging directory must be new' }
-          New-Item -ItemType Directory -Path $stage | Out-Null
-          # A genuine standard user cannot rely on the administrator's private checkout.
-          # Preserve the fixture's exact repository layout and original built payloads.
-          foreach ($relative in @('installer/tests/windows-brand-native.ps1', 'installer/miccamwatch.ico', 'target/mcw-brand-fixture.msi', 'target/release/mcw.exe', 'target/release/mcw-tray.exe')) {
-            $destination = Join-Path $stage $relative
-            New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
-            Copy-Item -LiteralPath (Join-Path $env:GITHUB_WORKSPACE $relative) -Destination $destination
-          }
-          $fixture = Join-Path $stage 'installer/tests/windows-brand-native.ps1'
-          $msi = Join-Path $stage 'target/mcw-brand-fixture.msi'
-          $proof = Join-Path $stage 'proof'
-          $wrapper = Join-Path $stage 'ordinary-brand.ps1'
-          $body = @(
-            "`$ErrorActionPreference = 'Stop'"
-            "`$env:GITHUB_ACTIONS = 'true'"
-            "`$env:RUNNER_ENVIRONMENT = 'github-hosted'"
-            "`$env:RUNNER_TEMP = '$($stage.Replace("'", "''"))'"
-            ". '$($fixture.Replace("'", "''"))' -MsiPath '$($msi.Replace("'", "''"))' -OutputDirectory '$($proof.Replace("'", "''"))' -IsolatedRunner"
-            'exit 0'
-          ) -join [Environment]::NewLine
-          [IO.File]::WriteAllText($wrapper, $body)
-          try {
-            python -B installer/tests/windows_ordinary.py --script $wrapper --working-directory $stage --timeout 900 --report (Join-Path $stage 'ordinary-launcher.json')
-            if ($LASTEXITCODE -ne 0) { throw 'Ordinary-user Shell proof failed or remained incomplete; inspect retained native evidence' }
-          } finally {
-            # Snapshot failures as well as success; never stop a live fixture to collect it.
-            Copy-Item -LiteralPath $stage -Destination (Join-Path $env:RUNNER_TEMP 'windows-brand-proof') -Recurse -ErrorAction Continue
-          }
+          $fixture = Join-Path $env:GITHUB_WORKSPACE 'installer/tests/windows-brand-native.ps1'
+          $msi = Join-Path $env:GITHUB_WORKSPACE 'target/mcw-brand-fixture.msi'
+          $proof = Join-Path $env:RUNNER_TEMP 'windows-brand-proof'
+          & powershell.exe -NoProfile -NonInteractive -STA -File $fixture -MsiPath $msi -OutputDirectory $proof -IsolatedRunner
+          if ($LASTEXITCODE -ne 0) { throw 'Native interactive Shell proof failed; inspect retained installer and image evidence' }
       - name: Retain native bitmaps, visual sheet, receipts and failure evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

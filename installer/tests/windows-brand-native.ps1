@@ -44,9 +44,15 @@ $report = [ordered]@{
     msi = $msi; installation = $installDirectory; shortcut = $shortcut
     productCode = $null; packageSha256 = $null; registration = $null
     versions = @(); comparisons = @(); limitations = @(); cleanup = $null; error = $null
+    observer = @{
+        context = 'interactive hosted runner; actual MSI registration must be per-user'
+        userSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+        administratorRole = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    }
 }
 $failure = $null
 $installAttempted = $false
+$script:mcwBrandMsiIncomplete = $false
 $productCode = $null
 $installer = $null
 $userPathBefore = [Environment]::GetEnvironmentVariable('PATH', 'User')
@@ -56,9 +62,9 @@ function Invoke-OwnedMsi([string]$Operation, [string]$Subject, [string]$Log, [st
     $process = Start-Process -FilePath (Join-Path $env:WINDIR 'System32/msiexec.exe') -ArgumentList $arguments -PassThru
     try {
         if (-not $process.WaitForExit(180000)) {
-            # Retain the precise child process handle, never kill by executable name.
-            $process.Kill()
-            throw "Owned msiexec exceeded 180 seconds; inspect $Log"
+            $script:mcwBrandMsiIncomplete = $true
+            $report['pendingInstaller'] = @{ pid=$process.Id; started=$process.StartTime; log=$Log }
+            throw "Owned msiexec exceeded 180 seconds; operation remains unknown and alive, no cleanup or forced stop; inspect $Log"
         }
         $process.Refresh()
         if ($process.ExitCode -notin @(0, 3010)) { throw "Owned msiexec exited $($process.ExitCode); inspect $Log" }
@@ -310,7 +316,9 @@ try {
 } finally {
     # Keep the MSI, receipt metadata, native PNGs, logs, and partial installation
     # evidence. Uninstall only the product absent before our own /i attempt.
-    if ($installAttempted -and $productCode -and $null -ne $installer) {
+    if ($script:mcwBrandMsiIncomplete) {
+        $report.cleanup = @{ status='incomplete-installer-retained'; productCode=$productCode }
+    } elseif ($installAttempted -and $productCode -and $null -ne $installer) {
         try {
             if (Test-Path -LiteralPath $installDirectory -PathType Container) {
                 Copy-Item -LiteralPath $installDirectory -Destination (Join-Path $proof 'installed-before-cleanup') -Recurse
