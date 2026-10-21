@@ -266,7 +266,9 @@ impl PeerProcess {
             // Round up sub-millisecond waits; cap each syscall, not the deadline.
             let millis = timeout
                 .as_millis()
-                .saturating_add(u128::from(timeout.subsec_nanos() % 1_000_000 != 0))
+                .saturating_add(u128::from(
+                    !timeout.subsec_nanos().is_multiple_of(1_000_000),
+                ))
                 .min(i32::MAX as u128) as i32;
             let result = unsafe { libc::poll(&mut event, 1, millis) };
             if result < 0 {
