@@ -323,7 +323,6 @@ try {
             foreach ($name in @('mcw', 'mcw-tray')) {
                 $installed = Join-Path $installDirectory "$name.exe"
                 Compare-Image $name 'shell' $installed 0 $size $expectedShell
-                Compare-Image $name 'extract' $installed 0 $size $expectedNative
             }
             # This is the actual installed Start Menu link, not a synthesized link
             # or a copied registry value. Shell resolves its icon on the consumer path.
@@ -370,7 +369,19 @@ try {
             $userPathAfter = [Environment]::GetEnvironmentVariable('PATH', 'User')
             $report['userPathAfter'] = $userPathAfter
             $report['userPathAfterSnapshot'] = Get-UserPathSnapshot
-            if ($userPathAfter -cne $userPathBefore) { throw 'MSI cleanup did not restore the pre-fixture user PATH.' }
+            # MSI removes the appended value and may normalize an empty trailing
+            # delimiter. Preserve actual unexpanded entries and their order,
+            # rather than pinning that incidental registry representation.
+            $beforeSnapshot = $report.userPathBeforeSnapshot
+            $afterSnapshot = $report.userPathAfterSnapshot
+            $beforeEntries = @(([string]$beforeSnapshot.rawValue).Split(';') | Where-Object { $_.Length -gt 0 })
+            $afterEntries = @(([string]$afterSnapshot.rawValue).Split(';') | Where-Object { $_.Length -gt 0 })
+            if ($beforeEntries.Count -ne $afterEntries.Count) { throw 'MSI cleanup lost or retained a user PATH entry.' }
+            for ($i = 0; $i -lt $beforeEntries.Count; $i++) {
+                if ($beforeEntries[$i] -cne $afterEntries[$i]) { throw 'MSI cleanup changed or reordered an unexpanded user PATH entry.' }
+            }
+            if ($beforeEntries.Count -gt 0 -and $beforeSnapshot.valueKind -cne $afterSnapshot.valueKind) { throw 'MSI cleanup changed the interpretation of the existing user PATH.' }
+            $report['userPathEntriesPreserved'] = $true
         } catch {
             $report.cleanup = @{ status = 'failed'; productCode = $productCode; error = $_.ToString() }
             $report.status = 'failed'

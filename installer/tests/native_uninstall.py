@@ -7,6 +7,8 @@ Windows uses the exact packaging receipt producer and real CLI/tray processes.
 No path, user, PID, device or application-data contents enter the proof report.
 Private command/frontend output and the first failure are retained beside the
 sanitized report, including failures before any native scenario completes.
+Windows exercises both frontend hosts; readiness failures retain SDK diagnostics
+and, after a companion exits, the same backend's actual console error output.
 Unix sockets use compact data namespaces; adversarial install paths stay intact.
 """
 import argparse
@@ -207,6 +209,8 @@ def _windows_cases(args, root, proof):
     user = ctypes.WinDLL("user32", use_last_error=True)
     user.FindWindowW.argtypes = [W.LPCWSTR, W.LPCWSTR]
     user.FindWindowW.restype = W.HWND
+    user.GetWindowThreadProcessId.argtypes = [W.HWND, ctypes.POINTER(W.DWORD)]
+    user.GetWindowThreadProcessId.restype = W.DWORD
     require(not user.FindWindowW("MicCamWatchTrayClass", None), "foreign tray present on disposable runner")
 
     def install(name):
@@ -238,6 +242,71 @@ def _windows_cases(args, root, proof):
             import traceback
             traceback.print_exc(file=sys.stderr)
 
+    def launch_frontend(cli, env, host, log="private-tray-output.log"):
+        command = [str(cli), "tray", "run"] if host == "console" else [str(cli.with_name("mcw-tray.exe"))]
+        with (cli.parent / log).open("wb") as output:
+            return subprocess.Popen(command, env=env, stdin=subprocess.DEVNULL,
+                                    stdout=output, stderr=output)
+
+    def frontend_ready(tray):
+        window = user.FindWindowW("MicCamWatchTrayClass", None)
+        owner = W.DWORD()
+        return (tray.poll() is None and window
+                and user.GetWindowThreadProcessId(window, ctypes.byref(owner))
+                and owner.value == tray.pid)
+
+    def wait_frontend(cli, env, tray, host):
+        deadline = time.monotonic() + 20
+        while not frontend_ready(tray):
+            if tray.poll() is not None or time.monotonic() >= deadline:
+                details = cli.parent / "private-tray-output.readiness.json"
+                proof["windows_owned_tray_readiness_failure"] = {
+                    "host": host, "exit_code": tray.poll(),
+                    "details_file": str(Path("private-windows") / details.relative_to(root))}
+                save_proof(args, proof)
+                context = {"argv": tray.args, "pid": tray.pid, "exit_code": tray.poll(),
+                           "environment": {key: env.get(key) for key in
+                                           ("USERPROFILE", "APPDATA", "LOCALAPPDATA", "TEMP")},
+                           "settings": str(Path(env["APPDATA"]) / "MicCamWatch/settings.toml"),
+                           "data": str(Path(env["LOCALAPPDATA"]) / "MicCamWatch"),
+                           "tray_mutex": r"Local\MicCamWatch.Tray"}
+                try:
+                    if host == "companion" and tray.poll() is not None:
+                        # This is diagnosis, not replacement companion coverage.
+                        # Wait for exit to avoid contaminating the mutex result.
+                        probe = launch_frontend(cli, env, "console", "private-console-tray-output.log")
+                        try:
+                            probe_deadline = time.monotonic() + 20
+                            while not frontend_ready(probe) and probe.poll() is None and time.monotonic() < probe_deadline:
+                                time.sleep(.05)
+                            context["console_backend"] = {
+                                "pid": probe.pid, "exit_code": probe.poll(),
+                                "ready": bool(frontend_ready(probe)),
+                                "log": "private-console-tray-output.log"}
+                        finally:
+                            if probe.poll() is None:
+                                run([cli, "tray", "stop"], env, allowed=None, timeout=20)
+                                try:
+                                    probe.wait(timeout=20)
+                                except subprocess.TimeoutExpired:
+                                    _timed_out_commands.append(probe)
+                                    raise
+                except Exception:
+                    context["diagnostic_failure"] = traceback.format_exc()
+                finally:
+                    try:
+                        # Doctor initializes the same COM/Media Foundation/audio
+                        # SDK. Its failure must not prevent the console probe.
+                        sdk = run([cli, "doctor", "--json", "--no-color"], env, allowed=None, timeout=20)
+                        context["sdk_diagnostic"] = {"exit_code": sdk.returncode,
+                                                     "stdout_file": sdk.stdout_file,
+                                                     "stderr_file": sdk.stderr_file}
+                    except Exception:
+                        context["sdk_diagnostic_failure"] = traceback.format_exc()
+                    details.write_text(json.dumps(context, indent=2) + "\n", encoding="utf-8")
+                raise AssertionError(f"owned native {host} tray did not become ready; see private readiness diagnostics")
+            time.sleep(.05)
+
     import re
 
     def remove_portable(cli, env):
@@ -259,8 +328,6 @@ def _windows_cases(args, root, proof):
     proof["windows_actual_deferred_pair_removal_without_frontend"] = True
     save_proof(args, proof)
 
-    directory, cli, env, preferences, sentinel = install("successful removal")
-    before = data_snapshot(preferences, sentinel)
     import winreg
     scheduler = Path(os.environ["SystemRoot"]) / "System32/schtasks.exe"
 
@@ -271,47 +338,38 @@ def _windows_cases(args, root, proof):
         except FileNotFoundError:
             return None
 
-    require(run([scheduler, "/Query", "/TN", "MicCamWatch Tray", "/XML"], env, allowed=None).returncode != 0
-            and run_entry() is None, "pre-existing autostart must remain untouched")
-    run([cli, "autostart", "enable"], env)
-    require(run([cli, "autostart", "status"], env).returncode == 0, "owned native autostart was not enabled")
-    with (directory / "private-tray-output.log").open("wb") as output:
-        tray = subprocess.Popen([str(directory / "mcw-tray.exe")], env=env,
-                                stdin=subprocess.DEVNULL, stdout=output, stderr=output)
-    try:
-        deadline = time.monotonic() + 20
-        while not user.FindWindowW("MicCamWatchTrayClass", None):
-            exit_code = tray.poll()
-            if exit_code is not None or time.monotonic() >= deadline:
-                proof["windows_owned_tray_readiness_failure"] = {
-                    "pid": tray.pid, "exit_code": exit_code, "log": "private-tray-output.log"}
-                save_proof(args, proof)
-                raise AssertionError("owned native tray did not become ready")
-            time.sleep(.05)
-        remove_portable(cli, env)
-        tray.wait(timeout=20)
-        require(not cli.exists() and not (directory / "mcw-tray.exe").exists()
-                and not (directory / ".miccamwatch-portable.json").exists(), "verified pair/receipt survived successful worker removal")
-        require(before == data_snapshot(preferences, sentinel), "uninstall changed retained settings/history/policy")
+    for host in ("companion", "console"):
+        directory, cli, env, preferences, sentinel = install("successful removal " + host)
+        before = data_snapshot(preferences, sentinel)
         require(run([scheduler, "/Query", "/TN", "MicCamWatch Tray", "/XML"], env, allowed=None).returncode != 0
-                and run_entry() is None, "owned native autostart survived removal")
-        proof["windows_actual_deferred_pair_and_owned_frontend_removal"] = True
-    finally:
-        cleanup(cli, env, tray, autostart=True)
+                and run_entry() is None, "pre-existing autostart must remain untouched")
+        run([cli, "autostart", "enable"], env)
+        require(run([cli, "autostart", "status"], env).returncode == 0, "owned native autostart was not enabled")
+        tray = launch_frontend(cli, env, host)
+        try:
+            wait_frontend(cli, env, tray, host)
+            remove_portable(cli, env)
+            tray.wait(timeout=20)
+            require(tray.returncode == 0, "cooperatively removed native frontend exited unsuccessfully")
+            require(not cli.exists() and not (directory / "mcw-tray.exe").exists()
+                    and not (directory / ".miccamwatch-portable.json").exists(), "verified pair/receipt survived successful worker removal")
+            require(before == data_snapshot(preferences, sentinel), "uninstall changed retained settings/history/policy")
+            require(run([scheduler, "/Query", "/TN", "MicCamWatch Tray", "/XML"], env, allowed=None).returncode != 0
+                    and run_entry() is None, "owned native autostart survived removal")
+            proof[f"windows_actual_deferred_pair_and_owned_{host}_frontend_removal"] = True
+            save_proof(args, proof)
+        finally:
+            cleanup(cli, env, tray, autostart=True)
+    proof["windows_actual_deferred_pair_and_owned_frontend_removal"] = True
 
     # Stop the actual worker before its first instruction, reserve the same
     # Windows byte-range lock, then let production preflight run normally.
     from windows_uninstall_lock import busy_worker
     directory, cli, env, preferences, sentinel = install("contended worker preflight")
     run([cli, "autostart", "enable"], env)
-    with (directory / "private-tray-output.log").open("wb") as output:
-        tray = subprocess.Popen([str(directory / "mcw-tray.exe")], env=env,
-                                stdin=subprocess.DEVNULL, stdout=output, stderr=output)
+    tray = launch_frontend(cli, env, "companion")
     try:
-        deadline = time.monotonic() + 20
-        while not user.FindWindowW("MicCamWatchTrayClass", None):
-            require(tray.poll() is None and time.monotonic() < deadline, "contention fixture frontend did not become ready")
-            time.sleep(.05)
+        wait_frontend(cli, env, tray, "companion")
         task_before = run([scheduler, "/Query", "/TN", "MicCamWatch Tray", "/XML"], env, allowed=None)
         registration_before = task_before.returncode, task_before.stdout, run_entry()
         before = sha(cli), sha(directory / "mcw-tray.exe"), data_snapshot(preferences, sentinel)
@@ -354,14 +412,8 @@ def _windows_cases(args, root, proof):
         run([cli, "mute"], env, allowed=None)
         before = json.loads(run([cli, "status", "--json", "--no-color"], env, allowed=(0, 1, 2)).stdout)["protection"]["microphone"]
         require(before["requested"] and before["service_active"], "real microphone protection owner was not established")
-        with (directory / "private-tray-output.log").open("wb") as output:
-            protected_tray = subprocess.Popen([str(directory / "mcw-tray.exe")], env=env,
-                                              stdin=subprocess.DEVNULL, stdout=output, stderr=output)
-        deadline = time.monotonic() + 20
-        while not user.FindWindowW("MicCamWatchTrayClass", None):
-            require(protected_tray.poll() is None and time.monotonic() < deadline,
-                    "protected native frontend did not become ready")
-            time.sleep(.05)
+        protected_tray = launch_frontend(cli, env, "companion")
+        wait_frontend(cli, env, protected_tray, "companion")
         require(run([cli, "uninstall"], env, allowed=None).returncode != 0, "active native protection did not refuse uninstall")
         after = json.loads(run([cli, "status", "--json", "--no-color"], env, allowed=(0, 1, 2)).stdout)["protection"]["microphone"]
         require(after["requested"] and after["service_active"] and cli.exists(), "uninstall silently released native protection")
