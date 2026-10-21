@@ -17,17 +17,21 @@ class Miccamwatch < Formula
     system "cargo", "install", *std_cargo_args, "--bin", "mcw"
   end
 
-  def post_install
-    unless quiet_system(opt_bin/"mcw", "autostart", "refresh")
-      opoo "Autostart was not refreshed; existing registration was preserved."
-      opoo "Run `mcw autostart refresh` to inspect the ownership/session refusal."
-    end
-  end
-
   def caveats
     <<~EOS
       Homebrew owns this installation: upgrade with `brew upgrade miccamwatch`,
       not `mcw update`. No public-installer receipt is created.
+
+      For an existing owned login LaunchAgent, including dormant or disabled
+      intent, run these commands as your ordinary user, without sudo:
+        HOMEBREW_NO_INSTALL_CLEANUP=1 brew upgrade miccamwatch &&
+        mcw autostart refresh &&
+        brew cleanup miccamwatch
+      Stop if upgrade or refresh fails; do not clean up the old keg until refresh
+      succeeds. Homebrew's sandboxed install hooks cannot refresh user autostart.
+      The explicit refresh preserves loaded, dormant, and disabled intent.
+      Without an existing login registration, ordinary `brew upgrade miccamwatch`
+      needs no refresh; refresh never enables an absent registration.
 
       Installation does not enable autostart or launch the native menu bar.
       Use `mcw tray run` to launch it, and `mcw autostart enable` only when you

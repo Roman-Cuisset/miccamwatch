@@ -305,7 +305,7 @@ fn enable_in(store: &Store, version: &str, activate: bool) -> Result<()> {
     let executable = std::env::current_exe().context("cannot locate mcw executable")?;
     // Darwin may report the invocation alias, including Homebrew's writable
     // prefix/bin link. Validate and register the physical executable instead;
-    // package post_install refreshes owned Cellar targets before old-keg cleanup.
+    // Explicit ordinary-user refresh updates owned Cellar targets before cleanup.
     #[cfg(target_os = "macos")]
     let executable = std::fs::canonicalize(executable)
         .context("cannot resolve the current executable; registration preserved")?;

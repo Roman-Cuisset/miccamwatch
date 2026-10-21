@@ -229,8 +229,15 @@ class Qualification:
             self.absent_service("baseline-dormant")
         if self.args.autostart_intent == "disabled":
             self.run("baseline-explicit-disabled-intent", ["launchctl", "disable", self.service])
+        original_registration = self.registration()
         recipe.write_text(formula_text)
         self.brew("native-upgrade", "upgrade", "--build-from-source", self.formula)
+        require(self.registration() == original_registration, "Brew upgrade changed user autostart before explicit refresh")
+        require(Path(original["ProgramArguments"][0]).is_file(), "Upgrade removed the old keg before explicit refresh")
+        require(self.disabled("disabled-state-before-refresh") == (self.args.autostart_intent == "disabled"),
+                "Brew upgrade changed the user's launchctl disabled intent")
+        if self.args.autostart_intent != "loaded":
+            self.absent_service("upgrade-did-not-activate")
         require(self.mcw("candidate-version", "--version").stdout.decode().strip() == "mcw " + version,
                 "Candidate archive's Cargo version does not match the supplied formula version")
         mach_o = self.run("installed-mach-o", ["file", self.binary.resolve()]).stdout.decode()
@@ -239,18 +246,21 @@ class Qualification:
                               ("autostart-help", ("autostart", "--help"))):
             self.mcw(name, *command)
         selected = self.binary.resolve(strict=True)
+        # This ordinary-user command is deliberately outside Homebrew's isolated
+        # post-install HOME and sandbox, before old-keg cleanup.
+        self.mcw("explicit-autostart-refresh", "autostart", "refresh")
         updated = plistlib.loads(self.entry.read_bytes())
         require(updated["ProgramArguments"] == [str(selected), "tray", "run"],
-                "Upgrade did not refresh owned autostart to the validated physical keg")
+                "Explicit refresh did not select the validated physical keg")
         require(updated["MicCamWatchVersion"] == version, "Registration version was not refreshed")
-        require(selected != Path(original["ProgramArguments"][0]), "Upgrade kept the historical executable target")
-        require(self.disabled("disabled-state-after-upgrade") == (self.args.autostart_intent == "disabled"),
-                "Upgrade changed the user's launchctl disabled intent")
+        require(selected != Path(original["ProgramArguments"][0]), "Explicit refresh kept the historical executable target")
+        require(self.disabled("disabled-state-after-refresh") == (self.args.autostart_intent == "disabled"),
+                "Explicit refresh changed the user's launchctl disabled intent")
         if self.args.autostart_intent == "loaded":
             loaded = self.run("upgraded-loaded-service", ["launchctl", "print", self.service]).stdout
             require(str(selected).encode() in loaded, "Loaded LaunchAgent did not select the refreshed physical target")
         else:
-            self.absent_service("upgrade-did-not-activate")
+            self.absent_service("refresh-did-not-activate")
         self.retained(snapshot)
         self.ownership("candidate-updater-ownership")
         registration = self.registration()
@@ -259,13 +269,13 @@ class Qualification:
             repeated_pid = re.search(rb"(?m)^\s*pid = (\d+)$", before_repeat)
             require(repeated_pid is not None, "Loaded native service did not expose its process")
         self.brew("idempotent-upgrade", "upgrade", "--build-from-source", self.formula)
-        self.brew("idempotent-postinstall", "postinstall", self.formula)
-        require(self.registration() == registration, "Repeated upgrade/postinstall changed owned registration bytes")
+        self.mcw("idempotent-explicit-refresh", "autostart", "refresh")
+        require(self.registration() == registration, "Repeated upgrade/explicit refresh changed owned registration bytes")
         if self.args.autostart_intent == "loaded":
             after_repeat = self.run("loaded-after-no-op", ["launchctl", "print", self.service]).stdout
             repeated_after = re.search(rb"(?m)^\s*pid = (\d+)$", after_repeat)
             require(repeated_after is not None and repeated_after.group(1) == repeated_pid.group(1),
-                    "Idempotent postinstall restarted the user's loaded native menu")
+                    "Idempotent explicit refresh restarted the user's loaded native menu")
         if self.args.autostart_intent != "loaded":
             self.absent_service("repeat-did-not-activate")
         self.brew("remove-old-keg", "cleanup", self.formula)
@@ -297,15 +307,16 @@ class Qualification:
         self.brew("native-reinstall", "install", "--build-from-source", self.formula)
         self.installed = True
         self.absent_service("reinstall-did-not-activate")
+        require(self.registration() == preserved, "Reinstall changed retained autostart registration")
         self.mcw("explicit-remove-login-intent", "autostart", "disable")
         self.stop_menu(self.login_env)
         require(not self.entry.exists(), "Explicit autostart disable did not remove owned registration")
         fresh = self.root / "fresh-home"
         fresh.mkdir(mode=0o700)
-        self.brew("absent-registration-postinstall", "postinstall", self.formula, env=self.environment(fresh))
-        require(not (fresh / "Library/LaunchAgents" / (LABEL + ".plist")).exists(), "Postinstall enabled absent registration")
-        require(not (fresh / "config/MicCamWatch/autostart").exists(), "Postinstall manufactured absent autostart ownership state")
-        self.absent_service("fresh-postinstall-did-not-activate")
+        self.mcw("absent-registration-explicit-refresh", "autostart", "refresh", env=self.environment(fresh))
+        require(not (fresh / "Library/LaunchAgents" / (LABEL + ".plist")).exists(), "Explicit refresh enabled absent registration")
+        require(not (fresh / "config/MicCamWatch/autostart").exists(), "Explicit refresh manufactured absent autostart ownership state")
+        self.absent_service("fresh-refresh-did-not-activate")
         external = b'<?xml version="1.0"?><plist version="1.0"><dict><key>Label</key><string>' + LABEL.encode() + b'</string><key>ProgramArguments</key><array><string>/usr/bin/true</string></array></dict></plist>\n'
         self.entry.parent.mkdir(parents=True, exist_ok=True)
         self.entry.write_bytes(external)
@@ -313,8 +324,6 @@ class Qualification:
             result = self.mcw("external-ownership-" + action, "autostart", action, codes=(2,))
             require(self.entry.read_bytes() == external, "External registration was overwritten")
             self.absent_service("external-refusal-did-not-activate")
-        self.brew("external-postinstall-refusal", "postinstall", self.formula)
-        require(self.entry.read_bytes() == external, "Formula hook overwrote external registration")
         self.brew("external-native-uninstall", "uninstall", self.formula)
         self.installed = False
         require(self.entry.read_bytes() == external, "Uninstall deleted an external registration")
@@ -324,7 +333,8 @@ class Qualification:
             "macos": runtime, "baseline": "0.16.1", "candidate": version,
             "candidate_ref": self.args.candidate_ref or RELEASE_COMMIT,
             "autostart_intent": self.args.autostart_intent,
-            "scope": "Genuine brew install/upgrade/cleanup/test/uninstall/reinstall, CLI, embedded AppKit menu lifecycle, ownership refusals and byte-preserved user fixtures. No physical capture/device mutation, Developer ID/notarization or external tap/core acceptance."}, indent=2) + "\n")
+            "autostart_refresh": "Explicit ordinary-user mcw autostart refresh after upgrade with HOMEBREW_NO_INSTALL_CLEANUP=1, before brew cleanup; no automatic install hook.",
+            "scope": "Genuine brew install/upgrade, explicit ordinary-user autostart refresh, cleanup/test/uninstall/reinstall, CLI, embedded AppKit menu lifecycle, ownership refusals and byte-preserved user fixtures. No physical capture/device mutation, Developer ID/notarization or external tap/core acceptance."}, indent=2) + "\n")
 
     def cleanup(self):
         for process in self.children:

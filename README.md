@@ -182,8 +182,20 @@ Distribution recipes are under `distribution/homebrew` and `distribution/aur`.
 They build immutable commit/digest-pinned source with locked Cargo dependencies;
 they do not manufacture public-installer receipts. Upgrade through the owning
 package manager, never overwrite a package with the curl installer or `mcw update`.
-Homebrew embeds the existing Swift/AppKit helper; its refresh preserves absent,
-dormant, disabled and externally owned autostart rather than enabling it.
+Homebrew embeds the existing Swift/AppKit helper. With an existing owned login
+registration, upgrade as the ordinary user **without cleaning the old keg first**:
+
+```sh
+HOMEBREW_NO_INSTALL_CLEANUP=1 brew upgrade miccamwatch &&
+mcw autostart refresh &&
+brew cleanup miccamwatch
+```
+
+Stop if upgrade or refresh fails; do not run cleanup until refresh succeeds.
+Homebrew's isolated install hooks cannot update user autostart. Explicit refresh
+preserves loaded, dormant and disabled intent and refuses unrelated registrations;
+it never enables absent intent. Without an existing registration, ordinary
+`brew upgrade miccamwatch` needs no refresh.
 Arch installs only reviewable camera-bootstrap materials under
 `/usr/share/miccamwatch/linux-camera`, not an active root helper or Polkit action.
 Administrator setup remains a separate reviewed matching-release archive operation;
