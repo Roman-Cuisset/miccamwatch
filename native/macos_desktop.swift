@@ -339,7 +339,7 @@ final class DesktopConsultation: NSObject {
         // The inset scroll viewport is narrower than the window, and shrinks
         // again on resize; let its document follow that width before wrapping.
         text.minSize = .zero
-        text.maxSize = NSSize(width: .greatestFiniteMagnitude, height: .greatestFiniteMagnitude)
+        text.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
         text.isVerticallyResizable = true
         text.isHorizontallyResizable = false
         text.autoresizingMask = [.width]
