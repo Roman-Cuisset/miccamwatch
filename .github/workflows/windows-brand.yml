@@ -1,4 +1,4 @@
-name: Windows retained native payload diagnostics
+name: Windows native surface and strict desktop prerequisites
 
 on:
   workflow_dispatch:
@@ -19,7 +19,7 @@ jobs:
           run-id: 39625449451
           github-token: ${{ github.token }}
           path: ${{ runner.temp }}/previous-native
-      - name: Exercise actual interactive images without rebuilding unchanged payload
+      - name: Exercise all real consumer images and PATH preservation
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
@@ -39,55 +39,44 @@ jobs:
           path: ${{ runner.temp }}/reused-interactive-proof
           if-no-files-found: error
           retention-days: 7
-  ordinary-frontend:
+  desktop-capabilities:
     runs-on: windows-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
-        with:
-          name: native-windows-brand-shell
-          run-id: 39625449451
-          github-token: ${{ github.token }}
-          path: ${{ runner.temp }}/previous-native
-      - name: Capture console backend and installer-service prerequisite
-        shell: pwsh
+      - name: Read native client registrations and server certificate trust
+        shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
           if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') { throw 'Disposable hosted runner required' }
-          $stage = Join-Path ([Environment]::GetFolderPath('CommonDocuments')) ('MicCamWatch-retained-probe-' + [guid]::NewGuid().ToString('N'))
-          New-Item -ItemType Directory -Path $stage | Out-Null
-          "MCW_RETAINED_PROOF=$stage" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          foreach ($directory in @('installer/tests','target/release')) { New-Item -ItemType Directory -Path (Join-Path $stage $directory) -Force | Out-Null }
-          foreach ($name in @('windows_frontend_probe.py','native_uninstall.py')) { Copy-Item -LiteralPath (Join-Path 'installer/tests' $name) -Destination (Join-Path $stage $name) }
-          Copy-Item -LiteralPath 'installer/tests/windows-brand-native.ps1' -Destination (Join-Path $stage 'installer/tests/windows-brand-native.ps1')
-          Copy-Item -LiteralPath 'installer/miccamwatch.ico' -Destination (Join-Path $stage 'installer/miccamwatch.ico')
-          $previous = Join-Path $env:RUNNER_TEMP 'previous-native'
-          foreach ($name in @('mcw.exe','mcw-tray.exe')) { Copy-Item -LiteralPath (Join-Path $previous "_temp/windows-brand-proof/installed-before-cleanup/$name") -Destination (Join-Path $stage "target/release/$name") }
-          $msi = Join-Path $stage 'target/mcw-brand-fixture.msi'
-          Copy-Item -LiteralPath (Join-Path $previous 'miccamwatch/miccamwatch/target/mcw-brand-fixture.msi') -Destination $msi
-          if ((Get-FileHash $msi -Algorithm SHA256).Hash -cne 'F37927EA1681738F0FDF49377F210812F1C0B8BF80489FB01900A3C59F5CCB66') { throw 'Retained exact MSI hash mismatch' }
-          Get-Service msiserver | Select-Object Status,StartType | ConvertTo-Json | Out-File -LiteralPath (Join-Path $stage 'installer-before.json') -Encoding utf8
-          if ((Get-Service msiserver).Status -ne 'Running') { Start-Service msiserver -ErrorAction Stop }
-          Get-Service msiserver | Select-Object Status,StartType | ConvertTo-Json | Out-File -LiteralPath (Join-Path $stage 'installer-started.json') -Encoding utf8
-          $python = (Get-Command python).Source
-          $wrapper = Join-Path $stage 'ordinary.ps1'
-          $body = @"
-          `$ErrorActionPreference = 'Continue'
-          `$env:RUNNER_TEMP = '$($stage.Replace("'", "''"))'
-          & '$($python.Replace("'", "''"))' -u -B '$(Join-Path $stage 'windows_frontend_probe.py')' --payload '$(Join-Path $stage 'target/release')' --proof '$(Join-Path $stage 'frontend-proof')'
-          Get-Service msiserver | Select-Object Status,StartType | ConvertTo-Json | Out-File -LiteralPath '$(Join-Path $stage 'installer-at-consumer.json')' -Encoding utf8
-          & powershell.exe -NoProfile -NonInteractive -STA -File '$(Join-Path $stage 'installer/tests/windows-brand-native.ps1')' -MsiPath '$msi' -OutputDirectory '$(Join-Path $stage 'batch-msi-proof')' -IsolatedRunner
-          exit `$LASTEXITCODE
-          "@
-          [IO.File]::WriteAllText($wrapper,$body)
-          & $python -u -B installer/tests/windows_ordinary.py --script $wrapper --working-directory $stage --timeout 420 --report (Join-Path $stage 'launcher.json')
-          if ($LASTEXITCODE -ne 0) { throw 'Ordinary consumer diagnostic failed; original outputs retained' }
+          $proof = Join-Path $env:RUNNER_TEMP 'desktop-capabilities'
+          New-Item -ItemType Directory -Path $proof | Out-Null
+          $registrations = @()
+          foreach ($view in @([Microsoft.Win32.RegistryView]::Registry64,[Microsoft.Win32.RegistryView]::Registry32)) {
+            $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::ClassesRoot,$view)
+            try {
+              foreach ($name in $base.GetSubKeyNames()) {
+                if ($name -notmatch '^(MsRdpClient|MsTscAx)') { continue }
+                $key=$base.OpenSubKey($name); $clsid=$base.OpenSubKey($name+'\CLSID'); $curver=$base.OpenSubKey($name+'\CurVer')
+                try {
+                  $guid=$(if($clsid){$clsid.GetValue('')}else{$null})
+                  $server=$(if($guid){$base.OpenSubKey('CLSID\'+$guid+'\InprocServer32')}else{$null})
+                  try { $registrations += @{view=$view.ToString();name=$name;description=$key.GetValue('');clsid=$guid;curver=$(if($curver){$curver.GetValue('')}else{$null});server=$(if($server){$server.GetValue('')}else{$null})} }
+                  finally { if($server){$server.Dispose()} }
+                } finally { if($curver){$curver.Dispose()};if($clsid){$clsid.Dispose()};if($key){$key.Dispose()} }
+              }
+            } finally { $base.Dispose() }
+          }
+          $certificates=@(Get-ChildItem 'Cert:/LocalMachine/Remote Desktop' | ForEach-Object {
+            $certificate=$_; $chain=New-Object Security.Cryptography.X509Certificates.X509Chain
+            try { @{subject=$certificate.Subject;thumbprint=$certificate.Thumbprint;certificate=[Convert]::ToBase64String($certificate.RawData);chainTrusted=$chain.Build($certificate);chainStatus=@($chain.ChainStatus|ForEach-Object{$_.Status.ToString()});san=@($certificate.Extensions|Where-Object{$_.Oid.Value -eq '2.5.29.17'}|ForEach-Object{$_.Format($false)})} }
+            finally { $chain.Dispose() }
+          })
+          $rdp=Get-CimInstance -Namespace 'root/cimv2/terminalservices' -ClassName Win32_TSGeneralSetting -Filter "TerminalName='RDP-tcp'"
+          @{registrations=$registrations;certificates=$certificates;serverCertificateSha1=$rdp.SSLCertificateSHA1Hash;tools=@(Get-Command mstsc,wfreerdp,freerdp,aximp,tlbimp -ErrorAction SilentlyContinue|Select-Object Name,Source)} | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $proof 'capabilities.json') -Encoding UTF8
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
-          name: retained-ordinary-consumer
-          path: ${{ env.MCW_RETAINED_PROOF }}
+          name: strict-desktop-capabilities
+          path: ${{ runner.temp }}/desktop-capabilities
           if-no-files-found: error
           retention-days: 7
-          include-hidden-files: true
