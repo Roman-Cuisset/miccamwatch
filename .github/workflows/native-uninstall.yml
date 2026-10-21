@@ -30,6 +30,15 @@ jobs:
     env:
       MACOSX_DEPLOYMENT_TARGET: '15.0'
     steps:
+      - name: Initialize retained fixture evidence
+        shell: bash
+        run: |
+          umask 077
+          mkdir -p "$RUNNER_TEMP/uninstall-proof"
+          platform="$RUNNER_OS"
+          if [ "$platform" = macOS ]; then platform=Darwin; fi
+          printf '{"platform":"%s","status":"not_started","first_failure":null}\n' "$platform" > "$RUNNER_TEMP/uninstall-proof/result.json"
+          : > "$RUNNER_TEMP/uninstall-proof/private-runner.log"
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
       - name: Install native Linux build prerequisites
@@ -39,6 +48,18 @@ jobs:
           test "$RUNNER_ENVIRONMENT" = github-hosted
           sudo apt-get update
           sudo apt-get install -y pkg-config libpipewire-0.3-dev libspa-0.2-dev libclang-dev pipewire-bin
+          # Match native installer CI: repair hosted VM metadata, never bypass
+          # the installer's fail-closed root-helper ancestry checks.
+          for directory in / /usr /usr/local /usr/local/libexec /usr/share /usr/share/polkit-1 /usr/share/polkit-1/actions /var /var/lib; do
+            test ! -L "$directory"
+            if [ -e "$directory" ]; then
+              test -d "$directory"
+              stat -c '%n before uninstall prerequisites: uid=%u gid=%g mode=%a' "$directory"
+              sudo chown root:root "$directory"
+              sudo chmod go-w "$directory"
+              stat -c '%n after uninstall prerequisites: uid=%u gid=%g mode=%a' "$directory"
+            fi
+          done
       - name: Build genuine native payloads
         shell: bash
         run: |
@@ -54,13 +75,32 @@ jobs:
         run: |
           test "$GITHUB_ACTIONS" = true
           test "$RUNNER_ENVIRONMENT" = github-hosted
-          python3 -B installer/tests/native_uninstall.py --binary "$GITHUB_WORKSPACE/target/release/mcw" --repository "$GITHUB_WORKSPACE" --cargo-install "$RUNNER_TEMP/mcw-cargo-uninstall" --proof "$RUNNER_TEMP/uninstall-proof/result.json"
+          umask 077
+          proof="$RUNNER_TEMP/uninstall-proof"
+          status=0
+          python3 -B installer/tests/native_uninstall.py --binary "$GITHUB_WORKSPACE/target/release/mcw" --repository "$GITHUB_WORKSPACE" --cargo-install "$RUNNER_TEMP/mcw-cargo-uninstall" --proof "$proof/result.json" > "$proof/private-runner.log" 2>&1 || status=$?
+          if [ "$status" -ne 0 ]; then
+            # Preserve Python's precise first failure; cover failures before
+            # main() could replace the bootstrap report without printing logs.
+            python3 - "$proof/result.json" <<'PY' >> "$proof/private-runner.log" 2>&1
+          import json, pathlib, sys
+          path = pathlib.Path(sys.argv[1])
+          report = json.loads(path.read_text())
+          if report.get("status") == "not_started":
+              report.update(status="failed", first_failure={"type": "FixtureLaunchFailure", "details_file": "private-runner.log"})
+              path.write_text(json.dumps(report, indent=2) + "\n")
+          PY
+            printf '%s\n' 'Native uninstall fixture failed; see retained private evidence artifact.' >&2
+            exit "$status"
+          fi
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: uninstall-${{ matrix.os }}
-          path: ${{ runner.temp }}/uninstall-proof/result.json
+          path: ${{ runner.temp }}/uninstall-proof
           if-no-files-found: error
+          retention-days: 7
+          include-hidden-files: true
 
   windows:
     runs-on: windows-latest
@@ -99,19 +139,32 @@ jobs:
           $result = Join-Path $proof 'result.json'
           $finished = Join-Path $proof 'finished'
           $log = Join-Path $proof 'private-runner.log'
+          [IO.File]::WriteAllText($log, "Ordinary-token qualification has not started.`n")
+          [IO.File]::WriteAllText($result, '{"platform":"Windows","status":"not_started"}')
           $wrapper = Join-Path $proof 'ordinary-token.ps1'
           $body = @"
           `$ErrorActionPreference = 'Stop'
           `$env:GITHUB_ACTIONS = 'true'
           `$env:RUNNER_ENVIRONMENT = 'github-hosted'
           `$env:PATH = '$($env:PATH.Replace("'", "''"))'
+          `$exitCode = 1
           try {
-            & '$($python.Replace("'", "''"))' -B '$($fixture.Replace("'", "''"))' --binary '$($binary.Replace("'", "''"))' --repository '$($env:GITHUB_WORKSPACE.Replace("'", "''"))' --cargo-install '$($cargo.Replace("'", "''"))' --msi '$($msi.Replace("'", "''"))' --proof '$($result.Replace("'", "''"))' *> '$($log.Replace("'", "''"))'
-            [IO.File]::WriteAllText('$($finished.Replace("'", "''"))', [string]`$LASTEXITCODE)
+            # Windows PowerShell 5 must not turn the native stderr stream into
+            # a terminating NativeCommandError that truncates the traceback.
+            `$ErrorActionPreference = 'Continue'
+            & '$($python.Replace("'", "''"))' -u -B '$($fixture.Replace("'", "''"))' --binary '$($binary.Replace("'", "''"))' --repository '$($env:GITHUB_WORKSPACE.Replace("'", "''"))' --cargo-install '$($cargo.Replace("'", "''"))' --msi '$($msi.Replace("'", "''"))' --proof '$($result.Replace("'", "''"))' *> '$($log.Replace("'", "''"))'
+            `$exitCode = `$LASTEXITCODE
+            `$ErrorActionPreference = 'Stop'
           } catch {
-            [IO.File]::WriteAllText('$($finished.Replace("'", "''"))', '1')
-            throw
+            (`$_ | Out-String) | Add-Content -LiteralPath '$($log.Replace("'", "''"))'
+            `$_.ScriptStackTrace | Add-Content -LiteralPath '$($log.Replace("'", "''"))'
+          } finally {
+            # Publish the exit marker atomically; a partially written marker
+            # must not masquerade as the fixture's first failure.
+            [IO.File]::WriteAllText('$($finished.Replace("'", "''")).tmp', [string]`$exitCode)
+            [IO.File]::Move('$($finished.Replace("'", "''")).tmp', '$($finished.Replace("'", "''"))')
           }
+          exit `$exitCode
           "@
           [IO.File]::WriteAllText($wrapper, $body)
           # The ordinary Windows Task Scheduler LIMITED token is the product's
@@ -123,27 +176,52 @@ jobs:
           $definition.Principal.UserId = "$env:USERDOMAIN\$env:USERNAME"
           $definition.Principal.LogonType = 3
           $definition.Principal.RunLevel = 0
-          $definition.Settings.ExecutionTimeLimit = 'PT15M'
+          # Never let Task Scheduler forcibly terminate the wrapper/debuggees.
+          $definition.Settings.ExecutionTimeLimit = 'PT0S'
+          $definition.Settings.AllowHardTerminate = $false
           $action = $definition.Actions.Create(0)
           $action.Path = (Get-Command powershell.exe).Source
           $action.Arguments = '-NoProfile -File "' + $wrapper + '"'
           $name = 'MCW-Uninstall-Disposable-' + [guid]::NewGuid().ToString('N')
+          $registered = $false
+          $failed = $false
           try {
             $task = $folder.RegisterTaskDefinition($name, $definition, 6, $definition.Principal.UserId, $null, 3)
+            $registered = $true
             $null = $task.Run($null)
             $deadline = (Get-Date).AddMinutes(15)
             while (-not (Test-Path $finished)) {
               if ((Get-Date) -gt $deadline) { throw 'Ordinary-token fixture did not finish; no process was killed' }
               Start-Sleep -Milliseconds 200
             }
-            if ((Get-Content $finished -Raw).Trim() -ne '0') { throw 'Native uninstall fixture failed; private logs remain only on the disposable runner' }
+            if ((Get-Content $finished -Raw).Trim() -ne '0') { throw 'Native uninstall fixture failed; private evidence will be uploaded' }
             if (-not (Test-Path $result)) { throw 'Native proof report missing' }
+            $report = Get-Content -LiteralPath $result -Raw | ConvertFrom-Json
+            if ($report.status -ne 'passed') { throw 'Native fixture exited without completed proof' }
+          } catch {
+            $failed = $true
+            ($_ | Out-String) | Add-Content -LiteralPath $log
+            $_.ScriptStackTrace | Add-Content -LiteralPath $log
+            $report = Get-Content -LiteralPath $result -Raw | ConvertFrom-Json
+            if ($report.status -eq 'not_started') {
+              [IO.File]::WriteAllText($result, '{"platform":"Windows","status":"failed","first_failure":{"type":"OrdinaryTokenFixtureError","details_file":"private-runner.log"}}')
+            }
+            throw 'Native Windows qualification failed; inspect the uploaded private evidence'
           } finally {
-            $folder.DeleteTask($name, 0)
+            if ($registered) {
+              try {
+                $folder.DeleteTask($name, 0)
+              } catch {
+                ($_ | Out-String) | Add-Content -LiteralPath $log
+                if (-not $failed) { throw 'Qualification task registration cleanup failed; inspect the uploaded private evidence' }
+              }
+            }
           }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: uninstall-windows
-          path: ${{ runner.temp }}/uninstall-proof/result.json
+          path: ${{ runner.temp }}/uninstall-proof/
           if-no-files-found: error
+          retention-days: 7
+          include-hidden-files: true
