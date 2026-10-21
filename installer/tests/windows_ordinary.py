@@ -1,17 +1,15 @@
 #!/usr/bin/env python3
-"""Run real Windows fixtures in a genuine ordinary account, hosted CI only.
+"""Run native fixtures as a genuine ordinary account, on disposable hosted CI.
 
-A fresh local Users-only account gets a Windows-loaded profile and a private
-window station/desktop with their documented default security. A real Explorer
-shell must become ready there. No existing ACL, UAC, security policy, antivirus,
-privilege, token flag, or desktop is modified. No process is forcibly stopped;
-accounts/profiles and live shells remain on the disposable host until teardown.
+Only the fresh fixture identity receives SeBatchLogonRight. Task Scheduler loads
+its real profile in its own noninteractive session; the bootstrap verifies its
+actual SID/session/elevation and actual Explorer before running the fixture.
+Existing accounts, namespace ACLs, UAC and device permissions are untouched.
+No token privilege is adjusted and no task/process/account is forcibly removed.
 
 SDK contracts:
-https://learn.microsoft.com/windows/win32/api/lmaccess/nf-lmaccess-netuseradd
-https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-createwindowstationw
-https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-createdesktopw
-https://learn.microsoft.com/windows/win32/api/winbase/nf-winbase-createprocesswithlogonw
+https://learn.microsoft.com/windows/win32/taskschd/security-contexts-for-running-tasks
+https://learn.microsoft.com/windows/win32/api/ntsecapi/nf-ntsecapi-lsaaddaccountrights
 """
 import argparse
 import ctypes as C
@@ -28,20 +26,6 @@ import traceback
 import uuid
 
 
-class StartupInfo(C.Structure):
-    _fields_ = [("size", W.DWORD), ("reserved", W.LPWSTR), ("desktop", W.LPWSTR),
-                ("title", W.LPWSTR), ("x", W.DWORD), ("y", W.DWORD),
-                ("width", W.DWORD), ("height", W.DWORD), ("chars_x", W.DWORD),
-                ("chars_y", W.DWORD), ("fill", W.DWORD), ("flags", W.DWORD),
-                ("show", W.WORD), ("reserved_size", W.WORD),
-                ("reserved_data", C.POINTER(W.BYTE)), ("stdin", W.HANDLE),
-                ("stdout", W.HANDLE), ("stderr", W.HANDLE)]
-
-
-class ProcessInfo(C.Structure):
-    _fields_ = [("process", W.HANDLE), ("thread", W.HANDLE),
-                ("pid", W.DWORD), ("tid", W.DWORD)]
-
 
 class UserInfo(C.Structure):
     _fields_ = [("name", W.LPWSTR), ("password", W.LPWSTR), ("password_age", W.DWORD),
@@ -52,6 +36,14 @@ class UserInfo(C.Structure):
 class GroupMember(C.Structure):
     _fields_ = [("name", W.LPWSTR)]
 
+
+class LsaAttributes(C.Structure):
+    _fields_ = [("length", W.DWORD), ("root", W.HANDLE), ("name", C.c_void_p),
+                ("flags", W.DWORD), ("descriptor", C.c_void_p), ("quality", C.c_void_p)]
+
+
+class LsaString(C.Structure):
+    _fields_ = [("length", W.USHORT), ("maximum", W.USHORT), ("buffer", C.c_void_p)]
 
 def require(condition, message):
     if not condition:
@@ -89,9 +81,6 @@ class Windows:
         self.sid_length = bind(self.native, "GetLengthSid", W.DWORD, [C.c_void_p])
         self.current_process = bind(self.kernel, "GetCurrentProcess", W.HANDLE, [])
         self.close = bind(self.kernel, "CloseHandle", W.BOOL, [W.HANDLE])
-        self.wait = bind(self.kernel, "WaitForSingleObject", W.DWORD, [W.HANDLE, W.DWORD])
-        self.exit_code = bind(self.kernel, "GetExitCodeProcess", W.BOOL,
-                              [W.HANDLE, C.POINTER(W.DWORD)])
         self.find_window = bind(self.user, "FindWindowW", W.HWND, [W.LPCWSTR, W.LPCWSTR])
         self.station = bind(self.user, "GetProcessWindowStation", W.HANDLE, [])
         self.object_info = bind(self.user, "GetUserObjectInformationW", W.BOOL,
@@ -164,119 +153,135 @@ def create_account(api, report):
     return name, password
 
 
+def grant_fixture_batch_logon(api, sid):
+    """Authorize only the newly authenticated fixture SID, never an existing user."""
+    open_policy = bind(api.native, "LsaOpenPolicy", W.LONG,
+                       [C.c_void_p, C.POINTER(LsaAttributes), W.DWORD, C.POINTER(W.HANDLE)])
+    add_right = bind(api.native, "LsaAddAccountRights", W.LONG,
+                     [W.HANDLE, C.c_void_p, C.POINTER(LsaString), W.ULONG])
+    win_error = bind(api.native, "LsaNtStatusToWinError", W.ULONG, [W.LONG])
+    close_policy = bind(api.native, "LsaClose", W.LONG, [W.HANDLE])
+    attributes, policy = LsaAttributes(), W.HANDLE()
+    attributes.length = C.sizeof(attributes)
+    status = open_policy(None, C.byref(attributes), 0x810, C.byref(policy))
+    if status:
+        raise C.WinError(win_error(status))
+    try:
+        sid_buffer = C.create_string_buffer(bytes.fromhex(sid))
+        text = C.create_unicode_buffer("SeBatchLogonRight")
+        right = LsaString(len("SeBatchLogonRight") * 2, C.sizeof(text),
+                          C.cast(text, C.c_void_p))
+        status = add_right(policy, sid_buffer, C.byref(right), 1)
+        if status:
+            raise C.WinError(win_error(status))
+    finally:
+        close_policy(policy)
+
+
+SCHEDULER_SCRIPT = r"""
+$ErrorActionPreference = 'Stop'
+$configuration = [Console]::In.ReadToEnd() | ConvertFrom-Json
+$scheduler = New-Object -ComObject 'Schedule.Service'
+$scheduler.Connect()
+$folder = $scheduler.GetFolder('\')
+$definition = $scheduler.NewTask(0)
+$definition.Principal.UserId = $configuration.user
+$definition.Principal.LogonType = 1
+$definition.Principal.RunLevel = 0
+$definition.Settings.Enabled = $true
+$definition.Settings.AllowDemandStart = $true
+$definition.Settings.DisallowStartIfOnBatteries = $false
+$definition.Settings.StopIfGoingOnBatteries = $false
+$definition.Settings.AllowHardTerminate = $false
+$definition.Settings.ExecutionTimeLimit = 'PT0S'
+$action = $definition.Actions.Create(0)
+$action.Path = $configuration.python
+$action.Arguments = $configuration.arguments
+$action.WorkingDirectory = $configuration.directory
+$task = $folder.RegisterTaskDefinition($configuration.name,$definition,2,$configuration.user,$configuration.password,1,$null)
+$configuration.password = $null
+Start-ScheduledTask -TaskName $configuration.name -TaskPath '\'
+@{task_name=$configuration.name;state=$task.State;last_task_result=$task.LastTaskResult;principal=$task.Definition.Principal.UserId} |
+    ConvertTo-Json | Set-Content -LiteralPath $configuration.report -Encoding UTF8
+"""
+
+
 def launch(args, report):
     api = Windows()
     logon = bind(api.native, "LogonUserW", W.BOOL,
                  [W.LPCWSTR, W.LPCWSTR, W.LPCWSTR, W.DWORD, W.DWORD, C.POINTER(W.HANDLE)])
-    create_process = bind(api.native, "CreateProcessWithLogonW", W.BOOL,
-                          [W.LPCWSTR, W.LPCWSTR, W.LPCWSTR, W.DWORD, W.LPCWSTR,
-                           W.LPWSTR, W.DWORD, C.c_void_p, W.LPCWSTR,
-                           C.POINTER(StartupInfo), C.POINTER(ProcessInfo)])
-    create_station = bind(api.user, "CreateWindowStationW", W.HANDLE,
-                          [W.LPCWSTR, W.DWORD, W.DWORD, C.c_void_p])
-    set_station = bind(api.user, "SetProcessWindowStation", W.BOOL, [W.HANDLE])
-    close_station = bind(api.user, "CloseWindowStation", W.BOOL, [W.HANDLE])
-    create_desktop = bind(api.user, "CreateDesktopW", W.HANDLE,
-                          [W.LPCWSTR, W.LPCWSTR, C.c_void_p, W.DWORD, W.DWORD, C.c_void_p])
-    close_desktop = bind(api.user, "CloseDesktop", W.BOOL, [W.HANDLE])
-    resume_thread = bind(api.kernel, "ResumeThread", W.DWORD, [W.HANDLE])
-    source, expected, actual = W.HANDLE(), W.HANDLE(), W.HANDLE()
-    station, desktop = None, None
-    child = ProcessInfo()
+    source, interactive, batch = W.HANDLE(), W.HANDLE(), W.HANDLE()
     try:
         checked(api.open_token(api.current_process(), 8, C.byref(source)))
         source_identity = api.identity(source)
         report["source_token_elevated"] = api.scalar(source, 20) != 0
         account, password = create_account(api, report)
-        checked(logon(account, ".", password, 2, 0, C.byref(expected)))  # INTERACTIVE, DEFAULT provider
-        expected_sid, _ = api.identity(expected)
-        report["expected_token_elevated"] = api.scalar(expected, 20) != 0
-        require(not report["expected_token_elevated"], "genuine standard account is unexpectedly elevated")
-        report["expected_account_sid"] = expected_sid
-        report["expected_session_id"] = source_identity[1]
+        checked(logon(account, ".", password, 2, 0, C.byref(interactive)))
+        expected_sid, _ = api.identity(interactive)
+        require(api.scalar(interactive, 20) == 0, "fresh fixture identity is elevated")
         report["fixture_is_runner_account"] = expected_sid == source_identity[0]
-        require(not report["fixture_is_runner_account"], "fixture did not receive its own account identity")
-
-        station_name = "mcw-ordinary-" + uuid.uuid4().hex
-        # Only NEW fixture-owned objects use documented default security; no
-        # existing window station/desktop/file DACL or system policy is edited.
-        original_station = checked(api.station())
-        station = checked(create_station(station_name, 1, 0x037F, None))  # CWF_CREATE_ONLY
-        try:
-            checked(set_station(station))
-            desktop = checked(create_desktop("default", None, None, 0, 0x01FF, None))
-        finally:
-            failing = sys.exc_info()[0] is not None
-            if not set_station(original_station):
-                report["station_restore_error"] = C.get_last_error()
-                if not failing:
-                    raise C.WinError(C.get_last_error())
-        report["private_window_station"] = station_name
-        report["private_desktop"] = "default"
+        require(not report["fixture_is_runner_account"], "fixture must have its own identity")
+        if not logon(account, ".", password, 4, 0, C.byref(batch)):
+            error = C.get_last_error()
+            report["initial_batch_logon_error"] = error
+            if error != 1385:
+                raise C.WinError(error)
+            grant_fixture_batch_logon(api, expected_sid)
+            report["fresh_fixture_logon_right"] = "SeBatchLogonRight"
+            checked(logon(account, ".", password, 4, 0, C.byref(batch)))
+        require(api.identity(batch) == (expected_sid, 0), "batch authentication has an unexpected SID/session")
+        report["expected_token_elevated"] = api.scalar(batch, 20) != 0
+        require(not report["expected_token_elevated"], "batch authentication is elevated")
+        report.update(expected_account_sid=expected_sid, expected_session_id=0)
         bootstrap_result = args.report.with_suffix(".bootstrap-result.json")
         configuration = args.report.with_suffix(".bootstrap.json")
         save(configuration, {"script": str(args.script), "working_directory": str(args.working_directory),
-                             "timeout": args.timeout, "report": str(bootstrap_result),
-                             "expected_account_sid": expected_sid, "expected_session_id": source_identity[1],
-                             "expected_station": station_name,
+                             "timeout": max(1, args.timeout - 60), "report": str(bootstrap_result),
+                             "expected_account_sid": expected_sid, "expected_session_id": 0,
                              "workflow_environment": {name: os.environ[name] for name in
                                                       ("GITHUB_ACTIONS", "RUNNER_ENVIRONMENT", "GITHUB_WORKSPACE", "PATH")
                                                       if name in os.environ}})
-        report["bootstrap_result"] = bootstrap_result.name
         helper = args.report.with_suffix(".bootstrap-helper.py")
         shutil.copy2(Path(__file__).resolve(), helper)
-        command = C.create_unicode_buffer(subprocess.list2cmdline(
-            [sys.executable, "-u", "-B", str(helper), "--bootstrap-config", str(configuration)]))
-        require(len(command.value) < 1024, "CreateProcessWithLogonW command exceeds its SDK limit")
-        startup = StartupInfo()
-        startup.size = C.sizeof(startup)
-        startup.desktop = station_name + "\\default"
-        # LOGON_WITH_PROFILE loads the real user hive and supplies that user's
-        # environment. CREATE_SUSPENDED lets us inspect the ACTUAL primary token
-        # before any Python/script instruction. No privilege adjustment is used.
-        checked(create_process(account, ".", password, 1, sys.executable, command,
-                               0x00000004, None, str(args.working_directory), C.byref(startup), C.byref(child)))
-        report["child_pid"] = child.pid
-        report["child_suspended"] = True
-        profile = api.profile_directory(expected)
-        report["profile_directory"] = str(profile)
-        checked(api.open_token(child.process, 8, C.byref(actual)))
-        report["child_token_elevated"] = api.scalar(actual, 20) != 0
-        report["child_expected_user_and_session"] = api.identity(actual) == (expected_sid, source_identity[1])
-        require(not report["child_token_elevated"], "actual bootstrap token is elevated")
-        require(report["child_expected_user_and_session"], "actual bootstrap has a different account or native session")
-        previous = resume_thread(child.thread)
-        if previous == 0xFFFFFFFF:
-            raise C.WinError(C.get_last_error())
-        report["child_suspended"] = previous > 1
-        require(previous == 1, "bootstrap thread had an unexpected suspend count")
+        broker_script = args.report.with_suffix(".scheduler.ps1")
+        broker_script.write_text(SCHEDULER_SCRIPT, encoding="utf-8")
+        scheduler_result = args.report.with_suffix(".scheduler.json")
+        task_name = "MicCamWatch-qualification-" + uuid.uuid4().hex
+        report.update(bootstrap_result=bootstrap_result.name, task_name=task_name,
+                      scheduler_result=scheduler_result.name)
         save(args.report, report)
-        waited = api.wait(child.process, round(args.timeout * 1000))
-        if waited == 258:
-            report["status"] = "incomplete"
-            report["reason"] = "bounded wait expired; account/profile/desktop/processes retained, nothing killed"
-            return 124
-        require(waited == 0, "waiting for the genuine-account bootstrap failed")
-        code = W.DWORD()
-        checked(api.exit_code(child.process, C.byref(code)))
-        early_failure = profile / "mcw-ordinary-bootstrap-failure.log"
-        if early_failure.is_file():
-            evidence = args.report.with_suffix(".bootstrap-early-failure.log")
-            shutil.copy2(early_failure, evidence)
-            report["details_file"] = evidence.name
-        report["status"] = "completed"
-        report["exit_code"] = code.value
-        return code.value
+        parameters = {"user": os.environ["COMPUTERNAME"] + "\\" + account,
+                      "password": password, "python": sys.executable,
+                      "arguments": subprocess.list2cmdline(["-u", "-B", str(helper), "--bootstrap-config", str(configuration)]),
+                      "directory": str(args.working_directory), "name": task_name,
+                      "report": str(scheduler_result)}
+        powershell = Path(os.environ["SystemRoot"]) / "System32/WindowsPowerShell/v1.0/powershell.exe"
+        deadline = time.monotonic() + args.timeout
+        with args.report.with_suffix(".scheduler.stdout.log").open("wb") as output, args.report.with_suffix(".scheduler.stderr.log").open("wb") as errors:
+            broker = subprocess.Popen([str(powershell), "-NoProfile", "-NonInteractive", "-File", str(broker_script)],
+                                      stdin=subprocess.PIPE, stdout=output, stderr=errors,
+                                      cwd=args.working_directory)
+            try:
+                broker.communicate(json.dumps(parameters).encode("utf-8"), timeout=min(60, args.timeout))
+            except subprocess.TimeoutExpired:
+                report.update(status="incomplete", reason="scheduler request wait expired; broker/task/account retained")
+                return 124
+        require(broker.returncode == 0, "native scheduler request failed; inspect scheduler stderr")
+        while time.monotonic() < deadline:
+            if bootstrap_result.is_file():
+                result = json.loads(bootstrap_result.read_text(encoding="utf-8"))
+                if result["status"] in ("completed", "refused_or_failed", "incomplete"):
+                    report.update(child_token_elevated=result.get("token_elevated"),
+                                  child_expected_user_and_session=result.get("expected_user_and_session"),
+                                  status=result["status"], exit_code=result.get("script_exit_code"))
+                    return int(result.get("script_exit_code", 124 if result["status"] == "incomplete" else 1))
+            time.sleep(.1)
+        report.update(status="incomplete", reason="bootstrap wait expired; task/profile/processes retained, nothing stopped")
+        return 124
     finally:
-        # References held by live genuine processes retain their own objects.
-        # Never delete an account/profile, unload a live hive, or kill a process.
-        for handle in (actual, child.thread, child.process, expected, source):
+        for handle in (batch, interactive, source):
             if handle:
                 api.close(handle)
-        if desktop:
-            close_desktop(desktop)
-        if station:
-            close_station(station)
 
 
 def bootstrap(configuration):
@@ -295,7 +300,6 @@ def bootstrap(configuration):
         report["expected_user_and_session"] = api.identity(token) == expected
         require(not report["token_elevated"] and report["expected_user_and_session"], "bootstrap identity is not the expected ordinary account/session")
         report["window_station"] = api.object_name(checked(api.station()))
-        require(report["window_station"].casefold() == config["expected_station"].casefold(), "bootstrap did not enter its private window station")
         profile = api.profile_directory(token)
         require(profile == Path(os.environ["USERPROFILE"]).resolve(), "environment is not the genuine Windows-loaded profile")
         import winreg
@@ -360,7 +364,7 @@ def bootstrap(configuration):
         traceback.print_exc(file=errors)
         return 1
     finally:
-        report["retention"] = "fixture account/profile/private desktop and any real Explorer retained until host teardown"
+        report["retention"] = "fixture account/task/profile and any real Explorer retained until hosted VM teardown"
         save(report_path, report)
         if token:
             api.close(token)
@@ -398,7 +402,7 @@ def main():
     require(args.working_directory.is_dir(), "working directory is not a directory")
     args.report = args.report.resolve()
     args.report.parent.mkdir(parents=True, exist_ok=True)
-    report = {"status": "starting", "token_method": "genuine_standard_account_LOGON_WITH_PROFILE",
+    report = {"status": "starting", "token_method": "genuine_standard_account_TASK_LOGON_PASSWORD",
               "no_process_was_killed": True}
     try:
         return launch(args, report)

@@ -194,9 +194,9 @@ jobs:
           exit `$exitCode
           "@
           [IO.File]::WriteAllText($wrapper, $body)
-          # The shared launcher proves a genuine standard account, real loaded
-          # profile and private desktop/Explorer before running the native cases.
-          # No existing UAC, policy or ACL is changed.
+          # The launcher verifies a genuine ordinary account/profile and Explorer
+          # in a scheduler-owned session. Only the fresh identity receives its
+          # required batch-logon right; no existing account, UAC or ACL is changed.
           $launcher = Join-Path $env:GITHUB_WORKSPACE 'installer/tests/windows_ordinary.py'
           $launcherReport = Join-Path $proof 'private-launcher.json'
           $launcherLog = Join-Path $proof 'private-launcher-runner.log'
