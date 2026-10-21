@@ -229,7 +229,9 @@ def launch(args, report):
             grant_fixture_batch_logon(api, expected_sid)
             report["fresh_fixture_logon_right"] = "SeBatchLogonRight"
             checked(logon(account, ".", password, 4, 0, C.byref(batch)))
-        require(api.identity(batch) == (expected_sid, 0), "batch authentication has an unexpected SID/session")
+        batch_sid, authentication_session = api.identity(batch)
+        report["batch_authentication_session_id"] = authentication_session
+        require(batch_sid == expected_sid, "batch authentication has an unexpected account SID")
         report["expected_token_elevated"] = api.scalar(batch, 20) != 0
         require(not report["expected_token_elevated"], "batch authentication is elevated")
         report.update(expected_account_sid=expected_sid, expected_session_id=0)
