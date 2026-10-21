@@ -76,7 +76,7 @@ Les identifiants sont stables. À chaque livraison, remplacer l'état par **En c
 | P0-WIN-IPC | **Publié0.19.0**, scénario natif complet passé : concurrence des clients du pipe admise avec attente bornée | Moyenne | CI39205263872 : vraie libération micro après garde/tray passée ; connexion seule attend3s, pairs conservés, aucune commande rejouée ni mutex d'ownership contourné |
 | P0-WIN-OWNER-IDLE | **Publié0.19.0**, cycle du vrai broker qualifié : arrêt coordonné avec les requêtes admises, sans hausse des délais ni replay | Élevée | bb70dcf, régression ciblée et contre-exemple concurrent sans SDK ; CI39217101436 proof_complete:true, libération et EOF réels passés. Cause unique du délai historique non certifiée |
 | P1-MAC-MENU | **Publié 0.18.0, AppKit réel qualifié** : quatre profils directs cochés, marque MCW template/badges, Details au-dessus d'Exit, sept langues et `--config` prioritaire | Moyenne | IPC desktop v2 frontend/helper appariés ; captures rendues et vraies fenêtres relues, données de capture simulées explicitement |
-| P1-MAC-UX | **AppKit0.20.0 rendu Intel/ARM ; correctifs reflow/IPC à requalifier** | Moyenne | Consultation, menu simplifié et À propos sept langues passent39568140011. Relecture révèle un document texte empêché de rétrécir : sizing corrigé, régression géométrique initial/narrow/wide/restored ajoutée. Finder/reopen attend le correctif du socket accepté ; aucun PASS de lifecycle global prétendu |
+| P1-MAC-UX | **Qualifié natif Intel/ARM en source0.20.0 non publiée** | Moyenne | CI39579549269 : consultation, menu simplifié et À propos sept langues, reflow initial/narrow/wide/restored ; app-smoke des deux architectures passed, fermeture/réouverture singleton et Finder ordinaire sans remplacer l'owner. Contrôles et autorisations matériels non revendiqués |
 | P1-TRAY-PROFILES | **Publié0.19.0, qualifié natif Windows/Linux** : quatre profils directs cochés, profil Windows également visible dans le libellé parent | Moyenne | Correctif62b550e, CI39298930148 :21 cas Windows passent, vrais rendus Profil — Réunion/Développement et priorité --config relus ; trois Unix verts. Collecteurs et protections matérielles hors fixture |
 | SITE-PAGES | **Publié et vérifié HTTPS0191**, source web89a7c8a : racine anglaise, russe et liens publics191 | Moyenne | Export privé huit accueils/quatre tests Node ; vrai navigateur rooten et /ru/ langru, huit liens191 et copyright vérifiés. Captures171 historiques non relabellées ; pas de fonctionnalités0.20 présentées comme déjà disponibles en0191 |
 | SITE-TOKENS | **Corrigé sur Pages, vérifié après déploiement `f1344bf`**. Build Git exécuté depuis racine dépôt, output `site-dist`, version/source/checksum réels ; source HTML brute n'est plus un entrypoint | Faible à Moyenne | Gardes build, source unique des faits, aucun token résiduel |
@@ -97,8 +97,8 @@ Les identifiants sont stables. À chaque livraison, remplacer l'état par **En c
 | P1-STARTUP-PASSIVE | **Publié019 Windows** : premier état de session connu = baseline passive ; les lacunes Unknown ne créent pas d'arête | Moyenne | Régressions initial Unknown/Locked/Unlocked et transitions ultérieures passées ; protections demandées/restaurations conservées ; aucune action sur le PC par l'assistant |
 | P1-UPGRADE-CLI-HOST | **Publié0.19.1 et qualifié public**, reconnaissance des deux images exactes avant remplacement | Élevée | Natif cinq layouts + publicCLI39419044223 : réparation/no-op, config relative depuis CWD distinct et --langfr face au fichierde réellement observés dans menu natif ; aucun héritage des pipes, état privé conservé. Acquisition et paire exactes vérifiées ; pas d'upgrade par l'ancien client019 ni de politique de classification/matériel prétendus |
 | P1-MAC-TRAY-STOP | **Corrigé source0.20.0, huit cycles natifs par architecture réussis** | Moyenne | 66574b1 remet explicitement le flux accepté en bloquant ; délais inchangés. 39579584237/source24303fe passe Intel et ARM : huit starts/readiness/stop propres et trois réouvertures par cycle, aucune errno22 ; sorties des descendants retenues par kqueue. Traces et échec release191 conservés. CI complète39579549269 verte quatre OS ; pas de réécriture d'asset191 |
-| P1-UNINSTALL | **Source0.20.0 implémentée, revue/qualification en cours** | Moyenne | Retrait Unix géré, worker portable Windows différé avec résultat final explicite, commandes des vrais gestionnaires et refus `.app`/standalone non possédés. Revue : polling caméra non bloquant et worker borné corrigés en source ; chemins réels de refus/retrait encore à qualifier |
-| P1-WIN-APP-ICON | **Demandé et préparé en source0.20.0** : logo officiel au lieu de l'icône générique de l'app/raccourci Windows | Faible | ICO16–256 issu du SVG canonique, ressource PE CLI/tray et Icon MSI/Apps/Start déclarés. Build-only embed-resource, pas de runtime ajouté ; preuve Shell/MSI jetable préparée, pas de réinstallation PC |
+| P1-UNINSTALL | **Unix/macOS/Cargo et Arch qualifiés ; Windows et Homebrew en cours** | Moyenne | 39608664509/sourcec794 : Linux/Intel/ARM passent, retraits gérés et refus sans perte, reçus caméra corrompus/demandés préservés. Arch39609032385 passe vrais install/upgrade/remove. Windows : vrai compte standard/profil/Explorer établis ; Cargo échoue avant le worker sur jobserver, MSI sur mutex système, erreurs5 conservées. Aucun garde-fou abaissé |
+| P1-WIN-APP-ICON | **Ressources PE vérifiées ; preuve MSI/Shell encore bloquée** | Faible | ICO16–256 canonique, PE CLI/tray et Icon MSI/Apps/Start implémentés. 39608669894 prouve vrai compte non élevé, profil chargé et Explorer ; MSI1603 refuse avant inscription, acquisition mutex erreur5. Pas de succès visuel MSI prétendu ni de réinstallation PC |
 | P1-MAC-MENU-ICON | **Implémenté, rendu natif vérifié Intel/ARM en source0.20.0 non publiée** | Faible | Marque20pt, marges réduites sans déformation ; image26×20 et vrai NSStatusBarButton42×22 sans rognage. Dix captures clair/sombre par architecture, cinq badges distincts ; étape AppKit39568140011 passe sur les deux Macs, captures relues. Finder/About inchangés ; ce PASS visuel ne clôture pas l'échec IPC du même run |
 | P2-HOOKS | Retenu, à faire | Élevée | Transitions actives cohérentes, effets bornés |
 | P2-NET | Reformulé en métadonnées locales, à faire | Élevée | PID authentifié ; macOS conditionnel |
@@ -583,11 +583,11 @@ aucune remise à zéro d'intention persistante ni ouverture de périphérique.
 
 **Demande utilisateur :** pouvoir retirer MCW rapidement avec **`mcw uninstall`**
 ou une commande native équivalente, sans devoir retrouver manuellement le script
-ou la paire d'exécutables. État : demandé, **non implémenté**.
+ou la paire d'exécutables. État : **implémenté source0.20.0, qualification finale en cours**.
 
 **Contrat :** identifier l'installation exacte de l'exécutable courant et sa
 provenance : installateur Unix géré, Windows portable/Cargo, MSI, gestionnaire
-Homebrew/AUR, future `.app` macOS. Réutiliser les contrats de receipt/ownership
+Homebrew/AUR et `.app` macOS. Réutiliser les contrats de receipt/ownership
 et de lifecycle existants ; ne jamais supprimer un autre MCW trouvé sur PATH.
 Si un gestionnaire possède l'installation, utiliser sa procédure appropriée
 ou afficher la commande exacte lorsque sa délégation n'est pas sûre/autorisée,
@@ -1137,8 +1137,10 @@ pas promettre une couleur orange sur cette icône monochrome.
 compréhensible, aucune fenêtre de programme ne permet de consulter les
 informations, certains éléments du tray semblent superflus et une courte
 présentation dans « À propos… » manque.
-**État :** demandé pour la prochaine version ; non implémenté, sans numéro de
-version future figé. Les validations du menu actuel ne clôturent pas ces retours.
+**État :** implémenté et qualifié sur Intel/ARM pour **0.20.0**, non publiée.
+CI39579549269 et ses rapports app-smoke passent les quatre surfaces ; réouvertures
+Finder ordinaires et fenêtre singleton conservées. Les limites matérielles et
+d'autorisation du système restent explicites.
 
 1. **Clarifier le statut.** Présenter un résumé lisible du micro et de la caméra,
    en distinguant activité observée, protection demandée/effective et couverture
@@ -1171,8 +1173,8 @@ contrôle de confidentialité ne doit être activé implicitement par ces surfac
 
 **Demande utilisateur :** proposer les quatre profils directement dans les menus
 natifs Windows, Linux et macOS, pas uniquement dans le menu AppKit.
-**État :** macOS livré et qualifié depuis 0.18.0 ; Windows et Linux implémentés
-en source, non publiés. CI39250411480 qualifie21 scénarios natifs Windows et21 Linux.
+**État :** macOS livré et qualifié depuis 0.18.0 ; Windows et Linux publiés
+depuis0.19.0. CI39298930148 qualifie les choix natifs et la priorité de `--config`.
 Les sept rendus Windows ont été relus, dont les choix désactivés sous `--config`.
 
 - Présenter Balanced, Private, Meeting et Development comme quatre choix directs,
@@ -1348,3 +1350,5 @@ Les sept rendus Windows ont été relus, dont les choix désactivés sous `--con
 | 2026-10-21 | Cause socket macOS et corrections de qualification | **Correctifs source intégrés, nouvelle qualification requise** | Listener O_NONBLOCK hérité côté BSD : acceptation suivie de lectures immédiatement EAGAIN et fermeture, puis EINVAL côté client. Passage explicite du seul flux accepté en bloquant ; pas de hausse du timeout. Projection UI de test isolée en sous-processus HOME/XDG pour ne plus créer l'état du login ; assertion de préservation maintenue. Texte AppKit autorisé à rétrécir, géométrie testée ; pilote Explorer utilise une vraie entrée SendInput et sortie coopérative | Refaire les parcours après changement. MSI branding39569008606 installé en contexte machine par argument vide ALLUSERS absorbant MSIINSTALLPERUSER : garder Scope=perUser du paquet sans override. Tests uniquement sur hôtes jetables, aucune installation ou protection PC touchée |
 | 2026-10-21 | Audit TLS — correctifs ciblés | **Local vérifié, aucun ignore** | Échec CI Windows39572288019 : rustls-webpki0.103.15, roots/root-certs1.0.9 signalés par RUSTSEC-2026-0382/0381/0383. Lock corrigé vers0.103.16/1.0.10/1.0.10 seulement ;181 tests, Clippy et build Windows passent. Vrai transport self_update du build appelle en HTTPS l'API release et reçoit0191 ; source/exécutable de smoke supprimés, preuve conservée | Audit réussit, trois avertissements de maintenance zbus_names/zvariant/zvariant_derive restent visibles. Requalifier source native finale ; pas de modification des assets191 déjà publiés |
 | 2026-10-21 | Fermeture BSD et intégration UI020 | **Huit cycles Intel/ARM et CI complète quatre OS passent** | 39579584237/source24303fe : démarrage/stop coopératif, trois réouvertures par cycle et kernel exit notes. 39579549269 : Windows/Linux/macOS ARM/Intel verts, vraies fenêtres AppKit/reflow/About et app Finder. Le premier succès open révélait seulement deux défauts du diagnostic : métadonnées sans errno et collecteurs éphémères confondus avec frontends persistants ; trames/exit notes désormais séparées | Désinstallation Linux passe39579584470 ; Mac exigeait à tort inventaire global sans reçu possédé, correction en source. SAFER garde TokenElevation=1 sur l'image Windows : aucun script lancé, passage à un vrai compte standard/desktop privé en qualification. Stable public191 inchangé |
+| 2026-10-21 | Désinstallation020 — preuves Unix/Arch et contexte Windows | **Linux/macOS Intel/ARM et paquet Arch passent ; Windows reste à qualifier** | 39608664509/sourcec794 : retrait Unix/Cargo et refus corrompu/protection demandée préservés. 39609032385 : vrais makepkg/pacman install/reinstall/pkgrel-upgrade/remove et délégation sans I/O Internet ; socket IPv6 de capacité pacman seul n'est pas du trafic. Compte Windows Users réel, TokenElevation0, HKCU/profil et Explorer privé prouvés par39608664509/39608669894 ; scripts entrés, Cargo jobserver et mutex MSI refusent accès5 | Diagnostiquer ces prérequis natifs sans modifier politique, ACL ou privilèges ; worker/icônes non qualifiés tant que leur parcours n'est pas exercé. Aucun contrôle ou logiciel du PC touché |
+| 2026-10-21 | Métadonnées Arch stable | **.SRCINFO0190 obsolète corrigé vers le PKGBUILD0191 existant** | Échec automatique39608506779 avant build : comparaison native makepkg révèle .SRCINFO périmé. Champs restaurés depuis son generated-srcinfo.stdout ; recette publique reste191/source3dd/SHA b044, candidat020 isolé sur branche de qualification | La publication020 ne remplace pas les assets191 et n'est pas annoncée avant qualification |
