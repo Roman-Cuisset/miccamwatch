@@ -529,6 +529,11 @@ impl Lifecycle {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
                         let reply = (|| -> Result<&str> {
+                            // BSD accept can inherit the listener's O_NONBLOCK.
+                            // Command reads must honor their bounded timeouts.
+                            stream
+                                .set_nonblocking(false)
+                                .context("set accepted tray command stream blocking")?;
                             verify_peer(&stream)?;
                             stream.set_read_timeout(Some(Duration::from_millis(250)))?;
                             stream.set_write_timeout(Some(Duration::from_millis(250)))?;
@@ -2141,6 +2146,42 @@ mod menu_tests {
     use super::*;
     use crate::model::{Access, CollectorHealth, Confidence, EnforcementDecision, Resource, Risk};
 
+    #[cfg(target_os = "macos")]
+    fn run_isolated_menu_fixture(test: &str) -> bool {
+        if std::env::var("MCW_TEST_MENU_CASE").as_deref() == Ok(test) {
+            return false;
+        }
+        // make_view reads real autostart state, whose ownership store creates
+        // directories even for a status query. Isolate that production path in
+        // a child, never by changing process-global HOME during parallel tests.
+        let directory = tempfile::tempdir().unwrap();
+        let home = directory.path().canonicalize().unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                test,
+                "--include-ignored",
+                "--test-threads=1",
+                "--nocapture",
+            ])
+            .env("MCW_TEST_MENU_CASE", test)
+            .env("HOME", &home)
+            .env("XDG_CONFIG_HOME", home.join("config"))
+            .env("XDG_DATA_HOME", home.join("data"))
+            .env("XDG_STATE_HOME", home.join("state"))
+            .env("XDG_RUNTIME_DIR", home.join("runtime"))
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "isolated menu fixture {test} failed: {}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        true
+    }
+
     fn observed() -> Snapshot {
         Snapshot {
             collectors: vec![CollectorHealth {
@@ -2206,6 +2247,11 @@ mod menu_tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn consultation_keeps_requested_effective_and_observation_independent() {
+        if run_isolated_menu_fixture(
+            "frontends::tray::menu_tests::consultation_keeps_requested_effective_and_observation_independent",
+        ) {
+            return;
+        }
         let settings = Settings::default();
         let mut inspection = CameraInspectionUi::default();
         let state = make_view(
@@ -2291,6 +2337,11 @@ mod menu_tests {
     fn native_consultation_producer_frames() {
         let output = std::env::var_os("MCW_NATIVE_MENU_FRAMES")
             .expect("native fixture must provide its private output path");
+        if run_isolated_menu_fixture(
+            "frontends::tray::menu_tests::native_consultation_producer_frames",
+        ) {
+            return;
+        }
         let mut cases = Vec::new();
         for (name, count, escaped) in [
             ("producer-long-accesses", 20, false),
