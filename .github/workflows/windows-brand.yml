@@ -75,6 +75,33 @@ jobs:
             public static extern bool Logon(string user, string domain, string password, int kind, int provider, out IntPtr token);
             [DllImport("kernel32.dll", SetLastError=true)]
             public static extern bool CloseHandle(IntPtr handle);
+            [StructLayout(LayoutKind.Sequential)]
+            struct Attributes {
+              public uint Length; public IntPtr RootDirectory; public IntPtr ObjectName;
+              public uint Flags; public IntPtr SecurityDescriptor; public IntPtr Quality;
+            }
+            [StructLayout(LayoutKind.Sequential)]
+            struct LsaString { public ushort Length; public ushort MaximumLength; public IntPtr Buffer; }
+            [DllImport("advapi32.dll")]
+            static extern uint LsaOpenPolicy(IntPtr system, ref Attributes attributes, uint access, out IntPtr policy);
+            [DllImport("advapi32.dll")]
+            static extern uint LsaAddAccountRights(IntPtr policy, byte[] sid, ref LsaString right, uint count);
+            [DllImport("advapi32.dll")]
+            static extern uint LsaNtStatusToWinError(uint status);
+            [DllImport("advapi32.dll")]
+            static extern uint LsaClose(IntPtr policy);
+            public static uint GrantFixtureBatchLogon(byte[] sid) {
+              var attributes = new Attributes { Length=(uint)Marshal.SizeOf(typeof(Attributes)) };
+              IntPtr policy;
+              uint status = LsaOpenPolicy(IntPtr.Zero,ref attributes,0x810,out policy);
+              if (status != 0) return LsaNtStatusToWinError(status);
+              string name = "SeBatchLogonRight";
+              IntPtr text = Marshal.StringToHGlobalUni(name);
+              try {
+                var right = new LsaString { Length=(ushort)(name.Length*2), MaximumLength=(ushort)((name.Length+1)*2), Buffer=text };
+                return LsaNtStatusToWinError(LsaAddAccountRights(policy,sid,ref right,1));
+              } finally { Marshal.FreeHGlobal(text); LsaClose(policy); }
+            }
           }
           '@
           $batchToken = [IntPtr]::Zero
@@ -82,6 +109,20 @@ jobs:
           $batchError = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
           @{batch_logon_succeeded=$batchOk;win32_error=$batchError;account_sid=$user.SID.Value} | ConvertTo-Json | Out-File -LiteralPath (Join-Path $stage 'batch-logon.json') -Encoding utf8
           if ($batchToken -ne [IntPtr]::Zero) { [void][BatchLogonProbe]::CloseHandle($batchToken) }
+          if (-not $batchOk) {
+            if ($batchError -ne 1385) { throw ('Unexpected fixture authentication failure: ' + $batchError) }
+            # Authorize only this newly-created fixture identity to use a task login.
+            # No administrator group, token privilege, existing account or namespace ACL changes.
+            $grant = [BatchLogonProbe]::GrantFixtureBatchLogon($sidBytes)
+            @{right='SeBatchLogonRight';account_sid=$user.SID.Value;grant_win32_error=$grant} | ConvertTo-Json | Out-File -LiteralPath (Join-Path $stage 'fixture-logon-right.json') -Encoding utf8
+            if ($grant -ne 0) { throw ('Cannot authorize fresh fixture login: ' + $grant) }
+            $batchToken = [IntPtr]::Zero
+            $batchOk = [BatchLogonProbe]::Logon($name,$env:COMPUTERNAME,$password,4,0,[ref]$batchToken)
+            $batchError = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+            if ($batchToken -ne [IntPtr]::Zero) { [void][BatchLogonProbe]::CloseHandle($batchToken) }
+            @{batch_logon_succeeded=$batchOk;win32_error=$batchError;account_sid=$user.SID.Value} | ConvertTo-Json | Out-File -LiteralPath (Join-Path $stage 'batch-logon-after.json') -Encoding utf8
+            if (-not $batchOk) { throw ('Fixture login still refused; no deny policy was changed: ' + $batchError) }
+          }
           $password = $null
           $before = $task.LastRunTime
           try {
