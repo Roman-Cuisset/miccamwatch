@@ -430,6 +430,14 @@ def unix_cases(args, root, proof):
         if frontend is not None:
             import fcntl
             camera_lock = Path(sandbox.env["XDG_DATA_HOME"]) / "MicCamWatch/macos-controls/camera.lock"
+            # IPC readiness precedes the first passive camera observation.
+            # Wait for the real frontend to create its ownership lock; never
+            # fabricate one and thereby hide missing production polling.
+            deadline = time.monotonic() + 20
+            while not camera_lock.exists():
+                require(frontend.poll() is None and time.monotonic() < deadline,
+                        "managed Mac frontend did not initialize passive camera observation")
+                time.sleep(.05)
             with camera_lock.open("r+b") as reservation:
                 deadline = time.monotonic() + 20
                 while True:
@@ -479,8 +487,12 @@ def unix_cases(args, root, proof):
     invoke_installer(sandbox, "--uninstall")
     proof["unix_actual_managed_payload_receipt_path_removal_and_noop"] = True
 
-    for case in ("modified executable", "linked executable", "unknown restoration", "requested protection", "foreign autostart"):
+    cases = ["modified executable", "linked executable", "unknown restoration", "requested protection", "foreign autostart"]
+    if platform.system() == "Darwin":
+        cases += ["unknown camera restoration", "requested camera protection"]
+    for case in cases:
         sandbox, preferences, sentinel = install(case)
+        journal = None
         if case == "modified executable":
             with sandbox.binary.open("ab") as output:
                 output.write(b"outside installer receipt\n")
@@ -495,6 +507,20 @@ def unix_cases(args, root, proof):
             journal = state / ("pipewire-mute.json" if platform.system() == "Linux" else "microphone.json")
             journal.write_bytes(b"corrupt restoration evidence; preserve\n")
             journal.chmod(0o600)
+        elif case in ("unknown camera restoration", "requested camera protection"):
+            state = Path(sandbox.env["XDG_DATA_HOME"]) / "MicCamWatch/macos-controls"
+            state.mkdir(parents=True, exist_ok=True, mode=0o700)
+            journal = state / "camera.json"
+            if case == "unknown camera restoration":
+                journal.write_bytes(b"corrupt camera restoration evidence; preserve\n")
+            else:
+                identity = "a19a13b1-fbbd-4ecd-8c05-ffb265a0e435"
+                journal.write_text(json.dumps({
+                    "version": 1, "identifier": "com.roman-cuisset.miccamwatch.camera." + identity,
+                    "uuid": identity, "payload_uuid": "900c15c3-5b51-4aaa-b914-0f9f1529510f",
+                    "intent": "install"
+                }) + "\n", encoding="utf-8")
+            journal.chmod(0o600)
         else:
             if platform.system() == "Linux":
                 entry = Path(sandbox.env["XDG_CONFIG_HOME"]) / "autostart/com.roman-cuisset.miccamwatch.desktop"
@@ -504,8 +530,10 @@ def unix_cases(args, root, proof):
             entry.write_bytes(b"external registration; do not adopt or remove\n")
         receipt = sandbox.prefix / ".miccamwatch-install"
         before = sha(sandbox.binary), {path.name: path.read_bytes() for path in receipt.iterdir()}, data_snapshot(preferences, sentinel)
+        restoration = journal.read_bytes() if journal is not None else None
         require(run([sandbox.binary, "uninstall"], sandbox.env, allowed=None).returncode != 0, f"unsafe managed removal accepted: {case}")
         require(before == (sha(sandbox.binary), {path.name: path.read_bytes() for path in receipt.iterdir()}, data_snapshot(preferences, sentinel)), f"refusal lost ownership/protection/data: {case}")
+        require(journal is None or journal.read_bytes() == restoration, f"refusal changed restoration evidence: {case}")
         proof["unix_refuses_" + case.replace(" ", "_")] = True
 
 

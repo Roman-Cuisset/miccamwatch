@@ -330,6 +330,13 @@ pub fn camera_state() -> Result<CameraPrivacyState> {
 pub(crate) fn reserve_uninstall() -> Result<OperationLock> {
     let lock = OperationLock::try_acquire("camera")?;
     let owned = load(&lock.directory.join("camera.json"))?;
+    // Uninstall reserves this application's restoration obligations, not the
+    // effective camera policy of other users or device management. An absent
+    // owned receipt under the native lock needs no global inventory or admin
+    // approval, and does not establish that the camera is globally allowed.
+    if owned.is_none() {
+        return Ok(lock);
+    }
     if owned
         .as_ref()
         .is_some_and(|profile| profile.intent == "install")

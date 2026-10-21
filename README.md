@@ -298,6 +298,11 @@ bundles receive explicit manual instructions and a non-success result. Settings,
 history and restoration data are retained. Windows removal is deferred: command
 acceptance is not proof of deletion; the worker records the final result.
 Foreign control ownership or an incomplete restoration refuses removal.
+On macOS, no owned camera receipt means there is no recorded camera restoration
+obligation to reserve; uninstall does not require an administrator-wide inventory
+of unrelated management profiles. This does not establish that the camera is
+globally allowed. Corrupt ownership records, requested protection and pending or
+unknown restoration for an existing owned receipt still refuse removal.
 
 TLS dependencies resolve to `rustls-webpki 0.103.16`, `webpki-roots 1.0.10`
 and `webpki-root-certs 1.0.10`, addressing
@@ -307,9 +312,10 @@ and `webpki-root-certs 1.0.10`, addressing
 three maintenance warnings for the Linux D-Bus dependency stack; no advisory is
 ignored or suppressed.
 
-Native qualification is tracked in [ROADMAP](docs/ROADMAP.md). These source
-changes are not a published release, and do not establish a fix for the historical
-macOS Intel stop EINVAL. Public stable remains 0.19.1.
+Unix tray command sockets now explicitly enter blocking mode after acceptance,
+so BSD listener-flag inheritance cannot cause an immediate read failure and a
+premature disconnect. Native qualification is tracked in [ROADMAP](docs/ROADMAP.md).
+These source changes are not a published release. Public stable remains 0.19.1.
 
 ## 0.19.1 — Windows CLI-hosted tray update correction
 
