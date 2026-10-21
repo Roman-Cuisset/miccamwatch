@@ -67,6 +67,21 @@ jobs:
           $action.WorkingDirectory = $stage
           $taskName = 'MicCamWatch-context-' + [guid]::NewGuid().ToString('N')
           $task = $folder.RegisterTaskDefinition($taskName,$definition,2,$definition.Principal.UserId,$password,1,$null)
+          Add-Type -TypeDefinition @'
+          using System;
+          using System.Runtime.InteropServices;
+          public static class BatchLogonProbe {
+            [DllImport("advapi32.dll", EntryPoint="LogonUserW", CharSet=CharSet.Unicode, SetLastError=true)]
+            public static extern bool Logon(string user, string domain, string password, int kind, int provider, out IntPtr token);
+            [DllImport("kernel32.dll", SetLastError=true)]
+            public static extern bool CloseHandle(IntPtr handle);
+          }
+          '@
+          $batchToken = [IntPtr]::Zero
+          $batchOk = [BatchLogonProbe]::Logon($name,$env:COMPUTERNAME,$password,4,0,[ref]$batchToken)
+          $batchError = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+          @{batch_logon_succeeded=$batchOk;win32_error=$batchError;account_sid=$user.SID.Value} | ConvertTo-Json | Out-File -LiteralPath (Join-Path $stage 'batch-logon.json') -Encoding utf8
+          if ($batchToken -ne [IntPtr]::Zero) { [void][BatchLogonProbe]::CloseHandle($batchToken) }
           $password = $null
           $before = $task.LastRunTime
           try {
