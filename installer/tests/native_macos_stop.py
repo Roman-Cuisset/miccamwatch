@@ -431,11 +431,15 @@ def main():
                 raise AssertionError(name + ": bounded client deadline exceeded; no kill sent")
             if traced:
                 operations = [json.loads(line) for line in trace_path.read_text().splitlines()]
-                report["cycles"][-1]["syscall_errors"] = [op for op in operations if op["errno"]]
-                require(any(op["operation"] == "interposer_loaded" for op in operations),
+                calls = [op for op in operations if op["operation"] != "timeout_parameters"]
+                report["cycles"][-1]["timeout_parameters"] = [
+                    op for op in operations if op["operation"] == "timeout_parameters"]
+                report["cycles"][-1]["syscall_errors"] = [op for op in calls if op["errno"]]
+                require(any(op["operation"] == "interposer_loaded" for op in calls),
                         "Stop interposer was not loaded; native diagnosis unavailable")
-                require(len(operations) > 1, "Stop interposer observed no native operations")
-                report["cycles"][-1]["errno22_stages"] = [op for op in operations if op["errno"] == 22]
+                require(any(op["operation"] == "connect" for op in calls),
+                        "Control interposer did not observe the real socket connection")
+                report["cycles"][-1]["errno22_stages"] = [op for op in calls if op["errno"] == 22]
             return process.returncode, stdout, stderr
         finally:
             if fd is not None:
