@@ -4,7 +4,9 @@
 Compiles unchanged native implementation files with a test-only entrypoint in a
 private temporary directory. Uses real NSWindow, NSMenu tracking and NSAlert,
 not menu mocks, Accessibility, device APIs or TCC grants. Native consultation
-and About PNGs show real AppKit content; menu-text PNGs are rendered fixtures.
+layout checks measure every laid-out line against the actual clip viewport at
+initial/resized widths, including prose and unbroken path/Unicode probes.
+Consultation and About PNGs show real AppKit content; menu-text PNGs are rendered fixtures.
 An optional display screenshot uses only preexisting permission.
 """
 
@@ -120,6 +122,40 @@ var oversizedSummary = valid
 oversizedSummary["summary"] = String(repeating: "S", count: 2049)
 require(rejects(oversizedSummary), "expanded diagnostics leaked into compact status")
 var measurements = [[String: Any]]()
+// Measure rendered geometry, not wrapping flags or AppKit's incidental defaults.
+// A taller document alone cannot detect a text view wider than its clip view.
+func consultationGeometry(_ consultation: DesktopConsultation, expected: String,
+                          context: String) -> [String: Any] {
+    consultation.window.contentView!.layoutSubtreeIfNeeded()
+    let text = consultation.text
+    let scroll = text.enclosingScrollView!
+    let container = text.textContainer!
+    let manager = text.layoutManager!
+    manager.ensureLayout(for: container)
+    require(text.string == expected, "\(context): layout lost diagnostic data")
+    let viewport = text.convert(scroll.contentView.bounds, from: scroll.contentView)
+    require(viewport.width > 0 && text.bounds.width <= viewport.width + 1,
+            "\(context): document is wider than the visible viewport")
+    let glyphs = manager.glyphRange(for: container)
+    let characters = manager.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil)
+    require(characters == NSRange(location: 0, length: (expected as NSString).length),
+            "\(context): not all diagnostic characters are laid out")
+    var lines = 0
+    var widest: CGFloat = 0
+    manager.enumerateLineFragments(forGlyphRange: glyphs) { _, used, _, range, _ in
+        let rendered = used.offsetBy(dx: text.textContainerOrigin.x, dy: text.textContainerOrigin.y)
+        require(rendered.minX >= viewport.minX - 1 && rendered.maxX <= viewport.maxX + 1,
+                "\(context): line \(lines) extends outside the visible viewport")
+        require(manager.truncatedGlyphRange(inLineFragmentForGlyphAt: range.location).location == NSNotFound,
+                "\(context): diagnostic line was truncated")
+        widest = max(widest, used.width)
+        lines += 1
+    }
+    require(lines > 1, "\(context): long diagnostic did not wrap")
+    return ["context": context, "viewport_width": viewport.width,
+            "document_width": text.bounds.width, "widest_line": widest,
+            "line_count": lines, "characters": characters.length]
+}
 for test in cases {
     let frame = test.frame
     let entries = frame.items!
@@ -241,8 +277,41 @@ for test in cases {
                 "unknown request was presented as known effective protection")
     }
     require(!text.isEditable && text.isSelectable, "consultation must be read-only and copyable")
-    require(!text.isHorizontallyResizable && text.textContainer!.widthTracksTextView, "consultation does not wrap")
-    nativeWindow.contentView!.layoutSubtreeIfNeeded()
+    var consultationLayout = [[String: Any]]()
+    let initialFrame = nativeWindow.frame
+    let widths: [(String, CGFloat)] = [
+        ("initial", initialFrame.width),
+        ("narrow", nativeWindow.minSize.width),
+        ("wide", min(screen.width - 40, initialFrame.width + 160)),
+        ("restored", initialFrame.width)
+    ]
+    for (name, width) in widths {
+        var resized = initialFrame
+        resized.size.width = width
+        nativeWindow.setFrame(resized, display: true)
+        consultationLayout.append(consultationGeometry(consultation, expected: content.diagnostic,
+                                                       context: "\(test.name)-\(name)"))
+        if name == "narrow" {
+            png(nativeWindow.contentView!, proof.appendingPathComponent(test.name + "-consultation-narrow.png"))
+        }
+        if test.name == cases[0].name {
+            // These are full selectable strings, not altered production labels
+            // or protocol fixtures. Each probe must wrap rather than disappear.
+            let probes = [
+                ("prose", String(repeating: localized.scope + " ", count: 12)),
+                ("path", "/private/var/tmp/" + String(repeating: "unbroken-component", count: 100) + ".log"),
+                ("unicode", String(repeating: "界👩🏽‍💻e\u{0301}", count: 300))
+            ]
+            for (kind, diagnostic) in probes {
+                consultation.update(frame, diagnostic: diagnostic)
+                consultationLayout.append(consultationGeometry(consultation, expected: diagnostic,
+                                                               context: "\(name)-\(kind)"))
+            }
+            consultation.update(frame, diagnostic: content.diagnostic)
+            consultationLayout.append(consultationGeometry(consultation, expected: content.diagnostic,
+                                                           context: "\(test.name)-\(name)-after-probes"))
+        }
+    }
     require(nativeWindow.frame.width <= screen.width && nativeWindow.frame.height <= screen.height,
             "consultation does not fit display")
     text.layoutManager!.ensureLayout(for: text.textContainer!)
@@ -303,6 +372,7 @@ for test in cases {
                          "titles": menu.items.map { $0.title },
                          "diagnostic_utf8_bytes": content.diagnostic.utf8.count,
                          "native_menu_tracking": tracked, "native_consultation_copy": checkClipboard,
+                         "consultation_layout": consultationLayout,
                          "singleton_reopen_close": true, "native_about": inspected])
 }
 // Exercise actual AppKit keyboard tracking, not direct selector forwarding.

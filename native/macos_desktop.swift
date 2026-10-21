@@ -326,21 +326,26 @@ final class DesktopConsultation: NSObject {
                           styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.title = "MicCamWatch"
-        let scroll = NSScrollView()
+        let scroll = NSScrollView(frame: NSRect(origin: .zero, size: size))
         scroll.hasVerticalScroller = true
         scroll.hasHorizontalScroller = false
         scroll.borderType = .bezelBorder
-        let text = NSTextView(frame: NSRect(origin: .zero, size: size))
+        let text = NSTextView(frame: NSRect(origin: .zero, size: scroll.contentSize))
         text.isEditable = false
         text.isSelectable = true
         text.isRichText = false
         text.font = NSFont.systemFont(ofSize: NSFont.systemFontSize)
+        // NSTextView otherwise keeps its initial frame as its minimum size.
+        // The inset scroll viewport is narrower than the window, and shrinks
+        // again on resize; let its document follow that width before wrapping.
+        text.minSize = .zero
+        text.maxSize = NSSize(width: .greatestFiniteMagnitude, height: .greatestFiniteMagnitude)
         text.isVerticallyResizable = true
         text.isHorizontallyResizable = false
         text.autoresizingMask = [.width]
         text.textContainer?.widthTracksTextView = true
         text.textContainer?.lineBreakMode = .byCharWrapping
-        text.textContainer?.containerSize = NSSize(width: size.width, height: .greatestFiniteMagnitude)
+        text.textContainer?.containerSize = NSSize(width: scroll.contentSize.width, height: .greatestFiniteMagnitude)
         scroll.documentView = text
         self.window = window
         self.text = text
