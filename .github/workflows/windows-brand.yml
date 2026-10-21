@@ -1,4 +1,4 @@
-name: Windows genuine batch-session diagnostic
+name: Windows shared ordinary-session launcher diagnostic
 
 on:
   workflow_dispatch:
@@ -12,142 +12,27 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - name: Exercise actual ordinary task login and native namespaces
+      - name: Exercise shared launcher with actual native namespaces
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') { throw 'Disposable hosted runner required' }
-          $stage = Join-Path ([Environment]::GetFolderPath('CommonDocuments')) ('MicCamWatch-task-context-' + [guid]::NewGuid().ToString('N'))
+          $stage = Join-Path ([Environment]::GetFolderPath('CommonDocuments')) ('MicCamWatch-context-' + [guid]::NewGuid().ToString('N'))
           New-Item -ItemType Directory -Path $stage | Out-Null
           "MCW_CONTEXT_PROOF=$stage" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           $probe = Join-Path $stage 'probe.py'
           Copy-Item -LiteralPath 'installer/tests/windows_context_probe.py' -Destination $probe
-          $helper = Join-Path $stage 'windows_ordinary.py'
-          Copy-Item -LiteralPath 'installer/tests/windows_ordinary.py' -Destination $helper
           $python = (Get-Command python).Source
-          $name = 'mcw_' + [guid]::NewGuid().ToString('N').Substring(0,12)
-          $password = 'Aa1!' + [guid]::NewGuid().ToString('N') + [guid]::NewGuid().ToString('N')
-          $user = New-LocalUser -Name $name -Password (ConvertTo-SecureString $password -AsPlainText -Force) -Description 'Disposable native session qualification'
-          $users = Get-LocalGroup -SID 'S-1-5-32-545'
-          if (-not (Get-LocalGroupMember -Group $users | Where-Object SID -eq $user.SID)) { Add-LocalGroupMember -Group $users -Member $user }
-          $sidBytes = New-Object byte[] $user.SID.BinaryLength
-          $user.SID.GetBinaryForm($sidBytes,0)
-          $sidHex = ([BitConverter]::ToString($sidBytes)).Replace('-','').ToLowerInvariant()
-          $wrapper = Join-Path $stage 'ordinary.ps1'
           $ordinary = Join-Path $stage 'ordinary.json'
+          $wrapper = Join-Path $stage 'ordinary.ps1'
           $body = @"
           `$ErrorActionPreference = 'Continue'
           & '$($python.Replace("'", "''"))' -B '$($probe.Replace("'", "''"))' | Out-File -LiteralPath '$($ordinary.Replace("'", "''"))' -Encoding utf8
           exit `$LASTEXITCODE
           "@
           [IO.File]::WriteAllText($wrapper,$body)
-          $configuration = Join-Path $stage 'bootstrap.json'
-          $config = @{
-            script=$wrapper; working_directory=$stage; timeout=120
-            report=(Join-Path $stage 'bootstrap-result.json')
-            expected_account_sid=$sidHex; expected_session_id=0; expected_station=$null
-            workflow_environment=@{GITHUB_ACTIONS='true';RUNNER_ENVIRONMENT='github-hosted';GITHUB_WORKSPACE=$stage;PATH=$env:PATH}
-          }
-          [IO.File]::WriteAllText($configuration,($config | ConvertTo-Json -Depth 8))
-          $scheduler = New-Object -ComObject 'Schedule.Service'
-          $scheduler.Connect()
-          $folder = $scheduler.GetFolder('\')
-          $definition = $scheduler.NewTask(0)
-          $definition.Principal.UserId = $env:COMPUTERNAME + '\' + $name
-          $definition.Principal.LogonType = 1
-          $definition.Principal.RunLevel = 0
-          $definition.Settings.Enabled = $true
-          $definition.Settings.AllowDemandStart = $true
-          $definition.Settings.DisallowStartIfOnBatteries = $false
-          $definition.Settings.StopIfGoingOnBatteries = $false
-          $definition.Settings.ExecutionTimeLimit = 'PT0S'
-          $action = $definition.Actions.Create(0)
-          $action.Path = $python
-          $action.Arguments = '-u -B "' + $helper + '" --bootstrap-config "' + $configuration + '"'
-          $action.WorkingDirectory = $stage
-          $taskName = 'MicCamWatch-context-' + [guid]::NewGuid().ToString('N')
-          $task = $folder.RegisterTaskDefinition($taskName,$definition,2,$definition.Principal.UserId,$password,1,$null)
-          Add-Type -TypeDefinition @'
-          using System;
-          using System.Runtime.InteropServices;
-          public static class BatchLogonProbe {
-            [DllImport("advapi32.dll", EntryPoint="LogonUserW", CharSet=CharSet.Unicode, SetLastError=true)]
-            public static extern bool Logon(string user, string domain, string password, int kind, int provider, out IntPtr token);
-            [DllImport("kernel32.dll", SetLastError=true)]
-            public static extern bool CloseHandle(IntPtr handle);
-            [StructLayout(LayoutKind.Sequential)]
-            struct Attributes {
-              public uint Length; public IntPtr RootDirectory; public IntPtr ObjectName;
-              public uint Flags; public IntPtr SecurityDescriptor; public IntPtr Quality;
-            }
-            [StructLayout(LayoutKind.Sequential)]
-            struct LsaString { public ushort Length; public ushort MaximumLength; public IntPtr Buffer; }
-            [DllImport("advapi32.dll")]
-            static extern uint LsaOpenPolicy(IntPtr system, ref Attributes attributes, uint access, out IntPtr policy);
-            [DllImport("advapi32.dll")]
-            static extern uint LsaAddAccountRights(IntPtr policy, byte[] sid, ref LsaString right, uint count);
-            [DllImport("advapi32.dll")]
-            static extern uint LsaNtStatusToWinError(uint status);
-            [DllImport("advapi32.dll")]
-            static extern uint LsaClose(IntPtr policy);
-            public static uint GrantFixtureBatchLogon(byte[] sid) {
-              var attributes = new Attributes { Length=(uint)Marshal.SizeOf(typeof(Attributes)) };
-              IntPtr policy;
-              uint status = LsaOpenPolicy(IntPtr.Zero,ref attributes,0x810,out policy);
-              if (status != 0) return LsaNtStatusToWinError(status);
-              string name = "SeBatchLogonRight";
-              IntPtr text = Marshal.StringToHGlobalUni(name);
-              try {
-                var right = new LsaString { Length=(ushort)(name.Length*2), MaximumLength=(ushort)((name.Length+1)*2), Buffer=text };
-                return LsaNtStatusToWinError(LsaAddAccountRights(policy,sid,ref right,1));
-              } finally { Marshal.FreeHGlobal(text); LsaClose(policy); }
-            }
-          }
-          '@
-          $batchToken = [IntPtr]::Zero
-          $batchOk = [BatchLogonProbe]::Logon($name,$env:COMPUTERNAME,$password,4,0,[ref]$batchToken)
-          $batchError = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
-          @{batch_logon_succeeded=$batchOk;win32_error=$batchError;account_sid=$user.SID.Value} | ConvertTo-Json | Out-File -LiteralPath (Join-Path $stage 'batch-logon.json') -Encoding utf8
-          if ($batchToken -ne [IntPtr]::Zero) { [void][BatchLogonProbe]::CloseHandle($batchToken) }
-          if (-not $batchOk) {
-            if ($batchError -ne 1385) { throw ('Unexpected fixture authentication failure: ' + $batchError) }
-            # Authorize only this newly-created fixture identity to use a task login.
-            # No administrator group, token privilege, existing account or namespace ACL changes.
-            $grant = [BatchLogonProbe]::GrantFixtureBatchLogon($sidBytes)
-            @{right='SeBatchLogonRight';account_sid=$user.SID.Value;grant_win32_error=$grant} | ConvertTo-Json | Out-File -LiteralPath (Join-Path $stage 'fixture-logon-right.json') -Encoding utf8
-            if ($grant -ne 0) { throw ('Cannot authorize fresh fixture login: ' + $grant) }
-            $batchToken = [IntPtr]::Zero
-            $batchOk = [BatchLogonProbe]::Logon($name,$env:COMPUTERNAME,$password,4,0,[ref]$batchToken)
-            $batchError = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
-            if ($batchToken -ne [IntPtr]::Zero) { [void][BatchLogonProbe]::CloseHandle($batchToken) }
-            @{batch_logon_succeeded=$batchOk;win32_error=$batchError;account_sid=$user.SID.Value} | ConvertTo-Json | Out-File -LiteralPath (Join-Path $stage 'batch-logon-after.json') -Encoding utf8
-            if (-not $batchOk) { throw ('Fixture login still refused; no deny policy was changed: ' + $batchError) }
-          }
-          $password = $null
-          $before = $task.LastRunTime
-          try {
-            Start-ScheduledTask -TaskName $taskName -TaskPath '\'
-            $deadline = [DateTime]::UtcNow.AddSeconds(60)
-            $result = $null
-            do {
-              Start-Sleep -Milliseconds 200
-              $task = $folder.GetTask($taskName)
-              $resultPath = Join-Path $stage 'bootstrap-result.json'
-              if (Test-Path -LiteralPath $resultPath) { $result = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json }
-              if ($task.LastRunTime -gt $before -and $task.State -eq 3 -and $task.LastTaskResult -ne 0) { throw ('Task ended before bootstrap: native result ' + $task.LastTaskResult) }
-              if ([DateTime]::UtcNow -ge $deadline) { throw 'Native task deadline; task/profile/processes retained without stopping' }
-            } while (-not $result -or $result.status -notin @('completed','refused_or_failed','incomplete'))
-            if ($result.status -ne 'completed' -or $result.script_exit_code -ne 0) { throw 'Ordinary task diagnostic failed; original bootstrap evidence retained' }
-          } finally {
-            $task = $folder.GetTask($taskName)
-            @{task_name=$taskName;state=$task.State;last_task_result=$task.LastTaskResult;last_run_time=$task.LastRunTime;account_sid=$user.SID.Value;retention='owned account/task and any live shell retained until VM teardown'} | ConvertTo-Json | Out-File -LiteralPath (Join-Path $stage 'scheduler.json') -Encoding utf8
-            [IO.File]::WriteAllText((Join-Path $stage 'task.xml'),$task.Xml)
-            Get-ScheduledTaskInfo -TaskName $taskName -TaskPath '\' | Select-Object LastRunTime,LastTaskResult,NumberOfMissedRuns | ConvertTo-Json | Out-File -LiteralPath (Join-Path $stage 'scheduler-cim.json') -Encoding utf8
-            $channel = Get-WinEvent -ListLog 'Microsoft-Windows-TaskScheduler/Operational' -ErrorAction SilentlyContinue
-            if ($channel -and $channel.IsEnabled) {
-              Get-WinEvent -FilterHashtable @{LogName=$channel.LogName;StartTime=[DateTime]::Now.AddMinutes(-10)} -ErrorAction SilentlyContinue | Where-Object Message -like ('*' + $taskName + '*') | Select-Object TimeCreated,Id,LevelDisplayName,Message | ConvertTo-Json -Depth 6 | Out-File -LiteralPath (Join-Path $stage 'task-events.json') -Encoding utf8
-            }
-          }
+          & $python -u -B installer/tests/windows_ordinary.py --script $wrapper --working-directory $stage --timeout 180 --report (Join-Path $stage 'launcher.json')
+          if ($LASTEXITCODE -ne 0) { throw 'Shared launcher diagnostic failed; original native evidence retained' }
       - name: Retain exact native namespace evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
