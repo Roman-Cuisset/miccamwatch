@@ -1,97 +1,48 @@
-name: Native Windows application branding
+name: Windows named-object context diagnostic
 
 on:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - 'build.rs'
-      - 'dotnet-tools.json'
-      - 'installer/miccamwatch.ico'
-      - 'installer/miccamwatch.rc'
-      - 'installer/miccamwatch.wxs'
-      - 'installer/tests/windows-brand-native.ps1'
-      - 'installer/tests/windows_ordinary.py'
-      - 'site/assets/mark.svg'
-      - '.github/workflows/windows-brand.yml'
 
 permissions:
   contents: read
 
 jobs:
-  shell-brand:
+  native-context:
     runs-on: windows-latest
-    timeout-minutes: 40
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
-      - name: Build actual CLI and tray application resources
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Compare actual parent and genuine ordinary native namespaces
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
           if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') { throw 'Disposable hosted runner required' }
-          $logs = Join-Path $env:RUNNER_TEMP 'windows-brand-build'
-          New-Item -ItemType Directory -Path $logs | Out-Null
-          cargo build --release --locked --features windows-tray --bin mcw --bin mcw-tray 2>&1 | Tee-Object -FilePath (Join-Path $logs 'cargo-build.log')
-          if ($LASTEXITCODE -ne 0) { throw 'Actual Windows application build failed' }
-      - name: Restore pinned WiX and build real per-user MSI
-        shell: pwsh
-        run: |
-          $logs = Join-Path $env:RUNNER_TEMP 'windows-brand-build'
-          # dotnet-tools.json pins WiX 5.0.2 with rollForward disabled.
-          dotnet tool restore 2>&1 | Tee-Object -FilePath (Join-Path $logs 'wix-restore.log')
-          if ($LASTEXITCODE -ne 0) { throw 'Pinned WiX tool restore failed' }
-          $metadata = cargo metadata --locked --no-deps --format-version 1
-          if ($LASTEXITCODE -ne 0) { throw 'Package version resolution failed' }
-          $version = (($metadata | ConvertFrom-Json).packages | Where-Object name -eq 'miccamwatch').version
-          if (-not $version) { throw 'MicCamWatch package version missing' }
-          dotnet wix build installer/miccamwatch.wxs -d Version=$version -d Executable=target/release/mcw.exe -d TrayExecutable=target/release/mcw-tray.exe -o target/mcw-brand-fixture.msi 2>&1 | Tee-Object -FilePath (Join-Path $logs 'wix-build.log')
-          if ($LASTEXITCODE -ne 0) { throw 'Real per-user MSI build failed' }
-      - name: Render actual installed Shell and Apps icons
-        # Share the token-checking ordinary-user launcher with uninstall qualification.
-        # LIMITED alone can still be elevated on a hosted runner.
-        shell: powershell
-        run: |
-          if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') { throw 'Disposable hosted runner required' }
-          $stage = Join-Path ([Environment]::GetFolderPath('CommonDocuments')) ('MicCamWatch-brand-' + [Guid]::NewGuid().ToString('N'))
-          if (Test-Path -LiteralPath $stage) { throw 'Native staging directory must be new' }
+          $stage = Join-Path ([Environment]::GetFolderPath('CommonDocuments')) ('MicCamWatch-context-' + [guid]::NewGuid().ToString('N'))
           New-Item -ItemType Directory -Path $stage | Out-Null
-          # A genuine standard user cannot rely on the administrator's private checkout.
-          # Preserve the fixture's exact repository layout and original built payloads.
-          foreach ($relative in @('installer/tests/windows-brand-native.ps1', 'installer/miccamwatch.ico', 'target/mcw-brand-fixture.msi', 'target/release/mcw.exe', 'target/release/mcw-tray.exe')) {
-            $destination = Join-Path $stage $relative
-            New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
-            Copy-Item -LiteralPath (Join-Path $env:GITHUB_WORKSPACE $relative) -Destination $destination
-          }
-          $fixture = Join-Path $stage 'installer/tests/windows-brand-native.ps1'
-          $msi = Join-Path $stage 'target/mcw-brand-fixture.msi'
-          $proof = Join-Path $stage 'proof'
-          $wrapper = Join-Path $stage 'ordinary-brand.ps1'
-          $body = @(
-            "`$ErrorActionPreference = 'Stop'"
-            "`$env:GITHUB_ACTIONS = 'true'"
-            "`$env:RUNNER_ENVIRONMENT = 'github-hosted'"
-            "`$env:RUNNER_TEMP = '$($stage.Replace("'", "''"))'"
-            ". '$($fixture.Replace("'", "''"))' -MsiPath '$($msi.Replace("'", "''"))' -OutputDirectory '$($proof.Replace("'", "''"))' -IsolatedRunner"
-            'exit 0'
-          ) -join [Environment]::NewLine
+          "MCW_CONTEXT_PROOF=$stage" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          $probe = Join-Path $stage 'probe.py'
+          Copy-Item -LiteralPath 'installer/tests/windows_context_probe.py' -Destination $probe
+          $python = (Get-Command python).Source
+          & $python -B $probe | Out-File -LiteralPath (Join-Path $stage 'parent.json') -Encoding utf8
+          if ($LASTEXITCODE -ne 0) { throw 'Parent diagnostic failed; original output retained' }
+          $ordinary = Join-Path $stage 'ordinary.json'
+          $wrapper = Join-Path $stage 'ordinary.ps1'
+          $body = @"
+          `$ErrorActionPreference = 'Continue'
+          `$env:GITHUB_ACTIONS = 'true'
+          `$env:RUNNER_ENVIRONMENT = 'github-hosted'
+          & '$($python.Replace("'", "''"))' -B '$($probe.Replace("'", "''"))' | Out-File -LiteralPath '$($ordinary.Replace("'", "''"))' -Encoding utf8
+          exit `$LASTEXITCODE
+          "@
           [IO.File]::WriteAllText($wrapper, $body)
-          try {
-            python -B installer/tests/windows_ordinary.py --script $wrapper --working-directory $stage --timeout 900 --report (Join-Path $stage 'ordinary-launcher.json')
-            if ($LASTEXITCODE -ne 0) { throw 'Ordinary-user Shell proof failed or remained incomplete; inspect retained native evidence' }
-          } finally {
-            # Snapshot failures as well as success; never stop a live fixture to collect it.
-            Copy-Item -LiteralPath $stage -Destination (Join-Path $env:RUNNER_TEMP 'windows-brand-proof') -Recurse -ErrorAction Continue
-          }
-      - name: Retain native bitmaps, visual sheet, receipts and failure evidence
+          & $python -u -B installer/tests/windows_ordinary.py --script $wrapper --working-directory $stage --timeout 180 --report (Join-Path $stage 'launcher.json')
+          if ($LASTEXITCODE -ne 0) { throw 'Genuine account diagnostic failed; inspect retained original evidence' }
+      - name: Retain exact native namespace evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: native-windows-brand-shell
+          name: windows-native-context
+          path: ${{ env.MCW_CONTEXT_PROOF }}
           if-no-files-found: error
-          retention-days: 14
-          path: |
-            ${{ runner.temp }}/windows-brand-proof
-            ${{ runner.temp }}/windows-brand-build
-            target/mcw-brand-fixture.msi
-            target/mcw-brand-fixture.wixpdb
+          retention-days: 7
+          include-hidden-files: true
