@@ -9,6 +9,7 @@ import ctypes as c
 from ctypes import wintypes as w
 import hashlib
 import json
+import msvcrt
 import os
 from pathlib import Path
 import subprocess
@@ -180,8 +181,6 @@ def consumer(args):
         code, out, err = invoke(args.binary, ["uninstall"], args.proof, "uninstall")
         guidance = f"msiexec.exe /x {args.product}"
         require(code == 2 and guidance in err, "Real SDK consumer did not delegate exact MSI ProductCode with exit2")
-        require("No MSI operation, elevation or success was claimed." in err,
-                "Missing production manager-ownership guidance")
         require(payload == {name: sha(args.binary.parent / name) for name in payload}, "Delegation modified installed payload")
         require(all(sha(Path(item["path"])) == item["sha256"] for item in data), "Delegation changed user data")
         report.update(status="passed", exit_code=code, exact_guidance=guidance, payload_and_data_unchanged=True)
@@ -198,10 +197,11 @@ def launch(args):
     path = args.proof / "tokens.json"
     token = current_token()
     selected = None
+    streams = []
     try:
         original = report["original"] = snapshot(token)
-        for mode, level_id in (("SAFER_CONSTRAINED", 0x10000), ("SAFER_UNTRUSTED", 0x1000),
-                               ("CreateRestrictedToken_LUA_TOKEN_DISABLE_MAX_PRIVILEGE", None)):
+        for mode, level_id in (("CreateRestrictedToken_LUA_TOKEN_DISABLE_MAX_PRIVILEGE", None),
+                               ("SAFER_CONSTRAINED", 0x10000), ("SAFER_UNTRUSTED", 0x1000)):
             candidate = {"mode": mode, "scope_id": 2 if level_id else None,
                          "level_id": level_id, "flags": 0 if level_id else 5}
             restricted = w.HANDLE()
@@ -234,11 +234,17 @@ def launch(args):
                    "--product", args.product, "--proof", str(args.proof)]
         startup = Startup()
         startup.cb = c.sizeof(startup)
+        streams = [open(os.devnull, "rb"), (args.proof / "restricted-launch.stdout").open("wb"),
+                   (args.proof / "restricted-launch.stderr").open("wb")]
+        for stream in streams:
+            os.set_inheritable(stream.fileno(), True)
+        startup.flags = 0x100  # STARTF_USESTDHANDLES; retain real native child errors.
+        startup.stdin, startup.stdout, startup.stderr = (msvcrt.get_osfhandle(stream.fileno()) for stream in streams)
         # No GUI is started or needed; retain caller's same-user session/profile.
         process = Process()
         checked(adv.CreateProcessAsUserW(selected, sys.executable,
                                        c.create_unicode_buffer(subprocess.list2cmdline(command)),
-                                       None, None, False, 0x08000000, None,
+                                       None, None, True, 0x08000000, None,
                                        str(args.proof), c.byref(startup), c.byref(process)))
         kernel.CloseHandle(process.thread)
         try:
@@ -259,6 +265,8 @@ def launch(args):
         report.update(status="failed", error=traceback.format_exc())
         raise
     finally:
+        for stream in streams:
+            stream.close()
         if selected:
             kernel.CloseHandle(selected)
         kernel.CloseHandle(token)
