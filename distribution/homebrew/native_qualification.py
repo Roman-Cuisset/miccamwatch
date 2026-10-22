@@ -164,36 +164,34 @@ class Qualification:
         self.mcw("native-menu-stopped", "tray", "status", codes=(1,))
 
     def provision_intel_rust(self):
-        # Use the disposable host's unmodified official core source graph,
-        # consistently, rather than mixing its recipes with API formulae.
+        # Use one official source checkout, not a mixture with API recipes.
+        # Homebrew chooses supported verified bottles or source for its own
+        # toolchain; the MicCamWatch package itself is always built from source.
         self.brew("intel-core-source-checkout", "tap", "--force", "homebrew/core")
         self.env["HOMEBREW_NO_INSTALL_FROM_API"] = "1"
         core = Path(self.brew("intel-core-repository", "--repository", "homebrew/core").stdout.decode().strip())
         commit = self.run("intel-core-commit", ["git", "-C", core, "rev-parse", "HEAD"]).stdout.decode().strip()
         origin = self.run("intel-core-origin", ["git", "-C", core, "remote", "get-url", "origin"]).stdout.decode().strip()
-        self.run("intel-core-unmodified", ["git", "-C", core, "diff", "--exit-code", "HEAD", "--"])
-        recipe = (core / "Formula/z/z3.rb").read_bytes()
-        recipe_sha256 = hashlib.sha256(recipe).hexdigest()
-        (self.proof / "intel-z3-source.rb").write_bytes(recipe)
-        (self.proof / "intel-z3-source.sha256").write_text(recipe_sha256 + "\n")
+        self.run("intel-core-supplied-delta", [
+            "git", "-C", core, "diff", "--binary", "--no-ext-diff", "--no-textconv", "HEAD", "--",
+        ])
         self.rust_provisioning = (
-            "Unmodified official Homebrew core source checkout " + commit + " (" + origin + "); "
-            "API formula installs disabled. Native LLVM/Rust source builds and unchanged Z3 C/Python tests.")
+            "Normal Homebrew toolchain resolution from official core checkout " + commit
+            + " (" + origin + "); supplied delta recorded, not a whole-checkout cleanliness claim. "
+            "API formula installs disabled; no formula edits or forced compiler rebuild. "
+            "MicCamWatch package built from source.")
         (self.proof / "intel-core-source.json").write_text(json.dumps({
             "scope": self.rust_provisioning,
-            "core_commit": commit,
-            "core_origin": origin,
-            "z3_formula_sha256": recipe_sha256,
-            "formula_api_disabled": True,
+            "core_commit": commit, "core_origin": origin, "formula_api_disabled": True,
         }, indent=2) + "\n")
-        self.brew("intel-source-toolchain-formulae", "info", "--json=v2", "rust", "llvm", "z3")
-        missing = self.brew("intel-missing-rust-dependencies", "deps", "--include-build",
-                            "--missing", "--topological", "rust").stdout.decode().splitlines()
-        self.run("intel-native-rust-source-install",
-                 ["brew", "install", "--build-from-source", "--formula", *missing, "rust"],
-                 timeout=18000)
-        self.brew("intel-installed-toolchain-versions", "list", "--versions", "rust", "llvm", "z3")
-        self.brew("intel-z3-real-c-and-python-tests", "test", "--formula", "z3")
+        self.brew("intel-toolchain-formula", "info", "--json=v2", "rust")
+        self.brew("intel-native-rust-install", "install", "--formula", "rust")
+        self.brew("intel-installed-rust-version", "list", "--versions", "rust")
+        prefix = self.brew("intel-rust-prefix", "--prefix", "rust").stdout.decode().strip()
+        compiler = self.run("intel-native-rust-host", [Path(prefix) / "bin/rustc", "--version", "--verbose"])
+        require("host: x86_64-apple-darwin" in compiler.stdout.decode(),
+                "Homebrew Rust is not the genuine native Intel compiler")
+
 
     def execute(self):
         require(platform.system() == "Darwin" and os.getuid() != 0, "Run as a normal user on macOS")

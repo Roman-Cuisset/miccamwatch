@@ -45,7 +45,7 @@ jobs:
     timeout-minutes: 360
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - name: Qualify source packages (Intel uses unmodified official core checkout)
+      - name: Qualify genuine source packages with native Homebrew toolchain
         shell: bash
         env:
           CANDIDATE_SOURCE_URL: ${{ inputs.candidate-source-url }}
@@ -66,10 +66,10 @@ jobs:
           stat -f 'Cellar before: %N uid=%u gid=%g mode=%OLp' "$cellar"
           chmod go-w "$cellar"
           stat -f 'Cellar prepared: %N uid=%u gid=%g mode=%OLp' "$cellar"
-          # Intel uses its unmodified official core source graph with formula
-          # API installs disabled, retaining native LLVM/Rust source builds and
-          # Z3's genuine C/Python tests. Artifacts record the exact core commit,
-          # origin, Z3 recipe/hash and Rust/LLVM/Z3 versions, not a latest-core claim.
+          # Intel uses a coherent official source checkout, with API recipe
+          # mixing disabled. Homebrew selects its supported toolchain normally;
+          # only the application is required to build from source. Record core
+          # provenance/deltas, actual Rust version and native compiler host.
           python3 -B distribution/homebrew/native_qualification.py \
             --disposable-machine \
             --architecture "$EXPECTED_ARCH" \
