@@ -158,6 +158,29 @@ def root_phase(args):
                 'wrong-checksum archive executable was invoked')
         (proof / ('wrong-sha-' + name + '-execve.txt')).write_text(trace_text)
 
+    # Corrupt each actual native executable independently. A foreign helper must
+    # be rejected before even the otherwise-valid mcw is probed; binfmt support
+    # on the runner cannot turn a foreign ELF into an executable fallback.
+    with tarfile.open(args.archive, 'r:gz') as package:
+        binary = package.extractfile('mcw').read()
+        camera = {name: package.extractfile(name).read() for name in fixtures.CAMERA_NAMES}
+    for name, payload, member in fixtures.linux_elf_rejection_archives(binary, camera):
+        archive = args.work / (name + '.tar.gz')
+        archive.write_bytes(payload)
+        trace_path = args.work / (name + '.strace')
+        refused = record(proof, name,
+                         ['strace', '-f', '-e', 'trace=execve', '-o', trace_path,
+                          '/bin/sh', args.root_installer, '--archive', archive, '--sha256', sha(archive)],
+                         codes=(1,), env=clean_env)
+        require(f'ELF64 little-endian executable: {member}' in refused.stderr,
+                f'{name} did not reach the real ELF rejection boundary')
+        require(snapshot() == before and usb_bindings() == initial_usb,
+                f'{name} changed root installation, receipts, lock or USB bindings')
+        trace_text = trace_path.read_text()
+        require(not re.search(r'execve\("[^"]*\.camera-helper-private-', trace_text),
+                f'{name} executed archive bytes before all native headers passed')
+        (proof / (name + '-execve.txt')).write_text(trace_text)
+
     # Observe successful real refresh syscall boundaries, then interrupt those
     # same syscalls with kernel-delivered SIGTERM in the unchanged installer.
     trace = args.work / 'refresh.strace'
@@ -250,7 +273,9 @@ def main():
     parser.add_argument('--caller-uid', type=int)
     parser.add_argument('--work', type=Path)
     args = parser.parse_args()
-    require(platform.system() == 'Linux' and platform.machine() == 'x86_64', 'native Linux x86_64 only')
+    arch = fixtures.linux_architecture()
+    require(arch != 'aarch64' or args.version.removeprefix('v') == '0.21.0',
+            'native aarch64 privilege proof requires the reviewed v0.21.0 candidate, not a historical baseline')
     require(os.environ.get('GITHUB_ACTIONS') == 'true' and os.environ.get('RUNNER_ENVIRONMENT') == 'github-hosted',
             'privileged smoke is restricted to disposable GitHub-hosted runners')
     require(all(path.is_absolute() for path in (args.archive, args.source_file, args.root_installer, args.proof)),
@@ -259,16 +284,17 @@ def main():
         root_phase(args)
         return
     require(os.getuid() == os.geteuid() != 0, 'start privilege smoke as the ordinary runner user')
-    require(args.version in ('v0.16.0', 'v0.16.1', 'v0.17.0', 'v0.17.1', 'v0.17.2', 'v0.18.0', 'v0.18.1', 'v0.19.0', 'v0.19.1', 'v0.20.0'), 'feature smoke requires an explicitly reviewed native Linux release')
+    require(args.version in ('v0.16.0', 'v0.16.1', 'v0.17.0', 'v0.17.1', 'v0.17.2', 'v0.18.0', 'v0.18.1', 'v0.19.0', 'v0.19.1', 'v0.20.0', 'v0.21.0'), 'feature smoke requires an explicitly reviewed native Linux release')
     args.proof.mkdir(parents=True, exist_ok=True)
     (args.proof / 'scope.txt').write_text(
         'Genuine six-member Linux archive; real ordinary-user install/update/remove/security/rollback fixtures; '
         'explicit administrator root bootstrap/refresh/uninstall. Root status uses explicit sudo authorization '
         'and the runner UID, not an interactive polkit/pkexec authentication-dialogue proof. Malformed/version/caller '
-        'refusals are checked before journal/cache/USB changes. Actual strace SIGTERM/SIGKILL interrupt private archive, '
+        'refusals are checked before journal/cache/USB changes. Genuine archive ELF class/endian/type/ABI/machine '
+        'mutations are rejected before either executable probe, with actual execve traces. Actual strace SIGTERM/SIGKILL interrupt private archive, '
         'preparation, publication and completion; recovery uses only installer-produced backups/manifest. Only read-only status is authorized; '
         'no block/allow/toggle, media acquisition, root autostart or unknown hardware mutation. An unavailable/no-USB '
-        'state remains genuine, never substituted with allowed. No physical Linux or macOS hardware parity is proved.\n')
+        'state remains genuine, never substituted with allowed. Native VM qualification is not Raspberry Pi or other physical-device proof; no physical Linux or macOS hardware parity is proved.\n')
     (args.proof / 'host.json').write_text(json.dumps(dict(os=platform.platform(), arch=platform.machine(),
                                                         uid=os.getuid(), version=args.version), indent=2) + '\n')
     shells = {shell: shutil.which(shell) for shell in ('bash', 'zsh', 'fish')}

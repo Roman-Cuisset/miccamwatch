@@ -81,7 +81,7 @@ Usage: sh install.sh [--version v0.16.1] [--prefix ABSOLUTE_PREFIX]
 Without a PATH flag, an interactive terminal is asked (default: no).
 Noninteractive installs never prompt or change PATH without --add-path.
 The child installer cannot change the parent shell: open a new terminal afterward.
-Supported: Linux x86_64 with glibc 2.35+, macOS 15+ on Intel/Apple Silicon.
+Supported: Linux x86_64/aarch64 with glibc 2.35+, macOS 15+ on Intel/Apple Silicon.
 A Rosetta-translated shell receives the native Apple Silicon executable.
 No autostart, device controls, elevation or Gatekeeper changes are performed.
 Checksums protect integrity, not independent publisher authenticity.
@@ -139,11 +139,14 @@ OS=$(uname -s)
 ARCH=$(uname -m)
 case "$OS" in
     Linux)
-        [ "$ARCH" = x86_64 ] || die "Unsupported Linux architecture: $ARCH (only x86_64 is published)."
+        case "$ARCH" in
+            x86_64|aarch64) ASSET_ARCH=$ARCH ;;
+            *) die "Unsupported Linux architecture: $ARCH (only x86_64 and aarch64 are supported)." ;;
+        esac
         command -v getconf >/dev/null 2>&1 || die 'getconf is required to verify glibc.'
         GLIBC=$(getconf GNU_LIBC_VERSION 2>/dev/null) || die 'Linux requires glibc 2.35+; musl is not supported.'
         printf '%s\n' "$GLIBC" | awk '$1=="glibc" && $2 ~ /^[0-9]+\.[0-9]+$/ { split($2,v,"."); ok=(v[1]>2 || (v[1]==2 && v[2]>=35)) } END { exit !ok }' || die "Unsupported C library: $GLIBC; glibc 2.35+ is required."
-        PLATFORM=linux; ASSET_ARCH=x86_64 ;;
+        PLATFORM=linux ;;
     Darwin)
         MACOS=$(sw_vers -productVersion) || die 'Cannot determine the macOS version.'
         printf '%s\n' "$MACOS" | awk '/^[0-9]+\.[0-9]+(\.[0-9]+)?$/ { split($0,v,"."); ok=(v[1]>=15) } END { exit !ok }' || die "macOS 15+ is required; found $MACOS."
@@ -184,6 +187,29 @@ link_count() {
 }
 regular_file() {
     [ ! -L "$1" ] && [ -f "$1" ] && [ "$(link_count "$1")" = 1 ]
+}
+
+linux_executable() {
+    # cmp already belongs to the installer toolset. Linux GNU cmp bounds these
+    # binary comparisons without shell variables (which cannot preserve NULs).
+    regular_file "$1" || return 1
+    printf '\177ELF\002\001' > "$WORK/elf-ident"
+    printf '\000' > "$WORK/elf-abi"
+    printf '\003' > "$WORK/elf-linux-abi"
+    case "$ASSET_ARCH" in
+        x86_64)
+            printf '\002\000\076\000' > "$WORK/elf-exec"
+            printf '\003\000\076\000' > "$WORK/elf-dyn" ;;
+        aarch64)
+            printf '\002\000\267\000' > "$WORK/elf-exec"
+            printf '\003\000\267\000' > "$WORK/elf-dyn" ;;
+        *) return 1 ;;
+    esac
+    cmp -s -n 6 "$1" "$WORK/elf-ident" &&
+        { cmp -s -i 7:0 -n 1 "$1" "$WORK/elf-abi" ||
+          cmp -s -i 7:0 -n 1 "$1" "$WORK/elf-linux-abi"; } &&
+        { cmp -s -i 16:0 -n 4 "$1" "$WORK/elf-exec" ||
+          cmp -s -i 16:0 -n 4 "$1" "$WORK/elf-dyn"; }
 }
 
 portable_parent_safe() {
@@ -625,6 +651,24 @@ mkdir -p "$BIN" || die "Cannot create $BIN."
 STAGE=$(mktemp "$BIN/.mcw-stage.XXXXXXXX") || die 'Cannot create same-directory executable staging file.'
 tar -xOzf "$WORK/package.tar.gz" mcw > "$STAGE" || die 'Cannot stream the executable from the archive.'
 [ -s "$STAGE" ] || die 'Archive executable is empty.'
+if [ "$OS" = Linux ]; then
+    linux_executable "$STAGE" || die "Not a Linux $ASSET_ARCH ELF64 little-endian executable: mcw; previous installation preserved."
+    # Validate both executables before running either one, including when a
+    # foreign ELF could otherwise be accepted by a host binfmt interpreter.
+    if [ "$CAMERA_REQUIRED" = yes ]; then
+        owned_camera
+        mkdir -p "$CAMERA" || die 'Cannot create camera payload directory.'
+        CAMERA_STAGE=$(mktemp -d "$CAMERA/.mcw-stage.XXXXXXXX") || die 'Cannot stage camera payload.'
+        for CAMERA_NAME in $CAMERA_NAMES; do
+            tar -xOzf "$WORK/package.tar.gz" "$CAMERA_NAME" > "$CAMERA_STAGE/$CAMERA_NAME" || die "Cannot extract $CAMERA_NAME; previous installation preserved."
+            [ -s "$CAMERA_STAGE/$CAMERA_NAME" ] || die "Empty camera payload: $CAMERA_NAME."
+        done
+        linux_executable "$CAMERA_STAGE/mcw-camera-helper" || die "Not a Linux $ASSET_ARCH ELF64 little-endian executable: mcw-camera-helper; previous installation preserved."
+        for CAMERA_NAME in $CAMERA_NAMES; do
+            case "$CAMERA_NAME" in *.policy) chmod 644 "$CAMERA_STAGE/$CAMERA_NAME" ;; *) chmod 755 "$CAMERA_STAGE/$CAMERA_NAME" ;; esac
+        done
+    fi
+fi
 chmod 755 "$STAGE" || die 'Cannot make staged executable runnable.'
 if [ -n "$PORTABLE_TARGET" ]; then
     owned_binary
@@ -672,13 +716,6 @@ fi
 if [ "$OS" = Linux ]; then
     owned_camera
     if [ "$CAMERA_REQUIRED" = yes ]; then
-        mkdir -p "$CAMERA" || die 'Cannot create camera payload directory.'
-        CAMERA_STAGE=$(mktemp -d "$CAMERA/.mcw-stage.XXXXXXXX") || die 'Cannot stage camera payload.'
-        for CAMERA_NAME in $CAMERA_NAMES; do
-            tar -xOzf "$WORK/package.tar.gz" "$CAMERA_NAME" > "$CAMERA_STAGE/$CAMERA_NAME" || die "Cannot extract $CAMERA_NAME; previous installation preserved."
-            [ -s "$CAMERA_STAGE/$CAMERA_NAME" ] || die "Empty camera payload: $CAMERA_NAME."
-            case "$CAMERA_NAME" in *.policy) chmod 644 "$CAMERA_STAGE/$CAMERA_NAME" ;; *) chmod 755 "$CAMERA_STAGE/$CAMERA_NAME" ;; esac
-        done
         helper_version_matches "$CAMERA_STAGE/mcw-camera-helper" || die 'Archived helper protocol/app version does not match mcw; previous installation preserved.'
     fi
     owned_binary

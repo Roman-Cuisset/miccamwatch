@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Native, isolated checks of the public installer and real release executable.
 
-Run on Linux x86_64 or macOS 15+ (ARM/Intel), as a normal user, with bash,
+Run on Linux x86_64/aarch64 or macOS 15+ (ARM/Intel), as a normal user, with bash,
 zsh and fish available. --source-url must identify a public 40-hex commit:
   python3 installer/tests/native_install.py --source-url \
     https://raw.githubusercontent.com/Roman-Cuisset/miccamwatch/COMMIT/installer/install.sh
@@ -27,6 +27,7 @@ import shlex
 import shutil
 import signal
 import stat
+import struct
 import subprocess
 import sys
 import tarfile
@@ -83,12 +84,29 @@ CAMERA_NAMES = (
 )
 
 
+def linux_architecture():
+    require(platform.system() == "Linux", "native Linux host required")
+    arch = platform.machine()
+    require(arch in ("x86_64", "aarch64"), f"unsupported native Linux architecture: {arch}")
+    return arch
+
+
+def native_linux_elf(binary, name):
+    machine = {"x86_64": 62, "aarch64": 183}[linux_architecture()]
+    require(len(binary) >= 20 and binary[:6] == b"\x7fELF\x02\x01"
+            and binary[7] in (0, 3)
+            and struct.unpack("<HH", binary[16:20]) in ((2, machine), (3, machine)),
+            f"{name} is not a native Linux ELF64 little-endian executable")
+
+
 def released_binary(curl, root, version):
     os_name = platform.system()
     arch = platform.machine().lower()
     if os_name == "Linux":
-        require(arch == "x86_64", f"unsupported native test architecture: {arch}")
-        asset = "miccamwatch-linux-x86_64.tar.gz"
+        arch = linux_architecture()
+        require(arch != "aarch64" or tuple(map(int, version[1:].split("."))) >= (0, 21, 0),
+                "no historical Linux aarch64 release exists before v0.21.0")
+        asset = f"miccamwatch-linux-{arch}.tar.gz"
     else:
         require(os_name == "Darwin", f"native test requires Linux or macOS, not {os_name}")
         require(arch in ("arm64", "aarch64", "x86_64"), f"unsupported native architecture: {arch}")
@@ -116,6 +134,10 @@ def released_binary(curl, root, version):
                 matches = [member for member in release.getmembers() if member.name == name]
                 require(len(matches) == 1 and matches[0].isfile(), f"release lacks regular camera payload: {name}")
                 camera[name] = release.extractfile(matches[0]).read()
+    if os_name == "Linux":
+        native_linux_elf(binary, "release mcw")
+        if camera:
+            native_linux_elf(camera["mcw-camera-helper"], "release helper")
     executable = root / "verified-release-mcw"
     executable.write_bytes(binary)
     executable.chmod(0o755)
@@ -124,9 +146,11 @@ def released_binary(curl, root, version):
 
 
 def local_camera_archive(path, root, version):
-    require(platform.system() == "Linux", "--camera-archive requires native Linux")
+    arch = linux_architecture()
     require(tuple(map(int, version[1:].split("."))) >= (0, 16, 0),
             "--camera-archive requires explicit --version v0.16.0 or newer")
+    require(arch != "aarch64" or tuple(map(int, version[1:].split("."))) >= (0, 21, 0),
+            "Linux aarch64 candidates start at v0.21.0; no historical ARM baseline is available")
     required = {"mcw", "README.md", "LICENSE", *CAMERA_NAMES}
     with tarfile.open(path, "r:gz") as archive:
         members = archive.getmembers()
@@ -134,6 +158,8 @@ def local_camera_archive(path, root, version):
                 and all(member.isfile() for member in members), "local archive violates the Linux release contract")
         binary = archive.extractfile("mcw").read()
         camera = {name: archive.extractfile(name).read() for name in CAMERA_NAMES}
+    native_linux_elf(binary, "local mcw")
+    native_linux_elf(camera["mcw-camera-helper"], "local helper")
     executable = root / "verified-local-mcw"
     executable.write_bytes(binary)
     executable.chmod(0o755)
@@ -144,7 +170,7 @@ def local_camera_archive(path, root, version):
     helper.chmod(0o755)
     require(json.loads(run([helper, "--protocol-version"]).stdout)
             == {"protocol": 1, "version": version[1:]}, "local helper does not match the CLI/protocol")
-    return "miccamwatch-linux-x86_64.tar.gz", binary, camera
+    return f"miccamwatch-linux-{arch}.tar.gz", binary, camera
 
 
 class Sandbox:
@@ -560,6 +586,31 @@ def archive_bytes(binary, extra=None, replacement=None, camera=None):
     return output.getvalue()
 
 
+def linux_elf_rejection_archives(binary, camera):
+    """Corrupt genuine native bytes, never substitute another architecture's release."""
+    foreign = 183 if linux_architecture() == "x86_64" else 62
+    for member, original in (("mcw", binary), ("mcw-camera-helper", camera.get("mcw-camera-helper"))):
+        if original is None:
+            continue
+        for name, offset, value in (
+            ("magic", 0, b"#!"),
+            ("class", 4, b"\x01"),
+            ("endian", 5, b"\x02"),
+            ("foreign-machine", 18, struct.pack("<H", foreign)),
+            ("unknown-machine", 18, b"\x00\x00"),
+            ("type", 16, b"\x01\x00"),
+            ("abi", 7, b"\x09"),
+        ):
+            changed = original[:offset] + value + original[offset + len(value):]
+            payload = dict(camera)
+            if member == "mcw":
+                candidate = archive_bytes(changed, camera=payload)
+            else:
+                payload[member] = changed
+                candidate = archive_bytes(binary, camera=payload)
+            yield f"elf-{member}-{name}", candidate, member
+
+
 def fixture_environment(sandbox, responses):
     wrapper_dir = sandbox.root / "controlled transport"
     wrapper_dir.mkdir(exist_ok=True)
@@ -588,19 +639,15 @@ def fixtures(script, root, shells, version, asset, binary, camera):
         "truncated-archive": (good_archive[:100], None, asset, version),
         "version-mismatch": (good_archive, None, asset, "v0.14.999"),
     }
+    elf_scenarios = {}
+    if platform.system() == "Linux":
+        for name, payload, member in linux_elf_rejection_archives(binary, camera):
+            elf_scenarios[name] = member
+            scenarios[name] = (payload, None, asset, version)
     if camera:
         for missing in CAMERA_NAMES:
             incomplete = {name: content for name, content in camera.items() if name != missing}
             scenarios["missing-" + missing] = (archive_bytes(binary, camera=incomplete), None, asset, version)
-        for name, response in (
-            ("helper-version-mismatch", {"protocol": 1, "version": "0.15.1"}),
-            ("helper-protocol-mismatch", {"protocol": 2, "version": version[1:]}),
-        ):
-            incompatible = dict(camera)
-            incompatible["mcw-camera-helper"] = (
-                "#!/bin/sh\nprintf '%s\\n' " + shlex.quote(json.dumps(response)) + "\n"
-            ).encode()
-            scenarios[name] = (archive_bytes(binary, camera=incompatible), None, asset, version)
         for payload_name in CAMERA_NAMES:
             duplicate = tarfile.TarInfo(payload_name)
             scenarios["duplicate-" + payload_name] = (archive_bytes(binary, extra=duplicate, camera=camera), None, asset, version)
@@ -691,6 +738,10 @@ def fixtures(script, root, shells, version, asset, binary, camera):
         log.unlink(missing_ok=True)
         failed = sandbox.invoke(script, "--add-path", env=env, version=target_version, codes=None)
         require(failed.returncode != 0, f"installer accepted dangerous fixture: {name}")
+        if name in elf_scenarios:
+            member = elf_scenarios[name]
+            require(f"ELF64 little-endian executable: {member}" in failed.stderr,
+                    f"{name} did not fail at the actual pre-probe ELF validation boundary")
         require((sandbox.binary.stat().st_ino, sandbox.binary.read_bytes()) == prior_binary,
                 f"failed {name} replaced the working executable")
         require({path.relative_to(receipt): path.read_bytes() for path in receipt.rglob("*") if path.is_file()} == prior_receipt,
@@ -860,6 +911,25 @@ def camera_fixtures(script, root, shells, version, asset, binary, camera):
     usable(missing)
     missing.invoke(script, "--uninstall", "--no-modify-path", env=env, version=version)
     require(not payload_dir.exists() and not missing.binary.exists(), "transactional uninstall retained payload")
+
+    # Controlled format migration, not a fabricated historical ARM release:
+    # retain the genuine candidate and its installer-created binary receipts,
+    # while presenting the existing format-1 binary-only asset layout.
+    migration = Sandbox(root, "camera-binary-only-format-migration", "bash", shells["bash"])
+    env = transport(migration, camera)
+    migration.invoke(script, "--no-modify-path", env=env, version=version)
+    payload_dir = migration.prefix / "share/miccamwatch/linux-camera"
+    shutil.rmtree(payload_dir)
+    receipt = migration.prefix / ".miccamwatch-install"
+    for name in ("camera-helper.sha256", "camera-installer.sha256", "camera-policy.sha256"):
+        (receipt / name).unlink()
+    migration.invoke(script, "--no-modify-path", env=env, version=version)
+    require({name: (payload_dir / name).read_bytes() for name in CAMERA_NAMES} == camera,
+            "binary-only format migration did not install the matching camera payload")
+    usable(migration)
+    migration.invoke(script, "--uninstall", "--no-modify-path", env=env, version=version)
+    require(not migration.binary.exists() and not payload_dir.exists(), "format migration uninstall retained payload")
+    print("PASS controlled binary-only format-1 migration with genuine same-version candidate; not historical release proof")
 
     rollback = Sandbox(root, "camera-transaction-rollback", "bash", shells["bash"])
     env = transport(rollback, camera)
