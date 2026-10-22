@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Real brew qualification on a disposable macOS 15+ Aqua host; no devices changed."""
 import argparse
-import difflib
 import hashlib
 import json
 import os
@@ -19,8 +18,6 @@ import uuid
 
 LABEL = "com.roman-cuisset.miccamwatch.tray"
 RELEASE_COMMIT = "a58c8b9f3a967589a576879d6d27bfdbc40f9dff"
-Z3_FORMULA_COMMIT = "19fcaa4600dca4d0ece386ee97016a2c43932ba5"
-Z3_FORMULA_SHA256 = "7fa080c800e9dc84fb382a5185714d569cca941e0fdf31a13e01fa6d31d1beae"
 
 
 def require(condition, message):
@@ -167,46 +164,35 @@ class Qualification:
         self.mcw("native-menu-stopped", "tray", "status", codes=(1,))
 
     def provision_intel_rust(self):
-        # Intel has no current Rust bottle. Keep Homebrew's real dependency
-        # graph and source builds, repairing only the known upstream Z3 helper
-        # defect in this disposable machine's official core source checkout.
+        # Use the disposable host's unmodified official core source graph,
+        # consistently, rather than mixing its recipes with API formulae.
         self.brew("intel-core-source-checkout", "tap", "--force", "homebrew/core")
         self.env["HOMEBREW_NO_INSTALL_FROM_API"] = "1"
         core = Path(self.brew("intel-core-repository", "--repository", "homebrew/core").stdout.decode().strip())
-        recipe = core / "Formula/z/z3.rb"
-        before = recipe.read_bytes()
-        (self.proof / "intel-z3-before.rb").write_bytes(before)
-        original_sha256 = hashlib.sha256(before).hexdigest()
-        (self.proof / "intel-z3-before.sha256").write_text(original_sha256 + "\n")
-        require(original_sha256 == Z3_FORMULA_SHA256,
-                "Intel Z3 source differs from the exact reviewed broken upstream recipe; do not patch it")
-        original = before.decode()
-        anchor = "  def install\n"
-        require(original.count(anchor) == 1, "Expected exactly one Z3 install method")
-        helper = '  def python3\n    Formula["python@3.15"].opt_bin/"python3.15"\n  end\n\n'
-        repaired = original.replace(anchor, helper + anchor, 1)
-        after = repaired.encode()
-        (self.proof / "intel-z3-after.rb").write_bytes(after)
-        (self.proof / "intel-z3-helper.patch").write_text("".join(difflib.unified_diff(
-            original.splitlines(keepends=True), repaired.splitlines(keepends=True),
-            fromfile="upstream/Formula/z/z3.rb", tofile="repaired/Formula/z/z3.rb")))
+        commit = self.run("intel-core-commit", ["git", "-C", core, "rev-parse", "HEAD"]).stdout.decode().strip()
+        origin = self.run("intel-core-origin", ["git", "-C", core, "remote", "get-url", "origin"]).stdout.decode().strip()
+        self.run("intel-core-unmodified", ["git", "-C", core, "diff", "--exit-code", "HEAD", "--"])
+        recipe = (core / "Formula/z/z3.rb").read_bytes()
+        recipe_sha256 = hashlib.sha256(recipe).hexdigest()
+        (self.proof / "intel-z3-source.rb").write_bytes(recipe)
+        (self.proof / "intel-z3-source.sha256").write_text(recipe_sha256 + "\n")
         self.rust_provisioning = (
-            "Native Homebrew LLVM/Rust source builds with an explicit checked upstream Z3 "
-            "python@3.15 helper repair; not stock broken core. Z3 source/checksum and C/Python tests unchanged.")
-        (self.proof / "intel-prerequisite-repair.json").write_text(json.dumps({
+            "Unmodified official Homebrew core source checkout " + commit + " (" + origin + "); "
+            "API formula installs disabled. Native LLVM/Rust source builds and unchanged Z3 C/Python tests.")
+        (self.proof / "intel-core-source.json").write_text(json.dumps({
             "scope": self.rust_provisioning,
-            "upstream_formula_url": "https://raw.githubusercontent.com/Homebrew/homebrew-core/"
-                                    + Z3_FORMULA_COMMIT + "/Formula/z/z3.rb",
-            "original_formula_sha256": Z3_FORMULA_SHA256,
-            "repaired_formula_sha256": hashlib.sha256(after).hexdigest(),
-            "helper": helper,
+            "core_commit": commit,
+            "core_origin": origin,
+            "z3_formula_sha256": recipe_sha256,
+            "formula_api_disabled": True,
         }, indent=2) + "\n")
-        recipe.write_bytes(after)
+        self.brew("intel-source-toolchain-formulae", "info", "--json=v2", "rust", "llvm", "z3")
         missing = self.brew("intel-missing-rust-dependencies", "deps", "--include-build",
                             "--missing", "--topological", "rust").stdout.decode().splitlines()
         self.run("intel-native-rust-source-install",
                  ["brew", "install", "--build-from-source", "--formula", *missing, "rust"],
                  timeout=18000)
+        self.brew("intel-installed-toolchain-versions", "list", "--versions", "rust", "llvm", "z3")
         self.brew("intel-z3-real-c-and-python-tests", "test", "--formula", "z3")
 
     def execute(self):

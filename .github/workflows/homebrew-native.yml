@@ -3,6 +3,11 @@ name: Native Homebrew distribution qualification
 on:
   workflow_dispatch:
     inputs:
+      architecture:
+        description: "Native cases to run; all retains the complete six-case matrix"
+        type: choice
+        options: [all, arm64, x86_64]
+        default: all
       candidate-source-url:
         description: "Optional immutable upstream codeload URL; supply all four candidate fields"
         type: string
@@ -34,30 +39,13 @@ jobs:
       fail-fast: false
       max-parallel: 2
       matrix:
-        include:
-          - runner: macos-15
-            architecture: arm64
-            intent: loaded
-          - runner: macos-15
-            architecture: arm64
-            intent: dormant
-          - runner: macos-15
-            architecture: arm64
-            intent: disabled
-          - runner: macos-15-intel
-            architecture: x86_64
-            intent: loaded
-          - runner: macos-15-intel
-            architecture: x86_64
-            intent: dormant
-          - runner: macos-15-intel
-            architecture: x86_64
-            intent: disabled
-    runs-on: ${{ matrix.runner }}
+        architecture: ${{ fromJSON(inputs.architecture == 'arm64' && '["arm64"]' || inputs.architecture == 'x86_64' && '["x86_64"]' || '["arm64","x86_64"]') }}
+        intent: [loaded, dormant, disabled]
+    runs-on: ${{ matrix.architecture == 'arm64' && 'macos-15' || 'macos-15-intel' }}
     timeout-minutes: 360
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - name: Qualify source packages (Intel includes checked upstream Z3 helper repair)
+      - name: Qualify source packages (Intel uses unmodified official core checkout)
         shell: bash
         env:
           CANDIDATE_SOURCE_URL: ${{ inputs.candidate-source-url }}
@@ -78,11 +66,10 @@ jobs:
           stat -f 'Cellar before: %N uid=%u gid=%g mode=%OLp' "$cellar"
           chmod go-w "$cellar"
           stat -f 'Cellar prepared: %N uid=%u gid=%g mode=%OLp' "$cellar"
-          # Intel retains native Homebrew LLVM/Rust source builds. The script
-          # fails closed unless Z3 matches the reviewed upstream recipe, then
-          # adds only its missing declared-Python helper and runs its real tests.
-          # Original/repaired recipes, hashes and the exact patch are artifacts;
-          # Intel results explicitly identify this upstream-prerequisite repair.
+          # Intel uses its unmodified official core source graph with formula
+          # API installs disabled, retaining native LLVM/Rust source builds and
+          # Z3's genuine C/Python tests. Artifacts record the exact core commit,
+          # origin, Z3 recipe/hash and Rust/LLVM/Z3 versions, not a latest-core claim.
           python3 -B distribution/homebrew/native_qualification.py \
             --disposable-machine \
             --architecture "$EXPECTED_ARCH" \
