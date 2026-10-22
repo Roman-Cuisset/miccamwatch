@@ -3,12 +3,13 @@
 Dernière mise à jour : **2026-10-22**. Responsable : lead architecture/développement.
 Base publiée : [v0.20.0 stable/latest](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.20.0), source `a26522028eafe02591f58c03ceb5c367f2d5d60b`, tag annoté `547f6185a0579876041d1ae7ebcdd6feccdcb5cf`, releaseID 420936561, publiée le 22/10 à 16:13:39Z. [Release native 39807585260](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/39807585260) réussie : neuf assets publics taille/digest API, huit entrées SHA256SUMS et huit sujets de provenance signée SLSA v1 vérifiés ; Windows EXE/MSI non signés, macOS ad-hoc.
 
-**Publication 0.20.0 effectuée le 22/10 :** les fichiers publics, leurs sommes et leur provenance sont vérifiés. Le site et les pins du dépôt sont alignés après cette vérification ; aucune publication externe Homebrew/AUR ni installation PC n'a été faite par l'assistant.
-Lots approuvés : diagnostic/correction de fermeture macOS Intel, fenêtre native
-de consultation et statut lisible, menu simplifié/À propos, `mcw uninstall`,
-puis ajout du logo officiel aux exécutables et au raccourci MSI Windows.
-Implémentations en source, intégration/revues et qualification natives en cours ;
-aucun changement de l'installation, des protections ou du backup du PC utilisateur.
+**Publication 0.20.0 effectuée le 22/10 :** les fichiers publics, leurs sommes et leur provenance sont vérifiés. Le site et les pins du dépôt sont alignés après cette vérification ; aucune publication externe Homebrew/AUR effectuée. Les essais PC autorisés ont utilisé des installations de test isolées puis retirées, sans remplacement de l'installation habituelle ni commande de protection micro/caméra.
+
+**Prochain lot en cours : P1-ARM, source `0.21.0` non publiée**, sur la branche
+`work/linux-arm64-021`. Construction et qualification Linux ARM64 natives sur
+Ubuntu22.04/glibc2.35, contrôles ELF et frontières d'installation conservés.
+La stable0.20.0 et son site restent inchangés ; un PASS en VM ne certifiera pas
+le matériel d'un Raspberry Pi/SBC.
 
 **Historique du candidat0.19.0 non publié livré avant cette autorisation :**
 paquets actualisés du commit `535bfc60d768976b98486c327fe7d1cca816980d` disponibles dans
@@ -84,7 +85,7 @@ Les identifiants sont stables. À chaque livraison, remplacer l'état par **En c
 | P1-AUR | Recette0191 source3dd/SHAb044 synchronisée ; qualification native complète0181 conservée ; publication AUR bloquée par accès SSH mainteneur | Moyenne | Requalification courante distincte des pins ; aucune soumission externe ni autorisation mainteneur inventée |
 | P1-WG | Winget : à faire | Moyenne | Identité MSI et upgrades contrôlés |
 | P1-MAC-APP-DMG | **Paquets publiés0.19.1**, DMG Apple Silicon et Intel, sommes/provenance vérifiées | Moyenne | Natif release191 et smokes publics bootstrap/CLI passent ; preuves Finder/Exit/autostart antérieures conservées, ad-hoc seulement, pas d'upgrade inter-version app inventé |
-| P1-ARM | Linux ARM64 : à faire | Élevée | ABI/sysroot, installation et tests natifs |
+| P1-ARM | **En cours, source0.21.0 non publiée** — branche work/linux-arm64-021 | Élevée | Runner natif ubuntu-22.04-arm confirmé dans la documentation GitHub ; même baseline glibc2.35/PipeWire que x64. Installateurs et CI traités séparément, qualification intégrée à venir. Aucun support Pi matériel, ARMv7/32bits ou musl déduit |
 | P1-UPGRADE | **Correctifs EOF019 et deux hosts191 publiés, qualifiés publics** | Moyenne | CLI39419044223 et compagnon39419044530 : vrai caller191 mappé, compagnon019 réparé, paire publique exacte, EOF avec successeur vivant et no-op mêmePID/HWND passés. Anciens clients non corrigés rétroactivement ; protections/restaurations restent des refus |
 | P1-UPGRADE-ACTIVE | **Tray actif sans protection qualifié public191 pour les deux hosts** ; transfert de protection active non promis | Moyenne | Réparation/no-op publics191 passent sans kill ni perte de contexte/préférences ; lease/foreign refusés sans stop dans cinq layouts natifs. L'ancien frontend PC0181 déjà dans le backup exige une bascule unique, cause du Busy historique non établie |
 | P1-STARTUP-PASSIVE | **Publié019 Windows** : premier état de session connu = baseline passive ; les lacunes Unknown ne créent pas d'arête | Moyenne | Régressions initial Unknown/Locked/Unlocked et transitions ultérieures passées ; protections demandées/restaurations conservées ; aucune action sur le PC par l'assistant |
