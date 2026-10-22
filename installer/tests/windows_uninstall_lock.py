@@ -4,9 +4,14 @@ Windows DEBUG_PROCESS stops the actual child at CREATE_PROCESS_DEBUG_EVENT,
 before its first instruction. The fixture takes the production byte-range lock
 there, then resumes the worker normally. No fake worker, production test hook,
 process termination, device effect, privilege adjustment or timing guess.
+Every created image and its kernel-reported parent are logged before the strict
+worker identity checks. Only the native system-directory console host, parented
+by this caller or its verified worker, is accepted as an additional descendant;
+it remains debugged until exit, with native exceptions handled normally.
 """
 import ctypes as C
 from ctypes import wintypes as W
+import hashlib
 import json
 import msvcrt
 from pathlib import Path
@@ -46,6 +51,12 @@ class DebugEvent(C.Structure):
     _fields_ = [("code", W.DWORD), ("pid", W.DWORD), ("tid", W.DWORD), ("data", EventData)]
 
 
+class ProcessBasicInformation(C.Structure):
+    _fields_ = [("reserved1", C.c_void_p), ("peb", C.c_void_p),
+                ("reserved2", C.c_void_p * 2), ("pid", C.c_size_t),
+                ("parent_pid", C.c_size_t)]
+
+
 def busy_worker(cli, env, private_output):
     assert C.sizeof(C.c_void_p) == 8 and C.sizeof(DebugEvent) == 176, "Native fixture requires Windows x64 SDK layout"
     native = C.WinDLL("kernel32", use_last_error=True)
@@ -59,9 +70,23 @@ def busy_worker(cli, env, private_output):
     native.DebugActiveProcessStop.restype = W.BOOL
     native.GetFinalPathNameByHandleW.argtypes = [W.HANDLE, W.LPWSTR, W.DWORD, W.DWORD]
     native.GetFinalPathNameByHandleW.restype = W.DWORD
+    native.GetSystemDirectoryW.argtypes = [W.LPWSTR, W.UINT]
+    native.GetSystemDirectoryW.restype = W.UINT
     native.CloseHandle.argtypes = [W.HANDLE]
     native.CloseHandle.restype = W.BOOL
+    ntdll = C.WinDLL("ntdll")
+    ntdll.NtQueryInformationProcess.argtypes = [
+        W.HANDLE, W.DWORD, C.c_void_p, W.ULONG, C.POINTER(W.ULONG)]
+    ntdll.NtQueryInformationProcess.restype = C.c_long
+    system_directory = C.create_unicode_buffer(32768)
+    system_length = native.GetSystemDirectoryW(system_directory, len(system_directory))
+    assert 0 < system_length < len(system_directory), C.WinError(C.get_last_error())
+    console_image = (Path(system_directory.value) / "conhost.exe").resolve(strict=True)
+    with cli.open("rb") as installed:
+        cli_hash = hashlib.file_digest(installed, "sha256").digest()
     live = set()
+    console_hosts = set()
+    console_exits = {}
     worker = None
     worker_exit = None
     result = None
@@ -88,15 +113,35 @@ def busy_worker(cli, env, private_output):
                         live.add(event.pid)
                         information = event.data.create
                         try:
-                            if event.pid != parent.pid:
-                                path = C.create_unicode_buffer(32768)
-                                length = native.GetFinalPathNameByHandleW(information.file, path, len(path), 0)
-                                assert 0 < length < len(path), "Native worker image identity unavailable"
-                                image = path.value.removeprefix("\\\\?\\")
+                            path = C.create_unicode_buffer(32768)
+                            length = native.GetFinalPathNameByHandleW(information.file, path, len(path), 0)
+                            assert 0 < length < len(path), f"Debugged image identity unavailable: {C.WinError(C.get_last_error())}"
+                            image = path.value.removeprefix("\\\\?\\")
+                            basic, returned = ProcessBasicInformation(), W.ULONG()
+                            status = ntdll.NtQueryInformationProcess(
+                                information.process, 0, C.byref(basic), C.sizeof(basic), C.byref(returned))
+                            print(f"created pid={event.pid} image={image!r} "
+                                  f"kernel_parent_pid={basic.parent_pid} kernel_pid={basic.pid} "
+                                  f"query_status=0x{status & 0xffffffff:08x} returned={returned.value}",
+                                  file=debug, flush=True)
+                            assert status >= 0 and returned.value == C.sizeof(basic), "Cannot inspect debugged process kernel parent"
+                            assert basic.pid == event.pid, "Debug event and kernel process identity disagree"
+                            if event.pid != parent.pid and Path(image).resolve(strict=True) == console_image:
+                                assert basic.parent_pid in {parent.pid, worker} and basic.parent_pid in live, (
+                                    f"System console host has an unauthenticated parent: {basic.parent_pid}")
+                                console_hosts.add(event.pid)
+                                print(f"authenticated system console host pid={event.pid}; "
+                                      f"kernel_parent_pid={basic.parent_pid}", file=debug, flush=True)
+                            elif event.pid != parent.pid:
                                 helper = Path(image)
-                                assert helper.name == "worker.exe" and helper.parent.name.startswith(".mcw-uninstall-"), "Unexpected debugged descendant"
+                                assert helper.name == "worker.exe" and helper.parent.name.startswith(".mcw-uninstall-"), (
+                                    f"Unexpected debugged descendant: image={image!r}, pid={event.pid}, "
+                                    f"kernel_parent_pid={basic.parent_pid}")
                                 assert helper.parent.parent.resolve() == Path(env["TEMP"]).resolve(), "Worker is outside isolated temporary state"
                                 assert worker is None, "Unexpected second uninstall worker"
+                                assert basic.parent_pid == parent.pid and parent.pid in live, "Worker is not a direct child of the live caller"
+                                with helper.open("rb") as staged:
+                                    assert hashlib.file_digest(staged, "sha256").digest() == cli_hash, "Worker differs from the installed CLI"
                                 worker = event.pid
                                 result = helper.parent / "result.json"
                                 # The caller released this permanent lock before CreateProcess.
@@ -114,6 +159,9 @@ def busy_worker(cli, env, private_output):
                         if event.pid == worker:
                             worker_exit = event.data.exit_code
                             print(f"worker exit={worker_exit}", file=debug, flush=True)
+                        elif event.pid in console_hosts:
+                            console_exits[event.pid] = event.data.exit_code
+                            print(f"system console host pid={event.pid} exit={event.data.exit_code}", file=debug, flush=True)
                     elif event.code == 6:  # LOAD_DLL_DEBUG_EVENT
                         if event.data.load_dll.file:
                             native.CloseHandle(event.data.load_dll.file)
@@ -126,6 +174,7 @@ def busy_worker(cli, env, private_output):
                         print(f"ContinueDebugEvent failed: {error}", file=debug, flush=True)
                         if not failing:
                             raise error
+            assert console_hosts == console_exits.keys(), "System console host remains alive"
             assert worker is not None and worker_exit is not None and worker_exit != 0, "Actual worker did not refuse its busy lock"
             caller_exit = parent.wait(timeout=5)
             print(f"caller exit={caller_exit}", file=debug, flush=True)
