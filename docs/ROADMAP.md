@@ -70,7 +70,7 @@ Les identifiants sont stables. À chaque livraison, remplacer l'état par **En c
 | P0-WIN-IPC | **Publié0.19.0**, scénario natif complet passé : concurrence des clients du pipe admise avec attente bornée | Moyenne | CI39205263872 : vraie libération micro après garde/tray passée ; connexion seule attend3s, pairs conservés, aucune commande rejouée ni mutex d'ownership contourné |
 | P0-WIN-OWNER-IDLE | **Publié0.19.0**, cycle du vrai broker qualifié : arrêt coordonné avec les requêtes admises, sans hausse des délais ni replay | Élevée | bb70dcf, régression ciblée et contre-exemple concurrent sans SDK ; CI39217101436 proof_complete:true, libération et EOF réels passés. Cause unique du délai historique non certifiée |
 | P1-MAC-MENU | **Publié 0.18.0, AppKit réel qualifié** : quatre profils directs cochés, marque MCW template/badges, Details au-dessus d'Exit, sept langues et `--config` prioritaire | Moyenne | IPC desktop v2 frontend/helper appariés ; captures rendues et vraies fenêtres relues, données de capture simulées explicitement |
-| P1-MAC-UX | **Qualifié natif Intel/ARM en source0.20.0 non publiée** | Moyenne | CI39579549269 : consultation, menu simplifié et À propos sept langues, reflow initial/narrow/wide/restored ; app-smoke des deux architectures passed, fermeture/réouverture singleton et Finder ordinaire sans remplacer l'owner. Contrôles et autorisations matériels non revendiqués |
+| P1-MAC-UX | **Consultation publiée0.20.0 ; refonte structurée0.21.0 en cours** à la suite de la nouvelle capture utilisateur | Moyenne | Remplacer le mur de diagnostics initial par Vue d'ensemble/Réglages/Diagnostics, état micro/caméra et accès actuellement observés, contrôles de préférences réels, présentation AppKit lisible et sept langues. Diagnostic causal séparé : corriger les défauts établis, pas masquer les limites macOS. Qualification native Intel/ARM à refaire pour ce nouveau lot |
 | P1-TRAY-PROFILES | **Publié0.19.0, qualifié natif Windows/Linux** : quatre profils directs cochés, profil Windows également visible dans le libellé parent | Moyenne | Correctif62b550e, CI39298930148 :21 cas Windows passent, vrais rendus Profil — Réunion/Développement et priorité --config relus ; trois Unix verts. Collecteurs et protections matérielles hors fixture |
 | SITE-PAGES | **Publié et vérifié HTTPS0191**, source web89a7c8a : racine anglaise, russe et liens publics191 | Moyenne | Export privé huit accueils/quatre tests Node ; vrai navigateur rooten et /ru/ langru, huit liens191 et copyright vérifiés. Captures171 historiques non relabellées ; pas de fonctionnalités0.20 présentées comme déjà disponibles en0191 |
 | SITE-TOKENS | **Corrigé sur Pages, vérifié après déploiement `f1344bf`**. Build Git exécuté depuis racine dépôt, output `site-dist`, version/source/checksum réels ; source HTML brute n'est plus un entrypoint | Faible à Moyenne | Gardes build, source unique des faits, aucun token résiduel |
@@ -378,13 +378,15 @@ permission refusée et retrait ; pas de preuve de capture matérielle déduite d
 
 ### P1-ARM — Linux ARM64 natif et Raspberry Pi/SBC
 
-**Fonction :** produire `aarch64-unknown-linux-gnu` et `miccamwatch-linux-aarch64.tar.gz` ; la cross-compilation prépare le paquet, les smokes ARM64 natifs en autorisent la publication.
+**Fonction :** produire `aarch64-unknown-linux-gnu` et `miccamwatch-linux-aarch64.tar.gz` par build natif sur `ubuntu-22.04-arm`, au même niveau de baseline que Linux x64. Une éventuelle cross-compilation ne remplacerait pas les smokes natifs nécessaires avant publication.
 
 **Modules Rust :** `src/platform/linux.rs`, `src/platform/linux/pipewire.rs`, `src/platform/linux/control.rs`, `src/platform/linux/procfs.rs`, `src/privacy/linux/usb.rs`, `src/privacy/linux/helper.rs`. Intégration : `Cargo.toml`, `vendor/libspa`, `.github/workflows/ci.yml`, `.github/workflows/release.yml`, `.github/workflows/unix-install.yml`, `installer/install.sh`, `installer/install-camera-helper.sh` et `installer/tests/`.
 
-**Contraintes :** sysroot/compiler, bindgen et pkg-config doivent viser les bibliothèques/header ARM64 de la baseline, sans emprunter ceux de l'hôte x64. Maintenir glibc 2.35+ et l'ABI PipeWire/SPA documentée ; aucune promesse ARMv7/OS 32 bits/musl. L'installateur ordinaire, le bootstrap root et les tests sont actuellement x64-only ; le bootstrap vérifie aussi l'ELF `e_machine=62`. Adapter la validation complète à AArch64 (`183`), sans supprimer les contrôles d'intégrité/architecture ni les restrictions de tests privilégiés aux machines jetables.
+**Contraintes :** compiler, bindgen et pkg-config doivent viser les bibliothèques/header ARM64 de la baseline, sans emprunter ceux de l'hôte x64. Maintenir glibc 2.35+ et l'ABI PipeWire/SPA documentée ; aucune promesse ARMv7/OS 32 bits/musl. Dans la source0.21.0, l'installateur ordinaire, le bootstrap root et les fixtures sélectionnent désormais l'architecture native ; les deux ELF doivent être 64bits little-endian, de type exécutable et d'ABI autorisée, avec `e_machine=183` sur ARM ou `62` sur x64 avant toute sonde. Les contrôles d'intégrité et les restrictions des tests privilégiés aux machines jetables sont conservés.
 
 **Validation :** fmt/clippy/tests, vraie extraction et CLI/PTY sur ARM64, serveur PipeWire, installation/migration/uninstall ; smoke desktop uniquement avec session/panel réels. Une VM ou QEMU ne prouve pas le support matériel d'un Pi. Tester un SBC autorisé séparément : micro observable et, si disponible, webcam USB conforme. Les caméras CSI/non-USB restent hors contrôle USB ; un SBC headless n'exige pas un tray fictif.
+
+**État0.21.0 non publié :** builds/tests/roundtrip SPA-C et frontières d'installation root ARM passés sur sourcee6ea9a1 ; installation/retrait gérés et vrai Cargo passés dans le run39828453493. Le scénario PipeWire du premier run39828353569 exigeait à tort un baseline ARM0161 inexistant : correction2998946, qualification complète relancée dans39832624207. Les baselines absents sont déclarés indisponibles, jamais remplacés par x64 ; migration de format au même candidat seulement, pas une migration publique ARM historique. Les mesures candidates ne prouvent pas le budget global15Mo. Aucun SBC physique qualifié.
 
 **Complexité : Élevée.** Nouvelle plateforme : release mineure plutôt que patch cosmétique.
 
@@ -1131,7 +1133,7 @@ pas promettre une couleur orange sur cette icône monochrome.
 compréhensible, aucune fenêtre de programme ne permet de consulter les
 informations, certains éléments du tray semblent superflus et une courte
 présentation dans « À propos… » manque.
-**État :** implémenté et qualifié sur Intel/ARM pour **0.20.0**, non publiée.
+**État :** première consultation implémentée et qualifiée sur Intel/ARM, publiée dans **0.20.0**. La nouvelle capture utilisateur expose une présentation trop technique : refonte **0.21.0 non publiée** en cours, distincte de cette première livraison.
 CI39579549269 et ses rapports app-smoke passent les quatre surfaces ; réouvertures
 Finder ordinaires et fenêtre singleton conservées. Les limites matérielles et
 d'autorisation du système restent explicites.
@@ -1157,6 +1159,9 @@ d'autorisation du système restent explicites.
    au microphone et à la caméra. Elle affiche les informations rendues visibles
    par le système, sans enregistrer de son ni d'image. » Ne pas promettre une
    attribution ou un blocage que macOS ne permet pas.
+
+5. **Retour complémentaire utilisateur/ami pour0.21.0.** Une fenêtre essentiellement composée de diagnostics et de deux boutons ne suffit pas. Ajouter une **Vue d'ensemble** lisible avec statut micro/caméra séparé de la protection, accès observés actuellement et date de la dernière observation ; des **Réglages** réellement persistés (profil, notifications/son, historique local, pause et autostart) ; un espace **Diagnostics** copiable et distinct de l'accueil. Utiliser les composants AppKit natifs, le logo existant, les couleurs système clair/sombre, une hiérarchie visuelle et une mise en page utilisable autour de645×570 et au redimensionnement. Préserver l'onglet, le focus, la sélection et le défilement lors des mises à jour.
+6. **Exploiter les diagnostics, pas seulement les déplacer.** Rechercher les causes des états dégradés/inconnus et corriger les bugs MCW démontrés, en distinguant les permissions système et le périmètre d'observation. Une inspection administrateur ponctuelle des profils n'est ni une permission TCC ni une preuve d'accès global à toutes les captures. Aucune collecte distante automatique, aucune élévation permanente, aucune suppression d'alerte pour afficher un faux statut rassurant.
 
 **Validation :** vrais statut/fenêtre/menu/À propos sous macOS, compréhension des
 états actif/inactif/inconnu/dégradé, ouverture/réouverture/fermeture sans doublon,
