@@ -112,7 +112,8 @@ def snapshot(token):
     checked(userenv.GetUserProfileDirectoryW(token, profile, c.byref(size)))
     return {"sid": sid_string(SidAttributes.from_buffer(user).sid),
             "session": number(12), "token_elevation": number(20),
-            "token_elevation_type": number(18), "has_restrictions": number(21),
+            "token_elevation_type": number(18),
+            "has_restrictions": bool(c.c_ubyte.from_buffer(token_info(token, 21)).value),
             "profile": profile.value, "userprofile_env": os.environ.get("USERPROFILE"),
             "appdata_env": os.environ.get("APPDATA"), "localappdata_env": os.environ.get("LOCALAPPDATA"),
             "administrators": admins, "admin_group_enabled": any(g["enabled"] for g in admins)}
