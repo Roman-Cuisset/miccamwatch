@@ -197,6 +197,9 @@ public static class McwRdpNative {
     $rdp.Domain = $machine
     $rdp.UserName = $name
     $rdp.DesktopWidth = 1024; $rdp.DesktopHeight = 768
+    $report.initial_color_depth = $rdp.ColorDepth
+    $rdp.ColorDepth = 32
+    $report.configured_color_depth = $rdp.ColorDepth
     $rdp.AdvancedSettings5.AuthenticationLevel = 1
     $rdp.AdvancedSettings7.EnableCredSspSupport = $true
     $rdp.AdvancedSettings2.RedirectDrives = $false
@@ -303,8 +306,9 @@ public static class McwRdpNative {
         } catch { $report.native_error_read_failure = $_.Exception.ToString() }
     }
     if ($report.status -eq 'refused_or_failed') {
+        & secedit.exe /export /areas USER_RIGHTS /cfg (Join-Path $stage 'native-logon-rights.inf') /log (Join-Path $stage 'native-logon-rights-export.log') | Out-Null
         $since = (Get-Date).AddSeconds(-$clock.Elapsed.TotalSeconds - 5)
-        $channels = @('Security','Microsoft-Windows-TerminalServices-RemoteConnectionManager/Operational','Microsoft-Windows-TerminalServices-LocalSessionManager/Operational','Microsoft-Windows-RemoteDesktopServices-RdpCoreTS/Operational')
+        $channels = @('Security','Application','System','Microsoft-Windows-TerminalServices-RemoteConnectionManager/Operational','Microsoft-Windows-TerminalServices-LocalSessionManager/Operational','Microsoft-Windows-RemoteDesktopServices-RdpCoreTS/Operational')
         foreach ($channel in $channels) {
             $file = Join-Path $stage ('native-events-' + ($channel -replace '[^A-Za-z0-9]','_') + '.json')
             try {
