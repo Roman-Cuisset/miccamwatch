@@ -32,7 +32,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-15, macos-15-intel]
+        os: [ubuntu-24.04, ubuntu-22.04-arm, macos-15, macos-15-intel]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 40
     env:
@@ -68,6 +68,18 @@ jobs:
               stat -c '%n after uninstall prerequisites: uid=%u gid=%g mode=%a' "$directory"
             fi
           done
+      - name: Retain actual native uninstall host identity
+        shell: bash
+        run: |
+          uname -a > "$RUNNER_TEMP/uninstall-proof/uname.txt"
+          rustc -vV > "$RUNNER_TEMP/uninstall-proof/rustc.txt"
+          if [ "$RUNNER_OS" = Linux ]; then
+            arch=$(uname -m)
+            case "$arch" in x86_64|aarch64) ;; *) exit 1 ;; esac
+            rustc -vV | python3 -c 'import sys; assert "host: " + sys.argv[1] + "-unknown-linux-gnu" in sys.stdin.read().splitlines()' "$arch"
+            getconf GNU_LIBC_VERSION > "$RUNNER_TEMP/uninstall-proof/glibc.txt"
+            pkg-config --modversion libpipewire-0.3 libspa-0.2 > "$RUNNER_TEMP/uninstall-proof/native-headers.txt"
+          fi
       - name: Build genuine native payloads
         shell: bash
         run: |

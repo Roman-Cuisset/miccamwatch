@@ -2,7 +2,7 @@
 """Real-process resource qualification, not a physical-device latency test.
 
 Private proof dependencies: pyte, plus pywinpty on Windows (NativeTerminal).
-Local: --proof DIR [--binary MCW]; baseline is always downloaded and hash-pinned.
+Local: --proof DIR [--binary MCW]; available baselines are downloaded/hash-pinned.
 Tray requires --runner-desktop on a disposable, logged-in native desktop runner.
 No raw status, terminal, event, process arguments or clipboard are persisted.
 """
@@ -33,6 +33,10 @@ HASHES = {
     "macos-aarch64": "ec1ecb4554cc14da5f1cbdc5e15af71766506ebe0d98643ed8137b56c052a5af",
     "macos-x86_64": "9000d6353c98bc5ada162b5df13afe4b9477748ecfbe1c35245c019ea0d04bad",
     "windows-x86_64": "276f0719b595e30b171ab1010e418de7bc4defcfc05e87b7e048a11406981e70",
+}
+# Public v0.16.1 never shipped this native architecture. Do not substitute x64.
+MISSING_BASELINES = {
+    "linux-aarch64": "No historical native Linux aarch64 archive was published for v0.16.1.",
 }
 BUDGET = 15_000_000
 INTERVAL = .025
@@ -1004,7 +1008,8 @@ def main():
     arch = {"AMD64": "x86_64", "arm64": "aarch64"}.get(platform.machine(), platform.machine())
     key = f"{system}-{arch}"
     report = dict(schema_version=1, host=dict(os=system, os_version=platform.platform(), arch=arch,
-                                            python_version=platform.python_version()), baseline=dict(label="baseline"), candidate=None,
+                                            python_version=platform.python_version()),
+                  baseline=dict(label="baseline", available=key in HASHES), candidate=None,
                   runs=[], requested_modes=["status", "watch", "top"] + (["tray"] if args.runner_desktop else []),
                   privacy=dict(raw_status_events_terminal_clipboard_published=False, hardware_actions=False,
                                notifications_sound_history_lock_policy=False, autostart_enabled=False),
@@ -1027,7 +1032,12 @@ def main():
     backend = None
     original_environment = os.environ.copy()
     try:
-        assert key in HASHES, "No independently pinned baseline for this native OS/architecture"
+        assert key in HASHES or key in MISSING_BASELINES, "Unsupported native resource qualification OS/architecture"
+        if key in MISSING_BASELINES:
+            report["baseline"].update(available=False, version=BASELINE_VERSION,
+                                      reason=MISSING_BASELINES[key], matching_architecture_comparison=False)
+            assert args.binary, "No historical baseline exists; provide a genuine native candidate with --binary"
+            print("::warning::" + MISSING_BASELINES[key] + " Measuring every candidate profile; no baseline comparison is qualified.")
         if args.runner_desktop:
             assert os.environ.get("GITHUB_ACTIONS") == "true" and os.environ.get("RUNNER_ENVIRONMENT") == "github-hosted", "Tray mode requires disposable GitHub-hosted native runner, never a user desktop"
             if system == "linux":
@@ -1048,11 +1058,12 @@ def main():
         # Short path prevents AF_UNIX path exhaustion, especially on macOS runners.
         with tempfile.TemporaryDirectory(prefix="mcwr-", dir=None if os.name == "nt" else "/tmp") as temporary:
             root = Path(temporary)
-            baseline = fetch_baseline(root, key, report["baseline"])
+            baseline = fetch_baseline(root, key, report["baseline"]) if key in HASHES else None
             isolate(root)
-            qualify(baseline, backend, report["baseline"], report, args.proof, args.scenario, args.runner_desktop,
-                    reference_only=args.gate_candidate)
-            assert report["baseline"]["version"] == "mcw 0.16.1", "Pinned public baseline reports unexpected version"
+            if baseline is not None:
+                qualify(baseline, backend, report["baseline"], report, args.proof, args.scenario, args.runner_desktop,
+                        reference_only=args.gate_candidate)
+                assert report["baseline"]["version"] == "mcw 0.16.1", "Pinned public baseline reports unexpected version"
             if args.binary:
                 report["candidate"] = dict(label="candidate")
                 qualify(args.binary, backend, report["candidate"], report, args.proof, args.scenario, args.runner_desktop)

@@ -161,6 +161,9 @@ jobs:
           - runner: ubuntu-22.04
             platform: linux
             arch: x86_64
+          - runner: ubuntu-22.04-arm
+            platform: linux
+            arch: aarch64
           - runner: macos-15
             platform: macos
             arch: aarch64
@@ -195,7 +198,7 @@ jobs:
           done
           pkg-config --modversion libpipewire-0.3
           pw-dump --version
-      - name: Verify native architecture and minimum macOS version
+      - name: Verify native architecture and record actual build baseline
         shell: bash
         env:
           EXPECTED_ARCH: ${{ matrix.arch }}
@@ -204,6 +207,45 @@ jobs:
           actual=$(uname -m)
           case "$actual" in arm64) actual=aarch64 ;; esac
           test "$actual" = "$EXPECTED_ARCH"
+          mkdir -p "$RUNNER_TEMP/native-proof"
+          uname -a | tee "$RUNNER_TEMP/native-proof/uname.txt"
+          rustc -vV | tee "$RUNNER_TEMP/native-proof/rustc.txt"
+          if [ "$RUNNER_OS" = Linux ]; then
+            EXPECTED_ARCH="$EXPECTED_ARCH" python3 -B - <<'PY'
+          import json, os, pathlib, subprocess
+          proof = pathlib.Path(os.environ["RUNNER_TEMP"]) / "native-proof"
+          def actual(*args):
+              return subprocess.check_output(args, text=True).strip()
+          arch = os.environ["EXPECTED_ARCH"]
+          target = arch + "-unknown-linux-gnu"
+          rustc = actual("rustc", "-vV")
+          assert "host: " + target in rustc.splitlines(), rustc
+          assert os.environ.get("CARGO_BUILD_TARGET", target) == target, "Cross-compilation is not native qualification"
+          debian_arch, multiarch = {"aarch64": ("arm64", "aarch64-linux-gnu"),
+                                   "x86_64": ("amd64", "x86_64-linux-gnu")}[arch]
+          assert actual("dpkg", "--print-architecture") == debian_arch
+          assert actual("cc", "-dumpmachine") == multiarch
+          glibc = actual("getconf", "GNU_LIBC_VERSION")
+          assert glibc == "glibc 2.35", ("Ubuntu 22.04 baseline changed", glibc)
+          packages = {}
+          for package in ("libpipewire-0.3", "libspa-0.2"):
+              version = actual("pkg-config", "--modversion", package)
+              if package == "libpipewire-0.3":
+                  assert tuple(map(int, version.split("."))) >= (0, 3, 48), (package, version)
+              else:
+                  assert version == "0.2", (package, "SPA API version", version)
+              libdir = actual("pkg-config", "--variable=libdir", package)
+              assert libdir == "/usr/lib/" + multiarch, (package, libdir)
+              packages[package] = dict(version=version, libdir=libdir,
+                                       cflags=actual("pkg-config", "--cflags", package),
+                                       libs=actual("pkg-config", "--libs", package))
+          report = dict(uname=actual("uname", "-a"), rustc=rustc, native_target=target,
+                        compiler=actual("cc", "--version"), multiarch=multiarch, glibc=glibc,
+                        package_versions=actual("dpkg-query", "-W", "libpipewire-0.3-dev", "libspa-0.2-dev", "libclang-dev", "libc6"),
+                        pkg_config=packages, physical_pi_qualification=False)
+          (proof / "linux-native-baseline.json").write_text(json.dumps(report, indent=2) + "\n")
+          PY
+          fi
           if [ "$RUNNER_OS" = macOS ]; then
             version=$(sw_vers -productVersion)
             echo "macOS runtime: $version"
@@ -220,6 +262,40 @@ jobs:
         run: cargo test --locked -p libspa --lib native_headers_builder_roundtrip_after_growth -- --nocapture
       - run: cargo build --locked ${{ matrix.platform == 'linux' && '--features linux-camera-helper' || '' }}
       - run: cargo build --release --locked ${{ matrix.platform == 'linux' && '--features linux-camera-helper' || '' }}
+      - name: Verify both native Linux ELF payloads and retain generated bindings
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          EXPECTED_ARCH: ${{ matrix.arch }}
+        run: |
+          python3 -B - <<'PY'
+          import hashlib, json, os, pathlib, re, shutil, struct, subprocess
+          proof = pathlib.Path(os.environ["RUNNER_TEMP"]) / "native-proof"
+          expected = {"x86_64": 62, "aarch64": 183}[os.environ["EXPECTED_ARCH"]]
+          payloads = {}
+          for name in ("mcw", "mcw-camera-helper"):
+              path = pathlib.Path("target/release") / name
+              header = path.read_bytes()[:20]
+              assert header[:6] == b"\x7fELF\x02\x01", (name, "Expected ELF64 little-endian")
+              machine = struct.unpack_from("<H", header, 18)[0]
+              assert machine == expected, (name, machine, expected)
+              elf = subprocess.check_output(["readelf", "-h", "-V", str(path)], text=True)
+              versions = sorted({tuple(map(int, match.split("."))) for match in re.findall(r"GLIBC_([0-9]+(?:\.[0-9]+)+)", elf)})
+              assert versions and max(versions) <= (2, 35), (name, versions)
+              (proof / (name + ".readelf.txt")).write_text(elf)
+              payloads[name] = dict(elf_class=64, little_endian=True, e_machine=machine,
+                                    glibc_requirements=[".".join(map(str, v)) for v in versions],
+                                    sha256=hashlib.sha256(path.read_bytes()).hexdigest())
+          bindings = list(pathlib.Path("target/release/build").glob("libspa-sys-*/out/bindings.rs"))
+          assert bindings, "Native libspa bindgen output missing"
+          outputs = []
+          for index, path in enumerate(bindings):
+              destination = proof / f"libspa-native-bindings-{index}.rs"
+              shutil.copyfile(path, destination)
+              outputs.append(dict(source=str(path), proof=destination.name,
+                                  sha256=hashlib.sha256(path.read_bytes()).hexdigest()))
+          (proof / "linux-elf.json").write_text(json.dumps(dict(payloads=payloads, native_bindings=outputs), indent=2) + "\n")
+          PY
       - name: Build native macOS app and disk image
         if: runner.os == 'macOS'
         shell: bash
@@ -699,7 +775,7 @@ jobs:
           version=$(python3 -c 'import json, subprocess; print("v" + json.loads(subprocess.check_output(["cargo", "metadata", "--no-deps", "--format-version", "1"]))["packages"][0]["version"])')
           python3 -B installer/tests/native_camera.py \
             --source-file "$GITHUB_WORKSPACE/installer/install.sh" \
-            --archive "$GITHUB_WORKSPACE/miccamwatch-linux-x86_64.tar.gz" \
+            --archive "$GITHUB_WORKSPACE/miccamwatch-linux-${{ matrix.arch }}.tar.gz" \
             --root-installer "$RUNNER_TEMP/native-proof/package/install-camera-helper.sh" \
             --version "$version" \
             --proof "$RUNNER_TEMP/native-proof/linux-camera"

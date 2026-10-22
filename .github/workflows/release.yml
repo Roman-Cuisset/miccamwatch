@@ -166,7 +166,7 @@ jobs:
         working-directory: dist
         shell: bash
         run: |
-          for asset in miccamwatch-linux-x86_64.tar.gz miccamwatch-macos-aarch64.tar.gz miccamwatch-macos-x86_64.tar.gz miccamwatch-macos-aarch64.dmg miccamwatch-macos-x86_64.dmg miccamwatch-sbom.spdx.json; do
+          for asset in miccamwatch-linux-x86_64.tar.gz miccamwatch-linux-aarch64.tar.gz miccamwatch-macos-aarch64.tar.gz miccamwatch-macos-x86_64.tar.gz miccamwatch-macos-aarch64.dmg miccamwatch-macos-x86_64.dmg miccamwatch-sbom.spdx.json; do
             test -s "$asset"
           done
           if [ "$WINDOWS_ARTIFACTS" = true ]; then
@@ -193,18 +193,14 @@ jobs:
           prerelease: ${{ vars.WINDOWS_RELEASE_APPROVED != 'true' }}
           make_latest: ${{ vars.WINDOWS_RELEASE_APPROVED == 'true' }}
           body: |
-            ## 0.20.0 — Native consultation, scoped uninstall and desktop branding
+            ## 0.21.0 — Native Linux aarch64 distribution
 
-            - macOS gains a native consultation window, clearer microphone/camera diagnostics, a simplified menu and localized About. Finder reopening reuses the existing owner and consultation window; closing the window leaves the tray running.
-            - The macOS menu-bar mark is larger without changing the Finder/About brand. Status badges remain distinct. Windows CLI/tray resources, Start shortcut and installed application metadata use the official logo.
-            - `mcw uninstall` identifies the actual installation. Managed Unix and verified portable Windows removal retain preferences/history/restoration records; Cargo, Homebrew, Arch and MSI installations receive their real manager procedure. Standalone apps and unowned layouts receive explicit manual guidance, not a false removal success.
-            - Portable Windows removal is deferred until the invoking process exits. An accepted request is not completed removal: the retained result file records completion or refusal. Requested protection, foreign/busy ownership, corrupt or pending restoration and unowned payloads refuse safely; nothing implicitly unmutes microphones, allows cameras or terminates another owner.
-            - Homebrew users with owned autostart intent must retain the old keg during upgrade, run `mcw autostart refresh` explicitly as the ordinary user, and only then clean up. Homebrew's isolated install hooks cannot perform this migration; refresh preserves loaded, dormant and disabled intent and never enables an absent registration.
-            - macOS autostart accepts native disabled/enabled and legacy boolean launchctl responses, preserving disabled intent without interpreting an unknown owned state as enabled.
-            - Unix accepted tray streams explicitly enter blocking mode. This fixes BSD inheritance of listener O_NONBLOCK causing premature command disconnects; existing timeout budgets and cooperative ownership checks remain unchanged.
-            - TLS dependencies include the targeted fixes rustls-webpki 0.103.16 and webpki-roots/webpki-root-certs 1.0.10 for RUSTSEC-2026-0382/0381/0383, without advisory ignores.
-            - Windows EXE/MSI artifacts remain unsigned without a configured real signing certificate; macOS apps are ad-hoc sealed, not Developer ID signed/notarized. Native UI and ownership checks do not establish physical capture enforcement or grant OS authorization.
-            - Tags-only publication, the approved-Windows stable/latest gate, exact package/version/source checks, SHA256SUMS, signed build provenance and SBOM are unchanged. Prior tags and assets are not rewritten.
+            - Adds `miccamwatch-linux-aarch64.tar.gz` for the native `aarch64-unknown-linux-gnu` target alongside the existing x86_64 package. Linux ARMv7/32-bit and musl are not supported.
+            - Linux packages use the same Ubuntu 22.04 / glibc 2.35 and PipeWire 0.3.48 baseline. Native ARM and x86_64 VM qualification runs the same Rust checks, native C SPA header roundtrip, packaged CLI/helper, PTY, isolated PipeWire, real XFCE panel, autostart and explicit root-boundary lifecycle checks. Retained proof records actual host/toolchain/header versions, generated bindings and both ELF machine identities; no cross-build, QEMU or x86 headers stand in for native ARM proof.
+            - Ordinary-user and root camera-helper installers reject incompatible ELF class, byte order, ABI, executable type and machine before probing either packaged executable. Checksums, permissions, ownership receipts, restoration safeguards and explicit privilege boundaries remain enforced.
+            - Native ARM resource qualification measures the real candidate and observed helper descendants with the existing soft 15 MB target. No historical Linux ARM v0.16.1 baseline exists, so ARM evidence explicitly leaves the historical comparison unqualified instead of downloading x86_64 or fabricating an older ARM archive.
+            - Native hosted-VM qualification is not physical Raspberry Pi/device, camera-enforcement or capture-transition proof. Consult the retained artifacts for actual execution results and limits; no physical hardware parity, OS authorization, signing or antivirus clearance is asserted.
+            - The complete asset set now requires the Linux aarch64 archive before checksums and provenance are generated. Tags-only publication, the approved-Windows stable/latest gate, SHA256SUMS and SBOM remain unchanged; prior tags/assets and the public v0.20.0 installer baseline are not rewritten. Public ARM installer proof is an explicit opt-in for an actually published v0.21.0+ archive.
           files: |
             dist/miccamwatch-*
             dist/SHA256SUMS
