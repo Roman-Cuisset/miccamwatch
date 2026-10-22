@@ -2,7 +2,7 @@
 """Hosted-only, OS-restricted SAME-user MSI consumer; never alters token fields/policy.
 
 Evidence scope is a restricted console process, not an ordinary interactive desktop.
-SAFER opens built-in levels only; no inert flag, ACL, account or UAC changes.
+SAFER opens built-in levels only; no inert flag, existing-object ACL, account or UAC changes.
 """
 import argparse
 import ctypes as c
@@ -15,6 +15,7 @@ from pathlib import Path
 import subprocess
 import sys
 import traceback
+import uuid
 
 
 def require(ok, message):
@@ -51,10 +52,15 @@ class Process(c.Structure):
     _fields_ = [("process", w.HANDLE), ("thread", w.HANDLE),
                 ("pid", w.DWORD), ("tid", w.DWORD)]
 
+class SecurityAttributes(c.Structure):
+    _fields_ = [("length", w.DWORD), ("descriptor", c.c_void_p), ("inherit", w.BOOL)]
+
+
 
 adv = c.WinDLL("advapi32", use_last_error=True)
 kernel = c.WinDLL("kernel32", use_last_error=True)
 userenv = c.WinDLL("userenv", use_last_error=True)
+user32 = c.WinDLL("user32", use_last_error=True)
 # Explicit pointer-sized prototypes are required on 64-bit Windows.
 adv.OpenProcessToken.argtypes = [w.HANDLE, w.DWORD, c.POINTER(w.HANDLE)]
 adv.GetTokenInformation.argtypes = [w.HANDLE, c.c_int, c.c_void_p, w.DWORD, c.POINTER(w.DWORD)]
@@ -73,6 +79,17 @@ kernel.LocalFree.argtypes = [c.c_void_p]
 kernel.WaitForSingleObject.argtypes = [w.HANDLE, w.DWORD]
 kernel.GetExitCodeProcess.argtypes = [w.HANDLE, c.POINTER(w.DWORD)]
 userenv.GetUserProfileDirectoryW.argtypes = [w.HANDLE, w.LPWSTR, c.POINTER(w.DWORD)]
+adv.ConvertStringSecurityDescriptorToSecurityDescriptorW.argtypes = [
+    w.LPCWSTR, w.DWORD, c.POINTER(c.c_void_p), c.POINTER(w.DWORD)]
+user32.GetProcessWindowStation.restype = w.HANDLE
+user32.SetProcessWindowStation.argtypes = [w.HANDLE]
+user32.CreateWindowStationW.argtypes = [w.LPCWSTR, w.DWORD, w.DWORD, c.POINTER(SecurityAttributes)]
+user32.CreateWindowStationW.restype = w.HANDLE
+user32.CreateDesktopW.argtypes = [w.LPCWSTR, w.LPCWSTR, c.c_void_p, w.DWORD, w.DWORD,
+                                c.POINTER(SecurityAttributes)]
+user32.CreateDesktopW.restype = w.HANDLE
+user32.CloseDesktop.argtypes = [w.HANDLE]
+user32.CloseWindowStation.argtypes = [w.HANDLE]
 
 
 def checked(ok):
@@ -111,10 +128,13 @@ def snapshot(token):
     size = w.DWORD(32768)
     profile = c.create_unicode_buffer(size.value)
     checked(userenv.GetUserProfileDirectoryW(token, profile, c.byref(size)))
+    integrity = token_info(token, 25)
+    integrity_sid = sid_string(SidAttributes.from_buffer(integrity).sid)
     return {"sid": sid_string(SidAttributes.from_buffer(user).sid),
             "session": number(12), "token_elevation": number(20),
             "token_elevation_type": number(18),
             "has_restrictions": bool(c.c_ubyte.from_buffer(token_info(token, 21)).value),
+            "integrity_sid": integrity_sid,
             "profile": profile.value, "userprofile_env": os.environ.get("USERPROFILE"),
             "appdata_env": os.environ.get("APPDATA"), "localappdata_env": os.environ.get("LOCALAPPDATA"),
             "administrators": admins, "admin_group_enabled": any(g["enabled"] for g in admins)}
@@ -133,6 +153,63 @@ def same_identity(left, right):
 
 def eligible(value, original):
     return value["token_elevation"] == 0 and not value["admin_group_enabled"] and same_identity(value, original)
+
+
+class OwnedDesktop:
+    """Creation-time access for this exact SID, never changes an existing object."""
+
+    def __init__(self, identity):
+        self.station = None
+        self.desktop = None
+        self.station_name = "mcw-msi-" + uuid.uuid4().hex
+        self.desktop_name = "consumer-" + uuid.uuid4().hex
+        self.full_name = self.station_name + "\\" + self.desktop_name
+        # Explicit user ownership/access avoids a default BA-owned descriptor.
+        # Label ONLY these new objects at the selected token's existing integrity;
+        # no token integrity, station ACL, desktop ACL or system policy is changed.
+        sid = identity["sid"]
+        self.sddl = f'O:{sid}G:{sid}D:P(A;;GA;;;{sid})S:(ML;;NW;;;{identity["integrity_sid"]})'
+        self.cleanup = "not-created"
+
+    def create(self):
+        original = user32.GetProcessWindowStation()
+        checked(original)
+        descriptor = c.c_void_p()
+        checked(adv.ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            self.sddl, 1, c.byref(descriptor), None))
+        attributes = SecurityAttributes(c.sizeof(SecurityAttributes), descriptor, False)
+        try:
+            try:
+                # CWF_CREATE_ONLY refuses existing objects even on a name collision.
+                self.station = user32.CreateWindowStationW(
+                    self.station_name, 1, 0x000F037F, c.byref(attributes))
+                checked(self.station)
+                checked(user32.SetProcessWindowStation(self.station))
+                self.desktop = user32.CreateDesktopW(
+                    self.desktop_name, None, None, 0, 0x000F01FF, c.byref(attributes))
+                checked(self.desktop)
+                self.cleanup = "owned-handles-open"
+            finally:
+                # Restore only this supervisor's association immediately. Never
+                # switch the input desktop or alter any other process/station.
+                checked(user32.SetProcessWindowStation(original))
+        finally:
+            kernel.LocalFree(descriptor)
+
+    def close(self):
+        if self.desktop:
+            checked(user32.CloseDesktop(self.desktop))
+            self.desktop = None
+        if self.station:
+            checked(user32.CloseWindowStation(self.station))
+            self.station = None
+        self.cleanup = "owned-handles-closed"
+
+    def evidence(self):
+        return {"station": self.station_name, "desktop": self.desktop_name,
+                "startup_desktop": self.full_name, "creation_security_sddl": self.sddl,
+                "existing_object_security_changed": False, "cleanup": self.cleanup,
+                "scope": "new noninteractive owned objects; not an ordinary desktop"}
 
 
 def invoke(binary, args, proof, label):
@@ -198,6 +275,8 @@ def launch(args):
     token = current_token()
     selected = None
     streams = []
+    desktop = None
+    pending_child = False
     try:
         original = report["original"] = snapshot(token)
         for mode, level_id in (("CreateRestrictedToken_LUA_TOKEN_DISABLE_MAX_PRIVILEGE", None),
@@ -234,7 +313,13 @@ def launch(args):
                    "--product", args.product, "--proof", str(args.proof)]
         startup = Startup()
         startup.cb = c.sizeof(startup)
-        startup.desktop = "winsta0\\default"
+        desktop = OwnedDesktop(snapshot(selected))
+        try:
+            desktop.create()
+        finally:
+            report["owned_desktop"] = desktop.evidence()
+            save(path, report)
+        startup.desktop = desktop.full_name
         streams = [open(os.devnull, "rb"), (args.proof / "restricted-launch.stdout").open("wb"),
                    (args.proof / "restricted-launch.stderr").open("wb")]
         for stream in streams:
@@ -251,6 +336,7 @@ def launch(args):
         try:
             wait = kernel.WaitForSingleObject(process.process, 360000)
             if wait == 258:
+                pending_child = True
                 save(args.proof / "pending-consumer.json", {"pid": process.pid,
                      "reason": "restricted consumer deadline; not killed; do not remove MSI"})
                 raise TimeoutError("Restricted child still alive; no forced termination")
@@ -266,12 +352,25 @@ def launch(args):
         report.update(status="failed", error=traceback.format_exc())
         raise
     finally:
+        cleanup_error = None
+        if desktop is not None:
+            if pending_child:
+                desktop.cleanup = "pending-child-handles-retained; no explicit object close"
+            else:
+                try:
+                    desktop.close()
+                except BaseException as error:
+                    cleanup_error = error
+                    report.update(status="failed", owned_desktop_cleanup_error=traceback.format_exc())
+            report["owned_desktop"] = desktop.evidence()
         for stream in streams:
             stream.close()
         if selected:
             kernel.CloseHandle(selected)
         kernel.CloseHandle(token)
         save(path, report)
+        if cleanup_error is not None and sys.exc_info()[0] is None:
+            raise cleanup_error
 
 
 def main():
