@@ -103,6 +103,21 @@ export function pageMetadata(origin, code) {
 }
 
 export function sitemap(origin) {
-  const urls = languages.map(({ code }) => `<url><loc>${escapeMarkup(`${origin}/${code}/`)}</loc></url>`).join('');
-  return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${urls}</urlset>\n`;
+  const alternateLinks = [
+    `    <xhtml:link rel="alternate" hreflang="x-default" href="${escapeMarkup(`${origin}/`)}" />`,
+    ...languages.map(({ code }) => `    <xhtml:link rel="alternate" hreflang="${code}" href="${escapeMarkup(`${origin}/${code}/`)}" />`),
+  ].join('\n');
+  const rootEntry = [
+    '  <url>',
+    `    <loc>${escapeMarkup(`${origin}/`)}</loc>`,
+    alternateLinks,
+    '  </url>',
+  ].join('\n');
+  const languageEntries = languages.map(({ code }) => [
+    '  <url>',
+    `    <loc>${escapeMarkup(`${origin}/${code}/`)}</loc>`,
+    alternateLinks,
+    '  </url>',
+  ].join('\n'));
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml">\n${[rootEntry, ...languageEntries].join('\n')}\n</urlset>\n`;
 }
