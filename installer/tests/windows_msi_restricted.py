@@ -70,9 +70,9 @@ adv.SaferComputeTokenFromLevel.argtypes = [w.HANDLE, w.HANDLE, c.POINTER(w.HANDL
 adv.SaferCloseLevel.argtypes = [w.HANDLE]
 adv.CreateRestrictedToken.argtypes = [w.HANDLE, w.DWORD, w.DWORD, c.c_void_p,
                                     w.DWORD, c.c_void_p, w.DWORD, c.c_void_p, c.POINTER(w.HANDLE)]
-adv.CreateProcessAsUserW.argtypes = [w.HANDLE, w.LPCWSTR, w.LPWSTR, c.c_void_p,
-                                   c.c_void_p, w.BOOL, w.DWORD, c.c_void_p,
-                                   w.LPCWSTR, c.POINTER(Startup), c.POINTER(Process)]
+adv.CreateProcessWithTokenW.argtypes = [w.HANDLE, w.DWORD, w.LPCWSTR, w.LPWSTR,
+                                      w.DWORD, c.c_void_p, w.LPCWSTR,
+                                      c.POINTER(Startup), c.POINTER(Process)]
 kernel.GetCurrentProcess.restype = w.HANDLE
 kernel.CloseHandle.argtypes = [w.HANDLE]
 kernel.LocalFree.argtypes = [c.c_void_p]
@@ -321,10 +321,10 @@ def launch(args):
         # Launch the actual installed CLI, not a second interpreter. Inspect its
         # real kernel primary token before its first instruction can execute.
         process = Process()
-        checked(adv.CreateProcessAsUserW(selected, str(args.binary),
-                                       c.create_unicode_buffer(subprocess.list2cmdline(command)),
-                                       None, None, True, 0x08000004, None,
-                                       str(args.proof), c.byref(startup), c.byref(process)))
+        checked(adv.CreateProcessWithTokenW(selected, 1, str(args.binary),  # LOGON_WITH_PROFILE
+                                          c.create_unicode_buffer(subprocess.list2cmdline(command)),
+                                          0x08000004, None, str(args.proof),
+                                          c.byref(startup), c.byref(process)))
         pending_child = True
         pending_path = args.proof / "pending-consumer.json"
         try:
