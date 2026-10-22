@@ -286,13 +286,26 @@ public static class McwRdpNative {
             if ([McwRdpNative]::DisconnectReason -ge 0) { $report.native_error_description = $rdp.GetErrorDescription([uint32][McwRdpNative]::DisconnectReason, [uint32]$rdp.ExtendedDisconnectReason) }
         } catch { $report.native_error_read_failure = $_.Exception.ToString() }
     }
+    if ($report.status -eq 'refused_or_failed') {
+        $since = (Get-Date).AddSeconds(-$clock.Elapsed.TotalSeconds - 5)
+        $channels = @('Security','Microsoft-Windows-TerminalServices-RemoteConnectionManager/Operational','Microsoft-Windows-TerminalServices-LocalSessionManager/Operational','Microsoft-Windows-RemoteDesktopServices-RdpCoreTS/Operational')
+        foreach ($channel in $channels) {
+            $file = Join-Path $stage ('native-events-' + ($channel -replace '[^A-Za-z0-9]','_') + '.json')
+            try {
+                $filter = @{LogName=$channel;StartTime=$since}
+                if ($channel -eq 'Security') { $filter.Id=4625 }
+                $events = @(Get-WinEvent -FilterHashtable $filter -MaxEvents 40 -ErrorAction Stop | Select-Object TimeCreated,Id,LevelDisplayName,Message)
+                $events | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $file -Encoding UTF8
+            } catch { @{query_error=$_.Exception.Message} | ConvertTo-Json | Set-Content -LiteralPath $file -Encoding UTF8 }
+        }
+    }
     $live = $true
     if ($null -ne $task) {
         try { $report.task_state = $task.State; $report.last_task_result = $task.LastTaskResult }
         catch { $report.task_query_error = $_.Exception.ToString() }
     }
     try {
-        $sessionsLeft = if ($null -ne $account) { @([McwRdpNative]::Logins() | Where-Object { $_.User -eq $account.Name }) } else { @() }
+        $sessionsLeft = @(if ($null -ne $account) { [McwRdpNative]::Logins() | Where-Object { $_.User -eq $account.Name } })
         $report.fixture_sessions_retained = @($sessionsLeft | ForEach-Object { @{ id=$_.Id; state=$_.State; protocol=$_.Protocol } })
         $live = $sessionsLeft.Count -ne 0 -or ($null -ne $task -and $task.State -eq 4)
     } catch { $report.retention_query_error = $_.Exception.ToString() }
