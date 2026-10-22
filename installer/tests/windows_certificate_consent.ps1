@@ -7,6 +7,30 @@ if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hoste
 $stage=[IO.Path]::GetFullPath($StageDirectory)
 if (-not $stage.StartsWith(([IO.Path]::GetFullPath($env:PUBLIC).TrimEnd('\')+'\'),[StringComparison]::OrdinalIgnoreCase)) { throw 'Public disposable stage required' }
 Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes,System.Windows.Forms,System.Drawing
+Add-Type @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using System.Text;
+public static class McwCertificateButton {
+    [DllImport("user32.dll")] static extern IntPtr GetDlgItem(IntPtr dialog,int id);
+    [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern int GetClassNameW(IntPtr window,StringBuilder text,int maximum);
+    [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern int GetWindowTextW(IntPtr window,StringBuilder text,int maximum);
+    [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr window,out uint pid);
+    [DllImport("user32.dll",SetLastError=true)] static extern IntPtr SendMessageTimeoutW(IntPtr window,uint message,IntPtr w,IntPtr l,uint flags,uint timeout,out IntPtr result);
+    public static void Consent(IntPtr dialog,uint expectedPid) {
+        IntPtr button=GetDlgItem(dialog,6);
+        uint pid; GetWindowThreadProcessId(button,out pid);
+        var name=new StringBuilder(128); var kind=new StringBuilder(128);
+        GetWindowTextW(button,name,name.Capacity); GetClassNameW(button,kind,kind.Capacity);
+        if(button==IntPtr.Zero || pid!=expectedPid || kind.ToString()!="Button" || name.ToString().Replace("&","")!="Yes")
+            throw new InvalidOperationException("Exact provider-owned native IDYES button unavailable; no consent given");
+        IntPtr result;
+        if(SendMessageTimeoutW(button,0x00F5,IntPtr.Zero,IntPtr.Zero,2,3000,out result)==IntPtr.Zero)
+            throw new Win32Exception(Marshal.GetLastWin32Error());
+    }
+}
+'@
 $deadline=[DateTime]::UtcNow.AddSeconds(120)
 while ([DateTime]::UtcNow -lt $deadline) {
     $reportPath=Join-Path $stage 'interactive-provider.json'
@@ -38,10 +62,7 @@ while ([DateTime]::UtcNow -lt $deadline) {
                 $graphics=[Drawing.Graphics]::FromImage($image)
                 try { $graphics.CopyFromScreen($bounds.Location,[Drawing.Point]::Empty,$bounds.Size);$image.Save((Join-Path $stage 'exact-certificate-consent.png'),[Drawing.Imaging.ImageFormat]::Png) }
                 finally { $graphics.Dispose();$image.Dispose() }
-                $yes=$dialog.FindFirst([Windows.Automation.TreeScope]::Descendants,(New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::NameProperty,'Yes')))
-                if ($null -eq $yes -or $yes.Current.ControlType -ne [Windows.Automation.ControlType]::Button) { throw 'Exact certificate consent button unavailable' }
-                $invoke=$yes.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern)
-                $invoke.Invoke()
+                [McwCertificateButton]::Consent([IntPtr]$dialog.Current.NativeWindowHandle,[uint32]$ProviderProcessId)
                 @{status='exact-leaf-consent-given';provider_pid=$ProviderProcessId;server_hostname=$hostname;thumbprint=$thumbprint;scope='CurrentUser Root only';no_policy_or_validation_disabled=$true} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $stage 'certificate-consent.json') -Encoding UTF8
                 exit 0
             }
