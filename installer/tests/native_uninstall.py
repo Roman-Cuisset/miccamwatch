@@ -42,7 +42,8 @@ def record_operation(argv, result):
                   "stdout": text(getattr(result, "stdout", None)),
                   "stderr": text(getattr(result, "stderr", None)),
                   "stdout_file": getattr(result, "stdout_file", None),
-                  "stderr_file": getattr(result, "stderr_file", None)}
+                  "stderr_file": getattr(result, "stderr_file", None),
+                  "native_command_line": getattr(result, "native_command_line", None)}
         with (_evidence_directory / "private-commands.jsonl").open("a", encoding="utf-8") as output:
             output.write(json.dumps(record) + "\n")
 
@@ -67,7 +68,7 @@ def require(condition, message):
         raise AssertionError(message)
 
 
-def capture(argv, env, timeout, *, cwd=None, start_new_session=False):
+def capture(argv, env, timeout, *, cwd=None, start_new_session=False, native_command_line=None):
     global _command_number
     require(_evidence_directory is not None, "fixture command evidence is not initialized")
     _command_number += 1
@@ -75,7 +76,8 @@ def capture(argv, env, timeout, *, cwd=None, start_new_session=False):
     directory.mkdir(exist_ok=True)
     stdout_path = directory / f"{_command_number:06d}.stdout"
     stderr_path = directory / f"{_command_number:06d}.stderr"
-    command = [str(arg) for arg in argv]
+    require(native_command_line is None or os.name == "nt", "Native command lines require Windows")
+    command = native_command_line if native_command_line is not None else [str(arg) for arg in argv]
     # Direct files retain late output without filling a pipe after a deadline.
     # Closing our handles never closes the child's inherited handles.
     with stdout_path.open("wb") as output, stderr_path.open("wb") as errors:
@@ -89,6 +91,7 @@ def capture(argv, env, timeout, *, cwd=None, start_new_session=False):
             error.stderr = stderr_path.read_bytes()
             error.stdout_file = str(stdout_path.relative_to(_evidence_directory))
             error.stderr_file = str(stderr_path.relative_to(_evidence_directory))
+            error.native_command_line = native_command_line
             record_operation(argv, error)
             raise
     result = subprocess.CompletedProcess(command, process.returncode,
@@ -96,6 +99,7 @@ def capture(argv, env, timeout, *, cwd=None, start_new_session=False):
                                          stderr_path.read_text(encoding="utf-8", errors="replace"))
     result.stdout_file = str(stdout_path.relative_to(_evidence_directory))
     result.stderr_file = str(stderr_path.relative_to(_evidence_directory))
+    result.native_command_line = native_command_line
     record_operation(argv, result)
     return result
 
@@ -640,7 +644,14 @@ def msi_case(args, root, proof):
     home = root / "MSI manager"
     env = environment(home)
     install = home / "MSI owned exact directory"
-    run(["msiexec.exe", "/i", args.msi.resolve(), f"INSTALLFOLDER={install}", "/qn", "/norestart"], os.environ)
+    msiexec = Path(os.environ["SystemRoot"]) / "System32" / "msiexec.exe"
+    package = args.msi.resolve()
+    # MSI parses NAME="value with spaces" itself; CRT quoting the whole
+    # assignment instead displays its usage dialog, even with /qn.
+    command_line = f'"{msiexec}" /i "{package}" INSTALLFOLDER="{install}" /qn /norestart'
+    installed = capture([msiexec, "/i", package, f"INSTALLFOLDER={install}", "/qn", "/norestart"],
+                        os.environ, 180, native_command_line=command_line)
+    require(installed.returncode in (0, 3010), "Actual MSI installation failed; see native command evidence")
     binary = install / "mcw.exe"
     require(binary.is_file(), "MSI did not install its actual payload")
     preferences, history = settings(binary, env)
@@ -650,7 +661,7 @@ def msi_case(args, root, proof):
     require(product is not None, "MCW did not identify the exact registered MSI product")
     require(before == (sha(binary), data_snapshot(preferences, history)),
             "Manager delegation changed MSI payload or user data")
-    run(["msiexec.exe", "/x", product.group(1), "/qn", "/norestart"], os.environ)
+    run([msiexec, "/x", product.group(1), "/qn", "/norestart"], os.environ)
     require(not binary.exists() and before[1] == data_snapshot(preferences, history),
             "Actual MSI procedure did not remove its payload while retaining user data")
     proof["genuine_msi_exact_product_delegation_and_manager_removal"] = True
