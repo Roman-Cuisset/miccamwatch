@@ -1,71 +1,63 @@
-name: Native Windows application branding
+name: Private actual perUser MSI consumer qualification
 
 on:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - 'build.rs'
-      - 'dotnet-tools.json'
-      - 'installer/miccamwatch.ico'
-      - 'installer/miccamwatch.rc'
-      - 'installer/miccamwatch.wxs'
-      - 'installer/tests/windows-brand-native.ps1'
-      - 'site/assets/mark.svg'
-      - '.github/workflows/windows-brand.yml'
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
-  shell-brand:
+  same-user-msi:
     runs-on: windows-latest
-    timeout-minutes: 40
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
-      - name: Build actual CLI and tray application resources
+      - name: Initialize retained private evidence
         shell: pwsh
         run: |
-          if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') { throw 'Disposable hosted runner required' }
-          $logs = Join-Path $env:RUNNER_TEMP 'windows-brand-build'
-          New-Item -ItemType Directory -Path $logs | Out-Null
-          cargo build --release --locked --features windows-tray --bin mcw --bin mcw-tray 2>&1 | Tee-Object -FilePath (Join-Path $logs 'cargo-build.log')
-          if ($LASTEXITCODE -ne 0) { throw 'Actual Windows application build failed' }
-      - name: Restore pinned WiX and build real per-user MSI
+          if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') { throw 'Actual disposable hosted VM required' }
+          $proof = Join-Path $env:RUNNER_TEMP 'msi-same-user-proof'
+          New-Item -ItemType Directory -Path $proof | Out-Null
+          '{"status":"not_started","scope":"actual perUser MSI; OS-restricted same-user console consumer only"}' | Set-Content (Join-Path $proof 'bootstrap.json')
+      - name: Download retained genuine package and installed pair
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: native-windows-brand-shell
+          run-id: 39625449451
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/msi-retained-artifact
+      - name: Qualify actual same-user restricted-token consumer and manager removal
         shell: pwsh
         run: |
-          $logs = Join-Path $env:RUNNER_TEMP 'windows-brand-build'
-          # dotnet-tools.json pins WiX 5.0.2 with rollForward disabled.
-          dotnet tool restore 2>&1 | Tee-Object -FilePath (Join-Path $logs 'wix-restore.log')
-          if ($LASTEXITCODE -ne 0) { throw 'Pinned WiX tool restore failed' }
-          $metadata = cargo metadata --locked --no-deps --format-version 1
-          if ($LASTEXITCODE -ne 0) { throw 'Package version resolution failed' }
-          $version = (($metadata | ConvertFrom-Json).packages | Where-Object name -eq 'miccamwatch').version
-          if (-not $version) { throw 'MicCamWatch package version missing' }
-          dotnet wix build installer/miccamwatch.wxs -d Version=$version -d Executable=target/release/mcw.exe -d TrayExecutable=target/release/mcw-tray.exe -o target/mcw-brand-fixture.msi 2>&1 | Tee-Object -FilePath (Join-Path $logs 'wix-build.log')
-          if ($LASTEXITCODE -ne 0) { throw 'Real per-user MSI build failed' }
-      - name: Render actual installed Shell and Apps icons
-        # Branding uses the real interactive hosted desktop, not a batch session.
-        # MSI AssignmentType proves per-user scope independently of runner elevation.
-        shell: powershell
-        run: |
-          if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') { throw 'Disposable hosted runner required' }
-          $fixture = Join-Path $env:GITHUB_WORKSPACE 'installer/tests/windows-brand-native.ps1'
-          $msi = Join-Path $env:GITHUB_WORKSPACE 'target/mcw-brand-fixture.msi'
-          $proof = Join-Path $env:RUNNER_TEMP 'windows-brand-proof'
-          & powershell.exe -NoProfile -NonInteractive -STA -File $fixture -MsiPath $msi -OutputDirectory $proof -IsolatedRunner
-          if ($LASTEXITCODE -ne 0) { throw 'Native interactive Shell proof failed; inspect retained installer and image evidence' }
-      - name: Retain native bitmaps, visual sheet, receipts and failure evidence
+          $ErrorActionPreference = 'Stop'
+          $artifact = Join-Path $env:RUNNER_TEMP 'msi-retained-artifact'
+          # Artifact upload used multiple roots. Locate the retained real files
+          # by exact name AND hash; never rebuild/repackage or substitute a pair.
+          function Find-ExactFile([string]$Name, [string]$Hash) {
+            $matches = @(Get-ChildItem -LiteralPath $artifact -Recurse -File -Filter $Name |
+              Where-Object { (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash -ceq $Hash })
+            if ($matches.Count -ne 1) { throw "Expected one retained genuine $Name with exact hash, found $($matches.Count)" }
+            return $matches[0].FullName
+          }
+          $msi = Find-ExactFile 'mcw-brand-fixture.msi' 'F37927EA1681738F0FDF49377F210812F1C0B8BF80489FB01900A3C59F5CCB66'
+          $cli = Find-ExactFile 'mcw.exe' '402CD89BD19E8F1853E4436A884A2BE47D8A3B15F08E954A084EA8B1BDF92CE1'
+          $tray = Find-ExactFile 'mcw-tray.exe' 'FAD3610978867902EB7EA8846EF789128B66D035FDB626D667EF1DB5E6630714'
+          if ((Split-Path -Parent $cli) -cne (Split-Path -Parent $tray)) { throw 'Retained installed pair does not share a directory' }
+          $target = Join-Path $env:GITHUB_WORKSPACE 'target'
+          New-Item -ItemType Directory -Path $target | Out-Null
+          $package = Join-Path $target 'mcw-brand-fixture.msi'
+          Copy-Item -LiteralPath $msi -Destination $package
+          $fixture = Join-Path $env:GITHUB_WORKSPACE 'installer/tests/windows-msi-delegation.ps1'
+          $proof = Join-Path $env:RUNNER_TEMP ('msi-same-user-proof/actual-' + [guid]::NewGuid().ToString('N'))
+          & $fixture -MsiPath $package -PayloadDirectory (Split-Path -Parent $cli) -OutputDirectory $proof -IsolatedRunner
+          if ($LASTEXITCODE -ne 0) { throw 'Actual perUser MSI qualification did not pass' }
+      - name: Retain actual token, installer, SDK consumer and removal evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: native-windows-brand-shell
+          name: msi-same-user-consumer
           if-no-files-found: error
           retention-days: 14
-          path: |
-            ${{ runner.temp }}/windows-brand-proof
-            ${{ runner.temp }}/windows-brand-build
-            target/mcw-brand-fixture.msi
-            target/mcw-brand-fixture.wixpdb
+          include-hidden-files: true
+          path: ${{ runner.temp }}/msi-same-user-proof
