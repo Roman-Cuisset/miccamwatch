@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Real brew qualification on a disposable macOS 15+ Aqua host; no devices changed."""
 import argparse
+import difflib
 import hashlib
 import json
 import os
@@ -13,10 +14,13 @@ import signal
 import subprocess
 import tempfile
 import time
+import traceback
 import uuid
 
 LABEL = "com.roman-cuisset.miccamwatch.tray"
 RELEASE_COMMIT = "a58c8b9f3a967589a576879d6d27bfdbc40f9dff"
+Z3_FORMULA_COMMIT = "19fcaa4600dca4d0ece386ee97016a2c43932ba5"
+Z3_FORMULA_SHA256 = "7fa080c800e9dc84fb382a5185714d569cca941e0fdf31a13e01fa6d31d1beae"
 
 
 def require(condition, message):
@@ -71,6 +75,7 @@ class Qualification:
         self.handles = []
         self.sequence = 0
         self.disabled_before = None
+        self.rust_provisioning = "Stock Homebrew declared rust build dependency"
 
     def environment(self, home):
         return dict(os.environ, HOME=str(home), XDG_CONFIG_HOME=str(home / "config"),
@@ -101,8 +106,15 @@ class Qualification:
 
     def disabled(self, name):
         text = self.run(name, ["launchctl", "print-disabled", self.domain]).stdout.decode()
-        match = re.search(r'"' + re.escape(LABEL) + r'"\s*=>\s*(true|false)', text)
-        return bool(match and match.group(1) == "true")
+        key = '"' + LABEL + '"'
+        for line in text.splitlines():
+            label, separator, value = line.strip().partition("=>")
+            if separator and label.strip() == key:
+                value = value.strip().rstrip(",;").strip()
+                require(value in ("true", "false", "disabled", "enabled"),
+                        "Unrecognized launchctl disabled-state response: " + line.strip())
+                return value in ("true", "disabled")
+        return False
 
     def until(self, predicate, description):
         deadline = time.monotonic() + 35
@@ -154,6 +166,49 @@ class Qualification:
         require(process.wait(timeout=25) == 0, "Owned native menu did not stop cleanly")
         self.mcw("native-menu-stopped", "tray", "status", codes=(1,))
 
+    def provision_intel_rust(self):
+        # Intel has no current Rust bottle. Keep Homebrew's real dependency
+        # graph and source builds, repairing only the known upstream Z3 helper
+        # defect in this disposable machine's official core source checkout.
+        self.brew("intel-core-source-checkout", "tap", "--force", "homebrew/core")
+        self.env["HOMEBREW_NO_INSTALL_FROM_API"] = "1"
+        core = Path(self.brew("intel-core-repository", "--repository", "homebrew/core").stdout.decode().strip())
+        recipe = core / "Formula/z/z3.rb"
+        before = recipe.read_bytes()
+        (self.proof / "intel-z3-before.rb").write_bytes(before)
+        original_sha256 = hashlib.sha256(before).hexdigest()
+        (self.proof / "intel-z3-before.sha256").write_text(original_sha256 + "\n")
+        require(original_sha256 == Z3_FORMULA_SHA256,
+                "Intel Z3 source differs from the exact reviewed broken upstream recipe; do not patch it")
+        original = before.decode()
+        anchor = "  def install\n"
+        require(original.count(anchor) == 1, "Expected exactly one Z3 install method")
+        helper = '  def python3\n    Formula["python@3.15"].opt_bin/"python3.15"\n  end\n\n'
+        repaired = original.replace(anchor, helper + anchor, 1)
+        after = repaired.encode()
+        (self.proof / "intel-z3-after.rb").write_bytes(after)
+        (self.proof / "intel-z3-helper.patch").write_text("".join(difflib.unified_diff(
+            original.splitlines(keepends=True), repaired.splitlines(keepends=True),
+            fromfile="upstream/Formula/z/z3.rb", tofile="repaired/Formula/z/z3.rb")))
+        self.rust_provisioning = (
+            "Native Homebrew LLVM/Rust source builds with an explicit checked upstream Z3 "
+            "python@3.15 helper repair; not stock broken core. Z3 source/checksum and C/Python tests unchanged.")
+        (self.proof / "intel-prerequisite-repair.json").write_text(json.dumps({
+            "scope": self.rust_provisioning,
+            "upstream_formula_url": "https://raw.githubusercontent.com/Homebrew/homebrew-core/"
+                                    + Z3_FORMULA_COMMIT + "/Formula/z/z3.rb",
+            "original_formula_sha256": Z3_FORMULA_SHA256,
+            "repaired_formula_sha256": hashlib.sha256(after).hexdigest(),
+            "helper": helper,
+        }, indent=2) + "\n")
+        recipe.write_bytes(after)
+        missing = self.brew("intel-missing-rust-dependencies", "deps", "--include-build",
+                            "--missing", "--topological", "rust").stdout.decode().splitlines()
+        self.run("intel-native-rust-source-install",
+                 ["brew", "install", "--build-from-source", "--formula", *missing, "rust"],
+                 timeout=18000)
+        self.brew("intel-z3-real-c-and-python-tests", "test", "--formula", "z3")
+
     def execute(self):
         require(platform.system() == "Darwin" and os.getuid() != 0, "Run as a normal user on macOS")
         require(self.args.disposable_machine, "Explicit --disposable-machine is required; this uses a real login LaunchAgent")
@@ -175,14 +230,7 @@ class Qualification:
         require(not (self.prefix / "Cellar/miccamwatch").exists(), "An existing Homebrew rack must remain untouched")
         source_dir = Path(__file__).resolve().parent
         if actual == "x86_64":
-            # New Intel bottles are unavailable on this native Homebrew tier.
-            # Provision genuine package-owned prerequisites from source rather
-            # than substituting rustup or inventing Homebrew ownership metadata.
-            missing = self.brew("intel-missing-rust-dependencies", "deps", "--include-build",
-                                "--missing", "--topological", "rust").stdout.decode().splitlines()
-            self.run("intel-native-rust-source-install",
-                     ["brew", "install", "--build-from-source", "--formula", *missing, "rust"],
-                     timeout=18000)
+            self.provision_intel_rust()
         formula_text, version = candidate_formula(source_dir / "Formula/miccamwatch.rb", self.args)
         self.brew("create-native-tap", "tap-new", "--no-git", self.tap)
         repository = Path(self.brew("brew-repository", "--repository").stdout.decode().strip())
@@ -229,6 +277,8 @@ class Qualification:
             self.absent_service("baseline-dormant")
         if self.args.autostart_intent == "disabled":
             self.run("baseline-explicit-disabled-intent", ["launchctl", "disable", self.service])
+        require(self.disabled("baseline-disabled-intent-readback") == (self.args.autostart_intent == "disabled"),
+                "Baseline launchctl disabled intent was not established")
         original_registration = self.registration()
         recipe.write_text(formula_text)
         self.brew("native-upgrade", "upgrade", "--build-from-source", self.formula)
@@ -332,6 +382,7 @@ class Qualification:
         (self.proof / "result.json").write_text(json.dumps({"qualified": True, "architecture": actual,
             "macos": runtime, "baseline": "0.16.1", "candidate": version,
             "candidate_ref": self.args.candidate_ref or RELEASE_COMMIT,
+            "rust_provisioning": self.rust_provisioning,
             "autostart_intent": self.args.autostart_intent,
             "autostart_refresh": "Explicit ordinary-user mcw autostart refresh after upgrade with HOMEBREW_NO_INSTALL_CLEANUP=1, before brew cleanup; no automatic install hook.",
             "scope": "Genuine brew install/upgrade, explicit ordinary-user autostart refresh, cleanup/test/uninstall/reinstall, CLI, embedded AppKit menu lifecycle, ownership refusals and byte-preserved user fixtures. No physical capture/device mutation, Developer ID/notarization or external tap/core acceptance."}, indent=2) + "\n")
@@ -372,13 +423,22 @@ def main():
     parser.add_argument("--candidate-version", default="")
     args = parser.parse_args()
     qualification = Qualification(args)
+    failed = False
     try:
         qualification.execute()
     except Exception as error:
+        failed = True
         (qualification.proof / "failure.txt").write_text(str(error) + "\n")
         raise
     finally:
-        qualification.cleanup()
+        try:
+            qualification.cleanup()
+        except Exception:
+            (qualification.proof / "cleanup-failure.txt").write_text(traceback.format_exc())
+            # Keep the original qualification error and retained kegs/intent as
+            # evidence. Never force uninstall merely to make untap succeed.
+            if not failed:
+                raise
 
 
 if __name__ == "__main__":

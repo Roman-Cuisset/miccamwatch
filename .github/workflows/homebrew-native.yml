@@ -57,7 +57,7 @@ jobs:
     timeout-minutes: 360
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - name: Qualify genuine brew packages and native AppKit lifecycle
+      - name: Qualify source packages (Intel includes checked upstream Z3 helper repair)
         shell: bash
         env:
           CANDIDATE_SOURCE_URL: ${{ inputs.candidate-source-url }}
@@ -78,6 +78,11 @@ jobs:
           stat -f 'Cellar before: %N uid=%u gid=%g mode=%OLp' "$cellar"
           chmod go-w "$cellar"
           stat -f 'Cellar prepared: %N uid=%u gid=%g mode=%OLp' "$cellar"
+          # Intel retains native Homebrew LLVM/Rust source builds. The script
+          # fails closed unless Z3 matches the reviewed upstream recipe, then
+          # adds only its missing declared-Python helper and runs its real tests.
+          # Original/repaired recipes, hashes and the exact patch are artifacts;
+          # Intel results explicitly identify this upstream-prerequisite repair.
           python3 -B distribution/homebrew/native_qualification.py \
             --disposable-machine \
             --architecture "$EXPECTED_ARCH" \
