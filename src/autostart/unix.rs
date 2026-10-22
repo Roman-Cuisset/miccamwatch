@@ -19,7 +19,7 @@ use std::{
 
 const RECORD: &str = "autostart.json";
 const MAX_FILE: u64 = 64 * 1024;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", test))]
 const LABEL: &str = "com.roman-cuisset.miccamwatch.tray";
 static SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -913,6 +913,29 @@ fn validate_file(file: &File) -> Result<()> {
     Ok(())
 }
 
+#[cfg(any(target_os = "macos", test))]
+fn parse_launchagent_disabled(text: &str) -> Result<bool> {
+    for line in text.lines() {
+        let Some((key, value)) = line.split_once("=>") else {
+            continue;
+        };
+        if key
+            .trim()
+            .strip_prefix('"')
+            .and_then(|key| key.strip_suffix('"'))
+            != Some(LABEL)
+        {
+            continue;
+        }
+        return match value.trim().trim_end_matches([',', ';']).trim() {
+            "true" | "disabled" => Ok(true),
+            "false" | "enabled" => Ok(false),
+            _ => bail!("unrecognized LaunchAgent disabled-state response"),
+        };
+    }
+    Ok(false)
+}
+
 #[cfg(target_os = "macos")]
 struct Native {
     domain: String,
@@ -981,17 +1004,7 @@ impl Native {
         let output = checked_output(output, "cannot inspect disabled LaunchAgents")?;
         let text = String::from_utf8(output.stdout)
             .context("invalid launchctl disabled-state encoding")?;
-        let key = format!("\"{LABEL}\" => ");
-        for line in text.lines() {
-            if let Some(value) = line.trim().strip_prefix(&key) {
-                return match value.trim_end_matches([',', ';']).trim() {
-                    "true" => Ok(true),
-                    "false" => Ok(false),
-                    _ => bail!("unrecognized LaunchAgent disabled-state response"),
-                };
-            }
-        }
-        Ok(false)
+        parse_launchagent_disabled(&text)
     }
 
     fn set_disabled(&self, disabled: bool) -> Result<()> {
@@ -1060,6 +1073,37 @@ fn checked_output(output: Output, operation: &str) -> Result<Output> {
 mod tests {
     use super::*;
     use std::os::unix::fs::{PermissionsExt, symlink};
+
+    #[test]
+    fn launchagent_disabled_preserves_native_and_legacy_intent() -> Result<()> {
+        for (value, expected) in [
+            ("true", true),
+            ("disabled", true),
+            ("false", false),
+            ("enabled", false),
+        ] {
+            let text = format!(
+                "disabled services = {{\n\t\"foreign.agent\" => unknown\n\t\"{LABEL}\" => {value}\n}}"
+            );
+            assert_eq!(parse_launchagent_disabled(&text)?, expected);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn launchagent_disabled_does_not_adopt_another_label() -> Result<()> {
+        let text = format!("\"{LABEL}.other\" => disabled\n\"prefix.{LABEL}\" => true");
+        assert!(!parse_launchagent_disabled(&text)?);
+        assert!(!parse_launchagent_disabled("disabled services = {\n}")?);
+        Ok(())
+    }
+
+    #[test]
+    fn launchagent_disabled_rejects_unknown_owned_intent() {
+        for value in ["unknown", "", "disabled extra"] {
+            assert!(parse_launchagent_disabled(&format!("\"{LABEL}\" => {value}")).is_err());
+        }
+    }
 
     struct Temporary(PathBuf);
     impl Temporary {

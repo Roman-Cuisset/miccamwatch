@@ -321,6 +321,10 @@ of unrelated management profiles. This does not establish that the camera is
 globally allowed. Corrupt ownership records, requested protection and pending or
 unknown restoration for an existing owned receipt still refuse removal.
 
+macOS autostart recognizes both native `disabled`/`enabled` and legacy boolean
+`launchctl print-disabled` responses. Refresh preserves the actual disabled
+intent; an unknown value for the owned label remains an error.
+
 TLS dependencies resolve to `rustls-webpki 0.103.16`, `webpki-roots 1.0.10`
 and `webpki-root-certs 1.0.10`, addressing
 [RUSTSEC-2026-0382](https://rustsec.org/advisories/RUSTSEC-2026-0382),
