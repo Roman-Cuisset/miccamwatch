@@ -298,6 +298,27 @@ The old mapped-CLI cleanup warning remains separate. See the 0.19.0 corrections
 below and [ROADMAP](docs/ROADMAP.md); no installed application or security
 protection has been changed by that source work.
 
+## 0.21.0 — Native Linux ARM64 (unreleased)
+
+Development source adds `aarch64-unknown-linux-gnu` and the separate
+`miccamwatch-linux-aarch64.tar.gz` package alongside Linux x86_64. Native
+Ubuntu 22.04 ARM64 builds use the same glibc 2.35 and PipeWire/SPA baseline;
+the ordinary installer still rejects musl and unsupported 32-bit systems.
+
+Both Linux executables must pass ELF64, little-endian, executable-type, ABI
+and native-machine checks before either staged executable is probed. The
+administrator-only camera bootstrap retains its checksum, private-copy,
+ownership, protocol and restoration boundaries; no device action is enabled
+by installation.
+
+Native qualification is tracked in [ROADMAP](docs/ROADMAP.md). A hosted ARM64
+VM is not physical Raspberry Pi/SBC qualification, and USB camera control does
+not cover CSI cameras. There are no historical pre-0.21.0 Linux ARM64 release
+archives to use as migration or resource-comparison baselines.
+
+Public stable remains 0.20.0, without a Linux ARM64 asset. Do not infer
+publication or Raspberry Pi hardware support from this development section.
+
 ## 0.20.0 — Native consultation and scoped uninstall
 
 The macOS tray opens a singleton native consultation window with observed
