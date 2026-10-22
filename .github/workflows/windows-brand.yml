@@ -32,7 +32,7 @@ jobs:
           $payload = Join-Path $stage 'payload'
           New-Item -ItemType Directory -Path $payload -Force | Out-Null
           foreach ($name in @('mcw.exe','mcw-tray.exe')) { Copy-Item -LiteralPath (Join-Path $previous "_temp/windows-brand-proof/installed-before-cleanup/$name") -Destination $payload }
-          foreach ($name in @('windows_ordinary.py','windows_interactive_probe.ps1','windows_frontend_probe.py','native_uninstall.py')) { Copy-Item -LiteralPath (Join-Path 'installer/tests' $name) -Destination $stage }
+          foreach ($name in @('windows_ordinary.py','windows_interactive_probe.ps1','windows_frontend_probe.py','windows_desktop_capture.ps1','native_uninstall.py')) { Copy-Item -LiteralPath (Join-Path 'installer/tests' $name) -Destination $stage }
           $python = (Get-Command python.exe).Source
           $fixture = Join-Path $stage 'frontend.ps1'
           @'
@@ -47,8 +47,12 @@ jobs:
             if (-not $hostResult.window_ready -or $hostResult.cooperative_stop_exit -ne 0 -or $hostResult.exit_after_observation -ne 0) { throw 'Actual frontend readiness/cooperative stop failed; original evidence retained' }
           }
           '@ | Set-Content -LiteralPath $fixture -Encoding UTF8
-          & powershell.exe -NoProfile -STA -File (Join-Path $stage 'windows_interactive_probe.ps1') -StageDirectory $stage -FixtureScript $fixture -PythonExe $python -ReportPath (Join-Path $stage 'interactive-provider.json') -TimeoutSeconds 900
-          if ($LASTEXITCODE -ne 0) { throw 'Genuine interactive desktop did not qualify; inspect original provider evidence' }
+          $captureArgs = @('-NoProfile','-STA','-File',(Join-Path $stage 'windows_desktop_capture.ps1'),'-OutputDirectory',$stage)
+          $capture = Start-Process powershell.exe -ArgumentList $captureArgs -PassThru -RedirectStandardOutput (Join-Path $stage 'capture.stdout.log') -RedirectStandardError (Join-Path $stage 'capture.stderr.log')
+          $providerArgs = @('-NoProfile','-STA','-File',(Join-Path $stage 'windows_interactive_probe.ps1'),'-StageDirectory',$stage,'-FixtureScript',$fixture,'-PythonExe',$python,'-ReportPath',(Join-Path $stage 'interactive-provider.json'),'-TimeoutSeconds','300')
+          $provider = Start-Process powershell.exe -ArgumentList $providerArgs -PassThru -RedirectStandardOutput (Join-Path $stage 'provider.stdout.log') -RedirectStandardError (Join-Path $stage 'provider.stderr.log')
+          if (-not $provider.WaitForExit(330000)) { throw 'Provider remains live in a blocking native API; retained untouched for disposable VM teardown, inspect last stage and screenshot' }
+          if ($provider.ExitCode -ne 0) { throw 'Genuine interactive desktop did not qualify; inspect original provider evidence' }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:

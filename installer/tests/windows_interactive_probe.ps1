@@ -34,12 +34,14 @@ $account = $null
 $code = 1
 $clock = [Diagnostics.Stopwatch]::StartNew()
 function Save-Report { [IO.File]::WriteAllText($reportFile, ($report | ConvertTo-Json -Depth 8), (New-Object Text.UTF8Encoding($false))) }
+function Stage([string]$value) { $report.stage = $value; Save-Report; Write-Output "Interactive provider: $value" }
 function Assert-Deadline { if ($clock.Elapsed.TotalSeconds -ge $TimeoutSeconds) { throw 'Bounded interactive-provider deadline expired; no task/session was stopped' } }
 function Quote-Argument([string]$value) {
     if ($value.Contains('"') -or $value.EndsWith('\')) { throw 'Unexpected quote/trailing slash in scheduled file argument' }
     return '"' + $value + '"'
 }
 try {
+    Stage 'compile-native-bridge'
     Add-Type -AssemblyName System.Windows.Forms
     Add-Type -ReferencedAssemblies System.Windows.Forms -TypeDefinition @'
 using System;
@@ -93,10 +95,12 @@ public static class McwRdpNative {
 }
 '@
     # Read the actual configured listener and public local server certificate.
+    Stage 'read-existing-listener'
     $listener = Get-CimInstance -Namespace root/cimv2/terminalservices -ClassName Win32_TSGeneralSetting -Filter "TerminalName='RDP-tcp'"
     if ($listener.UserAuthenticationRequired -ne 1) { throw 'Existing RDP listener does not require NLA; no policy will be changed' }
     $machine = [Environment]::MachineName
     $configuredHash = ([string]$listener.SSLCertificateSHA1Hash -replace '\s', '').ToUpperInvariant()
+    Stage 'read-existing-server-leaf'
     $certificates = @(Get-ChildItem -LiteralPath 'Cert:\LocalMachine\Remote Desktop' | Where-Object {
         $_.Subject -eq "CN=$machine" -and $_.Issuer -eq $_.Subject -and
         $_.NotBefore -le (Get-Date) -and $_.NotAfter -gt (Get-Date)
@@ -112,11 +116,14 @@ public static class McwRdpNative {
     $report.server_certificate_thumbprint = $leaf.Thumbprint
     $report.configured_certificate_hash = $configuredHash
     $report.server_hostname = $machine
+    Stage 'open-current-user-root'
     $rootStore = New-Object Security.Cryptography.X509Certificates.X509Store('Root', 'CurrentUser')
     $rootStore.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
     $present = @($rootStore.Certificates | Where-Object { [Convert]::ToBase64String($_.RawData) -ceq [Convert]::ToBase64String($leaf.RawData) })
+    Stage 'provision-exact-client-leaf'
     if ($present.Count -eq 0) { $rootStore.Add($leaf); $addedLeaf = $true }
     $report.exact_client_leaf_added = $addedLeaf
+    Stage 'create-fresh-account'
 
     $name = 'mcw_' + [Guid]::NewGuid().ToString('N').Substring(0, 12)
     $random = New-Object byte[] 24
@@ -127,12 +134,14 @@ public static class McwRdpNative {
     $secure = ConvertTo-SecureString -String $password -AsPlainText -Force
     try { $account = New-LocalUser -Name $name -Password $secure -Description 'Disposable native interactive qualification' }
     finally { $secure.Dispose() }
+    Stage 'assign-fresh-account-groups'
     foreach ($groupSid in @('S-1-5-32-545', 'S-1-5-32-555')) {
         $group = Get-LocalGroup -SID $groupSid
         if (@(Get-LocalGroupMember -Group $group | Where-Object { $_.SID -eq $account.SID }).Count -eq 0) {
             Add-LocalGroupMember -Group $group -Member $account
         }
     }
+    Stage 'verify-fresh-account-memberships'
     $memberships = @(Get-LocalGroup | Where-Object {
         @(Get-LocalGroupMember -Group $_ | Where-Object { $_.SID -eq $account.SID }).Count -ne 0
     } | ForEach-Object { $_.SID.Value })
@@ -142,6 +151,7 @@ public static class McwRdpNative {
     $report.fixture_groups = $memberships
     Save-Report
 
+    Stage 'create-native-rdp-client'
     # The registered v11 coclass is sufficient; no generated interop assemblies.
     $controlType = [Type]::GetTypeFromProgID('MsTscAx.MsTscAx.11', $true)
     $report.control_clsid = $controlType.GUID.ToString()
