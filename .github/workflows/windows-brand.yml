@@ -32,7 +32,7 @@ jobs:
           $payload = Join-Path $stage 'payload'
           New-Item -ItemType Directory -Path $payload -Force | Out-Null
           foreach ($name in @('mcw.exe','mcw-tray.exe')) { Copy-Item -LiteralPath (Join-Path $previous "_temp/windows-brand-proof/installed-before-cleanup/$name") -Destination $payload }
-          foreach ($name in @('windows_ordinary.py','windows_interactive_probe.ps1','windows_frontend_probe.py','windows_desktop_capture.ps1','windows_certificate_consent.ps1','native_uninstall.py')) { Copy-Item -LiteralPath (Join-Path 'installer/tests' $name) -Destination $stage }
+          foreach ($name in @('windows_ordinary.py','windows_interactive_probe.ps1','windows_frontend_probe.py','windows_desktop_capture.ps1','native_uninstall.py')) { Copy-Item -LiteralPath (Join-Path 'installer/tests' $name) -Destination $stage }
           $python = (Get-Command python.exe).Source
           $fixture = Join-Path $stage 'frontend.ps1'
           @'
@@ -52,12 +52,8 @@ jobs:
           $providerArgs = @('-NoProfile','-STA','-File',(Join-Path $stage 'windows_interactive_probe.ps1'),'-StageDirectory',$stage,'-FixtureScript',$fixture,'-PythonExe',$python,'-ReportPath',(Join-Path $stage 'interactive-provider.json'),'-TimeoutSeconds','300')
           $provider = Start-Process powershell.exe -ArgumentList $providerArgs -PassThru -RedirectStandardOutput (Join-Path $stage 'provider.stdout.log') -RedirectStandardError (Join-Path $stage 'provider.stderr.log')
           $null = $provider.Handle
-          $consentArgs = @('-NoProfile','-STA','-File',(Join-Path $stage 'windows_certificate_consent.ps1'),'-StageDirectory',$stage,'-ProviderProcessId',$provider.Id)
-          $consent = Start-Process powershell.exe -ArgumentList $consentArgs -PassThru -RedirectStandardOutput (Join-Path $stage 'consent.stdout.log') -RedirectStandardError (Join-Path $stage 'consent.stderr.log')
-          $null = $consent.Handle
           $waiting = [Diagnostics.Stopwatch]::StartNew()
           while (-not $provider.WaitForExit(1000)) {
-            if ($consent.HasExited -and $consent.ExitCode -ne 0) { throw 'Exact certificate consent refused; provider retained untouched, inspect dialog evidence' }
             if ($waiting.Elapsed.TotalSeconds -ge 330) { throw 'Provider remains live in a blocking native API; retained untouched for disposable VM teardown, inspect last stage and screenshot' }
           }
           if ($provider.ExitCode -ne 0) { throw 'Genuine interactive desktop did not qualify; inspect original provider evidence' }

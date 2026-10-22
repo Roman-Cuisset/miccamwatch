@@ -1,6 +1,6 @@
 # Disposable hosted experiment: real fresh-user RDP desktop, never a token substitute.
 # Strict server authentication remains enabled; only the exact local RDP leaf is
-# provisioned into the disposable client's CurrentUser Root, never LocalMachine.
+# provisioned into this disposable VM's machine Root for CredSSP validation.
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string]$StageDirectory,
@@ -23,7 +23,7 @@ $fixture = (Resolve-Path -LiteralPath $FixtureScript).Path
 $python = (Resolve-Path -LiteralPath $PythonExe).Path
 $reportFile = [IO.Path]::GetFullPath($ReportPath)
 $null = New-Item -ItemType Directory -Force -Path ([IO.Path]::GetDirectoryName($reportFile))
-$report = [ordered]@{ status = 'starting'; no_process_was_killed = $true; authentication_level = 1; trust_scope = 'CurrentUser Root exact local RDP leaf only' }
+$report = [ordered]@{ status = 'starting'; no_process_was_killed = $true; authentication_level = 1; trust_scope = 'Disposable hosted VM LocalMachine Root exact existing local RDP leaf only' }
 $rootStore = $null
 $addedLeaf = $false
 $leaf = $null
@@ -116,8 +116,8 @@ public static class McwRdpNative {
     $report.server_certificate_thumbprint = $leaf.Thumbprint
     $report.configured_certificate_hash = $configuredHash
     $report.server_hostname = $machine
-    Stage 'open-current-user-root'
-    $rootStore = New-Object Security.Cryptography.X509Certificates.X509Store('Root', 'CurrentUser')
+    Stage 'open-disposable-machine-root'
+    $rootStore = New-Object Security.Cryptography.X509Certificates.X509Store('Root', 'LocalMachine')
     $rootStore.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
     $present = @($rootStore.Certificates | Where-Object { [Convert]::ToBase64String($_.RawData) -ceq [Convert]::ToBase64String($leaf.RawData) })
     Stage 'provision-exact-client-leaf'
@@ -130,7 +130,7 @@ public static class McwRdpNative {
         $report.current_user_chain_status = @($chain.ChainStatus | ForEach-Object { $_.Status.ToString() })
     } finally { $chain.Dispose() }
     Stage 'read-back-exact-client-trust'
-    if (-not $report.exact_client_leaf_present -or -not $report.current_user_chain_trusted) { throw 'Exact CurrentUser leaf enrollment did not establish native client chain trust' }
+    if (-not $report.exact_client_leaf_present -or -not $report.current_user_chain_trusted) { throw 'Exact disposable machine leaf enrollment did not establish native client chain trust' }
     Stage 'create-fresh-account'
 
     $name = 'mcw_' + [Guid]::NewGuid().ToString('N').Substring(0, 12)
