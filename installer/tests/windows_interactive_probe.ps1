@@ -123,6 +123,14 @@ public static class McwRdpNative {
     Stage 'provision-exact-client-leaf'
     if ($present.Count -eq 0) { $rootStore.Add($leaf); $addedLeaf = $true }
     $report.exact_client_leaf_added = $addedLeaf
+    $report.exact_client_leaf_present = @($rootStore.Certificates | Where-Object { [Convert]::ToBase64String($_.RawData) -ceq [Convert]::ToBase64String($leaf.RawData) }).Count -eq 1
+    $chain = New-Object Security.Cryptography.X509Certificates.X509Chain
+    try {
+        $report.current_user_chain_trusted = $chain.Build($leaf)
+        $report.current_user_chain_status = @($chain.ChainStatus | ForEach-Object { $_.Status.ToString() })
+    } finally { $chain.Dispose() }
+    Stage 'read-back-exact-client-trust'
+    if (-not $report.exact_client_leaf_present -or -not $report.current_user_chain_trusted) { throw 'Exact CurrentUser leaf enrollment did not establish native client chain trust' }
     Stage 'create-fresh-account'
 
     $name = 'mcw_' + [Guid]::NewGuid().ToString('N').Substring(0, 12)
@@ -184,6 +192,8 @@ public static class McwRdpNative {
     $rdp.SecuredSettings2.AudioRedirectionMode = 2
     $rdp.AdvancedSettings2.ClearTextPassword = $password
     $password = $null
+    $report.effective_authentication_level = $rdp.AdvancedSettings5.AuthenticationLevel
+    Stage 'connect-strict-native-rdp'
     $rdp.Connect()
     do {
         Assert-Deadline
