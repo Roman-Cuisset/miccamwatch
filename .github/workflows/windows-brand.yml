@@ -51,8 +51,10 @@ jobs:
           $capture = Start-Process powershell.exe -ArgumentList $captureArgs -PassThru -RedirectStandardOutput (Join-Path $stage 'capture.stdout.log') -RedirectStandardError (Join-Path $stage 'capture.stderr.log')
           $providerArgs = @('-NoProfile','-STA','-File',(Join-Path $stage 'windows_interactive_probe.ps1'),'-StageDirectory',$stage,'-FixtureScript',$fixture,'-PythonExe',$python,'-ReportPath',(Join-Path $stage 'interactive-provider.json'),'-TimeoutSeconds','300')
           $provider = Start-Process powershell.exe -ArgumentList $providerArgs -PassThru -RedirectStandardOutput (Join-Path $stage 'provider.stdout.log') -RedirectStandardError (Join-Path $stage 'provider.stderr.log')
+          $null = $provider.Handle
           $consentArgs = @('-NoProfile','-STA','-File',(Join-Path $stage 'windows_certificate_consent.ps1'),'-StageDirectory',$stage,'-ProviderProcessId',$provider.Id)
           $consent = Start-Process powershell.exe -ArgumentList $consentArgs -PassThru -RedirectStandardOutput (Join-Path $stage 'consent.stdout.log') -RedirectStandardError (Join-Path $stage 'consent.stderr.log')
+          $null = $consent.Handle
           $waiting = [Diagnostics.Stopwatch]::StartNew()
           while (-not $provider.WaitForExit(1000)) {
             if ($consent.HasExited -and $consent.ExitCode -ne 0) { throw 'Exact certificate consent refused; provider retained untouched, inspect dialog evidence' }
