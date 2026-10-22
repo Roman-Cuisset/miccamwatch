@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   ordinary-interactive:
-    runs-on: windows-latest
+    runs-on: windows-2022
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
