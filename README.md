@@ -336,9 +336,10 @@ ignored or suppressed.
 Unix tray command sockets now explicitly enter blocking mode after acceptance,
 so BSD listener-flag inheritance cannot cause an immediate read failure and a
 premature disconnect. Native qualification is tracked in [ROADMAP](docs/ROADMAP.md).
-Use the [versioned release page](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.20.0)
-for platform packages and their verification metadata; the source version alone
-does not establish that publication has completed.
+[Version 0.20.0 is published](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.20.0).
+Public assets, named SHA-256 digests and signed build provenance were verified.
+Windows EXE and MSI files remain unsigned; macOS bundles are ad-hoc sealed without
+notarization.
 
 ## 0.19.1 — Windows CLI-hosted tray update correction
 
