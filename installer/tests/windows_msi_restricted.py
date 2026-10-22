@@ -78,6 +78,8 @@ kernel.CloseHandle.argtypes = [w.HANDLE]
 kernel.LocalFree.argtypes = [c.c_void_p]
 kernel.WaitForSingleObject.argtypes = [w.HANDLE, w.DWORD]
 kernel.GetExitCodeProcess.argtypes = [w.HANDLE, c.POINTER(w.DWORD)]
+kernel.ResumeThread.argtypes = [w.HANDLE]
+kernel.ResumeThread.restype = w.DWORD
 userenv.GetUserProfileDirectoryW.argtypes = [w.HANDLE, w.LPWSTR, c.POINTER(w.DWORD)]
 adv.ConvertStringSecurityDescriptorToSecurityDescriptorW.argtypes = [
     w.LPCWSTR, w.DWORD, c.POINTER(c.c_void_p), c.POINTER(w.DWORD)]
@@ -119,12 +121,15 @@ def snapshot(token):
     def number(kind):
         return w.DWORD.from_buffer(token_info(token, kind)).value
     user = token_info(token, 1)
-    groups = token_info(token, 2)
-    count = w.DWORD.from_buffer(groups).value
-    entries = (SidAttributes * count).from_address(c.addressof(groups) + Groups.groups.offset)
-    admins = [{"sid": sid_string(g.sid), "attributes": g.attributes,
-               "enabled": bool(g.attributes & 4), "deny_only": bool(g.attributes & 16)}
-              for g in entries if sid_string(g.sid) == "S-1-5-32-544"]
+    def groups(kind):
+        buffer = token_info(token, kind)
+        count = w.DWORD.from_buffer(buffer).value
+        entries = (SidAttributes * count).from_address(c.addressof(buffer) + Groups.groups.offset)
+        return [{"sid": sid_string(g.sid), "attributes": g.attributes,
+                 "enabled": bool(g.attributes & 4), "deny_only": bool(g.attributes & 16)}
+                for g in entries]
+    admins = [group for group in groups(2) if group["sid"] == "S-1-5-32-544"]
+    owner = token_info(token, 4)
     size = w.DWORD(32768)
     profile = c.create_unicode_buffer(size.value)
     checked(userenv.GetUserProfileDirectoryW(token, profile, c.byref(size)))
@@ -135,6 +140,8 @@ def snapshot(token):
             "token_elevation_type": number(18),
             "has_restrictions": bool(c.c_ubyte.from_buffer(token_info(token, 21)).value),
             "integrity_sid": integrity_sid,
+            "default_owner_sid": sid_string(c.c_void_p.from_buffer(owner).value),
+            "restricted_sids": groups(11),
             "profile": profile.value, "userprofile_env": os.environ.get("USERPROFILE"),
             "appdata_env": os.environ.get("APPDATA"), "localappdata_env": os.environ.get("LOCALAPPDATA"),
             "administrators": admins, "admin_group_enabled": any(g["enabled"] for g in admins)}
@@ -226,52 +233,34 @@ def invoke(binary, args, proof, label):
     return process.returncode, stdout.read_text(encoding="utf-8", errors="replace"), stderr.read_text(encoding="utf-8", errors="replace")
 
 
-def consumer(args):
-    report = {"status": "running", "scope": "OS-restricted same-user console consumer; not ordinary desktop"}
-    path = args.proof / "consumer.json"
-    try:
-        token = current_token()
-        try:
-            report["actual_process_token"] = snapshot(token)
-        finally:
-            kernel.CloseHandle(token)
-        original = json.loads((args.proof / "tokens.json").read_text(encoding="utf-8"))["original"]
-        require(eligible(report["actual_process_token"], original), "Actual child token is not eligible same-user TokenElevation0")
-        save(path, report)
-        data = []
-        for label, command, content in (
-            ("settings", ["config", "settings-path"], b"history_enabled = false\nnotifications_enabled = false\nshow_ready = false\nmute_on_lock = false\nblock_camera_on_lock = false\n"),
-            ("policy", ["config", "path"], b'language = "en"\n'),
-            ("history", ["history", "path"], b'{"fixture":"existing-user-history-preserved"}\n')):
-            code, out, err = invoke(args.binary, command, args.proof, label)
-            require(code == 0 and out.strip(), f"Actual {label} path command failed; inspect retained output")
-            target = Path(out.strip())
-            require(target.is_absolute() and not target.exists(), f"Existing {label} data: refusing overwrite")
-            require(target.is_relative_to(Path(original["profile"])), "Actual application data must remain beneath registered user's profile")
-            target.parent.mkdir(parents=True, exist_ok=True)
-            with target.open("xb") as output:
-                output.write(content)
-            data.append({"path": str(target), "sha256": sha(target)})
-        payload = {name: sha(args.binary.parent / name) for name in ("mcw.exe", "mcw-tray.exe")}
-        report.update(data=data, payload_before=payload)
-        save(path, report)
-        code, out, err = invoke(args.binary, ["uninstall"], args.proof, "uninstall")
-        guidance = f"msiexec.exe /x {args.product}"
-        require(code == 2 and guidance in err, "Real SDK consumer did not delegate exact MSI ProductCode with exit2")
-        require(payload == {name: sha(args.binary.parent / name) for name in payload}, "Delegation modified installed payload")
-        require(all(sha(Path(item["path"])) == item["sha256"] for item in data), "Delegation changed user data")
-        report.update(status="passed", exit_code=code, exact_guidance=guidance, payload_and_data_unchanged=True)
-    except BaseException:
-        report.update(status="failed", error=traceback.format_exc())
-        raise
-    finally:
-        save(path, report)
+def seed_user_data(args, original):
+    """Supervisor queries paths and seeds only absent data under the same profile."""
+    data = []
+    for label, command, content in (
+        ("settings", ["config", "settings-path"], b"history_enabled = false\nnotifications_enabled = false\nshow_ready = false\nmute_on_lock = false\nblock_camera_on_lock = false\n"),
+        ("policy", ["config", "path"], b'language = "en"\n'),
+        ("history", ["history", "path"], b'{"fixture":"existing-user-history-preserved"}\n')):
+        code, out, err = invoke(args.binary, command, args.proof, label)
+        require(code == 0 and out.strip(), f"Actual {label} path command failed; inspect retained output")
+        target = Path(out.strip())
+        require(target.is_absolute() and not target.exists(), f"Existing {label} data: refusing overwrite")
+        require(target.is_relative_to(Path(original["profile"])),
+                "Actual application data must remain beneath registered user's profile")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with target.open("xb") as output:
+            output.write(content)
+        data.append({"path": str(target), "sha256": sha(target)})
+    return data
 
 
 def launch(args):
     report = {"status": "running", "original": None, "candidates": [], "selected_mode": None,
               "scope": "restricted same-SID/session/profile process; no ordinary desktop claim"}
     path = args.proof / "tokens.json"
+    consumer_path = args.proof / "consumer.json"
+    consumer = {"status": "running", "actual_process_token": None,
+                "scope": "actual installed MCW, OS-restricted same-user console process; not ordinary desktop",
+                "data_seeded_by": "same-SID supervisor; only absent user fixtures"}
     token = current_token()
     selected = None
     streams = []
@@ -309,8 +298,11 @@ def launch(args):
                 save(path, report)
         require(selected is not None,
                 "No OS-derived same-user TokenElevation0/admin-disabled token. Required: disposable Windows VM with genuine standard-user MSI service access, or split-token same MSI user with UAC enabled by VM provisioning; do not alter this runner's policy or SDK guard.")
-        command = [sys.executable, "-B", str(Path(__file__).resolve()), "--consumer", "--binary", str(args.binary),
-                   "--product", args.product, "--proof", str(args.proof)]
+        consumer["data"] = data = seed_user_data(args, original)
+        consumer["payload_before"] = payload = {
+            name: sha(args.binary.parent / name) for name in ("mcw.exe", "mcw-tray.exe")}
+        save(consumer_path, consumer)
+        command = [str(args.binary), "uninstall"]
         startup = Startup()
         startup.cb = c.sizeof(startup)
         desktop = OwnedDesktop(snapshot(selected))
@@ -320,36 +312,70 @@ def launch(args):
             report["owned_desktop"] = desktop.evidence()
             save(path, report)
         startup.desktop = desktop.full_name
-        streams = [open(os.devnull, "rb"), (args.proof / "restricted-launch.stdout").open("wb"),
-                   (args.proof / "restricted-launch.stderr").open("wb")]
+        streams = [open(os.devnull, "rb"), (args.proof / "uninstall.stdout").open("wb"),
+                   (args.proof / "uninstall.stderr").open("wb")]
         for stream in streams:
             os.set_inheritable(stream.fileno(), True)
         startup.flags = 0x100  # STARTF_USESTDHANDLES; retain real native child errors.
         startup.stdin, startup.stdout, startup.stderr = (msvcrt.get_osfhandle(stream.fileno()) for stream in streams)
-        # No GUI is started or needed; retain caller's same-user session/profile.
+        # Launch the actual installed CLI, not a second interpreter. Inspect its
+        # real kernel primary token before its first instruction can execute.
         process = Process()
-        checked(adv.CreateProcessAsUserW(selected, sys.executable,
+        checked(adv.CreateProcessAsUserW(selected, str(args.binary),
                                        c.create_unicode_buffer(subprocess.list2cmdline(command)),
-                                       None, None, True, 0x08000000, None,
+                                       None, None, True, 0x08000004, None,
                                        str(args.proof), c.byref(startup), c.byref(process)))
-        kernel.CloseHandle(process.thread)
+        pending_child = True
+        pending_path = args.proof / "pending-consumer.json"
         try:
+            save(pending_path, {"pid": process.pid, "state": "suspended-token-inspection",
+                               "reason": "owned native child; do not clean up MSI until exit; no forced stop"})
+            child_token = w.HANDLE()
+            checked(adv.OpenProcessToken(process.process, 8, c.byref(child_token)))
+            try:
+                consumer["actual_process_token"] = snapshot(child_token)
+            finally:
+                kernel.CloseHandle(child_token)
+            save(consumer_path, consumer)
+            require(eligible(consumer["actual_process_token"], original),
+                    "Actual suspended MCW token not same-user TokenElevation0/admin-disabled; child preserved, no MSI cleanup")
+            previous_suspend_count = kernel.ResumeThread(process.thread)
+            require(previous_suspend_count != 0xFFFFFFFF,
+                    f"ResumeThread failed with Windows error {c.get_last_error()}; native child preserved")
+            require(previous_suspend_count == 1, "Unexpected native thread suspension count; child preserved")
+            save(pending_path, {"pid": process.pid, "state": "running",
+                               "reason": "owned native child; no MSI cleanup before exit; no forced stop"})
             wait = kernel.WaitForSingleObject(process.process, 360000)
             if wait == 258:
-                pending_child = True
-                save(args.proof / "pending-consumer.json", {"pid": process.pid,
-                     "reason": "restricted consumer deadline; not killed; do not remove MSI"})
-                raise TimeoutError("Restricted child still alive; no forced termination")
-            require(wait == 0, "Restricted child wait failed")
+                save(pending_path, {"pid": process.pid, "state": "deadline",
+                                   "reason": "actual MCW still alive; not killed; do not remove MSI"})
+                raise TimeoutError("Actual restricted MCW still alive; no forced termination")
+            require(wait == 0, "Actual restricted MCW wait failed; child retained")
+            pending_child = False
+            pending_path.unlink()
             code = w.DWORD()
             checked(kernel.GetExitCodeProcess(process.process, c.byref(code)))
-            report["consumer_process_exit_code"] = code.value
-            require(code.value == 0, "Actual restricted consumer failed; inspect consumer.json and native outputs")
+            report["consumer_process_exit_code"] = consumer["exit_code"] = code.value
+            consumer["exit_code_hex"] = f"0x{code.value:08X}"
+            save(consumer_path, consumer)
         finally:
+            kernel.CloseHandle(process.thread)
             kernel.CloseHandle(process.process)
+        for stream in streams:
+            stream.close()
+        streams = []
+        err = (args.proof / "uninstall.stderr").read_text(encoding="utf-8", errors="replace")
+        guidance = f"msiexec.exe /x {args.product}"
+        require(code.value == 2 and guidance in err,
+                "Actual restricted MCW did not delegate exact MSI ProductCode with exit2; inspect consumer.json/native output")
+        require(payload == {name: sha(args.binary.parent / name) for name in payload},
+                "Delegation modified installed payload")
+        require(all(sha(Path(item["path"])) == item["sha256"] for item in data), "Delegation changed user data")
+        consumer.update(status="passed", exact_guidance=guidance, payload_and_data_unchanged=True)
         report["status"] = "passed"
     except BaseException:
         report.update(status="failed", error=traceback.format_exc())
+        consumer.update(status="failed", error=report["error"])
         raise
     finally:
         cleanup_error = None
@@ -369,13 +395,13 @@ def launch(args):
             kernel.CloseHandle(selected)
         kernel.CloseHandle(token)
         save(path, report)
+        save(consumer_path, consumer)
         if cleanup_error is not None and sys.exc_info()[0] is None:
             raise cleanup_error
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--consumer", action="store_true")
     parser.add_argument("--binary", type=Path, required=True)
     parser.add_argument("--product", required=True)
     parser.add_argument("--proof", type=Path, required=True)
@@ -384,7 +410,7 @@ def main():
             os.environ.get("RUNNER_ENVIRONMENT") == "github-hosted", "Actual disposable hosted Windows runner required")
     args.proof = args.proof.resolve(strict=True)
     args.binary = args.binary.resolve(strict=True)
-    (consumer if args.consumer else launch)(args)
+    launch(args)
 
 
 if __name__ == "__main__":
