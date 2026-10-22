@@ -25,7 +25,14 @@ while ([DateTime]::UtcNow -lt $deadline) {
                 $elements=$dialog.FindAll([Windows.Automation.TreeScope]::Descendants,[Windows.Automation.Condition]::TrueCondition)
                 $names=@($elements|ForEach-Object{$_.Current.Name})
                 $text=$names -join "`n"
-                if (($text -replace '\s','').ToUpperInvariant().IndexOf($thumbprint,[StringComparison]::Ordinal) -lt 0 -or $names -cnotcontains $hostname -or -not $text.Contains('Do you want to install this certificate?')) { throw 'Native certificate dialog does not identify the exact validated server leaf; no consent given' }
+                $names | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $stage 'native-certificate-dialog-text.json') -Encoding UTF8
+                $checks=@{
+                    fingerprint=(($text -replace '[\s\u200e\u200f]','').ToUpperInvariant().IndexOf($thumbprint,[StringComparison]::Ordinal) -ge 0)
+                    hostname=([regex]::IsMatch($text,'(?<![A-Za-z0-9-])'+[regex]::Escape($hostname)+'(?![A-Za-z0-9-])'))
+                    enrollment_question=$text.Contains('Do you want to install this certificate?')
+                }
+                $checks | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $stage 'native-certificate-dialog-checks.json') -Encoding UTF8
+                if (-not $checks.fingerprint -or -not $checks.hostname -or -not $checks.enrollment_question) { throw 'Native certificate dialog does not identify the exact validated server leaf; no consent given' }
                 $bounds=[Windows.Forms.SystemInformation]::VirtualScreen
                 $image=New-Object Drawing.Bitmap($bounds.Width,$bounds.Height)
                 $graphics=[Drawing.Graphics]::FromImage($image)

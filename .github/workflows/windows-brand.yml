@@ -53,7 +53,11 @@ jobs:
           $provider = Start-Process powershell.exe -ArgumentList $providerArgs -PassThru -RedirectStandardOutput (Join-Path $stage 'provider.stdout.log') -RedirectStandardError (Join-Path $stage 'provider.stderr.log')
           $consentArgs = @('-NoProfile','-STA','-File',(Join-Path $stage 'windows_certificate_consent.ps1'),'-StageDirectory',$stage,'-ProviderProcessId',$provider.Id)
           $consent = Start-Process powershell.exe -ArgumentList $consentArgs -PassThru -RedirectStandardOutput (Join-Path $stage 'consent.stdout.log') -RedirectStandardError (Join-Path $stage 'consent.stderr.log')
-          if (-not $provider.WaitForExit(330000)) { throw 'Provider remains live in a blocking native API; retained untouched for disposable VM teardown, inspect last stage and screenshot' }
+          $waiting = [Diagnostics.Stopwatch]::StartNew()
+          while (-not $provider.WaitForExit(1000)) {
+            if ($consent.HasExited -and $consent.ExitCode -ne 0) { throw 'Exact certificate consent refused; provider retained untouched, inspect dialog evidence' }
+            if ($waiting.Elapsed.TotalSeconds -ge 330) { throw 'Provider remains live in a blocking native API; retained untouched for disposable VM teardown, inspect last stage and screenshot' }
+          }
           if ($provider.ExitCode -ne 0) { throw 'Genuine interactive desktop did not qualify; inspect original provider evidence' }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
