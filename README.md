@@ -298,7 +298,7 @@ The old mapped-CLI cleanup warning remains separate. See the 0.19.0 corrections
 below and [ROADMAP](docs/ROADMAP.md); no installed application or security
 protection has been changed by that source work.
 
-## 0.20.0 — Native consultation and scoped uninstall (unreleased)
+## 0.20.0 — Native consultation and scoped uninstall
 
 The macOS tray opens a singleton native consultation window with observed
 microphone/camera state, access details and diagnostics. Closing that window
@@ -336,7 +336,9 @@ ignored or suppressed.
 Unix tray command sockets now explicitly enter blocking mode after acceptance,
 so BSD listener-flag inheritance cannot cause an immediate read failure and a
 premature disconnect. Native qualification is tracked in [ROADMAP](docs/ROADMAP.md).
-These source changes are not a published release. Public stable remains 0.19.1.
+Use the [versioned release page](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.20.0)
+for platform packages and their verification metadata; the source version alone
+does not establish that publication has completed.
 
 ## 0.19.1 — Windows CLI-hosted tray update correction
 
