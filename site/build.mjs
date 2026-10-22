@@ -12,7 +12,7 @@ const markerName = '.mcw-site-export.json';
 const owner = 'miccamwatch-static-site';
 const originMarker = '<!-- MCW_ORIGIN_META -->';
 const textExtensions = new Set(['.html', '.css', '.js', '.json', '.svg', '.txt', '.xml']);
-const entryFiles = ['main.css', 'main.js', '_headers', '_redirects', 'robots.txt'];
+const entryFiles = ['main.css', 'main.js', '_headers', '_redirects', 'robots.txt', 'googlee33354524297c2d0.html'];
 
 async function statIfPresent(filename) {
   try {
