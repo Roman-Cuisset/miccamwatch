@@ -52,7 +52,21 @@ using System.Windows.Forms;
 public sealed class McwRdpHost : AxHost {
     public McwRdpHost(string clsid) : base(clsid) {}
 }
+[ComImport, Guid("302D8188-0052-4807-806A-362B628F9AC5"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+public interface McwExtendedSettings {
+    void Put([MarshalAs(UnmanagedType.BStr)] string name, [In, MarshalAs(UnmanagedType.Struct)] ref object value);
+    [return: MarshalAs(UnmanagedType.Struct)] object Get([MarshalAs(UnmanagedType.BStr)] string name);
+}
 public static class McwRdpNative {
+    public static void SoftwareRendering(object control) {
+        var settings=(McwExtendedSettings)control;
+        object disabled=false;
+        settings.Put("EnableFrameBufferRedirection",ref disabled);
+        disabled=false;
+        settings.Put("EnableHardwareMode",ref disabled);
+        if((bool)settings.Get("EnableFrameBufferRedirection"))
+            throw new InvalidOperationException("Native loopback framebuffer redirection remained enabled");
+    }
     [StructLayout(LayoutKind.Sequential)] struct Session { public int Id; public IntPtr Station; public int State; }
     public sealed class Login { public int Id; public int State; public string User; public string Domain; public int Protocol; }
     [DllImport("wtsapi32.dll", SetLastError=true)] static extern bool WTSEnumerateSessionsW(IntPtr server, int reserved, int version, out IntPtr sessions, out int count);
@@ -176,6 +190,8 @@ public static class McwRdpNative {
     [Windows.Forms.Application]::DoEvents()
     $rdp = $hostControl.GetOcx()
     [McwRdpNative]::Observe($rdp)
+    [McwRdpNative]::SoftwareRendering($rdp)
+    $report.rendering = 'Software decoding; native loopback framebuffer redirection disabled and read back'
     $report.control_version = $rdp.Version
     $rdp.Server = $machine
     $rdp.Domain = $machine
