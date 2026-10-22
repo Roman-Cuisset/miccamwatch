@@ -234,6 +234,7 @@ def launch(args):
                    "--product", args.product, "--proof", str(args.proof)]
         startup = Startup()
         startup.cb = c.sizeof(startup)
+        startup.desktop = "winsta0\\default"
         streams = [open(os.devnull, "rb"), (args.proof / "restricted-launch.stdout").open("wb"),
                    (args.proof / "restricted-launch.stderr").open("wb")]
         for stream in streams:
