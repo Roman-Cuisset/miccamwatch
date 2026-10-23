@@ -57,9 +57,9 @@ function validatePrivacy(value) {
   if (!value || Array.isArray(value) || typeof value !== 'object' ||
       Object.keys(value).length !== 2 || !Object.hasOwn(value, 'lastUpdated') || !Object.hasOwn(value, 'contactEmail') ||
       typeof value.lastUpdated !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value.lastUpdated) ||
-      (value.contactEmail !== null && (typeof value.contactEmail !== 'string' ||
-        !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.contactEmail)))) {
-    throw new Error('site/privacy.json must contain an ISO lastUpdated date and a contactEmail string or null pending confirmation.');
+      typeof value.contactEmail !== 'string' ||
+      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.contactEmail)) {
+    throw new Error('site/privacy.json must contain an ISO lastUpdated date and a valid contactEmail string.');
   }
   return value;
 }
@@ -93,11 +93,7 @@ function renderText(content, filename, release, origin, catalog = null, privacy 
     __MCW_LANGUAGE_LINKS__: languageLinks(catalog.language, filename),
     __MCW_PRIVACY_URL__: catalog.language === 'en' ? '/privacy' : `/${catalog.language}/privacy`,
     __MCW_PRIVACY_UPDATED__: privacy.lastUpdated,
-    __MCW_PRIVACY_CONTACT__: privacy.contactEmail
-      ? `<a href="mailto:${encodeURIComponent(privacy.contactEmail).replaceAll('%40', '@')}">${escapeMarkup(privacy.contactEmail)}</a>`
-      : escapeMarkup(catalog.messages['privacy.contact.pending']),
-    __MCW_PRIVACY_REVIEW__: privacy.contactEmail ? ''
-      : `<aside class="inline-warning policy-review" role="note"><p>${escapeMarkup(catalog.messages['privacy.review'])}</p></aside>`,
+    __MCW_PRIVACY_CONTACT__: `<a href="mailto:${encodeURIComponent(privacy.contactEmail).replaceAll('%40', '@')}">${escapeMarkup(privacy.contactEmail)}</a>`,
   });
   let rendered = content.replace(/__MCW_[A-Z0-9_]+__/g, (token) => {
     if (!Object.hasOwn(tokens, token)) throw new Error(`Unknown template token ${token} in ${filename}.`);
