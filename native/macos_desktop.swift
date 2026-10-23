@@ -470,6 +470,7 @@ private final class DesktopConsultationWindow: NSWindow {
 // UI language follows the state, not the host operating system.
 private struct DesktopGUIWords {
     let values: [String]
+    let missingIdentities: String
     subscript(_ index: Int) -> String { values[index] }
     init(_ language: String) {
         switch language {
@@ -480,6 +481,15 @@ private struct DesktopGUIWords {
         case "zh": values = ["概览", "设置", "诊断", "观测活动", "有效控制", "最近观测", "观测到的应用", "此快照中未观测到访问。", "无法观测；这不能证明没有访问。", "条访问已省略", "配置", "通知", "通知声音", "本地历史", "通知也需要 macOS 授权。声音跟随通知设置；暂停通知不会停止监视。", "配置不会静音或阻止设备。Meeting 和 Balanced 当前使用相同策略。", "范围与限制", "使用中", "就绪", "观测为空闲", "最近操作结果", "复制诊断", "已暂停", "通知未暂停"]
         case "ru": values = ["Обзор", "Настройки", "Диагностика", "Наблюдаемая активность", "Действующее управление", "Последнее наблюдение", "Наблюдаемые приложения", "В этом снимке доступ не наблюдался.", "Наблюдение недоступно; это не доказывает отсутствие доступа.", "доступов опущено", "Профиль", "Уведомления", "Звук уведомлений", "Локальная история", "Уведомления также требуют разрешения macOS. Звук зависит от уведомлений; пауза не останавливает наблюдение.", "Профиль не заглушает микрофон и не блокирует камеру. Meeting и Balanced сейчас используют одну политику.", "Область и ограничения", "Активно", "Готово", "Наблюдается простой", "Результат последнего действия", "Копировать диагностику", "Приостановлено", "Уведомления не приостановлены"]
         default: values = ["Overview", "Settings", "Diagnostics", "Observed activity", "Effective control", "Latest observation", "Observed applications", "No access observed in this snapshot.", "Observation unavailable; this is not proof of no access.", "accesses omitted", "Profile", "Notifications", "Notification sound", "Local history", "Notifications also depend on macOS permission. Sound follows notifications; pausing does not stop observation.", "A profile does not mute or block devices. Meeting and Balanced currently use the same policy.", "Scope and limitations", "Active", "Ready", "Observed idle", "Last action feedback", "Copy diagnostics", "Paused", "Notifications not paused"]
+        }
+        switch language {
+        case "fr": missingIdentities = "Les identités des applications sont indisponibles ou omises ; cela ne prouve pas une absence d’accès."
+        case "de": missingIdentities = "Anwendungsidentitäten sind nicht verfügbar oder ausgelassen; kein Nachweis fehlender Zugriffe."
+        case "es": missingIdentities = "Las identidades de las aplicaciones no están disponibles o se han omitido; no demuestra ausencia de acceso."
+        case "ja": missingIdentities = "アプリの識別情報は取得できないか省略されています。アクセスがないことの証明ではありません。"
+        case "zh": missingIdentities = "应用身份无法获取或已省略；这不能证明没有访问。"
+        case "ru": missingIdentities = "Данные о приложениях недоступны или опущены; это не доказывает отсутствие доступа."
+        default: missingIdentities = "Application identities are unavailable or omitted; this is not proof of no access."
         }
     }
 }
@@ -701,10 +711,17 @@ final class DesktopConsultation: NSObject {
         copyButton.bezelStyle = .rounded
         copyButton.identifier = NSUserInterfaceItemIdentifier("copy_diagnostics")
         let diagnostic = desktopColumn([diagnosticScroll, actionButton("camera_inspect"), copyButton], inset: 12)
-        diagnosticScroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 40).isActive = true
+        diagnosticScroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 120).isActive = true
         let overviewScroll = desktopScroll(overview), settingsScroll = desktopScroll(settings)
-        paneScrolls = [overviewScroll, settingsScroll, diagnosticScroll]
-        let sections: [(String, NSView)] = [("overview", overviewScroll), ("settings", settingsScroll), ("diagnostics", diagnostic)]
+        let diagnosticPaneScroll = desktopScroll(diagnostic)
+        // Fill the pane normally, but let long inspection labels grow the
+        // outer document instead of compressing text or pushing Copy offscreen.
+        diagnostic.heightAnchor.constraint(greaterThanOrEqualTo: diagnosticPaneScroll.contentView.heightAnchor).isActive = true
+        let preferredDiagnosticHeight = diagnostic.heightAnchor.constraint(equalTo: diagnosticPaneScroll.contentView.heightAnchor)
+        preferredDiagnosticHeight.priority = .defaultHigh
+        preferredDiagnosticHeight.isActive = true
+        paneScrolls = [overviewScroll, settingsScroll, diagnosticPaneScroll, diagnosticScroll]
+        let sections: [(String, NSView)] = [("overview", overviewScroll), ("settings", settingsScroll), ("diagnostics", diagnosticPaneScroll)]
         for (identifier, view) in sections {
             let tab = NSTabViewItem(identifier: identifier)
             tab.view = view
@@ -805,7 +822,14 @@ final class DesktopConsultation: NSObject {
         timestamp.stringValue = "\(gui[5]): \(overview.observed_at ?? words.unknown)"
         accessesTitle.stringValue = "\(gui[6]) · \(overview.total_accesses)"
         empty.isHidden = !overview.accesses.isEmpty
-        empty.stringValue = overview.microphone == "unknown" || overview.camera == "unknown" ? gui[8] : gui[7]
+        if overview.microphone == "idle" && overview.camera == "idle" && overview.total_accesses == 0 {
+            empty.stringValue = gui[7]
+        } else if overview.total_accesses > 0 || overview.microphone == "active" || overview.microphone == "ready" ||
+                    overview.camera == "active" || overview.camera == "ready" {
+            empty.stringValue = gui.missingIdentities
+        } else {
+            empty.stringValue = gui[8]
+        }
         for (index, row) in accessRows.enumerated() {
             row.isHidden = index >= overview.accesses.count
             guard index < overview.accesses.count else { continue }

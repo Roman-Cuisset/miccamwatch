@@ -1064,7 +1064,7 @@ fn run(api: Api, shared: Arc<Shared>, actions: SyncSender<Command>) -> Result<()
             restore_scroll(&ui.api, &mut ui.diagnostics);
         }
         #[cfg(test)]
-        tests::handle_probe(&mut ui, &shared);
+        tests::handle_probe(&mut ui, &shared, revision);
         thread::sleep(Duration::from_millis(16));
     }
     Ok(())
@@ -1495,6 +1495,7 @@ mod tests {
     }
     pub(super) struct ProbeRequest {
         operation: Probe,
+        revision: u64,
         reply: SyncSender<NativeState>,
     }
     #[derive(serde::Serialize)]
@@ -1520,7 +1521,11 @@ mod tests {
     impl Desktop {
         fn probe(&self, operation: Probe) -> NativeState {
             let (reply, response) = mpsc::sync_channel(1);
-            *self.shared.probe.lock().unwrap() = Some(ProbeRequest { operation, reply });
+            *self.shared.probe.lock().unwrap() = Some(ProbeRequest {
+                operation,
+                revision: self.shared.revision.load(Ordering::Acquire),
+                reply,
+            });
             response
                 .recv_timeout(Duration::from_secs(15))
                 .unwrap_or_else(|error| {
@@ -1538,11 +1543,22 @@ mod tests {
                 .into_owned()
         }
     }
-    pub(super) fn handle_probe(ui: &mut Ui, shared: &Shared) {
-        let request = shared.probe.lock().unwrap().take();
-        let Some(request) = request else {
+    pub(super) fn handle_probe(ui: &mut Ui, shared: &Shared, revision: u64) {
+        let mut pending = shared.probe.lock().unwrap();
+        let Some(request) = pending.as_ref() else {
             return;
         };
+        // An update/open can arrive after this iteration's render but before
+        // its probe. Observe the requested publication, not the previous frame.
+        // Hidden windows deliberately keep their last rendered state.
+        if shared.open.load(Ordering::Acquire)
+            || (unsafe { (ui.api.gtk_widget_get_visible)(ui.window) } != 0
+                && revision < request.revision)
+        {
+            return;
+        }
+        let request = pending.take().expect("pending native probe");
+        drop(pending);
         let api = &ui.api;
         unsafe {
             match request.operation {

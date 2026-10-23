@@ -1503,7 +1503,7 @@ fn make_view(
         &text,
     ));
     items.push(entry("exit", text.exit, true));
-    let view = View {
+    let mut view = View {
         kind: "state",
         summary,
         diagnostics,
@@ -1549,12 +1549,8 @@ fn make_view(
         details_label: text.details,
         items,
     };
-    let view = {
-        let mut bounded = view;
-        bounded.limited |= bounded.overview.text_limited;
-        bound_desktop_view(&mut bounded);
-        bounded
-    };
+    view.limited |= view.overview.text_limited;
+    bound_desktop_view(&mut view);
     view
 }
 
@@ -1569,10 +1565,7 @@ pub fn run_tray(
 ) -> Result<()> {
     let lifecycle = Lifecycle::acquire()?;
     let (sender, actions) = mpsc::sync_channel(32);
-    #[cfg(target_os = "macos")]
     let mut inspection = CameraInspectionWorker::default();
-    #[cfg(target_os = "linux")]
-    let inspection = CameraInspectionWorker::default();
     #[cfg(target_os = "macos")]
     let mut overview = DesktopOverview::default();
     let initial = make_view(
@@ -1636,12 +1629,12 @@ pub fn run_tray(
                 action_error = true;
                 next_poll = Instant::now();
             }
-            if lifecycle.open_requested.swap(false, Ordering::AcqRel) {
-                if let Err(error) = host.show_window() {
-                    feedback = Some(format!("{}: {error:#}", words(lang).failed));
-                    action_error = true;
-                    next_poll = Instant::now();
-                }
+            if lifecycle.open_requested.swap(false, Ordering::AcqRel)
+                && let Err(error) = host.show_window()
+            {
+                feedback = Some(format!("{}: {error:#}", words(lang).failed));
+                action_error = true;
+                next_poll = Instant::now();
             }
             #[cfg(target_os = "macos")]
             if inspection.poll() {

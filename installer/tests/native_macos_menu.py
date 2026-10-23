@@ -317,25 +317,47 @@ func captureSections(_ consultation: DesktopConsultation, _ name: String) {
                 window.displayIfNeeded()
                 let root = window.contentView!
                 require(root.bounds.width > 0 && root.bounds.height > 0, "empty native surface")
-                if let scroll = consultation.tabs.selectedTabViewItem?.view as? NSScrollView,
-                   let document = scroll.documentView {
-                    require(document.bounds.width <= scroll.contentView.bounds.width + 1,
-                            "pane content extends beyond scroll viewport")
-                    let controls = descendants(document).compactMap { $0 as? NSControl }.filter { !$0.isHiddenOrHasHiddenAncestor }
-                    require(!controls.isEmpty, "pane has no native content")
-                    for control in controls {
-                        let rectangle = control.convert(control.bounds, to: document)
-                        require(rectangle.width > 0 && rectangle.height > 0 &&
-                                rectangle.minX >= -1 && rectangle.maxX <= document.bounds.width + 1,
-                                "native content clipped horizontally: \(control.identifier?.rawValue ?? control.description)")
-                    }
-                    if let last = controls.last {
-                        _ = last.scrollToVisible(last.bounds)
-                        require(last.visibleRect.height > 0, "last pane control is unreachable by scrolling")
-                    }
-                    scroll.contentView.scroll(to: .zero)
-                    scroll.reflectScrolledClipView(scroll.contentView)
+                guard let scroll = consultation.tabs.selectedTabViewItem?.view as? NSScrollView,
+                      let document = scroll.documentView else {
+                    require(false, "native pane has no scrollable document"); return
                 }
+                require(document.bounds.width <= scroll.contentView.bounds.width + 1,
+                        "pane content extends beyond scroll viewport")
+                let controls = descendants(document).compactMap { $0 as? NSControl }
+                    .filter { !($0 is NSScroller) && !$0.isHiddenOrHasHiddenAncestor }
+                require(!controls.isEmpty, "pane has no native content")
+                for control in controls {
+                    let rectangle = control.convert(control.bounds, to: document)
+                    require(rectangle.width > 0 && rectangle.height > 0 &&
+                            rectangle.minX >= -1 && rectangle.maxX <= document.bounds.width + 1,
+                            "native content clipped horizontally: \(control.identifier?.rawValue ?? control.description)")
+                    require(rectangle.minY >= -1 && rectangle.maxY <= document.bounds.height + 1,
+                            "native control extends beyond scrollable document")
+                    for y in [rectangle.minY, rectangle.maxY - 1] {
+                        let edge = NSRect(x: rectangle.midX, y: y, width: 1, height: 1)
+                        _ = document.scrollToVisible(edge)
+                        require(document.visibleRect.intersects(edge),
+                                "native control edge is unreachable by scrolling")
+                    }
+                }
+                if index == 2 {
+                    let textScroll = consultation.text.enclosingScrollView!
+                    require(textScroll !== scroll && textScroll.bounds.height >= 119 &&
+                            textScroll.bounds.width > 0, "diagnostic text viewport is unusable")
+                    let copy = controls.first { $0.identifier?.rawValue == "copy_diagnostics" }
+                    require(copy != nil && copy!.isEnabled, "native Copy control unavailable")
+                    _ = copy!.scrollToVisible(copy!.bounds)
+                    require(copy!.visibleRect.height >= copy!.bounds.height - 1 &&
+                            copy!.visibleRect.width >= copy!.bounds.width - 1,
+                            "diagnostic Copy control cannot be fully reached")
+                    if name == "long-inspection-label" && sizeName == "minimum" {
+                        require(document.bounds.height > scroll.contentView.bounds.height,
+                                "long inspection fixture did not exercise diagnostic overflow")
+                        png(root, proof.appendingPathComponent("\(name)-\(appearance.rawValue)-minimum-diagnostics-bottom-simulated.png"))
+                    }
+                }
+                scroll.contentView.scroll(to: .zero)
+                scroll.reflectScrolledClipView(scroll.contentView)
                 if index == 1 {
                     require(consultation.notifications.window === window && consultation.profile.window === window,
                             "settings not attached to actual window")
@@ -507,6 +529,44 @@ for test in cases {
             consultation.sound.state == (frame.preferences!.sound_enabled ? .on : .off) &&
             consultation.history.state == (frame.preferences!.history_enabled ? .on : .off),
             "native preferences do not reflect authoritative producer values")
+    // Exercise empty-identity transitions in every UI language without pinning
+    // incidental translated wording. Missing identities must never reuse the
+    // observed-idle claim, even when all known rows have been omitted.
+    var emptyObject = rawCases.first { ($0["name"] as? String) == test.name }!["frame"] as! [String: Any]
+    var emptyOverview = emptyObject["overview"] as! [String: Any]
+    emptyOverview["microphone"] = "idle"
+    emptyOverview["camera"] = "idle"
+    emptyOverview["observed_at"] = "2026-10-22T12:00:00Z"
+    emptyOverview["total_accesses"] = 0
+    emptyOverview["omitted_accesses"] = 0
+    emptyOverview["accesses"] = [[String: Any]]()
+    func renderEmptyObservation() {
+        emptyObject["overview"] = emptyOverview
+        let emptyFrame = try! decodeDesktopFrame(JSONSerialization.data(withJSONObject: emptyObject))
+        consultation.update(emptyFrame, diagnostic: content.diagnostic)
+        require(!overviewLabel("access_empty").isHidden, "empty identities have no visible explanation")
+    }
+    renderEmptyObservation()
+    let idleEmptyMessage = overviewLabel("access_empty").stringValue
+    require(!idleEmptyMessage.isEmpty, "idle observation has no empty-state explanation")
+    for resource in ["microphone", "camera"] {
+        for activity in ["active", "ready"] {
+            emptyOverview[resource] = activity
+            renderEmptyObservation()
+            require(!overviewLabel("access_empty").stringValue.isEmpty &&
+                    overviewLabel("access_empty").stringValue != idleEmptyMessage,
+                    "observed activity without identities incorrectly claims no access")
+        }
+        emptyOverview[resource] = "idle"
+    }
+    emptyOverview["total_accesses"] = 3
+    emptyOverview["omitted_accesses"] = 3
+    renderEmptyObservation()
+    require(overviewLabel("access_empty").stringValue != idleEmptyMessage &&
+            !overviewLabel("omitted_accesses").isHidden &&
+            overviewLabel("omitted_accesses").stringValue.contains("3"),
+            "omitting every identity incorrectly claims no access or hides the omitted count")
+    consultation.update(frame, diagnostic: content.diagnostic)
     captureSections(consultation, test.name)
     consultation.tabs.selectTabViewItem(at: 2)
     nativeWindow.makeFirstResponder(text)
@@ -516,11 +576,18 @@ for test in cases {
     let selection = text.selectedRanges
     text.enclosingScrollView!.contentView.scroll(to: NSPoint(x: 0, y: 30))
     let scrollOrigin = text.enclosingScrollView!.contentView.bounds.origin
+    let diagnosticPaneScroll = consultation.tabs.tabViewItems[2].view as! NSScrollView
+    diagnosticPaneScroll.contentView.scroll(to: NSPoint(x: 0, y: 30))
+    let diagnosticPaneOrigin = diagnosticPaneScroll.contentView.bounds.origin
+    if test.name == "long-inspection-label" {
+        require(diagnosticPaneOrigin.y > 0, "diagnostic refresh fixture did not scroll the overflowing pane")
+    }
     consultation.update(frame, diagnostic: content.diagnostic + "\nSimulated refresh")
     require(consultation.tabs.selectedTabViewItem === selectedTab && nativeWindow.firstResponder === responder,
             "refresh stole tab or keyboard focus")
-    require(text.selectedRanges == selection && text.enclosingScrollView!.contentView.bounds.origin == scrollOrigin,
-            "refresh lost diagnostic selection or scroll")
+    require(text.selectedRanges == selection && text.enclosingScrollView!.contentView.bounds.origin == scrollOrigin &&
+            diagnosticPaneScroll.contentView.bounds.origin == diagnosticPaneOrigin,
+            "refresh lost diagnostic selection, text scroll or outer pane scroll")
     consultation.update(frame, diagnostic: content.diagnostic)
     consultation.tabs.selectTabViewItem(at: 1)
     nativeWindow.makeFirstResponder(consultation.notifications)
@@ -921,7 +988,19 @@ def fixture_cases():
         frame['preferences'] = dict(notifications_enabled=True, sound_enabled=False,
                                     history_enabled=True, notifications_paused=False)
         frame['feedback'] = None
+    long_inspection = json.loads(json.dumps(cases[0]))
+    long_inspection['name'] = 'long-inspection-label'
+    inspection = next(row for row in long_inspection['frame']['items'] if row['action'] == 'camera_inspect')
+    inspection['label'] += '\n/private/var/' + '界👩🏽‍💻e\u0301-component-' * 80
+    require(len(inspection['label'].encode()) <= 16384, 'inspection fixture exceeds protocol label bound')
+    cases.append(long_inspection)
     for name, overrides in (
+            ('active-without-identities', dict(microphone='active', camera='idle',
+                                            total_accesses=0, omitted_accesses=0, accesses=[])),
+            ('ready-without-identities', dict(microphone='idle', camera='ready',
+                                           total_accesses=0, omitted_accesses=0, accesses=[])),
+            ('all-identities-omitted', dict(microphone='active', camera='ready',
+                                         total_accesses=3, omitted_accesses=3, accesses=[])),
             ('ready-camera', dict(microphone='idle', camera='ready', total_accesses=1,
                                  accesses=[dict(application='Camera preview (simulated)',
                                                 resource='camera', activity='ready', pid=None)])),
@@ -934,6 +1013,8 @@ def fixture_cases():
         case = json.loads(json.dumps(cases[0]))
         case['name'] = name
         case['frame']['overview'].update(overrides)
+        if name == 'all-identities-omitted':
+            case['frame']['limited'] = True
         if name == 'bounded-applications':
             case['frame']['limited'] = True
             case['frame']['feedback'] = 'SIMULATED failed action: permission was not granted. ' * 8
