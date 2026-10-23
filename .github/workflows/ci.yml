@@ -10,13 +10,14 @@ on:
         type: boolean
         default: false
       native-platform:
-        description: Select native Unix targets; Windows is controlled separately by native-only
+        description: Select platform family; native-only separately skips Windows
         type: choice
         default: all
         options:
           - all
           - linux
           - macos
+          - windows
   workflow_call:
     inputs:
       native-only:
@@ -179,6 +180,7 @@ jobs:
           if ($uninstall.ExitCode -ne 0) { throw "MSI uninstall failed with code $($uninstall.ExitCode)" }
 
   portable:
+    if: ${{ inputs.native-platform != 'windows' }}
     strategy:
       fail-fast: false
       matrix:

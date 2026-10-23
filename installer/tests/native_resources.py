@@ -1054,6 +1054,24 @@ def main():
                 assert desktop, "Windows requires accessible interactive native desktop"
                 user.CloseDesktop(desktop)
                 assert not windows_tray_window(), "Existing user tray detected; refusing desktop qualification"
+                # Fresh hosted profiles may have no camera history key. Watch
+                # correctly refuses that missing evidence. Give this disposable
+                # idle scenario a real, readable store, never permission values
+                # or fabricated capture entries. It lives only until VM disposal.
+                import winreg
+                consent_path = r"Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\webcam"
+                initialized_after_missing = False
+                try:
+                    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, consent_path):
+                        pass
+                except FileNotFoundError:
+                    with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, consent_path, access=winreg.KEY_READ) as key:
+                        assert winreg.QueryInfoKey(key)[:2] == (0, 0), "New idle consent store is not empty"
+                    initialized_after_missing = True
+                report["host"]["windows_consent_store_fixture"] = dict(
+                    path=consent_path, initialized_after_missing=initialized_after_missing,
+                    permission_values_written=False, capture_entries_written=False,
+                    existing_store_preserved=True, lifetime="disposable_hosted_VM_only")
         backend = {"linux": LinuxProcesses, "windows": WindowsProcesses, "macos": MacProcesses}[system]()
         # Short path prevents AF_UNIX path exhaustion, especially on macOS runners.
         with tempfile.TemporaryDirectory(prefix="mcwr-", dir=None if os.name == "nt" else "/tmp") as temporary:
