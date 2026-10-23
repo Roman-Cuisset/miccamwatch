@@ -931,7 +931,9 @@ mcw --config policy.toml config validate
 
 ## Privacy Control Center
 
-`mcw tray` keeps the monitor in the Windows notification area. Its menu controls microphone mute, camera privacy, one-hour notification pause, the active profile, and autostart. The tray runs as a single per-user instance; the CLI can inspect or stop it. A left or right click on the icon opens the menu; a double click raises a toast with the current summary.
+`mcw tray` keeps the monitor in the Windows notification area. Its menu controls microphone mute, camera privacy, one-hour notification pause, the active profile, and autostart. The tray runs as a single per-user instance; the CLI can inspect, open or stop it. A left or right click opens the menu; in 0.21.0 development, a double click opens the native consultation window.
+
+**0.21.0 development:** `mcw tray open` opens the retained native consultation, reusing the owned frontend when it is already running. Overview separates microphone/camera observations, current application identities and requested/effective protection; Settings exposes the existing preferences; Diagnostics keeps detailed evidence and limitations out of the main view. Closing the window hides it without stopping the tray or changing protection. Linux's consultation requires a GTK3 runtime; the CLI/headless path does not. Displaying or refreshing a window never grants capture permission or authorizes a device change. See [ROADMAP](docs/ROADMAP.md) for actual native qualification results and remaining hardware limits; this is not a published 0.21.0 release.
 
 In v0.19.0, Windows and Linux join macOS with four direct, checked
 profile choices: Balanced, Private, Meeting and Development. Selection uses the

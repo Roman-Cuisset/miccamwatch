@@ -11,10 +11,12 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::UI::Controls::DRAWITEMSTRUCT;
 use windows::Win32::UI::WindowsAndMessaging::{
-    GWL_EXSTYLE, GWL_STYLE, GetWindowTextW, SW_HIDE, SW_RESTORE, WM_NCDESTROY,
+    GetWindowTextW, HWND_BOTTOM, SW_HIDE, SW_RESTORE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    SetWindowPos, WM_NCDESTROY, WS_VISIBLE,
 };
 
 const PAGE_TOP: i32 = 156;
+const PAGE_VIEWPORT: i32 = 386;
 const LOGO: i32 = 299;
 const MIC_PROTECTION: i32 = 328;
 const CAM_PROTECTION: i32 = 329;
@@ -85,15 +87,9 @@ unsafe extern "system" {
     fn GetWindowThreadProcessId(hwnd: HWND, pid: *mut u32) -> u32;
     fn GetKeyState(key: i32) -> i16;
     fn GetDlgCtrlID(hwnd: HWND) -> i32;
-    fn GetWindow(hwnd: HWND, command: u32) -> HWND;
-    fn IsWindowEnabled(hwnd: HWND) -> i32;
+    fn GetParent(hwnd: HWND) -> HWND;
+    fn GetNextDlgTabItem(hwnd: HWND, current: HWND, previous: i32) -> HWND;
 }
-// GW_CHILD / GW_HWNDNEXT / WS_TABSTOP / WS_EX_CONTROLPARENT, from winuser.h.
-// Named apart from the windows-crate style constants to avoid shadowing them.
-const FIRST_CHILD_WINDOW: u32 = 5;
-const NEXT_SIBLING_WINDOW: u32 = 2;
-const TAB_STOP_STYLE: u32 = 0x0001_0000;
-const CONTROL_PARENT_EXSTYLE: u32 = 0x0001_0000;
 #[link(name = "dwmapi")]
 unsafe extern "system" {
     fn DwmSetWindowAttribute(hwnd: HWND, attribute: u32, value: *const i32, size: u32) -> i32;
@@ -106,6 +102,34 @@ unsafe extern "system" {
 unsafe extern "system" {
     fn RoInitialize(kind: u32) -> i32;
     fn RoUninitialize();
+}
+
+// UISettings caches a WinRT activation factory. Releasing the apartment after
+// each color query leaves that cache pointing into a torn-down apartment.
+// Keep it and the settings object alive for the native UI thread's lifetime.
+struct DesktopRuntime {
+    initialized: bool,
+    settings: Option<UISettings>,
+}
+impl DesktopRuntime {
+    fn new() -> Self {
+        let initialized = unsafe { RoInitialize(0) } >= 0;
+        Self {
+            initialized,
+            settings: UISettings::new().ok(),
+        }
+    }
+}
+impl Drop for DesktopRuntime {
+    fn drop(&mut self) {
+        drop(self.settings.take());
+        if self.initialized {
+            unsafe { RoUninitialize() };
+        }
+    }
+}
+thread_local! {
+    static DESKTOP_RUNTIME: DesktopRuntime = DesktopRuntime::new();
 }
 #[repr(C)]
 struct ScrollInfo {
@@ -1015,36 +1039,6 @@ impl DesktopWindow {
         drop(self);
     }
 }
-// Hidden page controls are skipped, so Tab visits only what the user can see.
-// Walk visible, usable tab stops in native z-order and wrap around.
-fn tab_stops(parent: HWND, stops: &mut Vec<HWND>) {
-    let mut child = unsafe { GetWindow(parent, FIRST_CHILD_WINDOW) };
-    while !child.is_invalid() {
-        let style = unsafe { GetWindowLongPtrW(child, GWL_STYLE) } as u32;
-        let ex_style = unsafe { GetWindowLongPtrW(child, GWL_EXSTYLE) } as u32;
-        let usable =
-            unsafe { IsWindowVisible(child) } != 0 && unsafe { IsWindowEnabled(child) } != 0;
-        if ex_style & CONTROL_PARENT_EXSTYLE != 0 {
-            if usable {
-                tab_stops(child, stops);
-            }
-        } else if usable && style & TAB_STOP_STYLE != 0 {
-            stops.push(child);
-        }
-        child = unsafe { GetWindow(child, NEXT_SIBLING_WINDOW) };
-    }
-}
-fn next_tab_stop(root: HWND, current: HWND, backwards: bool) -> Option<HWND> {
-    let mut stops = Vec::new();
-    tab_stops(root, &mut stops);
-    let index = stops.iter().position(|stop| *stop == current)?;
-    let next = if backwards {
-        (index + stops.len() - 1) % stops.len()
-    } else {
-        (index + 1) % stops.len()
-    };
-    stops.get(next).copied()
-}
 pub(super) fn translate_message(message: &MSG) -> bool {
     if message.hwnd.is_invalid() {
         return false;
@@ -1063,28 +1057,26 @@ pub(super) fn translate_message(message: &MSG) -> bool {
     if unsafe { GetWindowLongPtrW(root, GWLP_WNDPROC) } != window_proc as *const () as isize {
         return false;
     }
-    // A read-only multiline EDIT cannot accept an editable tab character, and
-    // the page is nested one level down, so navigate the flattened tab order.
+    // Use Win32's nested tab order without allocating a parallel control list.
     // Alt/Ctrl combinations keep their native meaning (e.g. Ctrl+Tab).
     if message.message == 0x0100
         && message.wParam.0 == 9
         && unsafe { GetKeyState(0x11) } >= 0
         && unsafe { GetKeyState(0x12) } >= 0
-        && let Some(next) = next_tab_stop(
-            root,
-            unsafe { GetFocus() },
-            unsafe { GetKeyState(0x10) } < 0,
-        )
     {
-        unsafe {
-            SetFocus(next);
+        let next = unsafe { GetNextDlgTabItem(root, GetFocus(), i32::from(GetKeyState(0x10) < 0)) };
+        if !next.is_invalid() {
+            unsafe { SetFocus(next) };
+            return true;
         }
-        return true;
     }
     unsafe { IsDialogMessageW(root, message) != 0 }
 }
 fn control(hwnd: HWND, id: i32) -> windows::core::Result<HWND> {
-    unsafe { GetDlgItem(Some(hwnd), id) }
+    unsafe { GetDlgItem(Some(hwnd), id) }.or_else(|_| {
+        let viewport = unsafe { GetDlgItem(Some(hwnd), PAGE_VIEWPORT) }?;
+        unsafe { GetDlgItem(Some(viewport), id) }
+    })
 }
 // SendMessage/MoveWindow synchronously reenter the procedure. A shared RefCell
 // with a scoped try_borrow prevents aliased mutable Rust references; notifications
@@ -1112,6 +1104,11 @@ impl WindowState {
         };
         let class = format_wide(class);
         let caption = format_wide(caption);
+        let parent = if page == 4 {
+            hwnd
+        } else {
+            control(hwnd, PAGE_VIEWPORT)?
+        };
         let child = unsafe {
             CreateWindowExW(
                 WINDOW_EX_STYLE(0),
@@ -1122,7 +1119,7 @@ impl WindowState {
                 0,
                 0,
                 0,
-                Some(hwnd),
+                Some(parent),
                 Some(HMENU(id as usize as *mut _)),
                 None,
                 None,
@@ -1137,6 +1134,28 @@ impl WindowState {
         Ok(())
     }
     fn create_controls(&mut self, hwnd: HWND) -> Result<()> {
+        let class = windows::core::w!("MicCamWatchDesktopViewport");
+        unsafe {
+            let _ = RegisterClassW(&WNDCLASSW {
+                lpfnWndProc: Some(viewport_proc),
+                lpszClassName: class,
+                ..Default::default()
+            });
+            CreateWindowExW(
+                WINDOW_EX_STYLE(0x0001_0000),
+                class,
+                windows::core::w!(""),
+                WS_CHILD | WS_VISIBLE | WINDOW_STYLE(0x0200_0000),
+                0,
+                0,
+                0,
+                0,
+                Some(hwnd),
+                Some(HMENU(PAGE_VIEWPORT as usize as *mut _)),
+                None,
+                None,
+            )?;
+        }
         let lang = self.view.lang;
         self.add(
             hwnd,
@@ -1355,6 +1374,26 @@ impl WindowState {
             2,
         )?;
         self.add(hwnd, ABOUT, "STATIC", &format!("MicCamWatch v{}\r\n\r\n{}\r\n\r\n{}", env!("CARGO_PKG_VERSION"), words(lang, ["Local microphone and camera activity observation and explicit privacy controls.", "Observation locale du micro et des caméras, commandes explicites de confidentialité.", "Lokale Beobachtung von Mikrofon und Kamera mit expliziter Datenschutzsteuerung.", "Observación local de micrófono y cámaras y controles explícitos de privacidad.", "マイクとカメラのローカル観測と明示的なプライバシー操作。", "本地麦克风与摄像头活动观测及明确的隐私控制。", "Локальное наблюдение микрофона и камер и явное управление приватностью."]), words(lang, ["No automatic uploads or telemetry. Closing this window leaves the tray running. Unknown observations never mean safe or protected.", "Aucun envoi automatique ni télémétrie. Fermer la fenêtre laisse le tray actif. Inconnu ne signifie pas protégé.", "Keine automatischen Uploads oder Telemetrie. Schließen lässt das Tray aktiv. Unbekannt bedeutet nicht geschützt.", "Sin envíos automáticos ni telemetría. Cerrar conserva la bandeja. Desconocido no significa protegido.", "自動アップロード・テレメトリなし。閉じてもトレイは動作します。不明は安全や保護済みを意味しません。", "无自动上传或遥测。关闭窗口后托盘继续运行。未知不代表安全或已保护。", "Нет автоматической отправки или телеметрии. Закрытие оставляет трей. Неизвестно не означает защищено."])), WINDOW_STYLE(0x80), 3)?;
+        // Newly created children follow older siblings in Win32 z-order.
+        // Put decorative surfaces behind their labels and interactive controls.
+        for (id, child, _) in &self.controls {
+            if matches!(
+                *id,
+                CARD_MIC | CARD_CAM | PANEL_PROFILE | PANEL_ALERTS | PANEL_AUTOMATION
+            ) {
+                unsafe {
+                    SetWindowPos(
+                        *child,
+                        Some(HWND_BOTTOM),
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE,
+                    )?;
+                }
+            }
+        }
         self.font(hwnd);
         self.theme(hwnd);
         self.render(hwnd);
@@ -1478,23 +1517,19 @@ impl WindowState {
         let mut background = COLORREF(unsafe { GetSysColor(COLOR_WINDOW) });
         let mut foreground = COLORREF(unsafe { GetSysColor(COLOR_WINDOWTEXT) });
         if hc.flags & 1 == 0 {
-            let initialized = unsafe { RoInitialize(0) } >= 0;
-            if let Ok(settings) = UISettings::new()
-                && let (Ok(bg), Ok(fg)) = (
-                    settings.GetColorValue(UIColorType::Background),
-                    settings.GetColorValue(UIColorType::Foreground),
-                )
-            {
-                background =
-                    COLORREF(u32::from(bg.R) | u32::from(bg.G) << 8 | u32::from(bg.B) << 16);
-                foreground =
-                    COLORREF(u32::from(fg.R) | u32::from(fg.G) << 8 | u32::from(fg.B) << 16);
-            }
-            if initialized {
-                unsafe {
-                    RoUninitialize();
+            DESKTOP_RUNTIME.with(|runtime| {
+                if let Some(settings) = runtime.settings.as_ref()
+                    && let (Ok(bg), Ok(fg)) = (
+                        settings.GetColorValue(UIColorType::Background),
+                        settings.GetColorValue(UIColorType::Foreground),
+                    )
+                {
+                    background =
+                        COLORREF(u32::from(bg.R) | u32::from(bg.G) << 8 | u32::from(bg.B) << 16);
+                    foreground =
+                        COLORREF(u32::from(fg.R) | u32::from(fg.G) << 8 | u32::from(fg.B) << 16);
                 }
-            }
+            });
         }
         self.palette(hwnd, background, foreground, hc.flags & 1 != 0);
     }
@@ -1854,12 +1889,9 @@ impl WindowState {
         for index in 0..4 {
             if let Ok(child) = unsafe { GetDlgItem(Some(hwnd), TAB + index) } {
                 unsafe {
-                    SendMessageW(
-                        child,
-                        0x00f3, // BM_SETSTATE exposes selected navigation as pressed.
-                        Some(WPARAM(usize::from(self.tab == index as usize))),
-                        None,
-                    );
+                    // Selection belongs to the retained view model, not the
+                    // native transient "button held down" mouse state.
+                    InvalidateRect(child, std::ptr::null(), 1);
                 }
             }
         }
@@ -1877,16 +1909,15 @@ impl WindowState {
         // Render never moves focus or scrolls a page.
     }
     fn layout(&mut self, hwnd: HWND) {
-        // Repositioning controls can drop keyboard focus. A real user scrolling
-        // to reveal the focused control must never lose it.
-        let focused = unsafe { GetFocus() };
-        let restore_focus = !focused.is_invalid() && unsafe { GetAncestor(focused, 2) } == hwnd;
         let mut r = RECT::default();
         let _ = unsafe { GetClientRect(hwnd, &mut r) };
         let dpi = unsafe { GetDpiForWindow(hwnd) }.max(96) as i32;
         let u = |n: i32| n * dpi / 96;
         let width = (r.right * 96 / dpi).max(1);
         let height = (r.bottom * 96 / dpi - 156).max(1);
+        if let Ok(viewport) = control(hwnd, PAGE_VIEWPORT) {
+            let _ = unsafe { MoveWindow(viewport, 0, u(PAGE_TOP), r.right, u(height), true) };
+        }
         let wide = width >= 740;
         let extra = if wide { 0 } else { 172 };
         let half = (width - 56) / 2;
@@ -1979,18 +2010,10 @@ impl WindowState {
                 ABOUT => (24, 12, width - 48, height - 24),
                 _ => continue,
             };
-            // Page content scrolls inside the fixed header band; chrome (page 4)
-            // stays put. Content scrolled outside the band is hidden rather than
-            // drawn over the header and navigation.
-            let y = if *page == 4 { y } else { y - scroll + PAGE_TOP };
+            // Native child clipping keeps partially scrolled controls out of
+            // the fixed header without hiding keyboard-reachable page content.
+            let y = if *page == 4 { y } else { y - scroll };
             let (w, h) = (w.max(1), h.max(1));
-            let in_band = *page == 4 || (y + h > PAGE_TOP && y < PAGE_TOP + height);
-            unsafe {
-                let _ = ShowWindow(*child, if in_band { SW_SHOW } else { SW_HIDE });
-            }
-            if !in_band {
-                continue;
-            }
             let _ = unsafe { MoveWindow(*child, u(x), u(y), u(w), u(h), false) };
             unsafe {
                 InvalidateRect(*child, std::ptr::null(), 1);
@@ -1999,12 +2022,24 @@ impl WindowState {
         unsafe {
             InvalidateRect(hwnd, std::ptr::null(), 1);
         }
-        if restore_focus && unsafe { GetFocus() } != focused {
-            unsafe {
-                SetFocus(focused);
-            }
+    }
+}
+unsafe extern "system" fn viewport_proc(
+    hwnd: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    if matches!(
+        message,
+        WM_COMMAND | 0x002b | 0x0138 | 0x0133 | 0x0135 | 0x0014 | 0x020a
+    ) {
+        let parent = unsafe { GetParent(hwnd) };
+        if !parent.is_invalid() {
+            return unsafe { SendMessageW(parent, message, Some(wparam), Some(lparam)) };
         }
     }
+    unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
 }
 unsafe extern "system" fn window_proc(
     hwnd: HWND,
@@ -2175,24 +2210,24 @@ unsafe extern "system" fn window_proc(
                 if !page_control {
                     return LRESULT(0);
                 }
+                let viewport = control(hwnd, PAGE_VIEWPORT).unwrap_or(hwnd);
                 let mut rect = RECT::default();
                 let mut client = RECT::default();
                 unsafe {
                     GetWindowRect(focus, &mut rect);
-                    let _ = GetClientRect(hwnd, &mut client);
+                    let _ = GetClientRect(viewport, &mut client);
                 }
                 let mut top = POINT {
                     x: rect.left,
                     y: rect.top,
                 };
                 unsafe {
-                    ScreenToClient(hwnd, &mut top);
+                    ScreenToClient(viewport, &mut top);
                 }
                 let dpi = unsafe { GetDpiForWindow(hwnd) }.max(96) as i32;
-                let page_top = PAGE_TOP * dpi / 96;
                 let bottom = top.y + rect.bottom - rect.top;
-                let delta = if top.y < page_top {
-                    top.y - page_top
+                let delta = if top.y < 0 {
+                    top.y
                 } else {
                     (bottom - client.bottom).max(0)
                 };

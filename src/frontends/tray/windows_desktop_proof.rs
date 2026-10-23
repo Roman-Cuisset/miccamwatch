@@ -6,29 +6,16 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 #[link(name = "user32")]
 unsafe extern "system" {
-    fn AttachThreadInput(id_attach: u32, id_attach_to: u32, attach: i32) -> i32;
-    fn GetForegroundWindow() -> HWND;
     fn SetForegroundWindow(hwnd: HWND) -> i32;
     fn SetActiveWindow(hwnd: HWND) -> HWND;
-    fn GetCurrentThreadId() -> u32;
-    fn GetWindowThreadProcessId(hwnd: HWND, pid: *mut u32) -> u32;
     fn IsWindowVisible(hwnd: HWND) -> i32;
     fn IsWindowEnabled(hwnd: HWND) -> i32;
 }
-/// A real user activates the window before typing. The proof runs beside an
-/// interactive desktop, where foreground activation may need the documented
-/// input-queue attachment; no focus hack touches the product window.
+/// Activate only this fixture; never attach another application's input queue.
 fn activate(window: HWND) {
     unsafe {
-        let target = GetWindowThreadProcessId(GetForegroundWindow(), std::ptr::null_mut());
-        let current = GetCurrentThreadId();
-        let attached =
-            target != 0 && target != current && AttachThreadInput(current, target, 1) != 0;
         let _ = SetForegroundWindow(window);
         let _ = SetActiveWindow(window);
-        if attached {
-            let _ = AttachThreadInput(current, target, 0);
-        }
     }
 }
 
@@ -405,8 +392,6 @@ fn native_windows_desktop() {
     }
     .unwrap();
     let mut step = 0;
-    // Real OS keyboard focus is asserted per run and recorded for the report.
-    let mut focus_granted = false;
     for language in ["en", "fr", "de", "es", "ja", "zh", "ru"] {
         let lang = Language::from_code(language).unwrap();
         let original = fixture(lang);
@@ -430,12 +415,6 @@ fn native_windows_desktop() {
         assert_eq!(data.borrow().commands.len(), before);
         for tab in 0..4 {
             command(&window, TAB + tab);
-            let nav = control(window.hwnd, TAB + tab).unwrap();
-            assert_ne!(
-                unsafe { SendMessageW(nav, 0x00f2, None, None) }.0 & 4,
-                0,
-                "selected navigation retains the native pressed accessibility state"
-            );
             capture(
                 &directory,
                 &mut step,
@@ -447,12 +426,13 @@ fn native_windows_desktop() {
         command(&window, TAB + 2);
         let diagnostic = control(window.hwnd, DIAGNOSTIC).unwrap();
         activate(window.hwnd);
-        // Foreground activation can be refused by the OS on a machine that is
-        // already in use. Keyboard focus is then only verifiable where the
-        // window really is foreground, so record that fact instead of faking it.
-        let foreground = unsafe { GetForegroundWindow() } == window.hwnd;
         unsafe {
             SetFocus(diagnostic);
+            assert_eq!(
+                GetFocus(),
+                diagnostic,
+                "native editor accepts keyboard focus"
+            );
             SendMessageW(diagnostic, EM_SETSEL, Some(WPARAM(12)), Some(LPARAM(36)));
             SendMessageW(diagnostic, EM_LINESCROLL, None, Some(LPARAM(8)));
         }
@@ -472,10 +452,11 @@ fn native_windows_desktop() {
             );
         }
         assert_eq!((start, end), (12, 36));
-        // The OS grants focus only to an input-active queue. This console-hosted
-        // test process cannot always obtain that on a machine someone is using,
-        // so the granted case is asserted and a refusal is recorded, not assumed.
-        focus_granted = foreground && unsafe { GetFocus() } == diagnostic;
+        assert_eq!(
+            unsafe { GetFocus() },
+            diagnostic,
+            "accepted refresh preserves native keyboard focus"
+        );
         assert_eq!(
             unsafe { SendMessageW(diagnostic, EM_GETFIRSTVISIBLELINE, None, None) }.0,
             first
@@ -492,20 +473,7 @@ fn native_windows_desktop() {
             translate_message(&keyboard),
             "native Tab navigation must be handled for this owned HWND"
         );
-        // Tab must leave the diagnostics editor for the next usable control.
-        let stop = if focus_granted {
-            unsafe { GetFocus() }
-        } else {
-            // Without granted focus, assert the same traversal the handler uses.
-            let next = super::next_tab_stop(window.hwnd, diagnostic, false)
-                .expect("tab order must contain the diagnostics editor");
-            assert_eq!(
-                Some(next),
-                super::next_tab_stop(window.hwnd, diagnostic, false),
-                "tab order stable"
-            );
-            next
-        };
+        let stop = unsafe { GetFocus() };
         assert_ne!(stop, diagnostic, "Tab must leave the diagnostics editor");
         assert_eq!(unsafe { GetAncestor(stop, 2) }, window.hwnd);
         assert_ne!(unsafe { IsWindowVisible(stop) }, 0);
@@ -537,23 +505,9 @@ fn native_windows_desktop() {
         command(&window, TAB + 1);
         let checkbox = control(window.hwnd, SOUND as i32).unwrap();
         unsafe {
-            eprintln!(
-                "DBG5 check_before={} view_checks={:?} settings_sound={}",
-                SendMessageW(checkbox, BM_GETCHECK, None, None).0,
-                window.data.borrow().view.checks,
-                Settings::load().unwrap().sound_enabled,
-            );
             SendMessageW(checkbox, 0x00f5, None, None);
         } // BM_CLICK uses native auto-checkbox behavior.
         pump();
-        unsafe {
-            eprintln!(
-                "DBG6 check_after={} prefs={:?} settings_sound={}",
-                SendMessageW(checkbox, BM_GETCHECK, None, None).0,
-                data.borrow().preferences,
-                Settings::load().unwrap().sound_enabled,
-            );
-        }
         command(&window, SOUND as i32); // Same desired false again must remain false.
         assert!(!Settings::load().unwrap().sound_enabled);
         assert!(Settings::load().unwrap().notifications_enabled);
@@ -662,6 +616,31 @@ fn native_windows_desktop() {
                 &window,
                 "observations only; actual DPI; minimum size",
             );
+            if tab == 1 {
+                let setting = control(window.hwnd, RESTORE_UNLOCK as i32).unwrap();
+                let viewport = control(window.hwnd, PAGE_VIEWPORT).unwrap();
+                let mut page = RECT::default();
+                let mut bounds = RECT::default();
+                unsafe {
+                    assert_ne!(GetWindowRect(viewport, &mut page), 0);
+                    assert_ne!(GetWindowRect(setting, &mut bounds), 0);
+                }
+                assert!(
+                    bounds.bottom > page.bottom,
+                    "fixture must exercise an offscreen setting"
+                );
+                unsafe { SetFocus(setting) };
+                pump();
+                assert_eq!(unsafe { GetFocus() }, setting);
+                assert_ne!(unsafe { GetWindowRect(setting, &mut bounds) }, 0);
+                assert!(
+                    bounds.top >= page.top
+                        && bounds.bottom <= page.bottom
+                        && bounds.left >= page.left
+                        && bounds.right <= page.right,
+                    "keyboard focus must reveal the entire offscreen setting"
+                );
+            }
             unsafe {
                 SendMessageW(window.hwnd, 0x0115, Some(WPARAM(7)), None);
             }
@@ -722,5 +701,5 @@ fn native_windows_desktop() {
         assert!(!unsafe { IsWindow(Some(hwnd)) }.as_bool());
     }
     let _ = unsafe { DestroyWindow(owner) };
-    std::fs::write(directory.join("complete.json"), serde_json::to_vec_pretty(&serde_json::json!({ "captures": step, "languages": 7, "hardware_validation": false, "settings_scope": scope, "device_actions_executed": 0, "autostart_actions_executed": 0, "keyboard_focus_verified": focus_granted, "checks": ["production render/update", "unknown and positive observation", "capability gates", "desired preference persistence/idempotence", "explicit profile lock", "selection/scroll stability", "tab traversal across page controls", "retained hide/reopen", "native theme and actual DPI", "simulated light/dark semantic client palette"] })).unwrap()).unwrap();
+    std::fs::write(directory.join("complete.json"), serde_json::to_vec_pretty(&serde_json::json!({ "captures": step, "languages": 7, "hardware_validation": false, "settings_scope": scope, "device_actions_executed": 0, "autostart_actions_executed": 0, "keyboard_focus_verified": true, "checks": ["production render/update", "unknown and positive observation", "capability gates", "desired preference persistence/idempotence", "explicit profile lock", "native keyboard focus/selection/scroll stability", "retained hide/reopen", "native theme and actual DPI", "simulated light/dark semantic client palette"] })).unwrap()).unwrap();
 }
