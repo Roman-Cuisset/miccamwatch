@@ -483,6 +483,11 @@ impl Ui {
             (api.gtk_label_set_lines)(feedback, 3);
             (api.gtk_label_set_ellipsize)(feedback, 3);
             (api.gtk_box_pack_start)(root, feedback, 0, 0, 0);
+            // Display-only chrome must not become the initial text-selection
+            // target ahead of the native tab navigation.
+            for display in [brand, version, status, feedback] {
+                (api.gtk_label_set_selectable)(display, 0);
+            }
             let notebook = (api.gtk_notebook_new)();
             (api.gtk_notebook_set_scrollable)(notebook, 1);
             (api.gtk_box_pack_start)(root, notebook, 1, 1, 0);
@@ -968,10 +973,14 @@ unsafe fn set_text(api: &Api, pane: &mut TextPane, value: String) {
         );
         let vertical = (api.gtk_scrolled_window_get_vadjustment)(pane.scroll);
         let horizontal = (api.gtk_scrolled_window_get_hadjustment)(pane.scroll);
-        let scroll = (
-            (api.gtk_adjustment_get_value)(vertical),
-            (api.gtk_adjustment_get_value)(horizontal),
-        );
+        // A newer publication must not replace the pre-refresh viewport with
+        // an adjustment temporarily clamped by unfinished GTK text layout.
+        let scroll = pane.pending_scroll.unwrap_or_else(|| {
+            (
+                (api.gtk_adjustment_get_value)(vertical),
+                (api.gtk_adjustment_get_value)(horizontal),
+            )
+        });
         let native = cstring(&value);
         (api.gtk_text_buffer_set_text)(buffer, native.as_ptr(), -1);
         let count = value.chars().count().min(c_int::MAX as usize) as c_int;
@@ -1050,18 +1059,25 @@ fn run(api: Api, shared: Arc<Shared>, actions: SyncSender<Command>) -> Result<()
         // Both iteration count and elapsed time are bounded. Never wait for an
         // event: shutdown/open/latest-state checks cannot be starved by GLib.
         let started = Instant::now();
+        let mut settled = false;
         for _ in 0..32 {
-            if unsafe { (ui.api.g_main_context_iteration)(ptr::null_mut(), 0) } == 0
-                || started.elapsed() >= Duration::from_millis(4)
-            {
+            if unsafe { (ui.api.g_main_context_iteration)(ptr::null_mut(), 0) } == 0 {
+                settled = true;
+                break;
+            }
+            if started.elapsed() >= Duration::from_millis(4) {
                 break;
             }
         }
-        // Text-buffer replacement schedules layout. Restore after GTK has
-        // processed it, not only before adjustments receive their new bounds.
-        unsafe {
-            restore_scroll(&ui.api, &mut ui.accesses);
-            restore_scroll(&ui.api, &mut ui.diagnostics);
+        // GTK validates text lines incrementally in idle handlers. A bounded
+        // event slice can end before those handlers finish; consuming the saved
+        // viewport then lets subsequent validation overwrite it. Keep it until
+        // the context drains, without blocking shutdown/open/latest-state work.
+        if settled {
+            unsafe {
+                restore_scroll(&ui.api, &mut ui.accesses);
+                restore_scroll(&ui.api, &mut ui.diagnostics);
+            }
         }
         #[cfg(test)]
         tests::handle_probe(&mut ui, &shared, revision);
@@ -1551,7 +1567,9 @@ mod tests {
         // An update/open can arrive after this iteration's render but before
         // its probe. Observe the requested publication, not the previous frame.
         // Hidden windows deliberately keep their last rendered state.
-        if shared.open.load(Ordering::Acquire)
+        if ui.accesses.pending_scroll.is_some()
+            || ui.diagnostics.pending_scroll.is_some()
+            || shared.open.load(Ordering::Acquire)
             || (unsafe { (ui.api.gtk_widget_get_visible)(ui.window) } != 0
                 && revision < request.revision)
         {
@@ -1891,13 +1909,33 @@ mod tests {
             .push_str("\nSIMULATED refresh retained the selected text.");
         publish(&mut host, refreshed.clone())?;
         let after = state(&host, Probe::Snapshot);
+        fs::write(
+            proof.join("refresh-before.json"),
+            serde_json::to_vec_pretty(&before)?,
+        )?;
+        fs::write(
+            proof.join("refresh-after.json"),
+            serde_json::to_vec_pretty(&after)?,
+        )?;
         ensure!(
             after.window == first.window
                 && after.tab == 2
                 && after.focus == before.focus
                 && after.selection == before.selection
                 && (after.scroll - before.scroll).abs() < 1.0,
-            "refresh reset native window/tab/focus/selection/scroll"
+            "refresh reset native window/tab/focus/selection/scroll: \
+             window {} -> {}, tab {} -> {}, focus {} -> {}, \
+             selection {:?} -> {:?}, scroll {} -> {}",
+            before.window,
+            after.window,
+            before.tab,
+            after.tab,
+            before.focus,
+            after.focus,
+            before.selection,
+            after.selection,
+            before.scroll,
+            after.scroll
         );
         ensure!(
             after.diagnostics.contains("SIMULATED refresh"),

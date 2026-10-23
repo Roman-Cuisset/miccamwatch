@@ -365,6 +365,10 @@ fn native_windows_desktop() {
         scope.join("roaming/MicCamWatch/settings.toml")
     );
     enable_dpi_awareness();
+    // The real PlatformMonitor caller already owns an MTA initialization.
+    // The GUI runtime must retain its own reference after that caller ends.
+    assert!(unsafe { RoInitialize(1) } >= 0);
+    DESKTOP_RUNTIME.with(|_| ());
     let data = Box::new(RefCell::new(ProofOwner::default()));
     let class = format_wide("MicCamWatchIsolatedDesktopProofOwner");
     unsafe {
@@ -392,10 +396,26 @@ fn native_windows_desktop() {
     }
     .unwrap();
     let mut step = 0;
-    for language in ["en", "fr", "de", "es", "ja", "zh", "ru"] {
+    for (index, language) in ["en", "fr", "de", "es", "ja", "zh", "ru"]
+        .into_iter()
+        .enumerate()
+    {
         let lang = Language::from_code(language).unwrap();
         let original = fixture(lang);
         let mut window = DesktopWindow::create(owner, original.clone()).unwrap();
+        if index == 0 {
+            unsafe { RoUninitialize() };
+            let (mut apartment, mut qualifier) = (Default::default(), Default::default());
+            unsafe {
+                windows::Win32::System::Com::CoGetApartmentType(&mut apartment, &mut qualifier)
+            }
+            .expect("GUI must retain COM after the caller releases its initialization");
+            assert_eq!(apartment, windows::Win32::System::Com::APTTYPE_MTA);
+            assert_eq!(
+                qualifier,
+                windows::Win32::System::Com::APTTYPEQUALIFIER_NONE
+            );
+        }
         window.show();
         pump();
         assert_eq!(

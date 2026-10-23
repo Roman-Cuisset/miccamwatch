@@ -714,12 +714,14 @@ final class DesktopConsultation: NSObject {
         diagnosticScroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 120).isActive = true
         let overviewScroll = desktopScroll(overview), settingsScroll = desktopScroll(settings)
         let diagnosticPaneScroll = desktopScroll(diagnostic)
-        // Fill the pane normally, but let long inspection labels grow the
-        // outer document instead of compressing text or pushing Copy offscreen.
-        diagnostic.heightAnchor.constraint(greaterThanOrEqualTo: diagnosticPaneScroll.contentView.heightAnchor).isActive = true
-        let preferredDiagnosticHeight = diagnostic.heightAnchor.constraint(equalTo: diagnosticPaneScroll.contentView.heightAnchor)
-        preferredDiagnosticHeight.priority = .defaultHigh
-        preferredDiagnosticHeight.isActive = true
+        // Size the text viewport independently of document height. Equating the
+        // document and viewport heights lets AppKit enlarge the window to fit a
+        // long inspection label instead of making that document scroll.
+        // Reserve the normal 24-point insets/gaps and short action controls.
+        let preferredTextHeight = diagnosticScroll.heightAnchor.constraint(
+            equalTo: diagnosticPaneScroll.contentView.heightAnchor, constant: -100)
+        preferredTextHeight.priority = .defaultLow
+        preferredTextHeight.isActive = true
         paneScrolls = [overviewScroll, settingsScroll, diagnosticPaneScroll, diagnosticScroll]
         let sections: [(String, NSView)] = [("overview", overviewScroll), ("settings", settingsScroll), ("diagnostics", diagnosticPaneScroll)]
         for (identifier, view) in sections {

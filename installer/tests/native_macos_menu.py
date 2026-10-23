@@ -6,8 +6,9 @@ private temporary directory. Uses real NSWindow, NSMenu tracking and NSAlert,
 not menu mocks, Accessibility, device APIs or TCC grants. Captures the actual
 Overview, Settings and Diagnostics surfaces at narrow, minimum and roomy sizes
 in native light/dark and high-contrast appearances. All fixture data is simulated.
-Consultation and About PNGs show real AppKit content; menu-text PNGs are rendered fixtures.
-An optional display screenshot uses only preexisting permission.
+Consultation/About PNGs use appearance-scoped caching of the actual AppKit views,
+composited onto their resolved native window background. Capture provenance and
+native pixel dimensions are recorded. Menu-text PNGs remain rendered fixtures.
 """
 
 import argparse
@@ -26,15 +27,64 @@ import CoreGraphics
 func require(_ condition: @autoclosure () -> Bool, _ message: String) {
     if !condition() { fputs("FAIL: \(message)\n", stderr); exit(1) }
 }
-func png(_ view: NSView, _ path: URL) {
-    guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else {
-        require(false, "AppKit bitmap unavailable"); return
+var imageCaptureRecords = [[String: Any]]()
+@discardableResult
+func png(_ view: NSView, _ path: URL) -> [String: Any] {
+    let appearance = view.effectiveAppearance
+    var record = [String: Any]()
+    appearance.performAsCurrentDrawingAppearance {
+        view.window?.displayIfNeeded()
+        let background = view.window?.backgroundColor ?? NSColor.windowBackgroundColor
+        guard let resolvedBackground = background.usingColorSpace(.sRGB)?.withAlphaComponent(1) else {
+            require(false, "native window background cannot be resolved"); return
+        }
+        guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else {
+            require(false, "AppKit bitmap unavailable"); return
+        }
+        view.cacheDisplay(in: view.bounds, to: bitmap)
+        guard let image = bitmap.cgImage else {
+            require(false, "native capture image unavailable"); return
+        }
+        // Preserve source pixel dimensions, logical size and RGB color space.
+        // Fill before source-over drawing: transparent view/window pixels must
+        // not be left to an image viewer's arbitrary white/black background.
+        let sourceSpace = image.colorSpace
+        let space = sourceSpace?.model == .rgb ? sourceSpace! : CGColorSpace(name: CGColorSpace.sRGB)!
+        guard let context = CGContext(data: nil, width: image.width, height: image.height,
+                                      bitsPerComponent: 8, bytesPerRow: 0, space: space,
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
+            require(false, "opaque capture context unavailable"); return
+        }
+        let pixels = CGRect(x: 0, y: 0, width: image.width, height: image.height)
+        context.setFillColor(resolvedBackground.cgColor)
+        context.fill(pixels)
+        context.setBlendMode(.normal)
+        context.draw(image, in: pixels)
+        guard let composite = context.makeImage() else {
+            require(false, "opaque capture image unavailable"); return
+        }
+        let opaque = NSBitmapImageRep(cgImage: composite)
+        opaque.size = bitmap.size
+        guard let data = opaque.representation(using: .png, properties: [:]) else {
+            require(false, "AppKit PNG unavailable"); return
+        }
+        try! data.write(to: path)
+        record = ["file": path.lastPathComponent,
+                  "method": "appkit-cache-window-background-composite", "scope": "view",
+                  "appearance": appearance.name.rawValue, "opaque": true,
+                  "pixels_wide": image.width, "pixels_high": image.height,
+                  "logical_width": bitmap.size.width, "logical_height": bitmap.size.height,
+                  "window_backing_scale": view.window?.backingScaleFactor ?? 1,
+                  "background_source": view.window == nil ? "NSColor.windowBackgroundColor" : "NSWindow.backgroundColor",
+                  "background_srgb": [resolvedBackground.redComponent, resolvedBackground.greenComponent,
+                                      resolvedBackground.blueComponent, resolvedBackground.alphaComponent]]
     }
-    view.cacheDisplay(in: view.bounds, to: bitmap)
-    guard let data = bitmap.representation(using: .png, properties: [:]) else {
-        require(false, "AppKit PNG unavailable"); return
-    }
-    try! data.write(to: path)
+    imageCaptureRecords.append(record)
+    // Keep provenance available even if a later geometry/behavior assertion
+    // stops the harness before its aggregate manifests are written.
+    try! JSONSerialization.data(withJSONObject: record, options: [.prettyPrinted, .sortedKeys])
+        .write(to: path.deletingPathExtension().appendingPathExtension("capture.json"))
+    return record
 }
 // A visual fixture only. Assertions target the production native surfaces.
 final class MenuTextFixture: NSView {
@@ -310,12 +360,20 @@ func captureSections(_ consultation: DesktopConsultation, _ name: String) {
         window.appearance = nativeAppearance
         for (sizeName, size) in [("user", NSSize(width: 645, height: 570)), ("minimum", window.minSize),
                                  ("roomy", NSSize(width: 900, height: 700))] {
+            let requestedContent = window.contentRect(forFrameRect: NSRect(origin: window.frame.origin, size: size)).size
+            let contentMinimum = window.contentMinSize
+            require(size.width >= window.minSize.width - 1 && size.height >= window.minSize.height - 1 &&
+                    requestedContent.width >= contentMinimum.width - 1 &&
+                    requestedContent.height >= contentMinimum.height - 1,
+                    "fixture \(sizeName) frame \(size) is below declared frame/content minimum \(window.minSize)/\(contentMinimum)")
             window.setFrame(NSRect(origin: window.frame.origin, size: size), display: true)
             for index in 0..<3 {
                 consultation.tabs.selectTabViewItem(at: index)
                 window.contentView!.layoutSubtreeIfNeeded()
                 window.displayIfNeeded()
                 let root = window.contentView!
+                require(abs(window.frame.width - size.width) <= 1 && abs(window.frame.height - size.height) <= 1,
+                        "native pane enlarged the requested \(sizeName) window: requested \(size), actual \(window.frame.size)")
                 require(root.bounds.width > 0 && root.bounds.height > 0, "empty native surface")
                 guard let scroll = consultation.tabs.selectedTabViewItem?.view as? NSScrollView,
                       let document = scroll.documentView else {
@@ -351,8 +409,12 @@ func captureSections(_ consultation: DesktopConsultation, _ name: String) {
                             copy!.visibleRect.width >= copy!.bounds.width - 1,
                             "diagnostic Copy control cannot be fully reached")
                     if name == "long-inspection-label" && sizeName == "minimum" {
+                        let inspection = controls.first { $0.identifier?.rawValue == "camera_inspect" } as? NSButton
+                        require(inspection != nil && inspection!.title.utf8.count > 1000 &&
+                                inspection!.bounds.height > scroll.contentView.bounds.height,
+                                "long inspection fixture did not retain its wrapped title at the requested minimum size")
                         require(document.bounds.height > scroll.contentView.bounds.height,
-                                "long inspection fixture did not exercise diagnostic overflow")
+                                "long inspection fixture did not exercise diagnostic overflow: document \(document.bounds.size), viewport \(scroll.contentView.bounds.size)")
                         png(root, proof.appendingPathComponent("\(name)-\(appearance.rawValue)-minimum-diagnostics-bottom-simulated.png"))
                     }
                 }
@@ -367,10 +429,14 @@ func captureSections(_ consultation: DesktopConsultation, _ name: String) {
                 simulated.frame = NSRect(x: 16, y: root.bounds.height - 14, width: root.bounds.width - 32, height: 12)
                 simulated.removeFromSuperview()
                 root.addSubview(simulated, positioned: .above, relativeTo: nil)
-                png(root, proof.appendingPathComponent("\(name)-\(appearance.rawValue)-\(sizeName)-\(index)-simulated.png"))
+                let capture = png(root, proof.appendingPathComponent("\(name)-\(appearance.rawValue)-\(sizeName)-\(index)-simulated.png"))
                 captures.append(["case": name, "appearance": appearance.rawValue, "size": sizeName,
                                  "section": index, "window_width": window.frame.width,
-                                 "window_height": window.frame.height, "simulated": true])
+                                 "window_height": window.frame.height, "requested_window_width": size.width,
+                                 "requested_window_height": size.height,
+                                 "document_height": document.bounds.height,
+                                 "viewport_height": scroll.contentView.bounds.height,
+                                 "capture": capture, "simulated": true])
             }
         }
     }
@@ -781,6 +847,8 @@ let json = try! JSONSerialization.data(withJSONObject: measurements, options: [.
 try! json.write(to: proof.appendingPathComponent("native-menu-measurements.json"))
 try! JSONSerialization.data(withJSONObject: captures, options: [.prettyPrinted, .sortedKeys])
     .write(to: proof.appendingPathComponent("native-surface-captures.json"))
+try! JSONSerialization.data(withJSONObject: imageCaptureRecords, options: [.prettyPrinted, .sortedKeys])
+    .write(to: proof.appendingPathComponent("native-image-captures.json"))
 '''
 
 TRACKING_REGRESSION = r'''
@@ -1117,7 +1185,9 @@ def main():
         'Real modeless consultation window: Overview/Settings/Diagnostics light/dark/high-contrast at 645x570, minimum and roomy sizes, '
         'read-only full diagnostic copy, refresh tab/focus/selection/scroll retention, close and singleton reopen; '
         'localized native About with factual description and version in seven languages. '
-        'Consultation/About PNGs are actual AppKit content snapshots; menu-text PNGs are rendered fixtures. '
+        'Consultation/About PNGs use appearance-scoped caching of the actual AppKit views, '
+        'composited opaquely over the resolved native window background; method, appearance and pixel/logical dimensions are recorded in per-image capture.json sidecars and native-image-captures.json. '
+        'Menu-text PNGs are rendered fixtures, not native menu screen captures. '
         'App-local keyboard navigation selects a direct profile through real NSMenu tracking. '
         'No Accessibility/global-event-posting/TCC grants or capture/device actions. '
         'Native tracked-menu screen capture is optional and uses only existing authorization.\n')

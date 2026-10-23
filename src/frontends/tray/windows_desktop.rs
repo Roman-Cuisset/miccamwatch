@@ -113,10 +113,22 @@ struct DesktopRuntime {
 }
 impl DesktopRuntime {
     fn new() -> Self {
-        let initialized = unsafe { RoInitialize(0) } >= 0;
+        let result = unsafe { RoInitialize(0) };
+        // The monitor may already own an MTA. Match it and retain our own
+        // initialization rather than relying on that caller's lifetime.
+        let result = if result == windows::Win32::Foundation::RPC_E_CHANGED_MODE.0 {
+            unsafe { RoInitialize(1) }
+        } else {
+            result
+        };
+        let initialized = result >= 0;
         Self {
             initialized,
-            settings: UISettings::new().ok(),
+            settings: if initialized {
+                UISettings::new().ok()
+            } else {
+                None
+            },
         }
     }
 }
