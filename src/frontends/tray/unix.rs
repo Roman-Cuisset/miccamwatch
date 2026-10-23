@@ -1235,7 +1235,6 @@ fn observation_status(snapshot: &Snapshot, lang: Language) -> (String, &'static 
 
 #[derive(Default)]
 struct CameraInspectionUi {
-    #[cfg(target_os = "macos")]
     system_managed: bool,
     inventory_incomplete: bool,
     administrator_required: bool,
@@ -1769,6 +1768,8 @@ pub fn run_tray(
                     Ok(state) => {
                         // Mixed/stale ownership still offers explicit restoration.
                         camera_blocked = state != crate::privacy::CameraPrivacyState::Allowed;
+                        inspection.ui.system_managed =
+                            state == crate::privacy::CameraPrivacyState::SystemManaged;
                         camera_error = None;
                     }
                     Err(error) => {
@@ -1864,7 +1865,9 @@ pub fn run_tray(
                                     requested[0] = Some(mute != MicrophoneMuteState::Muted);
                                 }
                                 #[cfg(target_os = "linux")]
-                                host.requested[0] = Some(mute != MicrophoneMuteState::Muted);
+                                {
+                                    host.requested[0] = Some(mute != MicrophoneMuteState::Muted);
+                                }
                                 monitor.toggle_microphone_mute()?;
                             }
                             Command::Camera => {
@@ -1879,8 +1882,11 @@ pub fn run_tray(
                                 #[cfg(target_os = "linux")]
                                 {
                                     host.requested[1] = Some(!camera_blocked);
-                                    camera_blocked = crate::privacy::toggle_camera_state()?
-                                        != crate::privacy::CameraPrivacyState::Allowed;
+                                    let state = crate::privacy::toggle_camera_state()?;
+                                    camera_blocked =
+                                        state != crate::privacy::CameraPrivacyState::Allowed;
+                                    inspection.ui.system_managed =
+                                        state == crate::privacy::CameraPrivacyState::SystemManaged;
                                     camera_error = None;
                                 }
                             }
