@@ -65,11 +65,15 @@ export function htmlLanguage(code) {
   return code === 'zh' ? 'zh-Hans' : code;
 }
 
+function localizedPath(code, suffix = '') {
+  return code === 'en' && suffix === '' ? '/' : `/${code}/${suffix}`;
+}
+
 export function languageLinks(code, filename) {
   return languages.map((language) => {
     const current = language.code === code ? ' aria-current="page"' : '';
     const target = filename === '404.html' ? `/${language.code}/404.html`
-      : filename === 'privacy.html' ? `/${language.code}/privacy` : `/${language.code}/`;
+      : localizedPath(language.code, filename === 'privacy.html' ? 'privacy' : '');
     return `<a href="${target}" lang="${htmlLanguage(language.code)}" hreflang="${htmlLanguage(language.code)}"${current}>${language.name}</a>`;
   }).join('');
 }
@@ -91,26 +95,36 @@ export function localizedPage(template, catalog, filename) {
 export function pageMetadata(origin, code, filename = 'index.html') {
   if (!origin) return '';
   const suffix = filename === 'privacy.html' ? 'privacy' : '';
-  const canonical = `${origin}/${code}/${suffix}`;
+  const canonical = `${origin}${localizedPath(code, suffix)}`;
   const image = `${origin}/assets/${code === 'fr' ? 'social.png' : `social-${code}.png`}`;
-  const links = languages.map((language) => `<link rel="alternate" hreflang="${htmlLanguage(language.code)}" href="${origin}/${language.code}/${suffix}">`);
-  return [
+  const links = languages.map((language) => `<link rel="alternate" hreflang="${htmlLanguage(language.code)}" href="${origin}${localizedPath(language.code, suffix)}">`);
+  const metadata = [
     `<link rel="canonical" href="${canonical}">`,
     ...links,
     `<link rel="alternate" hreflang="x-default" href="${origin}/${suffix}">`,
     `<meta property="og:url" content="${canonical}">`,
     `<meta property="og:image" content="${image}">`,
     `<meta name="twitter:image" content="${image}">`,
-  ].join('\n  ');
+  ];
+  if (filename === 'index.html') {
+    metadata.push(`<script type="application/ld+json">${JSON.stringify({
+      '@context': 'https://schema.org',
+      '@type': 'WebSite',
+      name: 'MicCamWatch',
+      alternateName: 'MCW',
+      url: `${origin}/`,
+    })}</script>`);
+  }
+  return metadata.join('\n  ');
 }
 
 export function sitemap(origin) {
   const groups = ['', 'privacy'].flatMap((suffix) => {
     const alternateLinks = [
       `    <xhtml:link rel="alternate" hreflang="x-default" href="${escapeMarkup(`${origin}/${suffix}`)}" />`,
-      ...languages.map(({ code }) => `    <xhtml:link rel="alternate" hreflang="${code}" href="${escapeMarkup(`${origin}/${code}/${suffix}`)}" />`),
+      ...languages.map(({ code }) => `    <xhtml:link rel="alternate" hreflang="${code}" href="${escapeMarkup(`${origin}${localizedPath(code, suffix)}`)}" />`),
     ].join('\n');
-    return [`${origin}/${suffix}`, ...languages.map(({ code }) => `${origin}/${code}/${suffix}`)].map((url) => [
+    return [...new Set([`${origin}/${suffix}`, ...languages.map(({ code }) => `${origin}${localizedPath(code, suffix)}`)])].map((url) => [
       '  <url>',
       `    <loc>${escapeMarkup(url)}</loc>`,
       alternateLinks,
