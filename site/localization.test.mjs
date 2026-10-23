@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { languages, localizedPage, validateCatalog } from './localization.mjs';
+import { languages, localizedPage, pageMetadata, validateCatalog } from './localization.mjs';
 
 const french = {
   language: 'fr', name: 'Français', ogLocale: 'fr_FR',
@@ -55,4 +55,19 @@ test('translation cannot break the markup nesting of a safety warning', () => {
   const master = { ...french, messages: { notice: '<strong><span>Attention</span></strong>' } };
   const value = { ...english(), messages: { notice: '<strong><span>Warning</strong></span>' } };
   assert.throws(() => validateCatalog(value, en, master), Error);
+});
+
+test('pageMetadata declares canonical root and Schema WebSite structured data on homepages only', () => {
+  const origin = 'https://miccamwatch.pages.dev';
+  const enMeta = pageMetadata(origin, 'en', 'index.html');
+  assert.match(enMeta, /<link rel="canonical" href="https:\/\/miccamwatch\.pages\.dev\/">/);
+  assert.match(enMeta, /<script type="application\/ld\+json">\{"@context":"https:\/\/schema\.org","@type":"WebSite","name":"MicCamWatch","alternateName":"MCW","url":"https:\/\/miccamwatch\.pages\.dev\/"\}<\/script>/);
+
+  const frMeta = pageMetadata(origin, 'fr', 'index.html');
+  assert.match(frMeta, /<link rel="canonical" href="https:\/\/miccamwatch\.pages\.dev\/fr\/">/);
+  assert.match(frMeta, /<script type="application\/ld\+json">\{"@context":"https:\/\/schema\.org","@type":"WebSite","name":"MicCamWatch","alternateName":"MCW","url":"https:\/\/miccamwatch\.pages\.dev\/"\}<\/script>/);
+
+  const privacyMeta = pageMetadata(origin, 'en', 'privacy.html');
+  assert.match(privacyMeta, /<link rel="canonical" href="https:\/\/miccamwatch\.pages\.dev\/en\/privacy">/);
+  assert.doesNotMatch(privacyMeta, /WebSite/);
 });

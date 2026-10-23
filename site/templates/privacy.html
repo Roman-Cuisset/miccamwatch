@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="__MCW_LANG__">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#112a29">
+  <meta name="description" content="{{@ privacy.meta-description }}">
+  <meta property="og:type" content="article">
+  <meta property="og:locale" content="__MCW_OG_LOCALE__">
+  <meta property="og:site_name" content="MicCamWatch">
+  <meta property="og:title" content="{{@ privacy.title }} — MicCamWatch">
+  <meta property="og:description" content="{{@ privacy.meta-description }}">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="{{@ privacy.title }} — MicCamWatch">
+  <meta name="twitter:description" content="{{@ privacy.meta-description }}">
+  <title>{{ privacy.title }} — MicCamWatch</title>
+  <!-- MCW_ORIGIN_META -->
+  <link rel="icon" href="/assets/mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/main.css">
+</head>
+<body>
+  <a class="skip-link" href="#contenu">{{ home.a.skip-link }}</a>
+  <header class="site-header">
+    <div class="shell header-inner">
+      <a class="brand" href="/" aria-label="{{@ home.aria-label.brand }}"><img src="/assets/mark.svg" width="36" height="36" alt=""><span>MicCam<span class="brand-accent">Watch</span></span></a>
+      <nav aria-label="{{@ home.aria-label.navigation-principale }}"><a href="/#fonctions">{{ home.a.fonctions }}</a><a href="/#compatibilite">{{ home.a.compatibilite }}</a><a href="/#guide">{{ home.a.guide }}</a><a href="/#faq">{{ home.a.faq }}</a></nav>
+      <a class="button button-small" href="/#installer">{{ home.a.button-button-small }}</a>
+    </div>
+  </header>
+  <nav class="language-switch shell" aria-label="{{@ ui.language-navigation }}">__MCW_LANGUAGE_LINKS__</nav>
+  <main class="shell policy-page" id="contenu">
+    <header class="policy-hero">
+      <p class="eyebrow">{{ privacy.eyebrow }}</p>
+      <h1>{{ privacy.title }}</h1>
+      <p class="policy-lead">{{ privacy.lead }}</p>
+      <p class="small-text policy-date">{{ privacy.updated }} : <time datetime="__MCW_PRIVACY_UPDATED__">__MCW_PRIVACY_UPDATED__</time> <span class="badge">v__MCW_VERSION__</span></p>
+    </header>
+    <div class="policy-layout">
+      <nav class="policy-toc" aria-label="{{@ privacy.contents }}">
+        <h2>{{ privacy.contents }}</h2>
+        <ul>
+          <li><a href="#project">{{ privacy.owner.title }}</a></li>
+          <li><a href="#application">{{ privacy.app.title }}</a></li>
+          <li><a href="#retention">{{ privacy.retention.title }}</a></li>
+          <li><a href="#network">{{ privacy.network.title }}</a></li>
+          <li><a href="#website">{{ privacy.website.title }}</a></li>
+          <li><a href="#providers">{{ privacy.providers.title }}</a></li>
+          <li><a href="#legal-bases">{{ privacy.legal.title }}</a></li>
+          <li><a href="#rights">{{ privacy.rights.title }}</a></li>
+          <li><a href="#reports">{{ privacy.reports.title }}</a></li>
+          <li><a href="#contact">{{ privacy.contact.title }}</a></li>
+          <li><a href="#changes">{{ privacy.changes.title }}</a></li>
+        </ul>
+      </nav>
+      <article class="policy-content">
+        <section id="project" aria-labelledby="project-title"><h2 id="project-title">{{ privacy.owner.title }}</h2><p>{{ privacy.owner.p1 }}</p><p>{{ privacy.owner.p2 }}</p></section>
+        <section id="application" aria-labelledby="application-title"><h2 id="application-title">{{ privacy.app.title }}</h2><p>{{ privacy.app.p1 }}</p><p>{{ privacy.app.p2 }}</p></section>
+        <section id="retention" aria-labelledby="retention-title"><h2 id="retention-title">{{ privacy.retention.title }}</h2><p>{{ privacy.retention.p1 }}</p><p>{{ privacy.retention.p2 }}</p><p>{{ privacy.retention.p3 }}</p><p>{{ privacy.retention.p4 }}</p></section>
+        <section id="network" aria-labelledby="network-title"><h2 id="network-title">{{ privacy.network.title }}</h2><p>{{ privacy.network.p1 }}</p><p>{{ privacy.network.p2 }}</p></section>
+        <section id="website" aria-labelledby="website-title"><h2 id="website-title">{{ privacy.website.title }}</h2><p>{{ privacy.website.p1 }}</p><p>{{ privacy.website.p2 }}</p><p>{{ privacy.website.p3 }}</p></section>
+        <section id="providers" aria-labelledby="providers-title"><h2 id="providers-title">{{ privacy.providers.title }}</h2><p>{{ privacy.providers.p1 }}</p><p>{{ privacy.providers.p2 }}</p></section>
+        <section id="legal-bases" aria-labelledby="legal-bases-title"><h2 id="legal-bases-title">{{ privacy.legal.title }}</h2><p>{{ privacy.legal.p1 }}</p><p>{{ privacy.legal.p2 }}</p></section>
+        <section id="rights" aria-labelledby="rights-title"><h2 id="rights-title">{{ privacy.rights.title }}</h2><p>{{ privacy.rights.p1 }}</p><p>{{ privacy.rights.p2 }}</p><p><a href="https://www.edpb.europa.eu/about-edpb/about-edpb/members_en">European Data Protection Board (EDPB)</a></p></section>
+        <section id="reports" aria-labelledby="reports-title"><h2 id="reports-title">{{ privacy.reports.title }}</h2><p>{{ privacy.reports.p1 }}</p></section>
+        <section id="contact" aria-labelledby="contact-title"><h2 id="contact-title">{{ privacy.contact.title }}</h2><p>{{ privacy.contact.p1 }}</p><p class="policy-contact">__MCW_PRIVACY_CONTACT__</p></section>
+        <section id="changes" aria-labelledby="changes-title"><h2 id="changes-title">{{ privacy.changes.title }}</h2><p>{{ privacy.changes.p1 }}</p>
+          <ul class="policy-sources">
+            <li><a href="https://github.com/Roman-Cuisset/miccamwatch/tree/__MCW_SOURCE__">MicCamWatch — {{ home.a.documentation }}</a></li>
+            <li><a href="https://www.cloudflare.com/privacypolicy/">Cloudflare — {{ home.a.confidentialite }}</a></li>
+            <li><a href="https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement">GitHub — {{ home.a.confidentialite }}</a></li>
+            <li><a href="https://policies.google.com/privacy">Google / Gmail — {{ home.a.confidentialite }}</a></li>
+            <li><a href="https://developers.cloudflare.com/web-analytics/faq/">Cloudflare Web Analytics</a></li>
+            <li><a href="https://developers.cloudflare.com/network-error-logging/">Cloudflare Network Error Logging</a></li>
+            <li><a href="https://eur-lex.europa.eu/eli/reg/2016/679/oj">Regulation (EU) 2016/679</a></li>
+          </ul>
+        </section>
+        <p class="policy-back"><a class="button button-secondary" href="/">{{ privacy.back }}</a></p>
+      </article>
+    </div>
+  </main>
+  <footer class="site-footer shell"><div><a class="brand" href="/"><img src="/assets/mark.svg" width="32" height="32" alt=""><span>MicCamWatch</span></a><p>{{ home.p.surveillance-locale-limites-explicites-logiciel-libre-sous-licence }}</p><p>© 2026 Roman Cuisset · <a href="https://github.com/Roman-Cuisset/miccamwatch/blob/main/LICENSE">MIT</a> · <a href="https://github.com/Roman-Cuisset/miccamwatch">GitHub</a></p></div><nav aria-label="{{@ home.aria-label.ressources }}"><a href="https://github.com/Roman-Cuisset/miccamwatch">GitHub</a><a href="https://github.com/Roman-Cuisset/miccamwatch#readme">{{ home.a.documentation }}</a><a href="https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v__MCW_VERSION__">{{ home.a.release-mcw-version }}</a><a href="__MCW_PRIVACY_URL__" aria-current="page">{{ home.a.confidentialite }}</a><a href="https://github.com/Roman-Cuisset/miccamwatch/blob/main/docs/SIGNING.md">{{ home.a.signature-et-securite }}</a><a href="https://github.com/Roman-Cuisset/miccamwatch/blob/main/docs/ARCHITECTURE.md">{{ home.a.architecture-et-preuves }}</a></nav><p class="source-note">{{ home.p.source-note }}</p></footer>
+</body>
+</html>

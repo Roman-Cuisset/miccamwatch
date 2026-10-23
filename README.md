@@ -1,12 +1,66 @@
-# miccamwatch
+# MicCamWatch
 
+**Free, open-source microphone and camera activity monitoring for Windows, Linux, and macOS.**
+
+[![Official Website](https://img.shields.io/badge/website-miccamwatch.pages.dev-126b50)](https://miccamwatch.pages.dev/)
 [![Build](https://github.com/Roman-Cuisset/miccamwatch/actions/workflows/ci.yml/badge.svg)](https://github.com/Roman-Cuisset/miccamwatch/actions/workflows/ci.yml)
-[![Latest release](https://img.shields.io/github/v/release/Roman-Cuisset/miccamwatch)](https://github.com/Roman-Cuisset/miccamwatch/releases/latest)
+[![Latest Release](https://img.shields.io/github/v/release/Roman-Cuisset/miccamwatch)](https://github.com/Roman-Cuisset/miccamwatch/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/Roman-Cuisset/miccamwatch/total.svg)](https://github.com/Roman-Cuisset/miccamwatch/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-`mcw` monitors microphone and camera access using platform-specific evidence. Windows uses native capture and privacy APIs; Linux and macOS 15+ provide native monitoring, desktop frontends and scoped controls with narrower evidence. It supports high-contrast terminal colors, seven display languages, policy-driven trust validation, JSONL history and native event notifications. Detailed evidence remains in English for stable machine-readable diagnostics. Distribution covers Windows ZIP/MSI, Linux x64 and macOS Apple Silicon/Intel CLI archives and native application disk images; previous release tags and assets remain immutable.
+MicCamWatch (`mcw`) is a lightweight, privacy-focused desktop monitor that alerts you whenever an application accesses your microphone or webcam. It observes operating-system metadata in real time, correlates process identity and digital signatures, and provides native desktop interfaces, a terminal dashboard, and scoped privacy controls.
 
+- **Official Website:** [https://miccamwatch.pages.dev/](https://miccamwatch.pages.dev/)
+- **Releases & Downloads:** [GitHub Releases](https://github.com/Roman-Cuisset/miccamwatch/releases)
+- **Privacy Policy:** [https://miccamwatch.pages.dev/privacy](https://miccamwatch.pages.dev/privacy)
+- **100% Offline by Default:** No telemetry, no background analytics, no cloud reporting. Observations stay strictly on your local device.
+- **No Audio or Video Recording:** MicCamWatch never records sound, captures webcam frames, or inspects media payloads. It reads only OS-level capture metadata.
+
+---
+
+## Overview & Screenshots
+
+| Interactive Terminal Dashboard (`mcw top`) | Native Desktop Tray (`mcw tray`) |
+| :---: | :---: |
+| ![mcw top terminal dashboard](site/assets/top-windows.png) | ![MicCamWatch system tray](site/assets/tray-windows.png) |
+| *Real-time access events, PID attribution, and keyboard controls* | *Discreet tray icon, state badges, and quick controls* |
+
+---
+
+## Supported Operating Systems
+
+| Platform | Monitoring Coverage | Scoped Controls & Limits |
+| :--- | :--- | :--- |
+| **Windows 10 / 11 (x64)** | Active WASAPI sessions; Media Foundation camera streaming; Loaded capture modules; ConsentStore registry notifications. | Endpoint muting; UAC-approved camera device blocking with persistent background guard. |
+| **Desktop Linux (x64)** | PipeWire session sources and active node links; authenticated PID via `/proc`; V4L2 device open-handle monitoring. | PipeWire session-source muting; Polkit-approved root helper for USB `uvcvideo` cameras. |
+| **macOS 15+ (Apple Silicon & Intel)** | CoreAudio input activity with PID attribution; CoreMediaIO device running-state (medium confidence, client unknown). | Writable CoreAudio input muting; MCW-owned camera restriction profile requiring manual approval in System Settings. |
+
+---
+
+## Quick Start
+
+Download the latest packages from [GitHub Releases](https://github.com/Roman-Cuisset/miccamwatch/releases/latest) or install via the [official website](https://miccamwatch.pages.dev/#installer).
+
+### Windows (MSI or Portable ZIP)
+Install the per-user MSI or extract the portable ZIP from [Releases](https://github.com/Roman-Cuisset/miccamwatch/releases/latest):
+```powershell
+mcw --version
+mcw doctor
+mcw status --lang en
+mcw top
+```
+
+### Linux & macOS (One-line installer)
+Inspect and run the verified installer:
+```bash
+curl --proto '=https' --tlsv1.2 -fsSL https://miccamwatch.pages.dev/install.sh -o mcw-install.sh
+# Compare SHA-256 against release manifest, then run:
+sh mcw-install.sh --version v0.20.0 --add-path
+```
+
+---
+
+`mcw` monitors microphone and camera access using platform-specific evidence. Windows uses native capture and privacy APIs; Linux and macOS 15+ provide native monitoring, desktop frontends and scoped controls with narrower evidence. It supports high-contrast terminal colors, seven display languages, policy-driven trust validation, JSONL history and native event notifications. Detailed evidence remains in English for stable machine-readable diagnostics. Distribution covers Windows ZIP/MSI, Linux x64 and macOS Apple Silicon/Intel CLI archives and native application disk images; previous release tags and assets remain immutable.
 ## macOS camera activity
 
 Camera inventory uses passive AVFoundation discovery; activity uses public CoreMediaIO device running-state. A real-device report on Apple Silicon/macOS 27 confirmed Telegram **0 → 1 → 0** and FaceTime HD Camera START/STOP after the correction; that reported evidence is documented with attribution in [Architecture](docs/ARCHITECTURE.md), not represented as a maintainer or hosted-CI hardware run.
