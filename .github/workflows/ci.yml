@@ -6,9 +6,17 @@ on:
   workflow_dispatch:
     inputs:
       native-only:
-        description: Run Linux and macOS qualification while Windows is checked separately
+        description: Skip Windows qualification while native Unix targets are checked
         type: boolean
         default: false
+      native-platform:
+        description: Select native Unix targets; Windows is controlled separately by native-only
+        type: choice
+        default: all
+        options:
+          - all
+          - linux
+          - macos
   workflow_call:
     inputs:
       native-only:
@@ -174,19 +182,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - runner: ubuntu-22.04
-            platform: linux
-            arch: x86_64
-          - runner: ubuntu-22.04-arm
-            platform: linux
-            arch: aarch64
-          - runner: macos-15
-            platform: macos
-            arch: aarch64
-          - runner: macos-15-intel
-            platform: macos
-            arch: x86_64
+        include: >-
+          ${{ fromJSON(
+            inputs.native-platform == 'macos' &&
+            '[{"runner":"macos-15","platform":"macos","arch":"aarch64"},{"runner":"macos-15-intel","platform":"macos","arch":"x86_64"}]' ||
+            inputs.native-platform == 'linux' &&
+            '[{"runner":"ubuntu-22.04","platform":"linux","arch":"x86_64"},{"runner":"ubuntu-22.04-arm","platform":"linux","arch":"aarch64"}]' ||
+            '[{"runner":"ubuntu-22.04","platform":"linux","arch":"x86_64"},{"runner":"ubuntu-22.04-arm","platform":"linux","arch":"aarch64"},{"runner":"macos-15","platform":"macos","arch":"aarch64"},{"runner":"macos-15-intel","platform":"macos","arch":"x86_64"}]'
+          ) }}
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4

@@ -288,6 +288,10 @@ function Confirm-FixtureShellTooltip([string]$name) {
         throw 'Explorer did not register the actual fixture notification icon.'
     }
     if ($shell.capacity -ne 128 -or $shell.utf16_units -gt 127) { throw 'Invalid native tooltip capacity.' }
+    # Leave the previous hover before locating the visible icon. Leaving an
+    # overflow flyout after lookup can dismiss it and invalidate its bounds.
+    [McwNativeProof]::MovePointerTo(0, 0)
+    Start-Sleep -Milliseconds 200
     $deadline = (Get-Date).AddSeconds(30)
     $button = $null
     while (-not $button -and (Get-Date) -lt $deadline) {
@@ -297,10 +301,6 @@ function Confirm-FixtureShellTooltip([string]$name) {
     if (-not $button) { throw 'Fixture shell icon is not UIA-accessible, including overflow. Requires an unlocked English hosted Explorer desktop.' }
     $bounds = $button.Current.BoundingRectangle
     if ($bounds.IsEmpty -or $bounds.Width -le 0 -or $bounds.Height -le 0) { throw 'Fixture shell icon has no visible bounds.' }
-    # Leave the last tooltip before entering the next icon/status. This forces
-    # Explorer to show freshly updated native text rather than a stale hover.
-    [McwNativeProof]::MovePointerTo(0, 0)
-    Start-Sleep -Milliseconds 200
     [McwNativeProof]::MovePointerTo([int]($bounds.X + $bounds.Width / 2), [int]($bounds.Y + $bounds.Height / 2))
     Start-Sleep -Milliseconds 1000
     Capture-NativeDesktop "$name-shell-hover"

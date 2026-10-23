@@ -735,6 +735,12 @@ final class DesktopConsultation: NSObject {
         headerFeedback.identifier = NSUserInterfaceItemIdentifier("header_feedback")
         headerFeedback.maximumNumberOfLines = 2
         headerFeedback.lineBreakMode = .byTruncatingTail
+        // Explicit line breaks can inflate NSTextField's intrinsic height even
+        // with maximumNumberOfLines set. Keep this non-scrolling header bounded;
+        // the complete feedback remains in Diagnostics and the tooltip.
+        let feedbackFont = headerFeedback.font!
+        let feedbackLineHeight = ceil(feedbackFont.ascender - feedbackFont.descender + feedbackFont.leading)
+        headerFeedback.heightAnchor.constraint(lessThanOrEqualToConstant: 2 * feedbackLineHeight).isActive = true
         let root = desktopColumn([heading, headerFeedback, tabs], inset: 20)
         root.translatesAutoresizingMaskIntoConstraints = false
         window.contentView!.addSubview(root)

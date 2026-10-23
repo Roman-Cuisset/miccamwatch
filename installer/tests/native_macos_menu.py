@@ -78,6 +78,13 @@ func png(_ view: NSView, _ path: URL) -> [String: Any] {
                   "background_source": view.window == nil ? "NSColor.windowBackgroundColor" : "NSWindow.backgroundColor",
                   "background_srgb": [resolvedBackground.redComponent, resolvedBackground.greenComponent,
                                       resolvedBackground.blueComponent, resolvedBackground.alphaComponent]]
+        if let window = view.window {
+            record["window_frame_points"] = [window.frame.minX, window.frame.minY,
+                                             window.frame.width, window.frame.height]
+            if let visible = window.screen?.visibleFrame {
+                record["screen_visible_frame_points"] = [visible.minX, visible.minY, visible.width, visible.height]
+            }
+        }
     }
     imageCaptureRecords.append(record)
     // Keep provenance available even if a later geometry/behavior assertion
@@ -350,6 +357,8 @@ func descendants(_ root: NSView) -> [NSView] {
 }
 func captureSections(_ consultation: DesktopConsultation, _ name: String) {
     let window = consultation.window
+    let visible = (window.screen ?? NSScreen.main!).visibleFrame
+    let roomy = NSSize(width: min(900, visible.width), height: min(700, visible.height))
     let simulated = NSTextField(labelWithString: "SIMULATED DATA · Native AppKit UI proof, not hardware evidence")
     simulated.font = .systemFont(ofSize: 10)
     simulated.textColor = .secondaryLabelColor
@@ -359,21 +368,34 @@ func captureSections(_ consultation: DesktopConsultation, _ name: String) {
         guard let nativeAppearance = NSAppearance(named: appearance) else { continue }
         window.appearance = nativeAppearance
         for (sizeName, size) in [("user", NSSize(width: 645, height: 570)), ("minimum", window.minSize),
-                                 ("roomy", NSSize(width: 900, height: 700))] {
+                                 ("roomy", roomy)] {
             let requestedContent = window.contentRect(forFrameRect: NSRect(origin: window.frame.origin, size: size)).size
             let contentMinimum = window.contentMinSize
             require(size.width >= window.minSize.width - 1 && size.height >= window.minSize.height - 1 &&
                     requestedContent.width >= contentMinimum.width - 1 &&
                     requestedContent.height >= contentMinimum.height - 1,
                     "fixture \(sizeName) frame \(size) is below declared frame/content minimum \(window.minSize)/\(contentMinimum)")
-            window.setFrame(NSRect(origin: window.frame.origin, size: size), display: true)
+            require(size.width <= visible.width && size.height <= visible.height,
+                    "fixture \(sizeName) does not fit the native visible screen \(visible)")
+            let requestedFrame = NSRect(x: visible.midX - size.width / 2, y: visible.midY - size.height / 2,
+                                        width: size.width, height: size.height)
+            window.setFrame(requestedFrame, display: true)
             for index in 0..<3 {
                 consultation.tabs.selectTabViewItem(at: index)
                 window.contentView!.layoutSubtreeIfNeeded()
                 window.displayIfNeeded()
                 let root = window.contentView!
                 require(abs(window.frame.width - size.width) <= 1 && abs(window.frame.height - size.height) <= 1,
-                        "native pane enlarged the requested \(sizeName) window: requested \(size), actual \(window.frame.size)")
+                        "native pane resized requested \(sizeName) window for \(name)/\(appearance.rawValue)/section-\(index): requested \(size), actual \(window.frame.size), screen \(visible)")
+                require(visible.insetBy(dx: -1, dy: -1).contains(window.frame),
+                        "native pane extends beyond the visible screen for \(name)/\(sizeName)/section-\(index)")
+                if let feedback = descendants(root).compactMap({ $0 as? NSTextField })
+                    .first(where: { $0.identifier?.rawValue == "header_feedback" }), !feedback.isHidden {
+                    let font = feedback.font!
+                    let lineHeight = ceil(font.ascender - font.descender + font.leading)
+                    require(feedback.bounds.height <= 2 * lineHeight + 1,
+                            "feedback expanded beyond its two-line non-scrolling header")
+                }
                 require(root.bounds.width > 0 && root.bounds.height > 0, "empty native surface")
                 guard let scroll = consultation.tabs.selectedTabViewItem?.view as? NSScrollView,
                       let document = scroll.documentView else {
@@ -434,6 +456,9 @@ func captureSections(_ consultation: DesktopConsultation, _ name: String) {
                                  "section": index, "window_width": window.frame.width,
                                  "window_height": window.frame.height, "requested_window_width": size.width,
                                  "requested_window_height": size.height,
+                                 "screen_visible_frame": [visible.minX, visible.minY, visible.width, visible.height],
+                                 "requested_content_width": requestedContent.width,
+                                 "requested_content_height": requestedContent.height,
                                  "document_height": document.bounds.height,
                                  "viewport_height": scroll.contentView.bounds.height,
                                  "capture": capture, "simulated": true])
@@ -632,6 +657,29 @@ for test in cases {
             !overviewLabel("omitted_accesses").isHidden &&
             overviewLabel("omitted_accesses").stringValue.contains("3"),
             "omitting every identity incorrectly claims no access or hides the omitted count")
+    consultation.update(frame, diagnostic: content.diagnostic)
+    let feedbackLabel = descendants(nativeWindow.contentView!).compactMap { $0 as? NSTextField }
+        .first { $0.identifier?.rawValue == "header_feedback" }!
+    if let feedback = frame.feedback {
+        require(feedbackLabel.toolTip == feedback && text.string.contains(feedback),
+                "bounded feedback lost its full tooltip or diagnostic evidence")
+    }
+    // Test a multiline feedback refresh in every language, not only the Rust
+    // escaped-JSON fixture: the header must not enlarge the retained window.
+    var feedbackObject = rawCases.first { ($0["name"] as? String) == test.name }!["frame"] as! [String: Any]
+    let multilineFeedback = String(repeating: "SIMULATED feedback\n", count: 100)
+    feedbackObject["feedback"] = multilineFeedback
+    // Original bounded-producer frames are validated/captured unchanged below;
+    // leave projection space for this separate feedback-only refresh scenario.
+    feedbackObject["diagnostics"] = ""
+    let feedbackFrame = try! decodeDesktopFrame(JSONSerialization.data(withJSONObject: feedbackObject))
+    let sizeBeforeFeedback = nativeWindow.frame.size
+    consultation.update(feedbackFrame, diagnostic: content.diagnostic + "\n" + multilineFeedback)
+    let feedbackFont = feedbackLabel.font!
+    let feedbackLineHeight = ceil(feedbackFont.ascender - feedbackFont.descender + feedbackFont.leading)
+    require(nativeWindow.frame.size == sizeBeforeFeedback && feedbackLabel.bounds.height <= 2 * feedbackLineHeight + 1 &&
+            feedbackLabel.toolTip == multilineFeedback && text.string.contains(multilineFeedback),
+            "multiline feedback refresh enlarged the window or lost complete evidence")
     consultation.update(frame, diagnostic: content.diagnostic)
     captureSections(consultation, test.name)
     consultation.tabs.selectTabViewItem(at: 2)
