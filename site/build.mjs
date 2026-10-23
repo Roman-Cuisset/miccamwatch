@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { constants, promises as fs } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { languages, languageLinks, localizedPage, pageMetadata, sitemap, validateCatalog } from './localization.mjs';
+import { escapeMarkup, languages, languageLinks, localizedPage, pageMetadata, sitemap, validateCatalog } from './localization.mjs';
 
 // Run from any working directory. Node is needed only for this local export.
 const root = await fs.realpath(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'));
@@ -53,6 +53,17 @@ function validateRelease(value) {
   if (!/^[a-f0-9]{64}$/.test(value.installerSha256)) throw new Error('Installer SHA256 must be lowercase 64-character hexadecimal.');
   return value;
 }
+function validatePrivacy(value) {
+  if (!value || Array.isArray(value) || typeof value !== 'object' ||
+      Object.keys(value).length !== 2 || !Object.hasOwn(value, 'lastUpdated') || !Object.hasOwn(value, 'contactEmail') ||
+      typeof value.lastUpdated !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value.lastUpdated) ||
+      (value.contactEmail !== null && (typeof value.contactEmail !== 'string' ||
+        !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.contactEmail)))) {
+    throw new Error('site/privacy.json must contain an ISO lastUpdated date and a contactEmail string or null pending confirmation.');
+  }
+  return value;
+}
+
 
 function configuredOrigin(productionOrigin) {
   const name = process.env.MCW_SITE_URL !== undefined ? 'MCW_SITE_URL' : 'site/origin.json productionOrigin';
@@ -70,7 +81,7 @@ function configuredOrigin(productionOrigin) {
   return url.origin;
 }
 
-function renderText(content, filename, release, origin, catalog = null) {
+function renderText(content, filename, release, origin, catalog = null, privacy = null) {
   const tokens = {
     __MCW_VERSION__: release.version,
     __MCW_SOURCE__: release.source,
@@ -80,14 +91,21 @@ function renderText(content, filename, release, origin, catalog = null) {
     __MCW_LANG__: catalog.language,
     __MCW_OG_LOCALE__: catalog.ogLocale,
     __MCW_LANGUAGE_LINKS__: languageLinks(catalog.language, filename),
+    __MCW_PRIVACY_URL__: catalog.language === 'en' ? '/privacy' : `/${catalog.language}/privacy`,
+    __MCW_PRIVACY_UPDATED__: privacy.lastUpdated,
+    __MCW_PRIVACY_CONTACT__: privacy.contactEmail
+      ? `<a href="mailto:${encodeURIComponent(privacy.contactEmail).replaceAll('%40', '@')}">${escapeMarkup(privacy.contactEmail)}</a>`
+      : escapeMarkup(catalog.messages['privacy.contact.pending']),
+    __MCW_PRIVACY_REVIEW__: privacy.contactEmail ? ''
+      : `<aside class="inline-warning policy-review" role="note"><p>${escapeMarkup(catalog.messages['privacy.review'])}</p></aside>`,
   });
   let rendered = content.replace(/__MCW_[A-Z0-9_]+__/g, (token) => {
     if (!Object.hasOwn(tokens, token)) throw new Error(`Unknown template token ${token} in ${filename}.`);
     return tokens[token];
   });
-  if (filename === 'index.html') {
-    if (rendered.split(originMarker).length !== 2) throw new Error('index.html must have exactly one MCW_ORIGIN_META comment.');
-    rendered = rendered.replace(originMarker, pageMetadata(origin, catalog.language));
+  if (filename === 'index.html' || filename === 'privacy.html') {
+    if (rendered.split(originMarker).length !== 2) throw new Error(`${filename} must have exactly one MCW_ORIGIN_META comment.`);
+    rendered = rendered.replace(originMarker, pageMetadata(origin, catalog.language, filename));
   } else if (filename === '404.html') {
     rendered = rendered.replaceAll(originMarker, '');
   }
@@ -198,6 +216,7 @@ async function build() {
   await requireDirectory(sourceDirectory);
   await requireDirectory(path.join(root, 'installer'));
   const release = validateRelease(JSON.parse((await readRegularFile(path.join(sourceDirectory, 'release.json'))).toString('utf8')));
+  const privacy = validatePrivacy(JSON.parse((await readRegularFile(path.join(sourceDirectory, 'privacy.json'))).toString('utf8')));
   const publication = JSON.parse((await readRegularFile(path.join(sourceDirectory, 'origin.json'))).toString('utf8'));
   if (!publication || Array.isArray(publication) || Object.keys(publication).length !== 1 || typeof publication.productionOrigin !== 'string') {
     throw new Error('site/origin.json must contain only a productionOrigin HTTPS string.');
@@ -212,7 +231,7 @@ async function build() {
   const catalogs = await readCatalogs();
   await requireDirectory(path.join(sourceDirectory, 'templates'));
   const templates = new Map();
-  for (const filename of ['index.html', '404.html']) {
+  for (const filename of ['index.html', '404.html', 'privacy.html']) {
     templates.set(filename, (await readRegularFile(path.join(sourceDirectory, 'templates', filename))).toString('utf8'));
   }
   await requireDirectory(path.join(sourceDirectory, 'assets'));
@@ -246,7 +265,7 @@ async function build() {
     for (const catalog of catalogs) {
       for (const [filename, template] of templates) {
         const localized = localizedPage(template, catalog, filename);
-        const rendered = renderText(localized, filename, release, origin, catalog);
+        const rendered = renderText(localized, filename, release, origin, catalog, privacy);
         await writeGenerated(stage, `${catalog.language}/${filename}`, rendered, generated);
         if (catalog.language === 'en') await writeGenerated(stage, filename, rendered, generated);
       }
