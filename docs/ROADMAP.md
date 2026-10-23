@@ -1375,3 +1375,97 @@ Les sept rendus Windows ont été relus, dont les choix désactivés sous `--con
 | 2026-10-22 | P1-ARM — implémentation native et qualification engagée | **Source0.21.0 non publiée**, branche work/linux-arm64-021 | Commits292e850/9ff3471/e6ea9a1 : version mineure, sélection Linuxaarch64, ELF183/62 et deux binaires validés avant première sonde ; migrations de format contrôlées, refus d'en-têtes corrompus, runner ubuntu-22.04-arm et preuves ABI/glibc/bindgen, ressources candidates sans faux baseline ARM. Syntaxes shell/Python/YAML passent ; deux revues statiques n'identifient pas de défaut concret, sans remplacer un runtime | CI39828353569 et retrait natif39828453493 sur source exacte e6ea9a19b4195a3bbb91e3ed0679dba891f3a6bd en cours. Lire les résultats/artefacts avant qualification ; aucune publication021, aucune mutation de l'installation/protection PC ; Raspberry Pi/SBC physique non exercé |
 | 2026-10-22 | P1-ARM — premiers résultats et comparaison historique absente | **Qualification en cours, pas de publication** | Retrait natif39828453493 réussi sur UbuntuARM/x64 et macOSARM/Intel, vraies installations gérées/Cargo, données conservées et refus de retrait dangereux. CI39828353569 : Windows/Linuxx64/macOSARM/Intel réussis ; ARM compile/clippy/tests/SPA-C, contrôles ELF et frontière root réussis, puis arrêt du scénario PipeWire avant ses contrôles candidats car il exigeait une archive ARM0161 inexistante | native_pipewire_limits.py réutilise désormais la déclaration explicite MISSING_BASELINES : comparaison historique indisponible sur ARM, aucun remplacementx64, tous les scénarios candidats maintenus. Nouvelle qualification native nécessaire ; le premier run ARM reste échoué et n'est pas présenté comme validé |
 | 2026-10-22 | P1-ARM — qualification logicielle native clôturée | **Source2998946 qualifiée,0.21.0 non publiée** | CI39832624207 réussit Windows/Linuxx64/LinuxARM/macOSIntel/macOSARM. Artefacts ARM relus : uname/rustc/cc natifs, glibc2.35 et headers PipeWire/SPA0.3.48ARM ; deux ELF183 et bindings conservés ; installation réelle,14 refus ELF par installateur, format1 contrôlé, root read-only/rollback, PTY, six pannes PipeWire/reprise sans faux STOP et capture virtuelle conservée, vrai panel/menu/autostart. Retrait géré/Cargo39828453493 quatre Unix réussi, données conservées | Pas de publication/archive ARM historique/Pi physique ni garantie15Mo. Les nouvelles GUI trois OS demandées pendant ce lot sont distinctes et restent à qualifier sur leur source finale ; aucun contrôle de confidentialité PC changé |
+| 2026-10-23 | Sauvegarde WIP — GUI trois OS et préparation ARM64 | **Travaux préservés, 0.21.0 non compilée et non publiée**, commit WIP sur work/linux-arm64-021 | Audit de reprise par inspection : 12 fichiers suivis modifiés (+1765/−497) et 2 modules GUI non suivis (windows_desktop 361 l., linux_desktop 526 l.). Aucune compilation ni exécution GUI depuis le début du chantier (0 invocation cargo/swiftc dans les journaux des quatre agents). Deux références Windows orphelines empêchent la compilation : `DesktopWindow::is_visible` (tray.rs:1054) et `show_diagnostic_window`/`DETAILS_EDIT` supprimés mais encore appelés (tray.rs:3718/3720). ARM64 : CI39832624207 et retrait39828453493 réussis sur source2998946 ; aucun matériel ARM réel, aucune publication | Reprendre par les deux correctifs de compilation puis `cargo check` par cible ; détail exhaustif dans la section « 2026-10-23 — GUI Windows/Linux/macOS et Linux ARM64 — État de reprise » ci-dessous. Aucun merge dans main, aucun tag, release ni déploiement |
+
+## 2026-10-23 — GUI Windows/Linux/macOS et Linux ARM64 — État de reprise
+
+**Statut : travail sauvegardé et documenté. Les nouvelles interfaces GUI n'ont été ni compilées, ni lancées, ni validées. Aucune version 0.21.0 n'est publiée et la branche n'est pas fusionnée dans `main`.**
+
+### Origine et chronologie vérifiées
+
+| Moment | Fait établi | Source |
+| --- | --- | --- |
+| 2026-10-22 19:15 | Retour de l'utilisateur (capture macOS 645×570, mur de diagnostics) : réglages, statut compréhensible, présentation plus soignée | transcription de session |
+| 2026-10-22 19:20 | Contrats d'implémentation du protocole desktop v4 (macOS), puis extension Windows/Linux | `local://mcw-021-macos-gui-contract.md`, `local://mcw-021-windows-linux-gui-contract.md` |
+| 2026-10-22 19:35 | Agents `LinuxFullGui` et `WindowsFullGui` lancés en parallèle de `MacGuiAppKit` | transcription |
+| 2026-10-22 19:44:04 | Les agents Linux et Windows s'arrêtent à 70 ms d'intervalle **sans résumé** : travail interrompu en cours d'écriture | fichiers `.md` vides, derniers enregistrements 19:44:04.332/.401 |
+| 2026-10-23 05:38 | Reprise du parent seul (« continue »), orientée correctifs transverses | transcription |
+| 2026-10-23 05:46:41 | Dernière modification de code (`src/watcher/unix.rs`) | journal d'outils |
+| 2026-10-23 05:51:08 | Arrêt d'urgence demandé pour la politique de confidentialité | transcription |
+
+### A. Objectifs des deux chantiers
+
+- **GUI 0.21.0** : remplacer le mur de diagnostics macOS par une véritable application native retenue, avec trois espaces **Vue d'ensemble / Réglages / Diagnostics**, puis porter la même structure sous **Windows (Win32)** et **Linux (GTK3)**, sans dégrader la CLI, le tray discret, l'autostart silencieux ni les commandes headless.
+- **Linux ARM64** : produire `aarch64-unknown-linux-gnu` et `miccamwatch-linux-aarch64.tar.gz` au même niveau de baseline que x86_64 (glibc 2.35, PipeWire/SPA 0.3.48), avec contrôles ELF stricts et qualification native hébergée.
+
+### B. Fonctionnalités déjà développées
+
+| Plateforme | Fichiers | Contenu développé |
+| --- | --- | --- |
+| macOS | `native/macos_desktop.swift` (+563), `installer/tests/native_macos_menu.py` (375 l. modifiées), `installer/macos/app_smoke.swift` | Fenêtre AppKit retenue à trois onglets, marque et version, cartes clair/sombre, sept langues, protocole v4 strict (bornes, enums, horodatage UTC), actions `enable`/`disable` idempotentes, conservation onglet/focus/défilement au rafraîchissement, captures simulées étiquetées |
+| Rust partagé Unix | `src/frontends/tray/unix.rs` (+723) | `DesktopOverview`, `DesktopAccess`, `DesktopPreferences`, `feedback` borné, projection des accès courants (≤8 lignes, noms ≤256 octets), horodatage d'observation, six commandes de préférences via `Settings::update`, `open_running()` et IPC `open`/`opened` |
+| Windows | `src/frontends/tray.rs` (+305), `src/frontends/tray/windows_desktop.rs` (**nouveau**, 361 l.), `src/bin/mcw-tray.rs`, `src/main.rs`, `installer/miccamwatch.wxs` | Fenêtre Win32 retenue à onglets, cases de préférences, rendu DPI/thème, ouverture depuis le premier élément de menu et au double-clic, argument `--open` sur le raccourci du menu Démarrer |
+| Linux | `src/frontends/tray/linux_desktop.rs` (**nouveau**, 526 l.) | Fenêtre GTK3 chargée paresseusement par `dlopen` (aucune dépendance Cargo ajoutée), trois onglets, sept langues, erreur explicite si GTK3 ou session graphique manquante, CLI/tray conservés si GTK absent |
+| Entrées CLI | `src/frontends/cli.rs` | `mcw tray open` rendu disponible hors macOS (deux attributs `cfg` retirés) |
+
+### C. Travaux inachevés et erreurs de compilation identifiées par inspection
+
+| Problème | Emplacement | Preuve |
+| --- | --- | --- |
+| `DesktopWindow::is_visible` **n'existe pas** | appelé `src/frontends/tray.rs:1054` | `impl DesktopWindow` ne définit que `create`, `show`, `update`, `destroy` |
+| `show_diagnostic_window` et `DETAILS_EDIT` **supprimés** mais encore appelés | `src/frontends/tray.rs:3718` et `:3720` | présents dans `HEAD` (l. 115 et 1902), absents de l'arbre de travail ; le pilote de preuve Windows ne compile donc pas |
+
+Sont également manquants, sans être des erreurs de compilation : le **script de preuve natif Windows**, le **script de preuve natif Linux GTK** et toute **capture réelle** des nouvelles fenêtres.
+
+### D. Tests exécutés et non exécutés
+
+**Exécutés** : audit statique (inspection des symboles, `grep`, lecture des diffs) ; `ast.parse` valide sur `installer/tests/native_macos_menu.py` ; contrôles `git` de périmètre. **Aucun test des interfaces GUI.**
+
+**Jamais exécutés** : `cargo check`, `clippy`, `cargo test` sur les trois cibles ; `swiftc`/`build.rs` du helper macOS ; `native_macos_menu.py` réel (ARM/Intel) ; `app_smoke.swift` sur application construite ; fenêtre GTK3 réelle ; fenêtre Win32 réelle ; vérification du dialogue UAC et des contrôles depuis la nouvelle fenêtre.
+
+**Preuve de non-exécution** : `grep` sur les quatre transcriptions d'agents (`MacGuiRust`, `MacGuiAppKit`, `LinuxFullGui`, `WindowsFullGui`) renvoie **0 invocation `cargo`**, et le seul `bash` du parent entre 05:38 et 05:51 est un `git commit` documentaire.
+
+### E. Linux ARM64 — état réel
+
+- **Développé et commité** (`292e850`, `9ff3471`, `e6ea9a1`, `a4ecf93`, `2998946`) : version `0.21.0`, cible `aarch64-unknown-linux-gnu`, archive dédiée, contrôles ELF64 (machine 62/183) sur les **deux** binaires avant sonde, runner `ubuntu-22.04-arm`, `MISSING_BASELINES` explicite, `release.yml` exige désormais l'asset aarch64.
+- **Tests réussis (CI hébergée)** : `39832624207` sur source `2998946` — Windows, Linux x64, **Linux ARM**, macOS Intel et ARM ; `39828453493` — retrait natif géré/Cargo sur quatre Unix, données conservées. Artefacts ARM relus : `uname`/`rustc`/`cc` natifs, glibc 2.35, headers PipeWire/SPA 0.3.48 ARM, 14 refus ELF de l'installateur, root read-only/rollback, six pannes PipeWire sans faux STOP, panneau/menu/autostart sur VM.
+- **Non validé** : aucune **machine ARM physique** (Raspberry Pi/SBC), aucune **caméra USB réelle** sur ARM, aucun **bureau ARM réel** (panel/menu), budget 15 Mo non revendiqué, aucune baseline historique ARM64 pour la migration ou les ressources.
+- **Non publié** : dernière release `v0.20.0`, aucun tag `v0.21.0`, aucun asset ARM public.
+
+**À retenir** : Linux ARM64 est *compilé et qualifié en machine virtuelle hébergée*, **pas** pris en charge officiellement et **pas** validé matériellement. D'autres architectures (ARMv7, 32 bits, musl) restent hors périmètre.
+
+### F. Modifications transversales (notifications, sons, confidentialité)
+
+| Fichier | Changement | Tests ajoutés |
+| --- | --- | --- |
+| `src/notify.rs` | `toast_document(..., sound)` : le son du toast Windows obéit à la préférence utilisateur | 1 |
+| `src/watcher/unix.rs` | `alert_delivery` : notification et son filtrés **indépendamment** par la pause et les préférences | 1 |
+| `src/privacy/macos.rs` | Préflight passif d'inspection caméra : échec passif → consentement administrateur explicite, jamais un état inventé | 4 |
+
+Ces trois correctifs conditionnent les réglages exposés par la nouvelle GUI ; ils n'ont pas non plus été compilés ni exécutés.
+
+### G. Fichiers de cette sauvegarde
+
+12 fichiers suivis modifiés (`+1765/−497`) : `installer/macos/app_smoke.swift`, `installer/miccamwatch.wxs`, `installer/tests/native_macos_menu.py`, `native/macos_desktop.swift`, `src/bin/mcw-tray.rs`, `src/frontends/cli.rs`, `src/frontends/tray.rs`, `src/frontends/tray/unix.rs`, `src/main.rs`, `src/notify.rs`, `src/privacy/macos.rs`, `src/watcher/unix.rs`.
+2 fichiers nouveaux : `src/frontends/tray/windows_desktop.rs`, `src/frontends/tray/linux_desktop.rs`.
+Plus ce document. **Volontairement exclus** (non supprimés) : `.wrangler/` (cache d'outil), `installer/tests/__pycache__/` (artefacts compilés), `WATCHDOG.yml` (configuration d'agent), `debug_macos/` (utilitaire de diagnostic du 2026-10-05, antérieur au chantier), `docs/next_projects.md` (roadmap du 2026-10-06, remplacée par ce fichier).
+
+### H. Prochaines étapes, dans l'ordre recommandé
+
+1. Ajouter `DesktopWindow::is_visible` et retirer ou réécrire le pilote de preuve qui appelle `show_diagnostic_window`/`DETAILS_EDIT`.
+2. Exécuter `cargo check` puis `clippy -D warnings` et `cargo test` par cible (Windows, Linux, macOS) ; corriger les erreurs révélées, non prévisibles par inspection seule.
+3. Merger `main` dans la branche (confidentialité + SEO), en résolvant **uniquement** le conflit attendu de `docs/ROADMAP.md` (les deux côtés ajoutent des lignes en fin de journal).
+4. Qualifier les surfaces réelles : helper macOS sur ARM et Intel, fenêtre GTK3 sur Linux x64, fenêtre Win32 sur Windows ; créer les deux scripts de preuve manquants.
+5. Valider les trois correctifs transversaux (toast/son, gating des alertes, préflight caméra macOS).
+6. Linux ARM64 : preuve matérielle Raspberry Pi/SBC (micro observable, caméra USB conforme, bureau réel), puis décision de publication `0.21.0`.
+7. Mettre à jour README/roadmap et ne publier qu'après qualification complète.
+
+## Instructions pour le prochain agent IA
+
+1. **Lire cette section et la section précédente avant toute action.** Le dépôt contient du travail non compilé ; ne pas le présenter comme terminé.
+2. **Branche de reprise : `work/linux-arm64-021`**, HEAD = commit `wip(0.21.0): preserve GUI implementation and ARM64 handoff`. Ne pas repartir de `main` : `main` ne contient ni GUI ni ARM64.
+3. **Ne rien réinitialiser.** Les 12 fichiers modifiés et 2 modules nouveaux sont la seule copie du travail. `.wrangler/`, `WATCHDOG.yml`, `debug_macos/`, `docs/next_projects.md` et `installer/tests/__pycache__/` sont volontairement hors dépôt : ne pas les supprimer, ne pas les committer.
+4. **Deux erreurs de compilation connues** sont listées en section C. Les corriger en premier, puis compiler ; toute autre erreur est encore inconnue.
+5. **Aucun merge, tag, release ou déploiement** n'a été effectué. `main` (confidentialité, SEO, README) est intact et doit le rester jusqu'à validation.
+6. **Ne jamais déclarer** Linux ARM64 « pris en charge », la GUI « terminée », une capture « réelle » ou un test « réussi » sans exécution correspondante. Les seules preuves disponibles sont les runs CI cités en section E.
+7. Écrire les commits par lot cohérent, avec preuves ; mettre à jour ce journal à chaque étape franchie.

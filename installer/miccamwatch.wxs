@@ -37,6 +37,7 @@
                 Directory="ProgramMenuFolder"
                 Name="MicCamWatch"
                 Description="MicCamWatch Privacy Control Center"
+                Arguments="--open"
                 WorkingDirectory="INSTALLFOLDER"
                 Advertise="no"
                 Icon="MicCamWatchIcon"

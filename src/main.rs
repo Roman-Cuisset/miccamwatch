@@ -68,7 +68,6 @@ fn run() -> Result<u8> {
     if matches!(&cli.command, Command::Uninstall) {
         return uninstall::run();
     }
-    #[cfg(target_os = "macos")]
     if matches!(
         &cli.command,
         Command::Tray {
@@ -270,7 +269,7 @@ fn run() -> Result<u8> {
             TrayCommand::Run => {
                 let monitor = PlatformMonitor::new(policy.clone())?;
                 #[cfg(windows)]
-                tray::run_tray(monitor, policy, lang, settings, cli.config.is_some())?;
+                tray::run_tray(monitor, policy, lang, settings, cli.config.is_some(), false)?;
                 #[cfg(unix)]
                 tray::run_tray(
                     monitor,
@@ -279,14 +278,15 @@ fn run() -> Result<u8> {
                     settings,
                     cli.config.is_some(),
                     tray_eventlog,
-                    #[cfg(target_os = "macos")]
                     false,
                 )?;
                 Ok(0)
             }
-            #[cfg(target_os = "macos")]
             TrayCommand::Open => {
                 let monitor = PlatformMonitor::new(policy.clone())?;
+                #[cfg(windows)]
+                tray::run_tray(monitor, policy, lang, settings, cli.config.is_some(), true)?;
+                #[cfg(unix)]
                 tray::run_tray(
                     monitor,
                     policy,

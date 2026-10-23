@@ -33,7 +33,7 @@ func children(_ element: AXUIElement) -> [AXUIElement] {
     attribute(element, kAXChildrenAttribute) as? [AXUIElement] ?? []
 }
 func descendants(_ element: AXUIElement, depth: Int = 0) -> [AXUIElement] {
-    if depth > 8 { return [] }
+    if depth > 16 { return [] }
     return [element] + children(element).flatMap { descendants($0, depth: depth + 1) }
 }
 let application = AXUIElementCreateApplication(pid)
@@ -48,9 +48,28 @@ if operation != "quit" {
             guard (attribute(window, kAXRoleAttribute) as? String) == kAXWindowRole else {
                 stop("consultation is not a native window")
             }
-            guard descendants(window).contains(where: {
-                (attribute($0, kAXRoleAttribute) as? String) == kAXTextAreaRole
-            }) else { stop("consultation has no readable native snapshot document") }
+            guard let sections = descendants(window).first(where: {
+                (attribute($0, kAXRoleAttribute) as? String) == kAXTabGroupRole
+            }), let tabs = attribute(sections, kAXTabsAttribute) as? [AXUIElement], tabs.count == 3 else {
+                stop("consultation has no accessible native Overview/Settings/Diagnostics tabs")
+            }
+            // Only local navigation: never press settings/device/admin controls.
+            guard AXUIElementPerformAction(tabs[1], kAXPressAction as CFString) == .success else {
+                stop("native Settings tab is not accessible")
+            }
+            let settings = descendants(window)
+            guard settings.filter({ (attribute($0, kAXRoleAttribute) as? String) == kAXCheckBoxRole }).count == 3,
+                  settings.contains(where: { (attribute($0, kAXRoleAttribute) as? String) == kAXPopUpButtonRole }) else {
+                stop("native Settings lacks preference checkboxes or profile chooser")
+            }
+            guard AXUIElementPerformAction(tabs[2], kAXPressAction as CFString) == .success,
+                  descendants(window).contains(where: {
+                      (attribute($0, kAXRoleAttribute) as? String) == kAXTextAreaRole &&
+                      (attribute($0, kAXValueAttribute) as? String)?.isEmpty == false
+                  }) else { stop("native Diagnostics document is not accessible/readable") }
+            guard AXUIElementPerformAction(tabs[0], kAXPressAction as CFString) == .success else {
+                stop("native Overview tab is not accessible")
+            }
             if operation == "close-window" {
                 guard let close = attribute(window, kAXCloseButtonAttribute),
                       CFGetTypeID(close) == AXUIElementGetTypeID(),
@@ -58,7 +77,7 @@ if operation != "quit" {
                     stop("native consultation close button unavailable")
                 }
             }
-            print("{\"native_consultation\":\"\(operation)\",\"window_count\":1,\"helper_pid\":\(pid)}")
+            print("{\"native_consultation\":\"\(operation)\",\"window_count\":1,\"native_sections\":3,\"helper_pid\":\(pid)}")
             exit(0)
         }
         if consultation.count > 1 { stop("duplicate native consultation windows") }

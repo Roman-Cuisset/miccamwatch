@@ -116,12 +116,8 @@ impl EventDispatcher {
         {
             eprintln!("system journal delivery failed: {error:#}");
         }
-        let alerts_enabled = settings.notifications_enabled && !settings.notifications_paused();
-        let notify = self.notify && alerts_enabled;
-        let sound = self.sound
-            && alerts_enabled
-            && matches!(action, Action::Start)
-            && access.activity == Activity::Active;
+        let (notify, sound) =
+            alert_delivery(&settings, self.notify, self.sound, access.activity, action);
         if (notify || sound) && self.alert_due(&access.key) {
             if sound && let Err(error) = platform::play_chime() {
                 eprintln!("chime failed: {error:#}");
@@ -153,6 +149,21 @@ impl EventDispatcher {
         self.cooldown.insert(key.to_owned(), now);
         true
     }
+}
+
+fn alert_delivery(
+    settings: &Settings,
+    notifications_requested: bool,
+    sound_requested: bool,
+    activity: Activity,
+    action: Action,
+) -> (bool, bool) {
+    let enabled = settings.notifications_enabled && !settings.notifications_paused();
+    (
+        notifications_requested && enabled,
+        sound_requested && settings.sound_enabled && enabled
+            && matches!(action, Action::Start) && activity == Activity::Active,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -365,6 +376,52 @@ mod tests {
             accesses,
             observation_gaps: Vec::new(),
         }
+    }
+
+    #[test]
+    fn pause_and_capture_phase_gate_notifications_and_sound_independently() {
+        let mut settings = Settings {
+            notifications_enabled: true,
+            sound_enabled: true,
+            pause_notifications_until: None,
+            ..Settings::default()
+        };
+        assert_eq!(
+            alert_delivery(&settings, true, true, Activity::Active, Action::Start),
+            (true, true)
+        );
+        for (activity, action) in [
+            (Activity::Ready, Action::Start),
+            (Activity::Active, Action::Update),
+            (Activity::Active, Action::Stop),
+        ] {
+            assert_eq!(alert_delivery(&settings, true, true, activity, action), (true, false));
+        }
+        assert_eq!(
+            alert_delivery(&settings, false, true, Activity::Active, Action::Start),
+            (false, true)
+        );
+        assert_eq!(
+            alert_delivery(&settings, true, false, Activity::Active, Action::Start),
+            (true, false)
+        );
+        settings.sound_enabled = false;
+        assert_eq!(
+            alert_delivery(&settings, true, true, Activity::Active, Action::Start),
+            (true, false)
+        );
+        settings.sound_enabled = true;
+        settings.pause_notifications_until = Some(Utc::now() + chrono::Duration::days(1));
+        assert_eq!(
+            alert_delivery(&settings, true, true, Activity::Active, Action::Start),
+            (false, false)
+        );
+        settings.pause_notifications_until = None;
+        settings.notifications_enabled = false;
+        assert_eq!(
+            alert_delivery(&settings, true, true, Activity::Active, Action::Start),
+            (false, false)
+        );
     }
 
     #[test]

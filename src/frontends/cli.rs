@@ -148,7 +148,6 @@ pub enum TrayCommand {
     /// Run the notification-area service in this process
     Run,
     /// Open or reopen the native consultation window without another frontend
-    #[cfg(target_os = "macos")]
     Open,
     /// Stop the running notification-area service
     Stop,
@@ -580,7 +579,6 @@ fn command_help(name: &str, root: bool, lang: Language) -> Option<&'static str> 
             "移除此受管安装并保留用户数据",
             "Удалить эту управляемую установку, сохранив данные пользователя",
         ],
-        #[cfg(target_os = "macos")]
         "open" => [
             "Open the native consultation window without a duplicate frontend",
             "Ouvrir la fenêtre native sans créer de doublon",

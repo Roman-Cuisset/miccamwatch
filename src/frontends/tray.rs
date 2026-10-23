@@ -66,6 +66,9 @@ use windows::{
 #[path = "tray/windows_audio.rs"]
 mod microphone_worker;
 
+#[path = "tray/windows_desktop.rs"]
+mod windows_desktop;
+
 #[link(name = "user32")]
 unsafe extern "system" {
     fn SetProcessDpiAwarenessContext(context: isize) -> i32;
@@ -112,11 +115,7 @@ const CMD_PROFILE_MEETING: usize = 111;
 const CMD_PROFILE_DEVELOPMENT: usize = 112;
 const CMD_DETAILS: usize = 107;
 const CMD_RESUME_CAMERA: usize = 108;
-const DETAILS_EDIT: i32 = 201;
-const DETAILS_COPY: usize = 202;
-// Standard EDIT messages (no common-controls dependency).
-const EM_SETSEL: u32 = 0x00b1;
-const EM_SETLIMITTEXT: u32 = 0x00c5;
+const WM_DESKTOP_SETTING: u32 = WM_APP + 5;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TrayVisual {
@@ -147,6 +146,7 @@ impl Drop for MutexGuard {
 
 struct TrayRefresh {
     snapshot: Result<Snapshot, String>,
+    observed_at: chrono::DateTime<chrono::Utc>,
     microphone: Result<MicrophoneProtectionStatus, String>,
     microphone_generation: u64,
     camera: Result<CameraControlObservation, String>,
@@ -234,6 +234,9 @@ struct TrayAppState {
     lang: Language,
     visual: TrayVisual,
     summary: String,
+    desktop: Option<windows_desktop::DesktopWindow>,
+    overview: windows_desktop::Overview,
+    settings_error: Option<String>,
     mute_state: MicrophoneMuteState,
     camera_state: CameraPrivacyState,
     microphone_protection: Option<MicrophoneProtectionStatus>,
@@ -324,6 +327,7 @@ fn start_refresh_worker(
             Err(error) => {
                 let _ = sender.send(TrayRefresh {
                     snapshot: Err(format!("{error:#}")),
+                    observed_at: chrono::Utc::now(),
                     microphone: Err(format!("{error:#}")),
                     microphone_generation: 0,
                     camera: Err("Camera observation unavailable".to_owned()),
@@ -406,6 +410,7 @@ fn start_refresh_worker(
                 &sender,
                 TrayRefresh {
                     snapshot,
+                    observed_at: chrono::Utc::now(),
                     microphone,
                     microphone_generation,
                     camera: camera.clone(),
@@ -479,6 +484,7 @@ pub fn run_tray(
     lang: Language,
     settings: Settings,
     explicit_policy: bool,
+    initial_window: bool,
 ) -> Result<()> {
     enable_dpi_awareness();
     let mutex_name = format_wide("Local\\MicCamWatch.Tray");
@@ -529,6 +535,9 @@ pub fn run_tray(
         // the first observation, brand neutrally rather than asserting inactivity.
         visual: TrayVisual::Error,
         summary: "miccamwatch".to_owned(),
+        desktop: None,
+        overview: windows_desktop::Overview::default(),
+        settings_error: None,
         settings,
         explicit_policy,
         lock_state,
@@ -621,6 +630,9 @@ pub fn run_tray(
         anyhow::bail!("failed to start tray polling timer");
     }
 
+    if initial_window {
+        open_desktop(hwnd);
+    }
     println!("miccamwatch tray running. Click the icon near the clock to open the menu.");
     let mut message = MSG::default();
     let loop_result = loop {
@@ -630,6 +642,9 @@ pub fn run_tray(
         }
         if result.0 == 0 {
             break Ok(());
+        }
+        if windows_desktop::translate_message(&message) {
+            continue;
         }
         unsafe {
             let _ = TranslateMessage(&message);
@@ -654,6 +669,16 @@ pub fn is_running() -> bool {
 
 pub fn stop_running() -> Result<bool> {
     crate::updater::stop_installed_tray()
+}
+
+/// Request the existing tray's modeless desktop window without touching devices.
+pub fn open_running() -> Result<bool> {
+    let class = format_wide("MicCamWatchTrayClass");
+    let Ok(hwnd) = (unsafe { FindWindowW(PCWSTR(class.as_ptr()), PCWSTR::null()) }) else {
+        return Ok(false);
+    };
+    unsafe { PostMessageW(Some(hwnd), WM_COMMAND, WPARAM(CMD_DETAILS), LPARAM(0))? };
+    Ok(true)
 }
 
 fn state(hwnd: HWND) -> Option<&'static mut TrayAppState> {
@@ -690,10 +715,8 @@ unsafe extern "system" fn tray_wnd_proc(
         }
         WM_TRAY_CALLBACK => {
             match lparam.0 as u32 {
-                // A plain left click opens the menu, matching what users expect from
-                // other tray applications. Double clicks keep the status toast.
                 WM_LBUTTONUP | WM_RBUTTONUP => show_context_menu(hwnd),
-                WM_LBUTTONDBLCLK => show_status_toast(hwnd),
+                WM_LBUTTONDBLCLK => open_desktop(hwnd),
                 _ => {}
             }
             LRESULT(0)
@@ -702,6 +725,7 @@ unsafe extern "system" fn tray_wnd_proc(
             if let Some(state) = state(hwnd) {
                 handle_worker_results(state);
             }
+            refresh_desktop(hwnd);
             LRESULT(0)
         }
         WM_COMMAND => {
@@ -715,13 +739,7 @@ unsafe extern "system" fn tray_wnd_proc(
                 CMD_PROFILE_PRIVATE => select_profile(hwnd, PrivacyProfile::Private),
                 CMD_PROFILE_MEETING => select_profile(hwnd, PrivacyProfile::Meeting),
                 CMD_PROFILE_DEVELOPMENT => select_profile(hwnd, PrivacyProfile::Development),
-                CMD_DETAILS => {
-                    if let Some(state) = state(hwnd)
-                        && let Err(error) = show_diagnostic_window(hwnd, &state.summary)
-                    {
-                        notify_async(state, "MicCamWatch details", &format!("{error:#}"));
-                    }
-                }
+                CMD_DETAILS => open_desktop(hwnd),
                 CMD_EXIT if request_safe_close(hwnd) == UPDATE_BUSY => {
                     if let Some(state) = state(hwnd) {
                         notify_async(
@@ -733,11 +751,20 @@ unsafe extern "system" fn tray_wnd_proc(
                 }
                 _ => {}
             }
+            refresh_desktop(hwnd);
+            LRESULT(0)
+        }
+        WM_DESKTOP_SETTING => {
+            apply_desktop_setting(hwnd, wparam.0, lparam.0 != 0);
+            refresh_desktop(hwnd);
             LRESULT(0)
         }
         WM_DESTROY => {
             if let Some(state) = state(hwnd) {
                 state.hwnd_cell.store(0, Ordering::Relaxed);
+                if let Some(desktop) = state.desktop.take() {
+                    desktop.destroy();
+                }
             }
             unsafe { PostQuitMessage(0) };
             LRESULT(0)
@@ -1010,13 +1037,25 @@ fn accepts_control_refresh(
 fn refresh_state(hwnd: HWND, state: &mut TrayAppState) {
     // Preferences are read now, never copied from an older queued observation:
     // a pre-click collector frame must not roll back a successful menu update.
-    if let Ok(settings) = Settings::load() {
-        state.settings = settings;
+    match Settings::load() {
+        Ok(settings) => {
+            if !settings.history_enabled {
+                state.previous_accesses.clear();
+            }
+            state.settings = settings;
+        }
+        Err(error) => state.settings_error = Some(format!("{error:#}")),
     }
     // Consume each retained observation, then display the newest. Intermediate
     // lock/unlock and capture transitions carry effects and cannot be skipped.
     while let Some(refresh) = next_refresh(&state.refreshes, state.pending_microphone) {
         apply_refresh(hwnd, state, refresh);
+    }
+    if state.desktop.as_ref().is_some_and(windows_desktop::DesktopWindow::is_visible) {
+        let view = windows_desktop::View::from_state(state);
+        if let Some(desktop) = &mut state.desktop {
+            desktop.update(view);
+        }
     }
 }
 
@@ -1061,6 +1100,9 @@ fn apply_refresh(hwnd: HWND, state: &mut TrayAppState, refresh: TrayRefresh) {
     if let Ok(snapshot) = &refresh.snapshot {
         record_history_changes(state, snapshot);
     }
+    state.overview = windows_desktop::Overview::from_snapshot(
+        refresh.snapshot.as_ref().map_err(String::as_str), state.lang, refresh.observed_at,
+    );
     let (visual, summary) = refreshed_status(
         refresh.snapshot.as_ref().map_err(String::as_str),
         TrayStatus {
@@ -1105,6 +1147,7 @@ fn apply_refresh(hwnd: HWND, state: &mut TrayAppState, refresh: TrayRefresh) {
 
 fn record_history_changes(state: &mut TrayAppState, snapshot: &Snapshot) {
     if !state.settings.history_enabled {
+        state.previous_accesses.clear();
         return;
     }
     let current = history_current(&state.previous_accesses, snapshot);
@@ -1726,9 +1769,13 @@ fn toggle_notifications(hwnd: HWND) {
             Some(chrono::Utc::now() + chrono::Duration::hours(1))
         };
     }) {
-        Ok(settings) => state.settings = settings,
+        Ok(settings) => {
+            state.settings = settings;
+            state.settings_error = None;
+        }
         Err(error) => {
             state.summary = format!("miccamwatch: settings update failed: {error:#}");
+            state.settings_error = Some(state.summary.clone());
             notify_async(state, "MicCamWatch settings", &state.summary.clone());
         }
     }
@@ -1742,6 +1789,7 @@ fn toggle_autostart(hwnd: HWND) {
     };
     if let Err(error) = result {
         state.summary = format!("miccamwatch: autostart failed: {error}");
+        state.settings_error = Some(state.summary.clone());
     }
     state.autostart_state =
         crate::autostart::state().unwrap_or(crate::autostart::AutostartState::Disabled);
@@ -1758,9 +1806,13 @@ fn update_profile(explicit_policy: bool, profile: PrivacyProfile) -> Result<Sett
 fn select_profile(hwnd: HWND, profile: PrivacyProfile) {
     let Some(state) = state(hwnd) else { return };
     match update_profile(state.explicit_policy, profile) {
-        Ok(settings) => state.settings = settings,
+        Ok(settings) => {
+            state.settings = settings;
+            state.settings_error = None;
+        }
         Err(error) => {
             state.summary = format!("miccamwatch: settings update failed: {error:#}");
+            state.settings_error = Some(state.summary.clone());
             notify_async(state, "MicCamWatch settings", &state.summary.clone());
         }
     }
@@ -1899,162 +1951,77 @@ fn diagnostic_document(summary: &str) -> String {
     document
 }
 
-fn show_diagnostic_window(owner: HWND, summary: &str) -> Result<HWND> {
-    let class = format_wide("MicCamWatchDetailsClass");
-    let title = format_wide("MicCamWatch — status details");
-    unsafe {
-        let _ = RegisterClassW(&WNDCLASSW {
-            hbrBackground: GetSysColorBrush(COLOR_WINDOW),
-            lpfnWndProc: Some(details_wnd_proc),
-            lpszClassName: PCWSTR(class.as_ptr()),
-            ..Default::default()
-        });
-        let work = monitor_work_area(owner);
-        let dpi = GetDpiForWindow(owner).max(96) as i32;
-        let width = (640 * dpi / 96).min(work.right - work.left);
-        let height = (420 * dpi / 96).min(work.bottom - work.top);
-        let hwnd = CreateWindowExW(
-            WINDOW_EX_STYLE(0),
-            PCWSTR(class.as_ptr()),
-            PCWSTR(title.as_ptr()),
-            WS_OVERLAPPEDWINDOW,
-            work.left + (work.right - work.left - width) / 2,
-            work.top + (work.bottom - work.top - height) / 2,
-            width,
-            height,
-            Some(owner),
-            None,
-            None,
-            None,
-        )
-        .context("create status details window")?;
-        let result = (|| -> Result<()> {
-            let font = native_menu_font(owner).context("load native status font")?;
-            SetWindowLongPtrW(hwnd, GWLP_USERDATA, font.0 as isize);
-            let edit_class = format_wide("EDIT");
-            let edit = CreateWindowExW(
-                WS_EX_CLIENTEDGE,
-                PCWSTR(edit_class.as_ptr()),
-                PCWSTR::null(),
-                WS_CHILD
-                    | WS_VISIBLE
-                    | WS_VSCROLL
-                    | WS_TABSTOP
-                    | WINDOW_STYLE((ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL) as u32),
-                0,
-                0,
-                0,
-                0,
-                Some(hwnd),
-                Some(HMENU(DETAILS_EDIT as *mut _)),
-                None,
-                None,
-            )?;
-            SendMessageW(edit, EM_SETLIMITTEXT, Some(WPARAM(0x7fff_fffe)), None);
-            let document = format_wide(&diagnostic_document(summary));
-            SetWindowTextW(edit, PCWSTR(document.as_ptr()))?;
-            SendMessageW(
-                edit,
-                WM_SETFONT,
-                Some(WPARAM(font.0 as usize)),
-                Some(LPARAM(1)),
-            );
-            let button_class = format_wide("BUTTON");
-            let copy_text = format_wide("Copy all");
-            let copy = CreateWindowExW(
-                WINDOW_EX_STYLE(0),
-                PCWSTR(button_class.as_ptr()),
-                PCWSTR(copy_text.as_ptr()),
-                WS_CHILD | WS_VISIBLE | WS_TABSTOP,
-                0,
-                0,
-                0,
-                0,
-                Some(hwnd),
-                Some(HMENU(DETAILS_COPY as *mut _)),
-                None,
-                None,
-            )?;
-            SendMessageW(
-                copy,
-                WM_SETFONT,
-                Some(WPARAM(font.0 as usize)),
-                Some(LPARAM(1)),
-            );
-            layout_details(hwnd);
-            let _ = ShowWindow(hwnd, SW_SHOW);
-            let _ = SetForegroundWindow(hwnd);
-            Ok(())
-        })();
-        if let Err(error) = result {
-            let _ = DestroyWindow(hwnd);
-            return Err(error).context("create status details controls");
+fn open_desktop(hwnd: HWND) {
+    let Some(state) = state(hwnd) else { return };
+    if state.desktop.is_none() {
+        match windows_desktop::DesktopWindow::create(
+            hwnd, windows_desktop::View::from_state(state), state.green_icon,
+        ) {
+            Ok(desktop) => state.desktop = Some(desktop),
+            Err(error) => {
+                state.settings_error = Some(format!("MicCamWatch window: {error:#}"));
+                notify_async(state, "MicCamWatch", &format!("{error:#}"));
+                return;
+            }
         }
-        Ok(hwnd)
+    }
+    let view = windows_desktop::View::from_state(state);
+    if let Some(desktop) = &mut state.desktop {
+        desktop.update(view);
+    }
+    if let Some(desktop) = &state.desktop {
+        desktop.show();
     }
 }
 
-fn layout_details(hwnd: HWND) {
-    unsafe {
-        let mut rect = RECT::default();
-        let _ = GetClientRect(hwnd, &mut rect);
-        let unit = GetDpiForWindow(hwnd).max(96) as i32;
-        let margin = 12 * unit / 96;
-        let button_height = 30 * unit / 96;
-        if let Ok(edit) = GetDlgItem(Some(hwnd), DETAILS_EDIT) {
-            let _ = MoveWindow(
-                edit,
-                margin,
-                margin,
-                (rect.right - 2 * margin).max(1),
-                (rect.bottom - 3 * margin - button_height).max(1),
-                true,
-            );
-        }
-        if let Ok(copy) = GetDlgItem(Some(hwnd), DETAILS_COPY as i32) {
-            let _ = MoveWindow(
-                copy,
-                margin,
-                (rect.bottom - margin - button_height).max(0),
-                110 * unit / 96,
-                button_height,
-                true,
-            );
+fn refresh_desktop(hwnd: HWND) {
+    let Some(state) = state(hwnd) else { return };
+    if state.desktop.is_some() {
+        let view = windows_desktop::View::from_state(state);
+        if let Some(desktop) = &mut state.desktop {
+            desktop.update(view);
         }
     }
 }
 
-unsafe extern "system" fn details_wnd_proc(
-    hwnd: HWND,
-    message: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> LRESULT {
-    match message {
-        WM_SIZE => {
-            layout_details(hwnd);
-            LRESULT(0)
-        }
-        WM_COMMAND if wparam.0 & 0xffff == DETAILS_COPY => {
-            if let Ok(edit) = unsafe { GetDlgItem(Some(hwnd), DETAILS_EDIT) } {
-                unsafe {
-                    SendMessageW(edit, EM_SETSEL, Some(WPARAM(0)), Some(LPARAM(-1)));
-                    SendMessageW(edit, WM_COPY, None, None);
+fn update_desktop_preferences(id: usize, desired: bool) -> Result<Settings> {
+    use windows_desktop::*;
+    anyhow::ensure!(matches!(id, NOTIFICATIONS | SOUND | HISTORY | PAUSE | MUTE_LOCK | CAMERA_LOCK | RESTORE_UNLOCK), "Unsupported preference");
+    Settings::update(|settings| match id {
+        NOTIFICATIONS => settings.notifications_enabled = desired,
+        SOUND => settings.sound_enabled = desired,
+        HISTORY => settings.history_enabled = desired,
+        PAUSE => {
+            if desired {
+                if !settings.notifications_paused() {
+                    settings.pause_notifications_until = Some(chrono::Utc::now() + chrono::Duration::hours(1));
                 }
+            } else {
+                settings.pause_notifications_until = None;
             }
-            LRESULT(0)
         }
-        // This modeless owned window must never quit/block the tray event loop:
-        // pending camera results and updater shutdown safety continue unchanged.
-        windows::Win32::UI::WindowsAndMessaging::WM_NCDESTROY => {
-            let font = HFONT(unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *mut _);
-            if !font.is_invalid() {
-                let _ = unsafe { DeleteObject(font.into()) };
-            }
-            unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
-        }
-        _ => unsafe { DefWindowProcW(hwnd, message, wparam, lparam) },
-    }
+        MUTE_LOCK => settings.mute_on_lock = desired,
+        CAMERA_LOCK => settings.block_camera_on_lock = desired,
+        RESTORE_UNLOCK => settings.restore_on_unlock = desired,
+        _ => unreachable!(),
+    })
+}
+
+fn apply_desktop_setting(hwnd: HWND, id: usize, desired: bool) {
+    let Some(state) = state(hwnd) else { return };
+    let result = if id == windows_desktop::AUTOSTART {
+        let result = if desired { crate::autostart::enable() } else { crate::autostart::disable() };
+        result.and_then(|()| {
+            state.autostart_state = crate::autostart::state()?;
+            Ok(())
+        })
+    } else {
+        update_desktop_preferences(id, desired).map(|settings| {
+            if !settings.history_enabled { state.previous_accesses.clear(); }
+            state.settings = settings;
+        })
+    };
+    state.settings_error = result.err().map(|error| format!("{error:#}"));
 }
 
 fn camera_allow_label(lang: Language) -> &'static str {
@@ -2156,10 +2123,10 @@ fn build_context_menu(
     } = profile_state;
     unsafe {
         let menu = CreatePopupMenu()?;
+        let open = format_wide(windows_desktop::open_label(lang));
+        let _ = AppendMenuW(menu, MF_STRING, CMD_DETAILS, PCWSTR(open.as_ptr()));
         append_disabled(menu, &format!("miccamwatch v{}", env!("CARGO_PKG_VERSION")));
         append_disabled(menu, &compact_menu_summary(hwnd, summary));
-        let details = format_wide("Status details…");
-        let _ = AppendMenuW(menu, MF_STRING, CMD_DETAILS, PCWSTR(details.as_ptr()));
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
         let mute_text = microphone_requested.map_or(lang.unknown_protection(true), |requested| {
             lang.protection_action(requested)
@@ -2317,10 +2284,6 @@ fn append_disabled(menu: windows::Win32::UI::WindowsAndMessaging::HMENU, text: &
     };
 }
 
-fn show_status_toast(hwnd: HWND) {
-    let Some(state) = state(hwnd) else { return };
-    notify_async(state, "miccamwatch", &state.summary.clone());
-}
 
 fn idle_text(lang: Language) -> &'static str {
     match lang {
@@ -2983,7 +2946,7 @@ mod tests {
         };
         unsafe {
             let mut label = [0u16; 1024];
-            let len = GetMenuStringW(menu, 1, Some(&mut label), MF_BYPOSITION);
+            let len = GetMenuStringW(menu, 2, Some(&mut label), MF_BYPOSITION);
             assert!(len > 0);
             let label = String::from_utf16(&label[..len as usize]).unwrap();
             assert!(!label.chars().any(char::is_control));

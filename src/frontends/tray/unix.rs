@@ -52,6 +52,18 @@ enum Command {
     #[cfg(target_os = "macos")]
     #[serde(rename = "camera_inspect")]
     CameraInspect,
+    #[serde(rename = "notifications_enable")]
+    NotificationsEnable,
+    #[serde(rename = "notifications_disable")]
+    NotificationsDisable,
+    #[serde(rename = "sound_enable")]
+    SoundEnable,
+    #[serde(rename = "sound_disable")]
+    SoundDisable,
+    #[serde(rename = "history_enable")]
+    HistoryEnable,
+    #[serde(rename = "history_disable")]
+    HistoryDisable,
     Autostart,
     Exit,
 }
@@ -67,6 +79,12 @@ impl Command {
             "profile_private" => Some(Self::ProfilePrivate),
             "profile_meeting" => Some(Self::ProfileMeeting),
             "profile_development" => Some(Self::ProfileDevelopment),
+            "notifications_enable" => Some(Self::NotificationsEnable),
+            "notifications_disable" => Some(Self::NotificationsDisable),
+            "sound_enable" => Some(Self::SoundEnable),
+            "sound_disable" => Some(Self::SoundDisable),
+            "history_enable" => Some(Self::HistoryEnable),
+            "history_disable" => Some(Self::HistoryDisable),
             "autostart" => Some(Self::Autostart),
             "exit" => Some(Self::Exit),
             _ => None,
@@ -91,20 +109,17 @@ struct View {
     summary: String,
     visual: &'static str,
     items: Vec<MenuEntry>,
-    #[cfg(target_os = "macos")]
     diagnostics: String,
-    #[cfg(target_os = "macos")]
     limited: bool,
-    #[cfg(target_os = "macos")]
     language: &'static str,
-    #[cfg(target_os = "macos")]
     version: &'static str,
-    #[cfg(target_os = "macos")]
     protection: DesktopProtection,
+    overview: DesktopOverview,
+    preferences: DesktopPreferences,
+    feedback: Option<String>,
     #[cfg(target_os = "linux")]
     details_label: &'static str,
 }
-#[cfg(target_os = "macos")]
 #[derive(Clone, Serialize)]
 struct DesktopProtection {
     microphone: &'static str,
@@ -114,17 +129,124 @@ struct DesktopProtection {
     camera_on_lock: bool,
 }
 
-#[cfg(target_os = "macos")]
+#[derive(Clone, Serialize)]
+struct DesktopAccess {
+    application: String,
+    resource: crate::model::Resource,
+    activity: Activity,
+    pid: Option<u32>,
+}
+
+#[derive(Clone, Serialize)]
+struct DesktopOverview {
+    microphone: &'static str,
+    camera: &'static str,
+    observed_at: Option<String>,
+    total_accesses: usize,
+    omitted_accesses: usize,
+    accesses: Vec<DesktopAccess>,
+    #[serde(skip)]
+    text_limited: bool,
+}
+
+impl Default for DesktopOverview {
+    fn default() -> Self {
+        Self {
+            microphone: "unknown",
+            camera: "unknown",
+            observed_at: None,
+            total_accesses: 0,
+            omitted_accesses: 0,
+            accesses: Vec::new(),
+            text_limited: false,
+        }
+    }
+}
+
+impl DesktopOverview {
+    fn from_snapshot(snapshot: &Snapshot, observed_at: chrono::DateTime<chrono::Utc>) -> Self {
+        let mut text_limited = false;
+        let accesses: Vec<_> = snapshot.accesses.iter().take(8).map(|access| {
+            let (application, limited) = bounded_desktop_string(&access.application, 256);
+            text_limited |= limited;
+            DesktopAccess {
+                application,
+                resource: access.resource,
+                activity: access.activity,
+                pid: access.pid,
+            }
+        }).collect();
+        Self {
+            microphone: desktop_resource_activity(snapshot, crate::model::Resource::Microphone),
+            camera: desktop_resource_activity(snapshot, crate::model::Resource::Camera),
+            observed_at: Some(observed_at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
+            total_accesses: snapshot.accesses.len(),
+            omitted_accesses: snapshot.accesses.len() - accesses.len(),
+            accesses,
+            text_limited,
+        }
+    }
+}
+
+fn desktop_resource_activity(snapshot: &Snapshot, resource: crate::model::Resource) -> &'static str {
+    if snapshot.accesses.iter().any(|access| access.resource == resource && access.activity == Activity::Active) {
+        return "active";
+    }
+    if snapshot.accesses.iter().any(|access| access.resource == resource && access.activity == Activity::Ready) {
+        return "ready";
+    }
+    #[cfg(target_os = "macos")]
+    let collector = match resource {
+        crate::model::Resource::Microphone => "coreaudio_input",
+        crate::model::Resource::Camera => "coremediaio_video",
+    };
+    #[cfg(target_os = "linux")]
+    let collector = match resource {
+        crate::model::Resource::Microphone => "pipewire_audio",
+        crate::model::Resource::Camera => "pipewire_video",
+    };
+    // No rows is not proof of idle. Require the relevant collector to be
+    // present and healthy; degradation or a current gap cannot assert absence.
+    if !snapshot.observation_gaps.contains(&resource)
+        && snapshot.collectors.iter().any(|health| health.collector == collector)
+        && snapshot.collectors.iter().filter(|health| health.collector == collector)
+            .all(|health| health.state == CollectorState::Healthy)
+    {
+        "idle"
+    } else {
+        "unknown"
+    }
+}
+
+#[derive(Clone, Serialize)]
+struct DesktopPreferences {
+    notifications_enabled: bool,
+    sound_enabled: bool,
+    history_enabled: bool,
+    notifications_paused: bool,
+}
+
+fn bounded_desktop_string(text: &str, limit: usize) -> (String, bool) {
+    if text.len() <= limit {
+        return (text.to_owned(), false);
+    }
+    let mut end = limit - DESKTOP_OMISSION.len();
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    let mut bounded = String::with_capacity(limit);
+    bounded.push_str(&text[..end]);
+    bounded.push_str(DESKTOP_OMISSION);
+    (bounded, true)
+}
+
 const DESKTOP_TEXT_BUDGET: usize = 48_000;
-#[cfg(target_os = "macos")]
 const DESKTOP_DIAGNOSTIC_LIMIT: usize = 32_768;
-#[cfg(target_os = "macos")]
 const DESKTOP_OMISSION: &str =
     "\n[… more text omitted by bounded desktop transport; this field is incomplete.]";
 
 // Count JSON-escaped content, not just UTF-8: control characters can expand six
 // times. The remaining 17 KiB of a frame covers the bounded protocol structure.
-#[cfg(target_os = "macos")]
 fn desktop_text_cost(text: &str) -> usize {
     text.bytes()
         .map(|byte| match byte {
@@ -135,7 +257,6 @@ fn desktop_text_cost(text: &str) -> usize {
         .sum()
 }
 
-#[cfg(target_os = "macos")]
 fn project_desktop_text(
     text: &mut String,
     limit: usize,
@@ -171,7 +292,6 @@ fn project_desktop_text(
     true
 }
 
-#[cfg(target_os = "macos")]
 fn bound_desktop_view(view: &mut View) {
     fn field_count(entries: &[MenuEntry]) -> usize {
         entries
@@ -205,7 +325,23 @@ fn bound_desktop_view(view: &mut View) {
         limited
     }
     let mut budget = DESKTOP_TEXT_BUDGET;
-    let mut remaining = 2 + field_count(&view.items);
+    if let Some(observed_at) = &view.overview.observed_at {
+        budget -= desktop_text_cost(observed_at);
+    }
+    let mut remaining = 2 + field_count(&view.items) + view.overview.accesses.len()
+        + usize::from(view.feedback.is_some());
+    // These fields have UTF-8 byte bounds as well as a share of the escaped
+    // text budget. Project them first so their omission markers stay in bounds.
+    for access in &mut view.overview.accesses {
+        view.limited |= project_desktop_text(
+            &mut access.application, 256 * 6, &mut budget, &mut remaining,
+        );
+    }
+    if let Some(feedback) = &mut view.feedback {
+        view.limited |= project_desktop_text(
+            feedback, 2048 * 6, &mut budget, &mut remaining,
+        );
+    }
     view.limited |= project_desktop_text(&mut view.summary, 2048, &mut budget, &mut remaining);
     view.limited |= labels(&mut view.items, &mut budget, &mut remaining);
     view.limited |= project_desktop_text(
@@ -447,7 +583,6 @@ pub(crate) fn stop_current_installation() -> Result<bool> {
     }
 }
 
-#[cfg(target_os = "macos")]
 pub fn open_running() -> Result<bool> {
     match owned_control(b"open\n", false)? {
         None => Ok(false),
@@ -474,7 +609,6 @@ struct Lifecycle {
     finished: Arc<AtomicBool>,
     clean_shutdown: Arc<AtomicBool>,
     server_exit: Arc<AtomicBool>,
-    #[cfg(target_os = "macos")]
     open_requested: Arc<AtomicBool>,
     server: Option<thread::JoinHandle<()>>,
 }
@@ -513,9 +647,7 @@ impl Lifecycle {
         let finished = Arc::new(AtomicBool::new(false));
         let clean_shutdown = Arc::new(AtomicBool::new(false));
         let server_exit = Arc::new(AtomicBool::new(false));
-        #[cfg(target_os = "macos")]
         let open_requested = Arc::new(AtomicBool::new(false));
-        #[cfg(target_os = "macos")]
         let server_open = open_requested.clone();
         let flags = (
             ready.clone(),
@@ -558,7 +690,6 @@ impl Lifecycle {
                                 } else {
                                     "starting\n"
                                 }),
-                                #[cfg(target_os = "macos")]
                                 b"open" => {
                                     if flags.1.load(Ordering::Acquire)
                                         || flags.2.load(Ordering::Acquire)
@@ -618,7 +749,6 @@ impl Lifecycle {
             finished,
             clean_shutdown,
             server_exit,
-            #[cfg(target_os = "macos")]
             open_requested,
             server: Some(server),
         })
@@ -941,6 +1071,11 @@ fn observation_status(snapshot: &Snapshot, lang: Language) -> (String, &'static 
             .collectors
             .iter()
             .any(|health| health.state == CollectorState::Unavailable);
+    #[cfg(target_os = "macos")]
+    let unavailable = unavailable
+        || ["coreaudio_input", "coremediaio_video"].iter().any(|collector| {
+            !snapshot.collectors.iter().any(|health| health.collector == *collector)
+        });
     let partial = !snapshot.observation_gaps.is_empty()
         || snapshot
             .collectors
@@ -994,22 +1129,11 @@ fn observation_status(snapshot: &Snapshot, lang: Language) -> (String, &'static 
             crate::model::Resource::Microphone,
             crate::model::Resource::Camera,
         ] {
-            let activity = if snapshot
-                .accesses
-                .iter()
-                .any(|a| a.resource == resource && a.activity == Activity::Active)
-            {
-                lang.state_str(None, Activity::Active)
-            } else if snapshot
-                .accesses
-                .iter()
-                .any(|a| a.resource == resource && a.activity == Activity::Ready)
-            {
-                lang.state_str(None, Activity::Ready)
-            } else if unavailable || snapshot.observation_gaps.contains(&resource) {
-                words(lang).state_unknown
-            } else {
-                words(lang).idle
+            let activity = match desktop_resource_activity(snapshot, resource) {
+                "active" => lang.state_str(None, Activity::Active),
+                "ready" => lang.state_str(None, Activity::Ready),
+                "idle" => words(lang).idle,
+                _ => words(lang).state_unknown,
             };
             if !summary.is_empty() {
                 summary.push_str(" · ");
@@ -1055,6 +1179,15 @@ fn observation_status(snapshot: &Snapshot, lang: Language) -> (String, &'static 
             );
         }
     }
+    #[cfg(target_os = "macos")]
+    for collector in ["coreaudio_input", "coremediaio_video"] {
+        if !snapshot.collectors.iter().any(|health| health.collector == collector) {
+            let _ = write!(
+                summary,
+                "\n\n{collector}: collector absent from current observation; activity is unknown"
+            );
+        }
+    }
     for resource in &snapshot.observation_gaps {
         let _ = write!(
             summary,
@@ -1084,6 +1217,14 @@ struct CameraInspectionWorker {
 
 #[cfg(target_os = "macos")]
 impl CameraInspectionWorker {
+    fn observe_passive_state(&mut self, state: crate::privacy::CameraPrivacyState) {
+        self.ui.system_managed = state == crate::privacy::CameraPrivacyState::SystemManaged;
+        self.ui.inventory_incomplete = false;
+        self.ui.administrator_required = false;
+        // Keep the timestamped point-in-time inspection result as diagnostics.
+        // A current passive success supersedes only its obsolete action guidance.
+    }
+
     fn start(&mut self, lang: Language) -> Result<()> {
         if self.pending.is_some()
             || !(self.ui.inventory_incomplete || self.ui.administrator_required)
@@ -1142,6 +1283,8 @@ struct MenuContext<'a> {
     inspection: &'a CameraInspectionUi,
     #[cfg(target_os = "macos")]
     requested: [Option<bool>; 2],
+    #[cfg(target_os = "macos")]
+    overview: &'a DesktopOverview,
 }
 
 fn make_view(
@@ -1159,9 +1302,17 @@ fn make_view(
         inspection,
         #[cfg(target_os = "macos")]
         requested,
+        #[cfg(target_os = "macos")]
+        overview,
     } = context;
+    let (desktop_feedback, feedback_limited) = match feedback {
+        Some(text) => {
+            let (text, limited) = bounded_desktop_string(text, 2048);
+            (Some(text), limited)
+        }
+        None => (None, false),
+    };
     let (summary, visual) = status;
-    #[cfg(target_os = "macos")]
     let (summary, diagnostics) = {
         let compact = summary.lines().next().unwrap_or(&summary).to_owned();
         (compact, summary)
@@ -1311,16 +1462,11 @@ fn make_view(
     let view = View {
         kind: "state",
         summary,
-        #[cfg(target_os = "macos")]
         diagnostics,
-        #[cfg(target_os = "macos")]
-        limited: false,
+        limited: feedback_limited,
         visual,
-        #[cfg(target_os = "macos")]
         language: lang.code(),
-        #[cfg(target_os = "macos")]
         version: env!("CARGO_PKG_VERSION"),
-        #[cfg(target_os = "macos")]
         protection: DesktopProtection {
             microphone: match mute {
                 MicrophoneMuteState::Muted => "muted",
@@ -1337,17 +1483,31 @@ fn make_view(
             } else {
                 "absent"
             },
+            #[cfg(target_os = "macos")]
             requested,
+            #[cfg(target_os = "linux")]
+            requested: [None; 2],
             microphone_on_lock: settings.mute_on_lock,
             camera_on_lock: settings.block_camera_on_lock,
         },
+        #[cfg(target_os = "macos")]
+        overview: overview.clone(),
+        #[cfg(target_os = "linux")]
+        overview: DesktopOverview::default(),
+        preferences: DesktopPreferences {
+            notifications_enabled: settings.notifications_enabled,
+            sound_enabled: settings.sound_enabled,
+            history_enabled: settings.history_enabled,
+            notifications_paused: settings.notifications_paused(),
+        },
+        feedback: desktop_feedback,
         #[cfg(target_os = "linux")]
         details_label: text.details,
         items,
     };
-    #[cfg(target_os = "macos")]
     let view = {
         let mut bounded = view;
+        bounded.limited |= bounded.overview.text_limited;
         bound_desktop_view(&mut bounded);
         bounded
     };
@@ -1361,7 +1521,7 @@ pub fn run_tray(
     mut settings: Settings,
     explicit_policy: bool,
     eventlog: bool,
-    #[cfg(target_os = "macos")] initial_window: bool,
+    initial_window: bool,
 ) -> Result<()> {
     let lifecycle = Lifecycle::acquire()?;
     let (sender, actions) = mpsc::sync_channel(32);
@@ -1369,6 +1529,8 @@ pub fn run_tray(
     let mut inspection = CameraInspectionWorker::default();
     #[cfg(target_os = "linux")]
     let inspection = CameraInspectionWorker::default();
+    #[cfg(target_os = "macos")]
+    let mut overview = DesktopOverview::default();
     let initial = make_view(
         (words(lang).degraded.to_owned(), "error"),
         MicrophoneMuteState::Unavailable,
@@ -1382,6 +1544,8 @@ pub fn run_tray(
             inspection: &inspection.ui,
             #[cfg(target_os = "macos")]
             requested: [None; 2],
+            #[cfg(target_os = "macos")]
+            overview: &overview,
         },
     );
     let mut host = DesktopHost::start(sender, lifecycle.ready.clone(), initial)?;
@@ -1389,7 +1553,7 @@ pub fn run_tray(
     let mut dispatcher = EventDispatcher::new(
         lang,
         false,
-        false,
+        true,
         None,
         eventlog,
         settings.sound_enabled,
@@ -1415,7 +1579,6 @@ pub fn run_tray(
     let mut lock = SessionLockState::Unknown;
     #[cfg(target_os = "macos")]
     let mut requested = [None; 2];
-    #[cfg(target_os = "macos")]
     let mut show_initial_window = initial_window;
     let outcome = (|| -> Result<()> {
         loop {
@@ -1423,9 +1586,18 @@ pub fn run_tray(
                 break;
             }
             host.check()?;
-            #[cfg(target_os = "macos")]
+            #[cfg(target_os = "linux")]
+            if let Some(error) = host.take_window_error() {
+                feedback = Some(format!("{}: {error}", words(lang).failed));
+                action_error = true;
+                next_poll = Instant::now();
+            }
             if lifecycle.open_requested.swap(false, Ordering::AcqRel) {
-                host.show_window()?;
+                if let Err(error) = host.show_window() {
+                    feedback = Some(format!("{}: {error:#}", words(lang).failed));
+                    action_error = true;
+                    next_poll = Instant::now();
+                }
             }
             #[cfg(target_os = "macos")]
             if inspection.poll() {
@@ -1491,12 +1663,24 @@ pub fn run_tray(
                 }
                 match monitor.snapshot((&filter).into()) {
                     Ok(snapshot) => {
+                        #[cfg(target_os = "macos")]
+                        {
+                            overview = DesktopOverview::from_snapshot(&snapshot, chrono::Utc::now());
+                        }
+                        #[cfg(target_os = "linux")]
+                        host.observe(Some(&snapshot));
                         tracker.reconcile(&snapshot, |access, action| {
                             dispatcher.dispatch(access, action)
                         })?;
                         (summary, visual) = observation_status(&snapshot, lang);
                     }
                     Err(error) => {
+                        #[cfg(target_os = "macos")]
+                        {
+                            overview = DesktopOverview::default();
+                        }
+                        #[cfg(target_os = "linux")]
+                        host.observe(None);
                         tracker.observation_gap();
                         visual = "error";
                         summary = format!("{}: {error:#}", words(lang).degraded);
@@ -1549,10 +1733,8 @@ pub fn run_tray(
                 match crate::privacy::camera_state() {
                     Ok(state) => {
                         camera_blocked = state == crate::privacy::CameraPrivacyState::Blocked;
-                        inspection.ui.system_managed =
-                            state == crate::privacy::CameraPrivacyState::SystemManaged;
+                        inspection.observe_passive_state(state);
                         camera_error = None;
-                        inspection.ui.inventory_incomplete = false;
                         if camera_pending_target == Some(camera_blocked) {
                             camera_pending_target = None;
                             feedback = Some(words(lang).done.to_owned());
@@ -1579,9 +1761,10 @@ pub fn run_tray(
                         inspection: &inspection.ui,
                         #[cfg(target_os = "macos")]
                         requested,
+                        #[cfg(target_os = "macos")]
+                        overview: &overview,
                     },
                 ))?;
-                #[cfg(target_os = "macos")]
                 if show_initial_window {
                     host.show_window()?;
                     show_initial_window = false;
@@ -1590,9 +1773,19 @@ pub fn run_tray(
             match actions.recv_timeout(Duration::from_millis(100)) {
                 Ok(Command::Exit) => break,
                 Ok(command) => {
-                    #[cfg(target_os = "macos")]
                     if matches!(command, Command::Status) {
-                        host.show_window()?;
+                        if let Err(error) = host.show_window() {
+                            feedback = Some(format!("{}: {error:#}", words(lang).failed));
+                            action_error = true;
+                            next_poll = Instant::now();
+                        }
+                        continue;
+                    }
+                    #[cfg(target_os = "linux")]
+                    if !host.allows(command) {
+                        feedback = Some(format!("{}: {}", words(lang).failed, words(lang).unavailable));
+                        action_error = true;
+                        next_poll = Instant::now();
                         continue;
                     }
                     #[cfg(target_os = "macos")]
@@ -1610,35 +1803,14 @@ pub fn run_tray(
                     }
                     let result: Result<()> = (|| {
                         match command {
-                            Command::Status => {
-                                #[cfg(target_os = "macos")]
-                                host.show_window()?;
-                                #[cfg(target_os = "linux")]
-                                crate::notify::notify_message(
-                                    "MicCamWatch",
-                                    &diagnostic_document(&make_view(
-                                        (
-                                            summary.clone(),
-                                            if action_error { "error" } else { visual },
-                                        ),
-                                        mute,
-                                        (camera_blocked, camera_error.as_deref()),
-                                        &settings,
-                                        lang,
-                                        &feedback,
-                                        MenuContext {
-                                            lock,
-                                            explicit_policy,
-                                            inspection: &inspection.ui,
-                                        },
-                                    )),
-                                )?;
-                            }
+                            Command::Status => unreachable!(),
                             Command::Mic => {
                                 #[cfg(target_os = "macos")]
                                 {
                                     requested[0] = Some(mute != MicrophoneMuteState::Muted);
                                 }
+                                #[cfg(target_os = "linux")]
+                                host.requested[0] = Some(mute != MicrophoneMuteState::Muted);
                                 monitor.toggle_microphone_mute()?;
                             }
                             Command::Camera => {
@@ -1652,6 +1824,7 @@ pub fn run_tray(
                                 }
                                 #[cfg(target_os = "linux")]
                                 {
+                                    host.requested[1] = Some(!camera_blocked);
                                     camera_blocked = crate::privacy::toggle_camera_state()?
                                         != crate::privacy::CameraPrivacyState::Allowed;
                                     camera_error = None;
@@ -1666,6 +1839,14 @@ pub fn run_tray(
                                             Some(chrono::Utc::now() + chrono::Duration::minutes(30))
                                         };
                                 })?;
+                            }
+                            Command::NotificationsEnable
+                            | Command::NotificationsDisable
+                            | Command::SoundEnable
+                            | Command::SoundDisable
+                            | Command::HistoryEnable
+                            | Command::HistoryDisable => {
+                                settings = select_desktop_preference(command)?;
                             }
                             Command::ProfileBalanced
                             | Command::ProfilePrivate
@@ -1711,6 +1892,8 @@ pub fn run_tray(
                             inspection: &inspection.ui,
                             #[cfg(target_os = "macos")]
                             requested,
+                            #[cfg(target_os = "macos")]
+                            overview: &overview,
                         },
                     ))?;
                 }
@@ -1748,7 +1931,7 @@ pub fn run_tray(
 
 #[cfg(target_os = "linux")]
 fn diagnostic_document(view: &View) -> String {
-    let capacity = view.summary.len()
+    let capacity = view.diagnostics.len()
         + view
             .items
             .iter()
@@ -1758,7 +1941,7 @@ fn diagnostic_document(view: &View) -> String {
             })
             .sum::<usize>();
     let mut document = String::with_capacity(capacity);
-    document.push_str(&view.summary);
+    document.push_str(&view.diagnostics);
     for entry in &view.items {
         let original = entry.detail.as_deref().unwrap_or(&entry.label);
         if original != view.summary {
@@ -1768,6 +1951,18 @@ fn diagnostic_document(view: &View) -> String {
     }
     document
 }
+fn select_desktop_preference(command: Command) -> Result<Settings> {
+    Settings::update(|current| match command {
+        Command::NotificationsEnable => current.notifications_enabled = true,
+        Command::NotificationsDisable => current.notifications_enabled = false,
+        Command::SoundEnable => current.sound_enabled = true,
+        Command::SoundDisable => current.sound_enabled = false,
+        Command::HistoryEnable => current.history_enabled = true,
+        Command::HistoryDisable => current.history_enabled = false,
+        _ => unreachable!("not a desktop preference assignment"),
+    })
+}
+
 fn select_profile(command: Command, explicit_policy: bool, lang: Language) -> Result<Settings> {
     ensure!(!explicit_policy, "{}", words(lang).config_override);
     let profile = match command {
@@ -1917,7 +2112,7 @@ impl ksni::Tray for LinuxTray {
         let mut menu: Vec<ksni::MenuItem<Self>> =
             self.view.items.iter().map(linux_menu_entry).collect();
         menu.insert(
-            menu.len().saturating_sub(1),
+            0,
             ksni::menu::StandardItem {
                 label: linux_menu_label(self.view.details_label),
                 activate: Box::new(|this: &mut Self| {
@@ -1941,8 +2136,17 @@ impl ksni::Tray for LinuxTray {
     }
 }
 #[cfg(target_os = "linux")]
+#[path = "linux_desktop.rs"]
+mod linux_desktop;
+
+#[cfg(target_os = "linux")]
 struct DesktopHost {
     handle: ksni::blocking::Handle<LinuxTray>,
+    view: View,
+    actions: SyncSender<Command>,
+    window: Option<linux_desktop::Desktop>,
+    overview: DesktopOverview,
+    requested: [Option<bool>; 2],
 }
 #[cfg(target_os = "linux")]
 impl DesktopHost {
@@ -1950,19 +2154,52 @@ impl DesktopHost {
         use ksni::blocking::TrayMethods;
         // ksni's default registration verifies that an actual compatible SNI host exists.
         // In particular, do not use assume_sni_available on GNOME without AppIndicator.
-        let handle = LinuxTray { view, actions, ready: ready.clone() }.spawn()
+        let handle = LinuxTray { view: view.clone(), actions: actions.clone(), ready: ready.clone() }.spawn()
             .context("native tray requires a session D-Bus and a registered StatusNotifierItem desktop host (e.g. KDE, or GNOME AppIndicator)")?;
         ensure!(
             !handle.is_closed(),
             "native desktop host disappeared during tray registration"
         );
         ready.store(true, Ordering::Release);
-        Ok(Self { handle })
+        Ok(Self { handle, view, actions, window: None, overview: DesktopOverview::default(), requested: [None; 2] })
     }
-    fn update(&mut self, view: View) -> Result<()> {
-        self.handle
-            .update(|tray| tray.view = view)
-            .context("Linux tray service closed")
+    fn observe(&mut self, snapshot: Option<&Snapshot>) {
+        self.overview = snapshot.map_or_else(DesktopOverview::default, |snapshot| {
+            DesktopOverview::from_snapshot(snapshot, chrono::Utc::now())
+        });
+    }
+    fn update(&mut self, mut view: View) -> Result<()> {
+        view.overview = self.overview.clone();
+        view.protection.requested = self.requested;
+        view.limited |= view.overview.text_limited;
+        bound_desktop_view(&mut view);
+        self.view = view.clone();
+        if let Some(window) = &self.window { window.update(view.clone()); }
+        self.handle.update(|tray| tray.view = view).context("Linux tray service closed")
+    }
+    fn show_window(&mut self) -> Result<()> {
+        if self.window.as_ref().is_some_and(linux_desktop::Desktop::finished) {
+            self.window.take();
+        }
+        if let Some(window) = &self.window {
+            window.open();
+        } else {
+            self.window = Some(linux_desktop::Desktop::start(self.view.clone(), self.actions.clone())?);
+        }
+        Ok(())
+    }
+    fn take_window_error(&self) -> Option<String> {
+        self.window.as_ref().and_then(linux_desktop::Desktop::take_error)
+    }
+    fn allows(&self, command: Command) -> bool {
+        let action = match command {
+            Command::Mic => "mic", Command::Camera => "camera",
+            Command::Autostart => "autostart", Command::Pause => "pause",
+            Command::ProfileBalanced | Command::ProfilePrivate
+            | Command::ProfileMeeting | Command::ProfileDevelopment => "profile",
+            _ => return true,
+        };
+        self.view.items.iter().any(|entry| entry.action == action && entry.enabled)
     }
     fn check(&mut self) -> Result<()> {
         ensure!(
@@ -1972,6 +2209,7 @@ impl DesktopHost {
         Ok(())
     }
     fn shutdown(&mut self) -> Result<()> {
+        self.window.take();
         if !self.handle.is_closed() {
             self.handle.shutdown().wait();
         }
@@ -1981,6 +2219,7 @@ impl DesktopHost {
 #[cfg(target_os = "linux")]
 impl Drop for DesktopHost {
     fn drop(&mut self) {
+        self.window.take();
         if !self.handle.is_closed() {
             self.handle.shutdown().wait();
         }
@@ -2031,7 +2270,7 @@ impl DesktopHost {
                             .send(action)
                             .context("tray action receiver closed")?;
                     } else {
-                        if event.kind == "ready" && event.protocol == Some(3) {
+                        if event.kind == "ready" && event.protocol == Some(4) {
                             readiness.store(true, Ordering::Release);
                         }
                         if event.kind == "error" || event.kind == "stopped" {
@@ -2063,7 +2302,7 @@ impl DesktopHost {
         {
             DesktopEvent {
                 kind,
-                protocol: Some(3),
+                protocol: Some(4),
                 ..
             } if kind == "ready" => Ok(host),
             event => bail!(
@@ -2074,7 +2313,7 @@ impl DesktopHost {
     }
     fn update(&mut self, view: View) -> Result<()> {
         let mut frame = serde_json::to_vec(&view)?;
-        debug_assert!(
+        ensure!(
             frame.len() <= FRAME_LIMIT,
             "bounded desktop projection exceeded frame budget"
         );
@@ -2184,11 +2423,18 @@ mod menu_tests {
 
     fn observed() -> Snapshot {
         Snapshot {
-            collectors: vec![CollectorHealth {
-                collector: "coremediaio_video",
-                state: CollectorState::Degraded,
-                detail: Some("running-state does not identify the client".into()),
-            }],
+            collectors: vec![
+                CollectorHealth {
+                    collector: "coremediaio_video",
+                    state: CollectorState::Degraded,
+                    detail: Some("running-state does not identify the client".into()),
+                },
+                CollectorHealth {
+                    collector: "coreaudio_input",
+                    state: CollectorState::Healthy,
+                    detail: None,
+                },
+            ],
             accesses: vec![Access {
                 key: "input-client".into(),
                 resource: Resource::Microphone,
@@ -2246,6 +2492,225 @@ mod menu_tests {
 
     #[cfg(target_os = "macos")]
     #[test]
+    fn current_overview_requires_resource_coverage_and_retains_positive_observations() {
+        let observed_at = chrono::DateTime::parse_from_rfc3339("2026-10-22T12:34:56Z")
+            .unwrap().with_timezone(&chrono::Utc);
+        let mut snapshot = observed();
+        snapshot.accesses[0].activity = Activity::Ready;
+        let overview = DesktopOverview::from_snapshot(&snapshot, observed_at);
+        assert_eq!(overview.microphone, "ready");
+        assert_eq!(overview.camera, "unknown");
+        assert_eq!(overview.observed_at.as_deref(), Some("2026-10-22T12:34:56Z"));
+        snapshot.accesses.clear();
+        let overview = DesktopOverview::from_snapshot(&snapshot, observed_at);
+        assert_eq!(overview.microphone, "idle");
+        assert_eq!(overview.camera, "unknown");
+        snapshot.observation_gaps.push(Resource::Microphone);
+        assert_eq!(DesktopOverview::from_snapshot(&snapshot, observed_at).microphone, "unknown");
+        snapshot.observation_gaps.clear();
+        snapshot.collectors[1].state = CollectorState::Degraded;
+        assert_eq!(DesktopOverview::from_snapshot(&snapshot, observed_at).microphone, "unknown");
+        snapshot.collectors[1].state = CollectorState::Unavailable;
+        assert_eq!(DesktopOverview::from_snapshot(&snapshot, observed_at).microphone, "unknown");
+        snapshot.collectors.remove(1);
+        assert_eq!(DesktopOverview::from_snapshot(&snapshot, observed_at).microphone, "unknown");
+        assert_eq!(observation_status(&snapshot, Language::En).1, "error");
+        snapshot.accesses = observed().accesses;
+        assert_eq!(DesktopOverview::from_snapshot(&snapshot, observed_at).microphone, "active");
+        let cleared = DesktopOverview::default();
+        assert_eq!(cleared.microphone, "unknown");
+        assert_eq!(cleared.camera, "unknown");
+        assert!(cleared.observed_at.is_none());
+        assert_eq!(cleared.total_accesses, 0);
+        assert_eq!(cleared.omitted_accesses, 0);
+        assert!(cleared.accesses.is_empty());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn desktop_preference_assignments_are_idempotent_and_merge_latest_settings() {
+        if run_isolated_menu_fixture(
+            "frontends::tray::menu_tests::desktop_preference_assignments_are_idempotent_and_merge_latest_settings",
+        ) {
+            return;
+        }
+        Settings::update(|current| {
+            current.show_ready = true;
+            current.mute_on_lock = true;
+            current.block_camera_on_lock = true;
+            current.restore_on_unlock = false;
+            current.pause_notifications_until =
+                Some(chrono::Utc::now() + chrono::Duration::minutes(30));
+        }).unwrap();
+        for (action, field, enabled) in [
+            ("notifications_disable", "notifications_enabled", false),
+            ("notifications_enable", "notifications_enabled", true),
+            ("sound_enable", "sound_enabled", true),
+            ("sound_disable", "sound_enabled", false),
+            ("history_disable", "history_enabled", false),
+            ("history_enable", "history_enabled", true),
+        ] {
+            // A concurrent settings writer's latest unrelated value must survive.
+            let latest = Settings::update(|current| current.profile = PrivacyProfile::Private)
+                .unwrap();
+            let mut expected = serde_json::to_value(latest).unwrap();
+            expected[field] = serde_json::json!(enabled);
+            let command: Command = serde_json::from_value(serde_json::json!(action)).unwrap();
+            for _ in 0..2 {
+                let saved = select_desktop_preference(command).unwrap();
+                assert_eq!(serde_json::to_value(saved).unwrap(), expected);
+                assert_eq!(serde_json::to_value(Settings::load().unwrap()).unwrap(), expected);
+            }
+            assert!(select_profile(Command::ProfileBalanced, true, Language::En).is_err());
+            assert_eq!(serde_json::to_value(Settings::load().unwrap()).unwrap(), expected);
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn incomplete_inspection_worker(
+        authorization: crate::privacy::CameraInspectionAuthorization,
+    ) -> CameraInspectionWorker {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        sender.send(Ok(crate::privacy::CameraInspection {
+            observed_at: chrono::DateTime::parse_from_rfc3339("2026-10-22T12:34:56Z")
+                .unwrap().with_timezone(&chrono::Utc),
+            state: "unknown",
+            complete_inventory: false,
+            administrator_required: true,
+            authorization,
+            detail: "Simulated incomplete inventory; no physical camera proof.".to_owned(),
+        })).unwrap();
+        let mut worker = CameraInspectionWorker {
+            pending: Some(receiver),
+            ui: CameraInspectionUi {
+                inventory_incomplete: true,
+                running: true,
+                ..Default::default()
+            },
+        };
+        assert!(worker.poll());
+        assert!(worker.pending.is_none());
+        assert!(!worker.ui.running);
+        assert!(worker.ui.administrator_required);
+        worker
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn passive_recovery_retires_inspection_guidance_without_erasing_historical_evidence() {
+        if run_isolated_menu_fixture(
+            "frontends::tray::menu_tests::passive_recovery_retires_inspection_guidance_without_erasing_historical_evidence",
+        ) {
+            return;
+        }
+        for authorization in [
+            crate::privacy::CameraInspectionAuthorization::Cancelled,
+            crate::privacy::CameraInspectionAuthorization::Denied,
+        ] {
+            for passive in [
+                crate::privacy::CameraPrivacyState::Allowed,
+                crate::privacy::CameraPrivacyState::Blocked,
+                crate::privacy::CameraPrivacyState::SystemManaged,
+            ] {
+                let mut worker = incomplete_inspection_worker(authorization);
+                let historical = worker.ui.detail.clone();
+                worker.observe_passive_state(passive);
+                assert!(!worker.ui.inventory_incomplete);
+                assert!(!worker.ui.administrator_required);
+                assert_eq!(worker.ui.detail, historical);
+                let feedback = Some("Unrelated earlier action failed".to_owned());
+                let snapshot = observed();
+                let overview = DesktopOverview::from_snapshot(&snapshot, chrono::Utc::now());
+                let frame = make_view(
+                    observation_status(&snapshot, Language::En),
+                    MicrophoneMuteState::Unmuted,
+                    (passive == crate::privacy::CameraPrivacyState::Blocked, None),
+                    &Settings::default(),
+                    Language::En,
+                    &feedback,
+                    MenuContext {
+                        lock: SessionLockState::Unknown,
+                        explicit_policy: false,
+                        inspection: &worker.ui,
+                        requested: [None; 2],
+                        overview: &overview,
+                    },
+                );
+                assert!(!frame.items.iter().any(|entry| entry.action == "camera_inspect"));
+                assert!(frame.items.iter().any(|entry| entry.detail == historical));
+                assert_eq!(frame.feedback, feedback);
+                assert_eq!(frame.protection.camera, match passive {
+                    crate::privacy::CameraPrivacyState::Allowed => "absent",
+                    crate::privacy::CameraPrivacyState::Blocked => "owned",
+                    crate::privacy::CameraPrivacyState::SystemManaged => "system_managed",
+                });
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn desktop_projection_bounds_current_rows_utf8_and_escaped_text() {
+        if run_isolated_menu_fixture(
+            "frontends::tray::menu_tests::desktop_projection_bounds_current_rows_utf8_and_escaped_text",
+        ) {
+            return;
+        }
+        let mut snapshot = observed();
+        let template = snapshot.accesses[0].clone();
+        snapshot.accesses = (0..12).map(|index| {
+            let mut access = template.clone();
+            access.application = format!("{index}:{}", "\u{1}\\\"界".repeat(2000));
+            access.pid = None;
+            access
+        }).collect();
+        let overview = DesktopOverview::from_snapshot(&snapshot, chrono::Utc::now());
+        let feedback = Some("\u{1}\\\"界".repeat(10_000));
+        let frame = make_view(
+            observation_status(&snapshot, Language::En),
+            MicrophoneMuteState::Unavailable,
+            (false, Some("current camera inventory unknown")),
+            &Settings::default(),
+            Language::En,
+            &feedback,
+            MenuContext {
+                lock: SessionLockState::Unknown,
+                explicit_policy: false,
+                inspection: &CameraInspectionUi::default(),
+                requested: [None; 2],
+                overview: &overview,
+            },
+        );
+        assert!(frame.limited);
+        assert_eq!(frame.overview.total_accesses, 12);
+        assert_eq!(frame.overview.accesses.len(), 8);
+        assert_eq!(frame.overview.omitted_accesses, 4);
+        for access in &frame.overview.accesses {
+            assert!(access.application.len() <= 256);
+            assert!(access.application.ends_with(DESKTOP_OMISSION));
+        }
+        assert!(frame.feedback.as_ref().unwrap().len() <= 2048);
+        assert!(frame.feedback.as_ref().unwrap().ends_with(DESKTOP_OMISSION));
+        fn menu_cost(entries: &[MenuEntry]) -> usize {
+            entries.iter().map(|entry| {
+                desktop_text_cost(&entry.label)
+                    + entry.detail.as_deref().map_or(0, desktop_text_cost)
+                    + entry.children.as_deref().map_or(0, menu_cost)
+            }).sum()
+        }
+        let cost = desktop_text_cost(&frame.summary) + desktop_text_cost(&frame.diagnostics)
+            + menu_cost(&frame.items)
+            + frame.overview.accesses.iter().map(|access| desktop_text_cost(&access.application))
+                .sum::<usize>()
+            + desktop_text_cost(frame.feedback.as_ref().unwrap())
+            + desktop_text_cost(frame.overview.observed_at.as_ref().unwrap());
+        assert!(cost <= DESKTOP_TEXT_BUDGET);
+        assert!(serde_json::to_vec(&frame).unwrap().len() <= FRAME_LIMIT);
+        assert!(serde_json::to_value(&frame).unwrap()["overview"]["accesses"][0]["pid"].is_null());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
     fn consultation_keeps_requested_effective_and_observation_independent() {
         if run_isolated_menu_fixture(
             "frontends::tray::menu_tests::consultation_keeps_requested_effective_and_observation_independent",
@@ -2266,6 +2731,7 @@ mod menu_tests {
                 explicit_policy: false,
                 inspection: &inspection,
                 requested: [Some(true), Some(true)],
+                overview: &DesktopOverview::from_snapshot(&observed(), chrono::Utc::now()),
             },
         );
         assert_eq!(state.protection.requested, [Some(true), Some(true)]);
@@ -2288,6 +2754,16 @@ mod menu_tests {
             frame["protection"]["requested"],
             serde_json::json!([true, true])
         );
+        assert_eq!(frame["overview"]["microphone"], "active");
+        assert_eq!(frame["overview"]["camera"], "unknown");
+        assert_eq!(frame["overview"]["total_accesses"], 1);
+        assert_eq!(frame["overview"]["omitted_accesses"], 0);
+        assert_eq!(frame["overview"]["accesses"][0]["application"], "corespeechd");
+        assert_eq!(frame["preferences"]["notifications_enabled"], settings.notifications_enabled);
+        assert_eq!(frame["preferences"]["sound_enabled"], settings.sound_enabled);
+        assert_eq!(frame["preferences"]["history_enabled"], settings.history_enabled);
+        assert_eq!(frame["preferences"]["notifications_paused"], settings.notifications_paused());
+        assert_eq!(frame["feedback"], "Partial action: original control state retained");
         assert!(frame.get("details_label").is_none());
         inspection.system_managed = true;
         let managed = make_view(
@@ -2299,13 +2775,27 @@ mod menu_tests {
             &None,
             MenuContext {
                 lock: SessionLockState::Unlocked,
-                explicit_policy: false,
+                explicit_policy: true,
                 inspection: &inspection,
                 requested: [None; 2],
+                overview: &DesktopOverview::default(),
             },
         );
         assert_eq!(managed.protection.camera, "system_managed");
         assert_eq!(managed.protection.requested, [None; 2]);
+        assert_eq!(managed.overview.microphone, "unknown");
+        assert_eq!(managed.overview.camera, "unknown");
+        assert!(managed.overview.observed_at.is_none());
+        assert!(managed.overview.accesses.is_empty());
+        assert!(managed.feedback.is_none());
+        let profile = managed.items.iter().find(|entry| entry.action == "profile").unwrap();
+        assert!(!profile.enabled);
+        assert!(profile.children.as_ref().unwrap().iter().all(|entry| {
+            !entry.enabled && entry.checked == Some(false)
+        }));
+        let managed_frame = serde_json::to_value(&managed).unwrap();
+        assert!(managed_frame["overview"]["observed_at"].is_null());
+        assert!(managed_frame["feedback"].is_null());
         let mut snapshot = observed();
         snapshot.accesses.clear();
         snapshot.collectors[0].state = CollectorState::Healthy;
@@ -2389,6 +2879,7 @@ mod menu_tests {
                 detail: escaped.then(|| "Inspection remains read-only: \u{1}\n\\\"界".repeat(3000)),
                 ..Default::default()
             };
+            let overview = DesktopOverview::from_snapshot(&snapshot, chrono::Utc::now());
             let view = make_view(
                 observation_status(&snapshot, Language::En),
                 MicrophoneMuteState::Unmuted,
@@ -2401,10 +2892,16 @@ mod menu_tests {
                     explicit_policy: false,
                     inspection: &inspection,
                     requested: [None; 2],
+                    overview: &overview,
                 },
             );
             assert!(view.summary.len() <= 2048);
             assert!(view.diagnostics.len() <= DESKTOP_DIAGNOSTIC_LIMIT);
+            assert_eq!(view.overview.total_accesses, count as usize);
+            assert_eq!(view.overview.accesses.len(), 8);
+            assert_eq!(view.overview.omitted_accesses, count as usize - 8);
+            assert!(view.overview.observed_at.is_some());
+            assert!(view.feedback.as_ref().is_none_or(|text| text.len() <= 2048));
             assert!(
                 view.diagnostics
                     .contains(&format!("Observed accesses: {count}"))
@@ -2431,6 +2928,40 @@ mod menu_tests {
                 "omission_expected": count > 20 || escaped,
             }));
         }
+        let mut worker = incomplete_inspection_worker(
+            crate::privacy::CameraInspectionAuthorization::Cancelled,
+        );
+        let historical = worker.ui.detail.clone().unwrap();
+        worker.observe_passive_state(crate::privacy::CameraPrivacyState::SystemManaged);
+        let snapshot = observed();
+        let overview = DesktopOverview::from_snapshot(&snapshot, chrono::Utc::now());
+        let view = make_view(
+            observation_status(&snapshot, Language::En),
+            MicrophoneMuteState::Unmuted,
+            (false, None),
+            &Settings::default(),
+            Language::En,
+            &Some("Unrelated earlier action failed".to_owned()),
+            MenuContext {
+                lock: SessionLockState::Unknown,
+                explicit_policy: false,
+                inspection: &worker.ui,
+                requested: [None; 2],
+                overview: &overview,
+            },
+        );
+        assert!(!view.items.iter().any(|entry| entry.action == "camera_inspect"));
+        assert!(view.items.iter().any(|entry| entry.detail.as_deref() == Some(historical.as_str())));
+        assert_eq!(view.protection.camera, "system_managed");
+        cases.push(serde_json::json!({
+            "name": "producer-passive-recovery",
+            "frame": view,
+            "selected_profile": "profile_balanced",
+            "expected_text": ["corespeechd"],
+            "expected_accesses": 1,
+            "omission_expected": false,
+            "expected_inspection_detail": historical,
+        }));
         std::fs::write(output, serde_json::to_vec_pretty(&cases).unwrap()).unwrap();
     }
 }

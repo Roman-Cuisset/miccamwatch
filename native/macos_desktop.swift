@@ -6,7 +6,7 @@ import UserNotifications
 import os
 import Darwin
 
-// Desktop protocol v3: UTF-8 newline-delimited JSON, maximum frame 65536 bytes.
+// Desktop protocol v4: UTF-8 newline-delimited JSON, maximum frame 65536 bytes.
 // State carries bounded observations, explicit protection facts and localized UI
 // language/version. Only profile has children (four direct checked choices).
 // show opens the existing consultation window; stop retires the desktop.
@@ -47,6 +47,61 @@ struct DesktopItem: Decodable {
         children = try fields.decodeIfPresent([DesktopItem].self, forKey: .children)
     }
 }
+struct DesktopAccess: Decodable {
+    let application: String
+    let resource: String
+    let activity: String
+    let pid: Int?
+    private enum CodingKeys: String, CodingKey { case application, resource, activity, pid }
+    init(from decoder: Decoder) throws {
+        try desktopFields(decoder, allowed: ["application", "resource", "activity", "pid"])
+        let fields = try decoder.container(keyedBy: CodingKeys.self)
+        application = try fields.decode(String.self, forKey: .application)
+        resource = try fields.decode(String.self, forKey: .resource)
+        activity = try fields.decode(String.self, forKey: .activity)
+        guard fields.contains(.pid) else {
+            throw DecodingError.keyNotFound(CodingKeys.pid, .init(codingPath: decoder.codingPath, debugDescription: "missing pid"))
+        }
+        pid = try fields.decodeIfPresent(Int.self, forKey: .pid)
+    }
+}
+struct DesktopOverview: Decodable {
+    let microphone: String
+    let camera: String
+    let observed_at: String?
+    let total_accesses: Int
+    let omitted_accesses: Int
+    let accesses: [DesktopAccess]
+    private enum CodingKeys: String, CodingKey { case microphone, camera, observed_at, total_accesses, omitted_accesses, accesses }
+    init(from decoder: Decoder) throws {
+        try desktopFields(decoder, allowed: ["microphone", "camera", "observed_at", "total_accesses", "omitted_accesses", "accesses"])
+        let fields = try decoder.container(keyedBy: CodingKeys.self)
+        microphone = try fields.decode(String.self, forKey: .microphone)
+        camera = try fields.decode(String.self, forKey: .camera)
+        guard fields.contains(.observed_at) else {
+            throw DecodingError.keyNotFound(CodingKeys.observed_at, .init(codingPath: decoder.codingPath, debugDescription: "missing observation time"))
+        }
+        observed_at = try fields.decodeIfPresent(String.self, forKey: .observed_at)
+        total_accesses = try fields.decode(Int.self, forKey: .total_accesses)
+        omitted_accesses = try fields.decode(Int.self, forKey: .omitted_accesses)
+        accesses = try fields.decode([DesktopAccess].self, forKey: .accesses)
+    }
+}
+struct DesktopPreferences: Decodable {
+    let notifications_enabled: Bool
+    let sound_enabled: Bool
+    let history_enabled: Bool
+    let notifications_paused: Bool
+    private enum CodingKeys: String, CodingKey { case notifications_enabled, sound_enabled, history_enabled, notifications_paused }
+    init(from decoder: Decoder) throws {
+        try desktopFields(decoder, allowed: ["notifications_enabled", "sound_enabled", "history_enabled", "notifications_paused"])
+        let fields = try decoder.container(keyedBy: CodingKeys.self)
+        notifications_enabled = try fields.decode(Bool.self, forKey: .notifications_enabled)
+        sound_enabled = try fields.decode(Bool.self, forKey: .sound_enabled)
+        history_enabled = try fields.decode(Bool.self, forKey: .history_enabled)
+        notifications_paused = try fields.decode(Bool.self, forKey: .notifications_paused)
+    }
+}
 struct DesktopFrame: Decodable {
     let kind: String
     let summary: String?
@@ -57,11 +112,25 @@ struct DesktopFrame: Decodable {
     let language: String?
     let version: String?
     let protection: DesktopProtection?
-    private enum CodingKeys: String, CodingKey { case kind, summary, diagnostics, limited, visual, items, language, version, protection }
+    let overview: DesktopOverview?
+    let preferences: DesktopPreferences?
+    let feedback: String?
+    private enum CodingKeys: String, CodingKey {
+        case kind, summary, diagnostics, limited, visual, items, language, version, protection, overview, preferences, feedback
+    }
     init(from decoder: Decoder) throws {
-        try desktopFields(decoder, allowed: ["kind", "summary", "diagnostics", "limited", "visual", "items", "language", "version", "protection"])
         let fields = try decoder.container(keyedBy: CodingKeys.self)
         kind = try fields.decode(String.self, forKey: .kind)
+        let keys = ["kind", "summary", "diagnostics", "limited", "visual", "items", "language", "version", "protection", "overview", "preferences", "feedback"]
+        try desktopFields(decoder, allowed: kind == "state" ? keys : ["kind"])
+        guard ["state", "show", "stop"].contains(kind) else {
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "unknown desktop frame kind"))
+        }
+        if kind == "state" {
+            guard fields.allKeys.count == keys.count else {
+                throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "missing desktop state field"))
+            }
+        }
         summary = try fields.decodeIfPresent(String.self, forKey: .summary)
         diagnostics = try fields.decodeIfPresent(String.self, forKey: .diagnostics)
         limited = try fields.decodeIfPresent(Bool.self, forKey: .limited)
@@ -70,6 +139,9 @@ struct DesktopFrame: Decodable {
         language = try fields.decodeIfPresent(String.self, forKey: .language)
         version = try fields.decodeIfPresent(String.self, forKey: .version)
         protection = try fields.decodeIfPresent(DesktopProtection.self, forKey: .protection)
+        overview = try fields.decodeIfPresent(DesktopOverview.self, forKey: .overview)
+        preferences = try fields.decodeIfPresent(DesktopPreferences.self, forKey: .preferences)
+        feedback = try fields.decodeIfPresent(String.self, forKey: .feedback)
     }
 }
 struct DesktopProtection: Decodable {
@@ -89,6 +161,29 @@ struct DesktopProtection: Decodable {
         camera_on_lock = try fields.decode(Bool.self, forKey: .camera_on_lock)
     }
 }
+private let desktopTimestampPattern = try! NSRegularExpression(
+    pattern: #"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]+)?(?:Z|\+00:00)$"#)
+private let desktopTimestampFraction: ISO8601DateFormatter = {
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return formatter
+}()
+private let desktopTimestampSeconds: ISO8601DateFormatter = {
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime]
+    return formatter
+}()
+// Same escaped-content projection as the Rust producer, excluding JSON quotes.
+private func desktopTextCost(_ text: String?) -> Int {
+    guard let text = text else { return 0 }
+    return text.utf8.reduce(0) { cost, byte in
+        switch byte {
+        case 34, 92, 8, 12, 10, 13, 9: return cost + 2
+        case 0...31: return cost + 6
+        default: return cost + 1
+        }
+    }
+}
 func validDesktopState(_ frame: DesktopFrame) -> Bool {
     guard frame.kind == "state", let summary = frame.summary,
           let diagnostics = frame.diagnostics, diagnostics.utf8.count <= 32768, frame.limited != nil,
@@ -100,6 +195,27 @@ func validDesktopState(_ frame: DesktopFrame) -> Bool {
           ["owned", "absent", "system_managed", "unknown"].contains(protection.camera),
           let entries = frame.items, entries.count <= 16, summary.utf8.count <= 2048,
           entries.last?.action == "exit", entries.filter({ $0.action == "exit" }).count == 1 else { return false }
+    guard let overview = frame.overview, frame.preferences != nil,
+          ["active", "ready", "idle", "unknown"].contains(overview.microphone),
+          ["active", "ready", "idle", "unknown"].contains(overview.camera),
+          overview.accesses.count <= 8, overview.total_accesses >= overview.accesses.count,
+          overview.omitted_accesses == overview.total_accesses - overview.accesses.count,
+          (frame.feedback?.utf8.count ?? 0) <= 2048 else { return false }
+    if let stamp = overview.observed_at {
+        guard desktopTimestampPattern.rangeOfFirstMatch(in: stamp, options: [], range: NSRange(location: 0, length: stamp.utf16.count)).location != NSNotFound,
+              desktopTimestampFraction.date(from: stamp) != nil || desktopTimestampSeconds.date(from: stamp) != nil else { return false }
+    } else if overview.microphone != "unknown" || overview.camera != "unknown" || overview.total_accesses != 0 {
+        return false
+    }
+    for access in overview.accesses {
+        guard access.application.utf8.count <= 256,
+              ["microphone", "camera"].contains(access.resource),
+              ["active", "ready"].contains(access.activity) else { return false }
+        let state = access.resource == "microphone" ? overview.microphone : overview.camera
+        guard state == "active" || state == access.activity else { return false }
+    }
+    var projection = desktopTextCost(summary) + desktopTextCost(diagnostics) + desktopTextCost(frame.feedback) + desktopTextCost(overview.observed_at)
+    projection += overview.accesses.reduce(0) { $0 + desktopTextCost($1.application) }
     let roots = ["status", "mic", "camera", "camera_inspect", "pause", "profile", "autostart", "exit", "header"]
     let choices = Set(["profile_balanced", "profile_private", "profile_meeting", "profile_development"])
     guard ["mic", "camera", "pause", "profile", "autostart"].allSatisfy({ action in entries.filter { $0.action == action }.count == 1 }),
@@ -108,19 +224,21 @@ func validDesktopState(_ frame: DesktopFrame) -> Bool {
     for entry in entries {
         guard roots.contains(entry.action), entry.checked == nil,
               entry.label.utf8.count <= 16384, (entry.detail?.utf8.count ?? 0) <= 16384 else { return false }
+        projection += desktopTextCost(entry.label) + desktopTextCost(entry.detail)
         if entry.action == "profile" {
             guard let children = entry.children, children.count == 4,
                   Set(children.map { $0.action }) == choices,
                   children.filter({ $0.checked == true }).count <= 1 else { return false }
             count += children.count
             for child in children {
+                projection += desktopTextCost(child.label) + desktopTextCost(child.detail)
                 guard child.children == nil, child.checked != nil,
                       child.label.utf8.count <= 16384, (child.detail?.utf8.count ?? 0) <= 16384,
                       entry.enabled || !child.enabled else { return false }
             }
         } else if entry.children != nil { return false }
     }
-    return count <= 20
+    return count <= 20 && projection <= 48000
 }
 
 // Vector/template rendering is resolved by AppKit at the current backing scale
@@ -312,32 +430,217 @@ private final class DesktopConsultationWindow: NSWindow {
     }
 }
 
-// One retained, modeless AppKit window. Refresh never opens it and closing it
-// only orders out the window: the status item and Rust control owner stay alive.
+// UI language follows the state, not the host operating system.
+private struct DesktopGUIWords {
+    let values: [String]
+    subscript(_ index: Int) -> String { values[index] }
+    init(_ language: String) {
+        switch language {
+        case "fr": values = ["Vue d’ensemble", "Réglages", "Diagnostics", "Activité observée", "Contrôle effectif", "Dernière observation", "Applications observées", "Aucun accès observé dans cet instantané.", "Observation indisponible ; cela ne prouve pas une absence d’accès.", "accès omis", "Profil", "Notifications", "Son des notifications", "Historique local", "Les notifications dépendent aussi de l’autorisation macOS. Le son suit les notifications ; la pause ne suspend pas la surveillance.", "Le profil ne coupe ni le micro ni la caméra. Meeting et Balanced ont actuellement la même politique.", "Portée et limites", "Actif", "Prêt", "Inactif observé", "Retour de la dernière action", "Copier les diagnostics", "En pause", "Notifications non suspendues"]
+        case "de": values = ["Übersicht", "Einstellungen", "Diagnose", "Beobachtete Aktivität", "Wirksame Steuerung", "Letzte Beobachtung", "Beobachtete Anwendungen", "In diesem Schnappschuss kein Zugriff beobachtet.", "Beobachtung nicht verfügbar; kein Nachweis fehlender Zugriffe.", "Zugriffe ausgelassen", "Profil", "Mitteilungen", "Mitteilungston", "Lokaler Verlauf", "Mitteilungen benötigen auch die macOS-Erlaubnis. Ton folgt Mitteilungen; Pause stoppt nicht die Überwachung.", "Ein Profil schaltet Mikrofon und Kamera nicht ab. Meeting und Balanced nutzen derzeit dieselbe Richtlinie.", "Umfang und Grenzen", "Aktiv", "Bereit", "Beobachtet inaktiv", "Letzte Aktionsrückmeldung", "Diagnose kopieren", "Pausiert", "Mitteilungen nicht pausiert"]
+        case "es": values = ["Resumen", "Ajustes", "Diagnóstico", "Actividad observada", "Control efectivo", "Última observación", "Aplicaciones observadas", "No se observó acceso en esta instantánea.", "Observación no disponible; no demuestra ausencia de acceso.", "accesos omitidos", "Perfil", "Notificaciones", "Sonido de notificaciones", "Historial local", "Las notificaciones también requieren permiso de macOS. El sonido sigue a las notificaciones; la pausa no detiene la supervisión.", "El perfil no silencia ni bloquea dispositivos. Meeting y Balanced usan actualmente la misma política.", "Alcance y límites", "Activo", "Preparado", "Inactivo observado", "Resultado de la última acción", "Copiar diagnóstico", "En pausa", "Notificaciones sin pausar"]
+        case "ja": values = ["概要", "設定", "診断", "観測された動作", "実効制御", "最終観測", "観測されたアプリ", "このスナップショットではアクセスは観測されませんでした。", "観測できません。アクセスがないことの証明ではありません。", "件のアクセスを省略", "プロファイル", "通知", "通知音", "ローカル履歴", "通知には macOS の許可も必要です。音は通知設定に従います。一時停止しても監視は続きます。", "プロファイルはマイクやカメラを遮断しません。Meeting と Balanced は現在同じポリシーです。", "対象範囲と制限", "使用中", "準備完了", "未使用を観測", "最後の操作結果", "診断をコピー", "一時停止中", "通知の一時停止なし"]
+        case "zh": values = ["概览", "设置", "诊断", "观测活动", "有效控制", "最近观测", "观测到的应用", "此快照中未观测到访问。", "无法观测；这不能证明没有访问。", "条访问已省略", "配置", "通知", "通知声音", "本地历史", "通知也需要 macOS 授权。声音跟随通知设置；暂停通知不会停止监视。", "配置不会静音或阻止设备。Meeting 和 Balanced 当前使用相同策略。", "范围与限制", "使用中", "就绪", "观测为空闲", "最近操作结果", "复制诊断", "已暂停", "通知未暂停"]
+        case "ru": values = ["Обзор", "Настройки", "Диагностика", "Наблюдаемая активность", "Действующее управление", "Последнее наблюдение", "Наблюдаемые приложения", "В этом снимке доступ не наблюдался.", "Наблюдение недоступно; это не доказывает отсутствие доступа.", "доступов опущено", "Профиль", "Уведомления", "Звук уведомлений", "Локальная история", "Уведомления также требуют разрешения macOS. Звук зависит от уведомлений; пауза не останавливает наблюдение.", "Профиль не заглушает микрофон и не блокирует камеру. Meeting и Balanced сейчас используют одну политику.", "Область и ограничения", "Активно", "Готово", "Наблюдается простой", "Результат последнего действия", "Копировать диагностику", "Приостановлено", "Уведомления не приостановлены"]
+        default: values = ["Overview", "Settings", "Diagnostics", "Observed activity", "Effective control", "Latest observation", "Observed applications", "No access observed in this snapshot.", "Observation unavailable; this is not proof of no access.", "accesses omitted", "Profile", "Notifications", "Notification sound", "Local history", "Notifications also depend on macOS permission. Sound follows notifications; pausing does not stop observation.", "A profile does not mute or block devices. Meeting and Balanced currently use the same policy.", "Scope and limitations", "Active", "Ready", "Observed idle", "Last action feedback", "Copy diagnostics", "Paused", "Notifications not paused"]
+        }
+    }
+}
+private final class DesktopLabel: NSTextField {
+    override var stringValue: String {
+        get { super.stringValue }
+        set { if super.stringValue != newValue { super.stringValue = newValue } }
+    }
+}
+private func desktopLabel(_ size: CGFloat = 13, weight: NSFont.Weight = .regular) -> NSTextField {
+    let label = DesktopLabel(wrappingLabelWithString: "")
+    label.font = .systemFont(ofSize: size, weight: weight)
+    label.isSelectable = true
+    label.lineBreakMode = .byCharWrapping
+    label.maximumNumberOfLines = 0
+    label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+    return label
+}
+private final class DesktopColumn: NSStackView {
+    override var isFlipped: Bool { true }
+}
+private func desktopColumn(_ views: [NSView], inset: CGFloat = 0) -> NSStackView {
+    let stack = DesktopColumn(views: views)
+    stack.orientation = .vertical
+    stack.alignment = .leading
+    stack.spacing = 10
+    stack.edgeInsets = NSEdgeInsets(top: inset, left: inset, bottom: inset, right: inset)
+    for view in views {
+        view.translatesAutoresizingMaskIntoConstraints = false
+        view.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -2 * inset).isActive = true
+    }
+    return stack
+}
+private final class DesktopCard: NSView {
+    override func draw(_ dirtyRect: NSRect) {
+        let outline = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 10, yRadius: 10)
+        NSColor.controlBackgroundColor.setFill()
+        outline.fill()
+        NSColor.separatorColor.setStroke()
+        outline.stroke()
+    }
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
+    }
+}
+private func desktopCard(_ views: [NSView]) -> NSView {
+    let card = DesktopCard()
+    let stack = desktopColumn(views, inset: 14)
+    stack.translatesAutoresizingMaskIntoConstraints = false
+    card.addSubview(stack)
+    NSLayoutConstraint.activate([
+        stack.leadingAnchor.constraint(equalTo: card.leadingAnchor),
+        stack.trailingAnchor.constraint(equalTo: card.trailingAnchor),
+        stack.topAnchor.constraint(equalTo: card.topAnchor),
+        stack.bottomAnchor.constraint(equalTo: card.bottomAnchor)
+    ])
+    return card
+}
+private func desktopScroll(_ document: NSView) -> NSScrollView {
+    let scroll = NSScrollView()
+    scroll.hasVerticalScroller = true
+    scroll.hasHorizontalScroller = false
+    scroll.drawsBackground = false
+    document.translatesAutoresizingMaskIntoConstraints = false
+    scroll.documentView = document
+    NSLayoutConstraint.activate([
+        document.leadingAnchor.constraint(equalTo: scroll.contentView.leadingAnchor),
+        document.topAnchor.constraint(equalTo: scroll.contentView.topAnchor),
+        document.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor)
+    ])
+    return scroll
+}
+
+// Width-dependent height keeps long paths readable rather than clipping them
+// into a fixed-height pushbutton. Measurements are reused until width/title change.
+private final class DesktopActionButton: NSButton {
+    private var measuredWidth: CGFloat = -1
+    private var measuredTitle = ""
+    private var wrappingHeight: NSLayoutConstraint?
+    override func layout() {
+        super.layout()
+        guard bounds.width > 0, measuredWidth != bounds.width || measuredTitle != title else { return }
+        measuredWidth = bounds.width
+        measuredTitle = title
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineBreakMode = .byCharWrapping
+        let rectangle = (title as NSString).boundingRect(
+            with: NSSize(width: max(1, bounds.width - 28), height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [.font: font ?? NSFont.systemFont(ofSize: 13), .paragraphStyle: paragraph])
+        let height = max(32, ceil(rectangle.height) + 16)
+        if let constraint = wrappingHeight { constraint.constant = height }
+        else {
+            let constraint = heightAnchor.constraint(equalToConstant: height)
+            constraint.isActive = true
+            wrappingHeight = constraint
+        }
+    }
+}
+
+// Retain controls and tabs across snapshots. Refresh never steals focus, opens
+// the window or emits actions. Closing only orders out this modeless window.
 final class DesktopConsultation: NSObject {
     let window: NSWindow
     let text: NSTextView
-    private let actions = NSStackView()
+    let tabs = NSTabView()
+    let profile = NSPopUpButton(frame: .zero, pullsDown: false)
+    let notifications = NSButton(checkboxWithTitle: "", target: nil, action: nil)
+    let sound = NSButton(checkboxWithTitle: "", target: nil, action: nil)
+    let history = NSButton(checkboxWithTitle: "", target: nil, action: nil)
+    private let brand = desktopLabel(22, weight: .semibold)
+    private let subtitle = desktopLabel(12)
+    private let observedTitle = desktopLabel(15, weight: .semibold)
+    private let micObservation = desktopLabel(17, weight: .medium)
+    private let cameraObservation = desktopLabel(17, weight: .medium)
+    private let effectiveTitle = desktopLabel(15, weight: .semibold)
+    private let micEffective = desktopLabel()
+    private let cameraEffective = desktopLabel()
+    private let timestamp = desktopLabel(12)
+    private let accessesTitle = desktopLabel(15, weight: .semibold)
+    private let empty = desktopLabel()
+    private let accessRows = (0..<8).map { _ in desktopLabel() }
+    private let omitted = desktopLabel(12)
+    private let feedback = desktopLabel()
+    private let limitations = desktopLabel(12)
+    private let scopeTitle = desktopLabel(15, weight: .semibold)
+    private let scope = desktopLabel(12)
+    private let profileTitle = desktopLabel(15, weight: .semibold)
+    private let profileNote = desktopLabel(12)
+    private let notificationNote = desktopLabel(12)
+    private let paused = desktopLabel()
+    private let headerFeedback = desktopLabel(12)
+    private let settingsFeedback = desktopLabel()
+    private let copyButton = NSButton()
+    private var buttons: [String: NSButton] = [:]
+    private var paneScrolls: [NSScrollView] = []
     private var frame: DesktopFrame?
+    private var dirty = false
     override init() {
         let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 800, height: 600)
-        let size = NSSize(width: min(720, screen.width - 40), height: min(600, screen.height - 60))
-        let window = DesktopConsultationWindow(contentRect: NSRect(origin: .zero, size: size),
-                          styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+        let size = NSSize(width: min(645, screen.width - 40), height: min(548, screen.height - 60))
+        window = DesktopConsultationWindow(contentRect: NSRect(origin: .zero, size: size),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.title = "MicCamWatch"
-        let scroll = NSScrollView(frame: NSRect(origin: .zero, size: size))
-        scroll.hasVerticalScroller = true
-        scroll.hasHorizontalScroller = false
-        scroll.borderType = .bezelBorder
-        let text = NSTextView(frame: NSRect(origin: .zero, size: scroll.contentSize))
+        text = NSTextView(frame: NSRect(x: 0, y: 0, width: size.width - 48, height: 300))
+        super.init()
+        window.minSize = NSSize(width: min(440, size.width), height: min(360, size.height))
+        for (identifier, label) in [
+            ("observation_microphone", micObservation), ("observation_camera", cameraObservation),
+            ("effective_microphone", micEffective), ("effective_camera", cameraEffective),
+            ("observed_at", timestamp), ("access_empty", empty), ("omitted_accesses", omitted),
+            ("last_action_feedback", feedback)
+        ] {
+            label.identifier = NSUserInterfaceItemIdentifier(identifier)
+        }
+        for (index, row) in accessRows.enumerated() {
+            row.identifier = NSUserInterfaceItemIdentifier("access_\(index)")
+        }
+        let icon = NSImageView()
+        icon.image = mcwBrandImage(size: 44)
+        icon.setAccessibilityLabel("MicCamWatch")
+        icon.widthAnchor.constraint(equalToConstant: 44).isActive = true
+        icon.heightAnchor.constraint(equalToConstant: 44).isActive = true
+        let heading = NSStackView(views: [icon, desktopColumn([brand, subtitle])])
+        heading.spacing = 12
+        heading.alignment = .centerY
+        let overview = desktopColumn([
+            desktopCard([observedTitle, micObservation, cameraObservation, timestamp]),
+            feedback, limitations,
+            desktopCard([accessesTitle, empty] + accessRows + [omitted]),
+            desktopCard([effectiveTitle, micEffective, cameraEffective, actionButton("mic"), actionButton("camera")]),
+            desktopCard([scopeTitle, scope])
+        ], inset: 12)
+        let settings = desktopColumn([
+            settingsFeedback,
+            desktopCard([profileTitle, profile, profileNote]),
+            desktopCard([notifications, sound, history, notificationNote, paused, actionButton("pause")]),
+            desktopCard([actionButton("autostart")])
+        ], inset: 12)
+        for (key, button) in [("notifications", notifications), ("sound", sound), ("history", history)] {
+            button.identifier = NSUserInterfaceItemIdentifier(key)
+            button.target = self
+            button.action = #selector(preferenceSelected(_:))
+            button.lineBreakMode = .byWordWrapping
+            button.cell?.wraps = true
+        }
+        profile.target = self
+        profile.action = #selector(profileSelected(_:))
+        profile.identifier = NSUserInterfaceItemIdentifier("profile")
+        profile.cell?.lineBreakMode = .byTruncatingTail
+        profile.menu?.autoenablesItems = false
         text.isEditable = false
         text.isSelectable = true
         text.isRichText = false
-        text.font = NSFont.systemFont(ofSize: NSFont.systemFontSize)
-        // NSTextView otherwise keeps its initial frame as its minimum size.
-        // The inset scroll viewport is narrower than the window, and shrinks
-        // again on resize; let its document follow that width before wrapping.
+        text.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+        text.textContainerInset = NSSize(width: 10, height: 10)
         text.minSize = .zero
         text.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
         text.isVerticallyResizable = true
@@ -345,82 +648,195 @@ final class DesktopConsultation: NSObject {
         text.autoresizingMask = [.width]
         text.textContainer?.widthTracksTextView = true
         text.textContainer?.lineBreakMode = .byCharWrapping
-        text.textContainer?.containerSize = NSSize(width: scroll.contentSize.width, height: .greatestFiniteMagnitude)
-        scroll.documentView = text
-        self.window = window
-        self.text = text
-        super.init()
-        actions.orientation = .vertical
-        actions.alignment = .leading
-        actions.spacing = 6
-        let root = NSStackView(views: [scroll, actions])
-        root.orientation = .vertical
-        root.alignment = .leading
-        root.spacing = 10
-        root.edgeInsets = NSEdgeInsets(top: 12, left: 12, bottom: 12, right: 12)
+        text.textContainer?.containerSize = NSSize(width: text.frame.width, height: .greatestFiniteMagnitude)
+        let diagnosticScroll = NSScrollView()
+        diagnosticScroll.hasVerticalScroller = true
+        diagnosticScroll.documentView = text
+        copyButton.target = self
+        copyButton.action = #selector(copyDiagnostics(_:))
+        copyButton.bezelStyle = .rounded
+        copyButton.identifier = NSUserInterfaceItemIdentifier("copy_diagnostics")
+        let diagnostic = desktopColumn([diagnosticScroll, actionButton("camera_inspect"), copyButton], inset: 12)
+        diagnosticScroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 40).isActive = true
+        let overviewScroll = desktopScroll(overview), settingsScroll = desktopScroll(settings)
+        paneScrolls = [overviewScroll, settingsScroll, diagnosticScroll]
+        let sections: [(String, NSView)] = [("overview", overviewScroll), ("settings", settingsScroll), ("diagnostics", diagnostic)]
+        for (identifier, view) in sections {
+            let tab = NSTabViewItem(identifier: identifier)
+            tab.view = view
+            tabs.addTabViewItem(tab)
+        }
+        tabs.identifier = NSUserInterfaceItemIdentifier("desktop_sections")
+        headerFeedback.identifier = NSUserInterfaceItemIdentifier("header_feedback")
+        headerFeedback.maximumNumberOfLines = 2
+        headerFeedback.lineBreakMode = .byTruncatingTail
+        let root = desktopColumn([heading, headerFeedback, tabs], inset: 16)
         root.translatesAutoresizingMaskIntoConstraints = false
         window.contentView!.addSubview(root)
         NSLayoutConstraint.activate([
             root.leadingAnchor.constraint(equalTo: window.contentView!.leadingAnchor),
             root.trailingAnchor.constraint(equalTo: window.contentView!.trailingAnchor),
             root.topAnchor.constraint(equalTo: window.contentView!.topAnchor),
-            root.bottomAnchor.constraint(equalTo: window.contentView!.bottomAnchor),
-            scroll.widthAnchor.constraint(equalTo: root.widthAnchor, constant: -24),
-            actions.widthAnchor.constraint(equalTo: root.widthAnchor, constant: -24),
-            scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 180)
+            root.bottomAnchor.constraint(equalTo: window.contentView!.bottomAnchor)
         ])
-        window.minSize = NSSize(width: min(480, size.width), height: min(360, size.height))
+        tabs.setContentHuggingPriority(.defaultLow, for: .vertical)
+        diagnosticScroll.setContentHuggingPriority(.defaultLow, for: .vertical)
+        subtitle.textColor = .secondaryLabelColor
+        timestamp.textColor = .secondaryLabelColor
+        notificationNote.textColor = .secondaryLabelColor
+        profileNote.textColor = .secondaryLabelColor
+        scope.textColor = .secondaryLabelColor
         window.center()
+    }
+    private func actionButton(_ action: String) -> NSButton {
+        let button = DesktopActionButton(title: "", target: self, action: #selector(selected(_:)))
+        button.identifier = NSUserInterfaceItemIdentifier(action)
+        button.bezelStyle = .regularSquare
+        button.lineBreakMode = .byCharWrapping
+        button.cell?.wraps = true
+        button.cell?.isScrollable = false
+        button.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        button.heightAnchor.constraint(greaterThanOrEqualToConstant: 32).isActive = true
+        buttons[action] = button
+        return button
     }
     func update(_ frame: DesktopFrame, diagnostic: String) {
         self.frame = frame
+        dirty = true
         if text.string != diagnostic {
             let selection = text.selectedRanges
             let visible = text.enclosingScrollView?.contentView.bounds.origin
             text.string = diagnostic
-            if selection.allSatisfy({ NSMaxRange($0.rangeValue) <= (diagnostic as NSString).length }) {
-                text.selectedRanges = selection
+            text.selectedRanges = selection.map {
+                let range = $0.rangeValue
+                let start = min(range.location, (diagnostic as NSString).length)
+                return NSValue(range: NSRange(location: start, length: min(range.length, (diagnostic as NSString).length - start)))
             }
             if let scroll = text.enclosingScrollView, let visible = visible {
                 scroll.contentView.scroll(to: visible)
                 scroll.reflectScrolledClipView(scroll.contentView)
             }
         }
-        for view in actions.arrangedSubviews {
-            if !frame.items!.contains(where: { $0.action == view.identifier?.rawValue }) {
-                actions.removeArrangedSubview(view)
-                view.removeFromSuperview()
-            }
+        if window.isVisible { render() }
+    }
+    private func render() {
+        guard dirty, let frame = frame else { return }
+        dirty = false
+        let positions = paneScrolls.map { $0.contentView.bounds.origin }
+        let words = DesktopWords(frame.language!), gui = DesktopGUIWords(frame.language!)
+        let overview = frame.overview!, protection = frame.protection!, preferences = frame.preferences!
+        for index in 0..<3 where tabs.tabViewItems[index].label != gui[index] {
+            tabs.tabViewItems[index].label = gui[index]
         }
-        for entry in frame.items! where ["camera_inspect", "autostart"].contains(entry.action) {
-            let existing = actions.arrangedSubviews.first { $0.identifier?.rawValue == entry.action } as? NSButton
-            let button: NSButton
-            if let existing = existing { button = existing }
-            else {
-                button = NSButton(title: entry.label, target: self, action: #selector(selected(_:)))
-                button.identifier = NSUserInterfaceItemIdentifier(entry.action)
-                button.lineBreakMode = .byWordWrapping
-                button.cell?.wraps = true
-                button.cell?.isScrollable = false
-                button.heightAnchor.constraint(greaterThanOrEqualToConstant: 36).isActive = true
-                button.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-                actions.addArrangedSubview(button)
-                button.widthAnchor.constraint(lessThanOrEqualTo: actions.widthAnchor).isActive = true
-            }
-            button.title = entry.label
-            button.isEnabled = entry.enabled
-            button.toolTip = entry.detail ?? entry.label
+        brand.stringValue = "MicCamWatch"
+        subtitle.stringValue = frame.version!
+        observedTitle.stringValue = gui[3]
+        effectiveTitle.stringValue = gui[4]
+        func activity(_ state: String) -> String {
+            switch state { case "active": return gui[17]; case "ready": return gui[18]; case "idle": return gui[19]; default: return words.unknown }
+        }
+        micObservation.stringValue = "\(words.microphone): \(activity(overview.microphone))"
+        cameraObservation.stringValue = "\(words.camera): \(activity(overview.camera))"
+        micObservation.textColor = overview.microphone == "active" ? .systemOrange : .labelColor
+        cameraObservation.textColor = overview.camera == "active" ? .systemOrange : .labelColor
+        let mic: String
+        switch protection.microphone { case "muted": mic = words.muted; case "unmuted": mic = words.unmuted; case "mixed": mic = words.mixed; default: mic = words.unknown }
+        let camera: String
+        switch protection.camera { case "owned": camera = words.restricted; case "absent": camera = words.unrestricted; case "system_managed": camera = words.systemManaged; default: camera = words.unknown }
+        micEffective.stringValue = "\(words.microphone): \(mic)"
+        cameraEffective.stringValue = "\(words.camera): \(camera)"
+        timestamp.stringValue = "\(gui[5]): \(overview.observed_at ?? words.unknown)"
+        accessesTitle.stringValue = "\(gui[6]) · \(overview.total_accesses)"
+        empty.isHidden = !overview.accesses.isEmpty
+        empty.stringValue = overview.microphone == "unknown" || overview.camera == "unknown" ? gui[8] : gui[7]
+        for (index, row) in accessRows.enumerated() {
+            row.isHidden = index >= overview.accesses.count
+            guard index < overview.accesses.count else { continue }
+            let access = overview.accesses[index]
+            let resource = access.resource == "microphone" ? words.microphone : words.camera
+            row.stringValue = "\(access.application)\n\(resource) · \(activity(access.activity))" + (access.pid.map { " · PID \($0)" } ?? "")
+            row.setAccessibilityLabel(row.stringValue)
+        }
+        omitted.isHidden = overview.omitted_accesses == 0
+        omitted.stringValue = "\(overview.omitted_accesses) \(gui[9])"
+        let feedbackText = frame.feedback.map { "\(gui[20])\n\($0)" } ?? ""
+        headerFeedback.stringValue = feedbackText
+        headerFeedback.isHidden = frame.feedback == nil
+        headerFeedback.toolTip = frame.feedback
+        feedback.stringValue = feedbackText
+        feedback.isHidden = frame.feedback == nil
+        settingsFeedback.stringValue = feedbackText
+        settingsFeedback.isHidden = frame.feedback == nil
+        limitations.stringValue = words.limited
+        limitations.isHidden = frame.limited != true
+        scopeTitle.stringValue = gui[16]
+        scope.stringValue = words.scope
+        profileTitle.stringValue = gui[10]
+        profileNote.stringValue = gui[15]
+        notifications.title = gui[11]; notifications.state = preferences.notifications_enabled ? .on : .off
+        sound.title = gui[12]; sound.state = preferences.sound_enabled ? .on : .off
+        history.title = gui[13]; history.state = preferences.history_enabled ? .on : .off
+        notifications.setAccessibilityLabel(gui[11])
+        sound.setAccessibilityLabel(gui[12])
+        history.setAccessibilityLabel(gui[13])
+        notificationNote.stringValue = gui[14]
+        paused.stringValue = gui[preferences.notifications_paused ? 22 : 23]
+        copyButton.title = gui[21]
+        copyButton.setAccessibilityLabel(gui[21])
+        text.setAccessibilityLabel(gui[2])
+        for (action, button) in buttons {
+            let entry = frame.items!.first { $0.action == action }
+            button.isHidden = entry == nil
+            button.isEnabled = entry?.enabled == true
+            button.title = entry?.label ?? ""
+            button.toolTip = entry?.detail ?? entry?.label
+            button.setAccessibilityLabel(entry?.label)
+        }
+        let entry = frame.items!.first { $0.action == "profile" }!
+        let children = entry.children!
+        if profile.itemTitles != children.map({ $0.label }) {
+            profile.removeAllItems()
+            profile.addItems(withTitles: children.map { $0.label })
+        }
+        for (index, child) in children.enumerated() {
+            profile.item(at: index)?.representedObject = child.action
+            profile.item(at: index)?.isEnabled = entry.enabled && child.enabled
+        }
+        let selectedProfile = children.firstIndex { $0.checked == true } ?? -1
+        if profile.indexOfSelectedItem != selectedProfile { profile.selectItem(at: selectedProfile) }
+        profile.isEnabled = entry.enabled
+        profile.toolTip = entry.detail ?? entry.label
+        profile.setAccessibilityLabel(entry.label)
+        window.contentView!.layoutSubtreeIfNeeded()
+        for (scroll, position) in zip(paneScrolls, positions) {
+            scroll.contentView.scroll(to: position)
+            scroll.reflectScrolledClipView(scroll.contentView)
         }
     }
     func show() {
+        render()
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
-        window.makeFirstResponder(text)
     }
     @objc private func selected(_ sender: NSButton) {
         guard let action = sender.identifier?.rawValue,
               frame?.items?.contains(where: { $0.action == action && $0.enabled }) == true else { return }
         desktopEmit(DesktopEvent(kind: "action", action: action))
+    }
+    @objc private func preferenceSelected(_ sender: NSButton) {
+        guard frame != nil, let key = sender.identifier?.rawValue,
+              ["notifications", "sound", "history"].contains(key), sender.isEnabled else { return }
+        desktopEmit(DesktopEvent(kind: "action", action: key + (sender.state == .on ? "_enable" : "_disable")))
+    }
+    @objc private func profileSelected(_ sender: NSPopUpButton) {
+        guard let entry = frame?.items?.first(where: { $0.action == "profile" }), entry.enabled,
+              let action = sender.selectedItem?.representedObject as? String,
+              entry.children?.contains(where: { $0.action == action && $0.enabled }) == true else { return }
+        desktopEmit(DesktopEvent(kind: "action", action: action))
+    }
+    @objc private func copyDiagnostics(_ sender: Any?) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text.string, forType: .string)
     }
 }
 
@@ -465,6 +881,13 @@ final class DesktopMenu: NSObject {
             "\(words.automatic)\n\(words.microphone): \(flag(protection.microphone_on_lock))\n\(words.camera): \(flag(protection.camera_on_lock))",
             words.scope
         ]
+        let overview = frame.overview!, preferences = frame.preferences!
+        paragraphs.append("overview\nmicrophone: \(overview.microphone)\ncamera: \(overview.camera)\nobserved_at: \(overview.observed_at ?? "null")\ntotal_accesses: \(overview.total_accesses)\nomitted_accesses: \(overview.omitted_accesses)")
+        for access in overview.accesses {
+            paragraphs.append("\(access.application)\nresource: \(access.resource); activity: \(access.activity); pid: \(access.pid.map(String.init) ?? "null")")
+        }
+        paragraphs.append("preferences\nnotifications_enabled: \(preferences.notifications_enabled)\nsound_enabled: \(preferences.sound_enabled)\nhistory_enabled: \(preferences.history_enabled)\nnotifications_paused: \(preferences.notifications_paused)")
+        if let feedback = frame.feedback { paragraphs.append(feedback) }
         if frame.limited == true { paragraphs.insert(words.limited, at: 0) }
         func appendDetails(_ entries: [DesktopItem]) {
             for entry in entries {
@@ -564,7 +987,7 @@ final class DesktopMenu: NSObject {
         aboutAlert().runModal()
     }
     @objc private func selected(_ sender: NSMenuItem) {
-        if let action = sender.representedObject as? String {
+        if sender.isEnabled, let action = sender.representedObject as? String {
             desktopEmit(DesktopEvent(kind: "action", action: action))
         }
     }
@@ -612,11 +1035,6 @@ private final class DesktopDelegate: NSObject, NSApplicationDelegate {
                         let decoded = try JSONDecoder().decode(DesktopFrame.self, from: frame)
                         frame.removeAll(keepingCapacity: true)
                         if decoded.kind == "stop" {
-                            guard decoded.summary == nil, decoded.items == nil, decoded.protection == nil,
-                                  decoded.language == nil, decoded.version == nil, decoded.visual == nil,
-                                  decoded.diagnostics == nil, decoded.limited == nil else {
-                                throw NSError(domain: "MicCamWatch", code: 3, userInfo: [NSLocalizedDescriptionKey: "invalid stop frame"])
-                            }
                             scheduleStop()
                             return
                         } else {
@@ -625,10 +1043,7 @@ private final class DesktopDelegate: NSObject, NSApplicationDelegate {
                             let applied = DispatchSemaphore(value: 0)
                             RunLoop.main.perform(inModes: [.common]) { [weak self] in
                                 defer { applied.signal() }
-                                if decoded.kind == "show", decoded.summary == nil, decoded.items == nil,
-                                   decoded.protection == nil, decoded.language == nil,
-                                   decoded.version == nil, decoded.visual == nil,
-                                   decoded.diagnostics == nil, decoded.limited == nil {
+                                if decoded.kind == "show" {
                                     self?.showConsultation()
                                 } else { self?.apply(decoded) }
                             }
@@ -664,7 +1079,7 @@ private final class DesktopDelegate: NSObject, NSApplicationDelegate {
         menuContent = content
         if !initialized {
             initialized = true
-            desktopEmit(DesktopEvent(kind: "ready", protocol: 3))
+            desktopEmit(DesktopEvent(kind: "ready", protocol: 4))
         }
     }
     private func showConsultation() {
