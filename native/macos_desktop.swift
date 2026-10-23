@@ -163,11 +163,6 @@ struct DesktopProtection: Decodable {
 }
 private let desktopTimestampPattern = try! NSRegularExpression(
     pattern: #"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]+)?(?:Z|\+00:00)$"#)
-private let desktopTimestampFraction: ISO8601DateFormatter = {
-    let formatter = ISO8601DateFormatter()
-    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    return formatter
-}()
 private let desktopTimestampSeconds: ISO8601DateFormatter = {
     let formatter = ISO8601DateFormatter()
     formatter.formatOptions = [.withInternetDateTime]
@@ -184,6 +179,37 @@ private func desktopTextCost(_ text: String?) -> Int {
         }
     }
 }
+// All consumers, including the stdin reader, share the wire-size and semantic
+// boundary. JSONDecoder alone does not enforce the v4 state invariants.
+private func desktopUTF8JSON(_ data: Data) -> Bool {
+    data.withUnsafeBytes { bytes in
+        var iterator = bytes.makeIterator()
+        var decoder = Unicode.UTF8()
+        while true {
+            switch decoder.decode(&iterator) {
+            case .scalarValue(let scalar):
+                // Literal NUL is invalid JSON and would allow Foundation to
+                // auto-detect/transcode BOM-less UTF-16/32 instead of UTF-8.
+                if scalar.value == 0 { return false }
+            case .emptyInput: return true
+            case .error: return false
+            }
+        }
+    }
+}
+func decodeDesktopFrame(_ data: Data) throws -> DesktopFrame {
+    guard !data.isEmpty, data.count <= 65536, desktopUTF8JSON(data) else {
+        throw NSError(domain: "MicCamWatch", code: 1, userInfo: [NSLocalizedDescriptionKey: "desktop frame is empty, oversized or not UTF-8 JSON"])
+    }
+    let frame = try JSONDecoder().decode(DesktopFrame.self, from: data)
+    guard frame.kind != "state" || validDesktopState(frame) else {
+        throw NSError(domain: "MicCamWatch", code: 2, userInfo: [NSLocalizedDescriptionKey: "invalid desktop state frame"])
+    }
+    return frame
+}
+private let desktopRootActions = ["status", "mic", "camera", "camera_inspect", "pause", "profile", "autostart", "exit", "header"]
+private let desktopRequiredActions = ["mic", "camera", "pause", "profile", "autostart"]
+private let desktopProfileActions = ["profile_balanced", "profile_private", "profile_meeting", "profile_development"]
 func validDesktopState(_ frame: DesktopFrame) -> Bool {
     guard frame.kind == "state", let summary = frame.summary,
           let diagnostics = frame.diagnostics, diagnostics.utf8.count <= 32768, frame.limited != nil,
@@ -194,7 +220,7 @@ func validDesktopState(_ frame: DesktopFrame) -> Bool {
           ["muted", "unmuted", "mixed", "unknown"].contains(protection.microphone),
           ["owned", "absent", "system_managed", "unknown"].contains(protection.camera),
           let entries = frame.items, entries.count <= 16, summary.utf8.count <= 2048,
-          entries.last?.action == "exit", entries.filter({ $0.action == "exit" }).count == 1 else { return false }
+          entries.last?.action == "exit", entries.lazy.filter({ $0.action == "exit" }).count == 1 else { return false }
     guard let overview = frame.overview, frame.preferences != nil,
           ["active", "ready", "idle", "unknown"].contains(overview.microphone),
           ["active", "ready", "idle", "unknown"].contains(overview.camera),
@@ -202,13 +228,20 @@ func validDesktopState(_ frame: DesktopFrame) -> Bool {
           overview.omitted_accesses == overview.total_accesses - overview.accesses.count,
           (frame.feedback?.utf8.count ?? 0) <= 2048 else { return false }
     if let stamp = overview.observed_at {
-        guard desktopTimestampPattern.rangeOfFirstMatch(in: stamp, options: [], range: NSRange(location: 0, length: stamp.utf16.count)).location != NSNotFound,
-              desktopTimestampFraction.date(from: stamp) != nil || desktopTimestampSeconds.date(from: stamp) != nil else { return false }
+        guard stamp.utf8.count <= 64,
+              desktopTimestampPattern.rangeOfFirstMatch(in: stamp, options: [], range: NSRange(location: 0, length: stamp.utf16.count)).location != NSNotFound else { return false }
+        // Validate calendar components at whole-second precision only. Parsing
+        // a legitimate .999999999 fraction through Date can round into the next
+        // second; the fraction is already validated by the wire grammar above.
+        let seconds = String(stamp.prefix(19)) + "Z"
+        guard let date = desktopTimestampSeconds.date(from: seconds),
+              desktopTimestampSeconds.string(from: date) == seconds else { return false }
     } else if overview.microphone != "unknown" || overview.camera != "unknown" || overview.total_accesses != 0 {
         return false
     }
     for access in overview.accesses {
         guard access.application.utf8.count <= 256,
+              access.pid.map({ $0 >= 0 && UInt64($0) <= UInt64(UInt32.max) }) ?? true,
               ["microphone", "camera"].contains(access.resource),
               ["active", "ready"].contains(access.activity) else { return false }
         let state = access.resource == "microphone" ? overview.microphone : overview.camera
@@ -216,19 +249,17 @@ func validDesktopState(_ frame: DesktopFrame) -> Bool {
     }
     var projection = desktopTextCost(summary) + desktopTextCost(diagnostics) + desktopTextCost(frame.feedback) + desktopTextCost(overview.observed_at)
     projection += overview.accesses.reduce(0) { $0 + desktopTextCost($1.application) }
-    let roots = ["status", "mic", "camera", "camera_inspect", "pause", "profile", "autostart", "exit", "header"]
-    let choices = Set(["profile_balanced", "profile_private", "profile_meeting", "profile_development"])
-    guard ["mic", "camera", "pause", "profile", "autostart"].allSatisfy({ action in entries.filter { $0.action == action }.count == 1 }),
-          entries.filter({ $0.action == "camera_inspect" }).count <= 1 else { return false }
+    guard desktopRequiredActions.allSatisfy({ action in entries.lazy.filter { $0.action == action }.count == 1 }),
+          entries.lazy.filter({ $0.action == "camera_inspect" }).count <= 1 else { return false }
     var count = entries.count
     for entry in entries {
-        guard roots.contains(entry.action), entry.checked == nil,
+        guard desktopRootActions.contains(entry.action), entry.checked == nil,
               entry.label.utf8.count <= 16384, (entry.detail?.utf8.count ?? 0) <= 16384 else { return false }
         projection += desktopTextCost(entry.label) + desktopTextCost(entry.detail)
         if entry.action == "profile" {
             guard let children = entry.children, children.count == 4,
-                  Set(children.map { $0.action }) == choices,
-                  children.filter({ $0.checked == true }).count <= 1 else { return false }
+                  desktopProfileActions.allSatisfy({ action in children.lazy.filter { $0.action == action }.count == 1 }),
+                  children.lazy.filter({ $0.checked == true }).count <= 1 else { return false }
             count += children.count
             for child in children {
                 projection += desktopTextCost(child.label) + desktopTextCost(child.detail)
@@ -417,12 +448,18 @@ struct DesktopWords {
 // Accessory helpers have no application menu bar. Keep the standard document
 // keyboard actions local to this window; Command-W must never become tray Exit.
 private final class DesktopConsultationWindow: NSWindow {
+    weak var sectionTabs: NSTabView?
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         if event.modifierFlags.intersection([.command, .option, .control, .shift]) == .command {
             switch event.charactersIgnoringModifiers?.lowercased() {
             case "w": performClose(nil); return true
             case "c": return NSApp.sendAction(#selector(NSText.copy(_:)), to: firstResponder, from: self)
             case "a": return NSApp.sendAction(#selector(NSText.selectAll(_:)), to: firstResponder, from: self)
+            case "1", "2", "3":
+                if let index = Int(event.charactersIgnoringModifiers ?? ""), let tabs = sectionTabs {
+                    tabs.selectTabViewItem(at: index - 1)
+                    return true
+                }
             default: break
             }
         }
@@ -456,7 +493,7 @@ private func desktopLabel(_ size: CGFloat = 13, weight: NSFont.Weight = .regular
     let label = DesktopLabel(wrappingLabelWithString: "")
     label.font = .systemFont(ofSize: size, weight: weight)
     label.isSelectable = true
-    label.lineBreakMode = .byCharWrapping
+    label.lineBreakMode = .byWordWrapping
     label.maximumNumberOfLines = 0
     label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
     return label
@@ -468,7 +505,7 @@ private func desktopColumn(_ views: [NSView], inset: CGFloat = 0) -> NSStackView
     let stack = DesktopColumn(views: views)
     stack.orientation = .vertical
     stack.alignment = .leading
-    stack.spacing = 10
+    stack.spacing = 12
     stack.edgeInsets = NSEdgeInsets(top: inset, left: inset, bottom: inset, right: inset)
     for view in views {
         view.translatesAutoresizingMaskIntoConstraints = false
@@ -556,32 +593,33 @@ final class DesktopConsultation: NSObject {
     let history = NSButton(checkboxWithTitle: "", target: nil, action: nil)
     private let brand = desktopLabel(22, weight: .semibold)
     private let subtitle = desktopLabel(12)
+    private let microphoneTitle = desktopLabel(13, weight: .semibold)
+    private let cameraTitle = desktopLabel(13, weight: .semibold)
     private let observedTitle = desktopLabel(15, weight: .semibold)
     private let micObservation = desktopLabel(17, weight: .medium)
     private let cameraObservation = desktopLabel(17, weight: .medium)
     private let effectiveTitle = desktopLabel(15, weight: .semibold)
     private let micEffective = desktopLabel()
     private let cameraEffective = desktopLabel()
+    private let micRequested = desktopLabel(12)
+    private let cameraRequested = desktopLabel(12)
     private let timestamp = desktopLabel(12)
     private let accessesTitle = desktopLabel(15, weight: .semibold)
     private let empty = desktopLabel()
     private let accessRows = (0..<8).map { _ in desktopLabel() }
     private let omitted = desktopLabel(12)
-    private let feedback = desktopLabel()
     private let limitations = desktopLabel(12)
-    private let scopeTitle = desktopLabel(15, weight: .semibold)
-    private let scope = desktopLabel(12)
     private let profileTitle = desktopLabel(15, weight: .semibold)
     private let profileNote = desktopLabel(12)
     private let notificationNote = desktopLabel(12)
     private let paused = desktopLabel()
     private let headerFeedback = desktopLabel(12)
-    private let settingsFeedback = desktopLabel()
     private let copyButton = NSButton()
     private var buttons: [String: NSButton] = [:]
     private var paneScrolls: [NSScrollView] = []
     private var frame: DesktopFrame?
     private var dirty = false
+    private var pendingDiagnostic = ""
     override init() {
         let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 800, height: 600)
         let size = NSSize(width: min(645, screen.width - 40), height: min(548, screen.height - 60))
@@ -596,7 +634,7 @@ final class DesktopConsultation: NSObject {
             ("observation_microphone", micObservation), ("observation_camera", cameraObservation),
             ("effective_microphone", micEffective), ("effective_camera", cameraEffective),
             ("observed_at", timestamp), ("access_empty", empty), ("omitted_accesses", omitted),
-            ("last_action_feedback", feedback)
+            ("requested_microphone", micRequested), ("requested_camera", cameraRequested)
         ] {
             label.identifier = NSUserInterfaceItemIdentifier(identifier)
         }
@@ -611,15 +649,21 @@ final class DesktopConsultation: NSObject {
         let heading = NSStackView(views: [icon, desktopColumn([brand, subtitle])])
         heading.spacing = 12
         heading.alignment = .centerY
+        let resourceCards = NSStackView(views: [
+            desktopCard([microphoneTitle, micObservation]),
+            desktopCard([cameraTitle, cameraObservation])
+        ])
+        resourceCards.orientation = .horizontal
+        resourceCards.distribution = .fillEqually
+        resourceCards.alignment = .top
+        resourceCards.spacing = 12
         let overview = desktopColumn([
-            desktopCard([observedTitle, micObservation, cameraObservation, timestamp]),
-            feedback, limitations,
+            observedTitle, resourceCards, timestamp, limitations,
             desktopCard([accessesTitle, empty] + accessRows + [omitted]),
-            desktopCard([effectiveTitle, micEffective, cameraEffective, actionButton("mic"), actionButton("camera")]),
-            desktopCard([scopeTitle, scope])
+            desktopCard([effectiveTitle, micEffective, micRequested, cameraEffective, cameraRequested,
+                         actionButton("mic"), actionButton("camera")])
         ], inset: 12)
         let settings = desktopColumn([
-            settingsFeedback,
             desktopCard([profileTitle, profile, profileNote]),
             desktopCard([notifications, sound, history, notificationNote, paused, actionButton("pause")]),
             desktopCard([actionButton("autostart")])
@@ -667,10 +711,12 @@ final class DesktopConsultation: NSObject {
             tabs.addTabViewItem(tab)
         }
         tabs.identifier = NSUserInterfaceItemIdentifier("desktop_sections")
+        (window as? DesktopConsultationWindow)?.sectionTabs = tabs
+        window.initialFirstResponder = tabs
         headerFeedback.identifier = NSUserInterfaceItemIdentifier("header_feedback")
         headerFeedback.maximumNumberOfLines = 2
         headerFeedback.lineBreakMode = .byTruncatingTail
-        let root = desktopColumn([heading, headerFeedback, tabs], inset: 16)
+        let root = desktopColumn([heading, headerFeedback, tabs], inset: 20)
         root.translatesAutoresizingMaskIntoConstraints = false
         window.contentView!.addSubview(root)
         NSLayoutConstraint.activate([
@@ -685,7 +731,14 @@ final class DesktopConsultation: NSObject {
         timestamp.textColor = .secondaryLabelColor
         notificationNote.textColor = .secondaryLabelColor
         profileNote.textColor = .secondaryLabelColor
-        scope.textColor = .secondaryLabelColor
+        microphoneTitle.textColor = .secondaryLabelColor
+        cameraTitle.textColor = .secondaryLabelColor
+        micRequested.textColor = .secondaryLabelColor
+        cameraRequested.textColor = .secondaryLabelColor
+        omitted.textColor = .secondaryLabelColor
+        limitations.textColor = .secondaryLabelColor
+        limitations.maximumNumberOfLines = 2
+        limitations.lineBreakMode = .byTruncatingTail
         window.center()
     }
     private func actionButton(_ action: String) -> NSButton {
@@ -702,27 +755,24 @@ final class DesktopConsultation: NSObject {
     }
     func update(_ frame: DesktopFrame, diagnostic: String) {
         self.frame = frame
+        pendingDiagnostic = diagnostic
         dirty = true
-        if text.string != diagnostic {
-            let selection = text.selectedRanges
-            let visible = text.enclosingScrollView?.contentView.bounds.origin
-            text.string = diagnostic
-            text.selectedRanges = selection.map {
-                let range = $0.rangeValue
-                let start = min(range.location, (diagnostic as NSString).length)
-                return NSValue(range: NSRange(location: start, length: min(range.length, (diagnostic as NSString).length - start)))
-            }
-            if let scroll = text.enclosingScrollView, let visible = visible {
-                scroll.contentView.scroll(to: visible)
-                scroll.reflectScrolledClipView(scroll.contentView)
-            }
-        }
         if window.isVisible { render() }
     }
     private func render() {
         guard dirty, let frame = frame else { return }
         dirty = false
         let positions = paneScrolls.map { $0.contentView.bounds.origin }
+        let diagnostic = pendingDiagnostic
+        if text.string != diagnostic {
+            let selection = text.selectedRanges
+            text.string = diagnostic
+            text.selectedRanges = selection.map {
+                let range = $0.rangeValue
+                let start = min(range.location, (diagnostic as NSString).length)
+                return NSValue(range: NSRange(location: start, length: min(range.length, (diagnostic as NSString).length - start)))
+            }
+        }
         let words = DesktopWords(frame.language!), gui = DesktopGUIWords(frame.language!)
         let overview = frame.overview!, protection = frame.protection!, preferences = frame.preferences!
         for index in 0..<3 where tabs.tabViewItems[index].label != gui[index] {
@@ -735,8 +785,12 @@ final class DesktopConsultation: NSObject {
         func activity(_ state: String) -> String {
             switch state { case "active": return gui[17]; case "ready": return gui[18]; case "idle": return gui[19]; default: return words.unknown }
         }
-        micObservation.stringValue = "\(words.microphone): \(activity(overview.microphone))"
-        cameraObservation.stringValue = "\(words.camera): \(activity(overview.camera))"
+        microphoneTitle.stringValue = words.microphone
+        cameraTitle.stringValue = words.camera
+        micObservation.stringValue = activity(overview.microphone)
+        cameraObservation.stringValue = activity(overview.camera)
+        micObservation.setAccessibilityLabel("\(words.microphone): \(micObservation.stringValue)")
+        cameraObservation.setAccessibilityLabel("\(words.camera): \(cameraObservation.stringValue)")
         micObservation.textColor = overview.microphone == "active" ? .systemOrange : .labelColor
         cameraObservation.textColor = overview.camera == "active" ? .systemOrange : .labelColor
         let mic: String
@@ -745,6 +799,9 @@ final class DesktopConsultation: NSObject {
         switch protection.camera { case "owned": camera = words.restricted; case "absent": camera = words.unrestricted; case "system_managed": camera = words.systemManaged; default: camera = words.unknown }
         micEffective.stringValue = "\(words.microphone): \(mic)"
         cameraEffective.stringValue = "\(words.camera): \(camera)"
+        func requested(_ value: Bool?) -> String { value.map { $0 ? words.yes : words.no } ?? words.noRequest }
+        micRequested.stringValue = "\(words.requested): \(requested(protection.requested[0]))"
+        cameraRequested.stringValue = "\(words.requested): \(requested(protection.requested[1]))"
         timestamp.stringValue = "\(gui[5]): \(overview.observed_at ?? words.unknown)"
         accessesTitle.stringValue = "\(gui[6]) · \(overview.total_accesses)"
         empty.isHidden = !overview.accesses.isEmpty
@@ -759,18 +816,13 @@ final class DesktopConsultation: NSObject {
         }
         omitted.isHidden = overview.omitted_accesses == 0
         omitted.stringValue = "\(overview.omitted_accesses) \(gui[9])"
-        let feedbackText = frame.feedback.map { "\(gui[20])\n\($0)" } ?? ""
-        headerFeedback.stringValue = feedbackText
+        headerFeedback.stringValue = frame.feedback.map { "\(gui[20]): \($0)" } ?? ""
         headerFeedback.isHidden = frame.feedback == nil
         headerFeedback.toolTip = frame.feedback
-        feedback.stringValue = feedbackText
-        feedback.isHidden = frame.feedback == nil
-        settingsFeedback.stringValue = feedbackText
-        settingsFeedback.isHidden = frame.feedback == nil
+        headerFeedback.setAccessibilityLabel(headerFeedback.stringValue)
         limitations.stringValue = words.limited
+        limitations.toolTip = words.limited
         limitations.isHidden = frame.limited != true
-        scopeTitle.stringValue = gui[16]
-        scope.stringValue = words.scope
         profileTitle.stringValue = gui[10]
         profileNote.stringValue = gui[15]
         notifications.title = gui[11]; notifications.state = preferences.notifications_enabled ? .on : .off
@@ -1032,7 +1084,7 @@ private final class DesktopDelegate: NSObject, NSApplicationDelegate {
                 }
                 for byte in buffer.prefix(count) {
                     if byte == 10 {
-                        let decoded = try JSONDecoder().decode(DesktopFrame.self, from: frame)
+                        let decoded = try decodeDesktopFrame(frame)
                         frame.removeAll(keepingCapacity: true)
                         if decoded.kind == "stop" {
                             scheduleStop()
@@ -1069,7 +1121,7 @@ private final class DesktopDelegate: NSObject, NSApplicationDelegate {
         CFRunLoopWakeUp(CFRunLoopGetMain())
     }
     private func apply(_ frame: DesktopFrame) {
-        guard !stopping, validDesktopState(frame),
+        guard !stopping,
               let summary = frame.summary, let visual = frame.visual else {
             desktopEmit(DesktopEvent(kind: "error", error: "invalid desktop state frame")); stop(); return
         }

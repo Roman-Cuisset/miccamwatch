@@ -87,9 +87,7 @@ fn toast_document(title: &str, detail: &str, sound: bool) -> windows::core::Resu
 #[cfg(all(test, windows))]
 mod tests {
     use super::*;
-    use windows::Win32::System::Com::{
-        COINIT_MULTITHREADED, CoInitializeEx, CoUninitialize,
-    };
+    use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoUninitialize};
 
     #[test]
     fn native_toast_audio_obeys_the_sound_preference_without_delivery() -> anyhow::Result<()> {
@@ -98,10 +96,18 @@ mod tests {
             for sound in [false, true] {
                 let document = toast_document("MCW", "Preference qualification", sound)?;
                 let toast = ToastNotification::CreateToastNotification(&document)?;
-                let audio = toast.Content()?.GetElementsByTagName(&HSTRING::from("audio"))?;
+                let audio = toast
+                    .Content()?
+                    .GetElementsByTagName(&HSTRING::from("audio"))?;
                 assert_eq!(audio.Length()?, 1);
-                let silent = audio.Item(0)?.Attributes()?.GetNamedItem(&HSTRING::from("silent"))?;
-                assert_eq!(silent.InnerText()?.to_string(), if sound { "false" } else { "true" });
+                let silent = audio
+                    .Item(0)?
+                    .Attributes()?
+                    .GetNamedItem(&HSTRING::from("silent"))?;
+                assert_eq!(
+                    silent.InnerText()?.to_string(),
+                    if sound { "false" } else { "true" }
+                );
             }
             Ok(())
         })();

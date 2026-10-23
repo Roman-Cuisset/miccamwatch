@@ -24,6 +24,8 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
+#[cfg(test)]
+use windows::Win32::UI::WindowsAndMessaging::WS_VISIBLE;
 use windows::{
     Win32::{
         Foundation::{
@@ -55,8 +57,7 @@ use windows::{
                 TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, WINDOW_EX_STYLE,
                 WINDOW_STYLE, WM_APP, WM_CLOSE, WM_COMMAND, WM_COPY, WM_DESTROY, WM_LBUTTONDBLCLK,
                 WM_LBUTTONUP, WM_NCCREATE, WM_NULL, WM_RBUTTONUP, WM_SETFONT, WM_SIZE, WM_TIMER,
-                WNDCLASSW, WS_CHILD, WS_EX_CLIENTEDGE, WS_OVERLAPPED, WS_OVERLAPPEDWINDOW,
-                WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+                WNDCLASSW, WS_CHILD, WS_OVERLAPPED, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VSCROLL,
             },
         },
     },
@@ -711,6 +712,7 @@ unsafe extern "system" fn tray_wnd_proc(
                 handle_worker_results(state);
                 refresh_state(hwnd, state);
             }
+            refresh_desktop(hwnd);
             LRESULT(0)
         }
         WM_TRAY_CALLBACK => {
@@ -1051,12 +1053,6 @@ fn refresh_state(hwnd: HWND, state: &mut TrayAppState) {
     while let Some(refresh) = next_refresh(&state.refreshes, state.pending_microphone) {
         apply_refresh(hwnd, state, refresh);
     }
-    if state.desktop.as_ref().is_some_and(windows_desktop::DesktopWindow::is_visible) {
-        let view = windows_desktop::View::from_state(state);
-        if let Some(desktop) = &mut state.desktop {
-            desktop.update(view);
-        }
-    }
 }
 
 fn apply_refresh(hwnd: HWND, state: &mut TrayAppState, refresh: TrayRefresh) {
@@ -1101,7 +1097,9 @@ fn apply_refresh(hwnd: HWND, state: &mut TrayAppState, refresh: TrayRefresh) {
         record_history_changes(state, snapshot);
     }
     state.overview = windows_desktop::Overview::from_snapshot(
-        refresh.snapshot.as_ref().map_err(String::as_str), state.lang, refresh.observed_at,
+        refresh.snapshot.as_ref().map_err(String::as_str),
+        state.lang,
+        refresh.observed_at,
     );
     let (visual, summary) = refreshed_status(
         refresh.snapshot.as_ref().map_err(String::as_str),
@@ -1952,41 +1950,65 @@ fn diagnostic_document(summary: &str) -> String {
 }
 
 fn open_desktop(hwnd: HWND) {
-    let Some(state) = state(hwnd) else { return };
-    if state.desktop.is_none() {
-        match windows_desktop::DesktopWindow::create(
-            hwnd, windows_desktop::View::from_state(state), state.green_icon,
-        ) {
-            Ok(desktop) => state.desktop = Some(desktop),
-            Err(error) => {
-                state.settings_error = Some(format!("MicCamWatch window: {error:#}"));
-                notify_async(state, "MicCamWatch", &format!("{error:#}"));
-                return;
+    let Some((existing, view)) =
+        state(hwnd).map(|s| (s.desktop.take(), windows_desktop::View::from_state(s)))
+    else {
+        return;
+    };
+    // No TrayAppState reference survives native calls, which may synchronously
+    // send owner notifications. The desktop has its own scoped callback storage.
+    let desktop = match existing {
+        Some(mut desktop) => {
+            desktop.update(view);
+            Ok(desktop)
+        }
+        None => windows_desktop::DesktopWindow::create(hwnd, view),
+    };
+    match desktop {
+        Ok(desktop) => {
+            desktop.show();
+            if let Some(s) = state(hwnd) {
+                s.desktop = Some(desktop);
             }
         }
-    }
-    let view = windows_desktop::View::from_state(state);
-    if let Some(desktop) = &mut state.desktop {
-        desktop.update(view);
-    }
-    if let Some(desktop) = &state.desktop {
-        desktop.show();
+        Err(error) => {
+            if let Some(s) = state(hwnd) {
+                s.settings_error = Some(format!("MicCamWatch window: {error:#}"));
+                notify_async(s, "MicCamWatch", &format!("{error:#}"));
+            }
+        }
     }
 }
 
 fn refresh_desktop(hwnd: HWND) {
-    let Some(state) = state(hwnd) else { return };
-    if state.desktop.is_some() {
-        let view = windows_desktop::View::from_state(state);
-        if let Some(desktop) = &mut state.desktop {
-            desktop.update(view);
+    let Some((desktop, view)) = state(hwnd).and_then(|s| {
+        if !s
+            .desktop
+            .as_ref()
+            .is_some_and(windows_desktop::DesktopWindow::is_visible)
+        {
+            return None;
         }
+        Some((s.desktop.take()?, windows_desktop::View::from_state(s)))
+    }) else {
+        return;
+    };
+    let mut desktop = desktop;
+    desktop.update(view);
+    if let Some(s) = state(hwnd) {
+        s.desktop = Some(desktop);
     }
 }
 
 fn update_desktop_preferences(id: usize, desired: bool) -> Result<Settings> {
     use windows_desktop::*;
-    anyhow::ensure!(matches!(id, NOTIFICATIONS | SOUND | HISTORY | PAUSE | MUTE_LOCK | CAMERA_LOCK | RESTORE_UNLOCK), "Unsupported preference");
+    anyhow::ensure!(
+        matches!(
+            id,
+            NOTIFICATIONS | SOUND | HISTORY | PAUSE | MUTE_LOCK | CAMERA_LOCK | RESTORE_UNLOCK
+        ),
+        "Unsupported preference"
+    );
     Settings::update(|settings| match id {
         NOTIFICATIONS => settings.notifications_enabled = desired,
         SOUND => settings.sound_enabled = desired,
@@ -1994,7 +2016,8 @@ fn update_desktop_preferences(id: usize, desired: bool) -> Result<Settings> {
         PAUSE => {
             if desired {
                 if !settings.notifications_paused() {
-                    settings.pause_notifications_until = Some(chrono::Utc::now() + chrono::Duration::hours(1));
+                    settings.pause_notifications_until =
+                        Some(chrono::Utc::now() + chrono::Duration::hours(1));
                 }
             } else {
                 settings.pause_notifications_until = None;
@@ -2010,14 +2033,20 @@ fn update_desktop_preferences(id: usize, desired: bool) -> Result<Settings> {
 fn apply_desktop_setting(hwnd: HWND, id: usize, desired: bool) {
     let Some(state) = state(hwnd) else { return };
     let result = if id == windows_desktop::AUTOSTART {
-        let result = if desired { crate::autostart::enable() } else { crate::autostart::disable() };
+        let result = if desired {
+            crate::autostart::enable()
+        } else {
+            crate::autostart::disable()
+        };
         result.and_then(|()| {
             state.autostart_state = crate::autostart::state()?;
             Ok(())
         })
     } else {
         update_desktop_preferences(id, desired).map(|settings| {
-            if !settings.history_enabled { state.previous_accesses.clear(); }
+            if !settings.history_enabled {
+                state.previous_accesses.clear();
+            }
             state.settings = settings;
         })
     };
@@ -2283,7 +2312,6 @@ fn append_disabled(menu: windows::Win32::UI::WindowsAndMessaging::HMENU, text: &
         )
     };
 }
-
 
 fn idle_text(lang: Language) -> &'static str {
     match lang {
@@ -2940,6 +2968,22 @@ mod tests {
         }
     }
 
+    fn native_profile_submenu(menu: HMENU) -> (i32, HMENU) {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            GetMenuItemCount, GetMenuState, GetSubMenu, MF_BYCOMMAND,
+        };
+        unsafe {
+            (0..GetMenuItemCount(Some(menu)))
+                .map(|position| (position, GetSubMenu(menu, position)))
+                .find(|(_, submenu)| {
+                    !submenu.is_invalid()
+                        && GetMenuState(*submenu, CMD_PROFILE_BALANCED as u32, MF_BYCOMMAND)
+                            != u32::MAX
+                })
+                .expect("native profile actions must be reachable in a submenu")
+        }
+    }
+
     fn assert_native_menu(menu: HMENU, owner: HWND) {
         use windows::Win32::UI::WindowsAndMessaging::{
             GetMenuState, GetMenuStringW, MF_BYCOMMAND, MF_BYPOSITION,
@@ -2978,13 +3022,7 @@ mod tests {
                 assert_ne!(flags, u32::MAX, "essential action is missing");
                 assert_eq!(flags & (MF_DISABLED.0 | MF_GRAYED.0), 0);
             }
-            let profiles =
-                (0..windows::Win32::UI::WindowsAndMessaging::GetMenuItemCount(Some(menu)))
-                    .map(|position| {
-                        windows::Win32::UI::WindowsAndMessaging::GetSubMenu(menu, position)
-                    })
-                    .find(|submenu| !submenu.is_invalid())
-                    .expect("profile submenu is present");
+            let (_, profiles) = native_profile_submenu(menu);
             for (command, _) in PROFILE_CHOICES {
                 let flags = GetMenuState(profiles, command as u32, MF_BYCOMMAND);
                 assert_ne!(flags, u32::MAX, "profile choice is missing");
@@ -3088,7 +3126,7 @@ mod tests {
     #[test]
     fn native_profile_menu_checks_only_effective_selection_in_every_language() {
         use windows::Win32::UI::WindowsAndMessaging::{
-            GetMenuState, GetMenuStringW, GetSubMenu, MF_BYCOMMAND, MF_BYPOSITION,
+            GetMenuState, GetMenuStringW, MF_BYCOMMAND, MF_BYPOSITION,
         };
         let owner = native_test_owner();
         for lang in [
@@ -3119,10 +3157,11 @@ mod tests {
                         crate::autostart::AutostartState::Disabled,
                     )
                     .unwrap();
-                    let profiles = unsafe { GetSubMenu(menu, 7) };
+                    let (position, profiles) = native_profile_submenu(menu);
                     let mut parent_text = [0u16; 256];
-                    let parent_length =
-                        unsafe { GetMenuStringW(menu, 7, Some(&mut parent_text), MF_BYPOSITION) };
+                    let parent_length = unsafe {
+                        GetMenuStringW(menu, position as u32, Some(&mut parent_text), MF_BYPOSITION)
+                    };
                     assert!(parent_length > 0);
                     let parent_text =
                         String::from_utf16(&parent_text[..parent_length as usize]).unwrap();
@@ -3213,9 +3252,7 @@ mod tests {
     #[test]
     #[ignore = "hosted isolated desktop only: installer/tests/windows-tray-profiles-native.ps1"]
     fn native_windows_tray_profiles() {
-        use windows::Win32::UI::WindowsAndMessaging::{
-            EnableMenuItem, GetMenuState, GetSubMenu, MF_BYCOMMAND,
-        };
+        use windows::Win32::UI::WindowsAndMessaging::{EnableMenuItem, GetMenuState, MF_BYCOMMAND};
         assert_eq!(std::env::var("GITHUB_ACTIONS").as_deref(), Ok("true"));
         assert_eq!(
             std::env::var("RUNNER_ENVIRONMENT").as_deref(),
@@ -3355,7 +3392,7 @@ mod tests {
                     );
                 }
             }
-            let profiles = unsafe { GetSubMenu(menu, 7) };
+            let (_, profiles) = native_profile_submenu(menu);
             assert!(!profiles.is_invalid());
             let states: Vec<_> = PROFILE_CHOICES.iter().map(|(command, profile)| {
                 let flags = unsafe { GetMenuState(profiles, *command as u32, MF_BYCOMMAND) };
@@ -3572,10 +3609,7 @@ mod tests {
     #[test]
     #[ignore = "requires interactive Windows desktop; run installer/tests/windows-tray-native.ps1"]
     fn native_windows_tray_visual_smoke() {
-        use windows::Win32::UI::WindowsAndMessaging::{
-            ChangeWindowMessageFilterEx, ES_AUTOHSCROLL, GWL_STYLE, GetWindowTextLengthW,
-            GetWindowTextW, IsWindow, MSGFLT_ALLOW, PM_REMOVE, PeekMessageW,
-        };
+        use windows::Win32::UI::WindowsAndMessaging::{ChangeWindowMessageFilterEx, MSGFLT_ALLOW};
         let directory = std::path::PathBuf::from(
             std::env::var_os("MCW_WINDOWS_NATIVE_PROOF_DIR").expect("proof output directory"),
         );
@@ -3713,52 +3747,6 @@ mod tests {
                 );
                 let _ = DestroyMenu(menu);
             }
-            let document = diagnostic_document(&summary);
-            std::fs::write(directory.join(format!("{name}-diagnostic.txt")), &document).unwrap();
-            let details = show_diagnostic_window(owner, &summary).unwrap();
-            unsafe {
-                let edit = GetDlgItem(Some(details), DETAILS_EDIT).unwrap();
-                let style = GetWindowLongPtrW(edit, GWL_STYLE) as u32;
-                assert_eq!(
-                    style & ES_AUTOHSCROLL as u32,
-                    0,
-                    "diagnostic must word-wrap"
-                );
-                assert_ne!(
-                    style & ES_READONLY as u32,
-                    0,
-                    "diagnostic must be copyable, not editable"
-                );
-                let mut text = vec![0u16; GetWindowTextLengthW(edit) as usize + 1];
-                let length = GetWindowTextW(edit, &mut text);
-                assert_eq!(
-                    String::from_utf16(&text[..length as usize]).unwrap(),
-                    document
-                );
-                std::fs::write(
-                    directory.join(format!("{name}-details.json")),
-                    serde_json::to_vec(&serde_json::json!({
-                        "window": details.0 as usize, "edit": edit.0 as usize,
-                        "document_utf16_units": document.encode_utf16().count(),
-                    }))
-                    .unwrap(),
-                )
-                .unwrap();
-                let deadline = Instant::now() + Duration::from_secs(90);
-                while IsWindow(Some(details)).as_bool() {
-                    assert!(
-                        Instant::now() < deadline,
-                        "native proof driver did not close details"
-                    );
-                    let mut message = MSG::default();
-                    if PeekMessageW(&mut message, None, 0, 0, PM_REMOVE).as_bool() {
-                        let _ = TranslateMessage(&message);
-                        DispatchMessageW(&message);
-                    } else {
-                        thread::sleep(Duration::from_millis(10));
-                    }
-                }
-            }
             let _ = unsafe { DestroyIcon(icon) };
         }
         drop(shell_icon);
@@ -3766,7 +3754,7 @@ mod tests {
         let _ = unsafe { DestroyWindow(owner) };
         std::fs::write(
             directory.join("complete"),
-            "actual shell tooltip/UIA, native HMENU geometry and full EDIT content checked",
+            "actual shell tooltip/UIA and native HMENU geometry checked; retained desktop is qualified separately",
         )
         .unwrap();
     }

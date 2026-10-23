@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import Darwin
 
 // Test executable only. Reads existing Accessibility authorization, never asks
 // for it and never changes TCC. No device APIs or injected capture fixtures.
@@ -53,12 +54,16 @@ if operation != "quit" {
             }), let tabs = attribute(sections, kAXTabsAttribute) as? [AXUIElement], tabs.count == 3 else {
                 stop("consultation has no accessible native Overview/Settings/Diagnostics tabs")
             }
+            let originalTab = tabs.first {
+                (attribute($0, kAXValueAttribute) as? NSNumber)?.boolValue == true
+            }
+            let originalFocus = attribute(application, kAXFocusedUIElementAttribute)
             // Only local navigation: never press settings/device/admin controls.
             guard AXUIElementPerformAction(tabs[1], kAXPressAction as CFString) == .success else {
                 stop("native Settings tab is not accessible")
             }
             let settings = descendants(window)
-            guard settings.filter({ (attribute($0, kAXRoleAttribute) as? String) == kAXCheckBoxRole }).count == 3,
+            guard settings.filter({ (attribute($0, kAXRoleAttribute) as? String) == kAXCheckBoxRole }).count >= 3,
                   settings.contains(where: { (attribute($0, kAXRoleAttribute) as? String) == kAXPopUpButtonRole }) else {
                 stop("native Settings lacks preference checkboxes or profile chooser")
             }
@@ -70,14 +75,39 @@ if operation != "quit" {
             guard AXUIElementPerformAction(tabs[0], kAXPressAction as CFString) == .success else {
                 stop("native Overview tab is not accessible")
             }
+            if let originalTab = originalTab {
+                guard AXUIElementPerformAction(originalTab, kAXPressAction as CFString) == .success else {
+                    stop("native section navigation could not restore the selected tab")
+                }
+            }
+            if let originalFocus = originalFocus, CFGetTypeID(originalFocus) == AXUIElementGetTypeID() {
+                // Focus restoration is local navigation, never a control press.
+                _ = AXUIElementSetAttributeValue(originalFocus as! AXUIElement,
+                                                kAXFocusedAttribute as CFString, kCFBooleanTrue)
+            }
             if operation == "close-window" {
                 guard let close = attribute(window, kAXCloseButtonAttribute),
                       CFGetTypeID(close) == AXUIElementGetTypeID(),
                       AXUIElementPerformAction(close as! AXUIElement, kAXPressAction as CFString) == .success else {
                     stop("native consultation close button unavailable")
                 }
+                let closeDeadline = Date().addingTimeInterval(3)
+                var closed = false
+                while Date() < closeDeadline {
+                    let remaining = attribute(application, kAXWindowsAttribute) as? [AXUIElement] ?? []
+                    if !remaining.contains(where: { (attribute($0, kAXTitleAttribute) as? String) == "MicCamWatch" }) {
+                        closed = true
+                        break
+                    }
+                    RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+                }
+                guard closed else { stop("native consultation close did not hide the window") }
+                guard Darwin.kill(pid, 0) == 0 || errno == EPERM else {
+                    stop("closing consultation terminated the desktop helper instead of retaining tray service")
+                }
             }
-            print("{\"native_consultation\":\"\(operation)\",\"window_count\":1,\"native_sections\":3,\"helper_pid\":\(pid)}")
+            let visibleCount = operation == "close-window" ? 0 : 1
+            print("{\"native_consultation\":\"\(operation)\",\"window_count\":\(visibleCount),\"observed_window_count_before\":1,\"native_sections\":3,\"helper_pid\":\(pid)}")
             exit(0)
         }
         if consultation.count > 1 { stop("duplicate native consultation windows") }

@@ -161,8 +161,11 @@ fn alert_delivery(
     let enabled = settings.notifications_enabled && !settings.notifications_paused();
     (
         notifications_requested && enabled,
-        sound_requested && settings.sound_enabled && enabled
-            && matches!(action, Action::Start) && activity == Activity::Active,
+        sound_requested
+            && settings.sound_enabled
+            && enabled
+            && matches!(action, Action::Start)
+            && activity == Activity::Active,
     )
 }
 
@@ -395,7 +398,10 @@ mod tests {
             (Activity::Active, Action::Update),
             (Activity::Active, Action::Stop),
         ] {
-            assert_eq!(alert_delivery(&settings, true, true, activity, action), (true, false));
+            assert_eq!(
+                alert_delivery(&settings, true, true, activity, action),
+                (true, false)
+            );
         }
         assert_eq!(
             alert_delivery(&settings, false, true, Activity::Active, Action::Start),

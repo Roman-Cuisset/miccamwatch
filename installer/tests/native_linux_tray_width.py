@@ -9,6 +9,9 @@ Run on a Linux runner with build/native dependencies already installed:
 Run profiles independently with the same command plus --profiles-only (python3-gi required).
 Both modes refuse non-GitHub-hosted or non-opted-in environments. The ignored Rust
 fixtures use production view/menu/actions with no hardware monitor or permission grant.
+The notification mode qualifies the complete bounded diagnostic projection,
+including explicit omission markers; native_linux_desktop.py separately
+qualifies the retained production GTK window and its widget interactions.
 """
 import argparse
 import json
@@ -371,10 +374,12 @@ def main():
                 require(fixture.poll() is None, 'native fixture exited; inspect fixture stderr/stdout')
                 view = json.loads((case_proof / 'view.json').read_text())
                 diagnostic = (case_proof / 'diagnostic.txt').read_text()
-                require('END-LINUX-DIAGNOSTIC' in diagnostic, 'original diagnostic tail missing')
+                require('BEGIN-LINUX-DIAGNOSTIC' in diagnostic, 'projected diagnostic evidence missing')
+                if view['limited']:
+                    require('omitted' in diagnostic, 'limited projection did not explain omitted evidence')
                 for row in view['items']:
                     require((row.get('detail') or row['label']).replace('\r', '\n') in diagnostic,
-                            'full original menu row not retained in details')
+                            'projected menu row not retained in details')
                 # The DBus service registers before the GTK tray button is
                 # mapped. Let the isolated host finish its initial paint.
                 time.sleep(.5)
@@ -400,8 +405,10 @@ def main():
                         ('real menu exceeds half the screen', geometry, screen_width))
                 require(0 < geometry['height'] < screen_height,
                         ('real menu does not fit the screen vertically', geometry))
-                # Details is inserted immediately before the existing Exit command.
-                run(['xdotool', 'key', 'End', 'Up', 'Return'])
+                # The production Open/Details affordance is the first menu item.
+                # This transport fixture deliberately consumes its Status intent
+                # as a notification; the separate desktop proof opens real GTK.
+                run(['xdotool', 'key', 'Home', 'Return'])
                 until(lambda: (case_proof / 'status-delivered').is_file(),
                       'actual native Details command did not deliver notification')
                 notification = until(lambda: native_window('_NET_WM_WINDOW_TYPE_NOTIFICATION'),
@@ -415,12 +422,12 @@ def main():
                 stop(monitor)
                 transport = (proof / (case + '-notification-transport.stdout')).read_text()
                 require(transport.count('END-LINUX-DIAGNOSTIC') == diagnostic.count('END-LINUX-DIAGNOSTIC'),
-                        'actual D-Bus body did not retain every full diagnostic tail')
+                        'actual D-Bus body did not retain every projected diagnostic tail')
                 require(transport.count('BEGIN-LINUX-DIAGNOSTIC') == diagnostic.count('BEGIN-LINUX-DIAGNOSTIC'),
-                        'actual D-Bus body did not retain every full diagnostic prefix')
+                        'actual D-Bus body did not retain every projected diagnostic prefix')
                 token = '运行时摄像头错误' if case == 'cjk' else 'runtime camera error_'
                 require(transport.count(token) == diagnostic.count(token),
-                        'actual D-Bus body did not retain complete repeated Unicode/Latin payload')
+                        'actual D-Bus body did not retain the complete projected Unicode/Latin payload')
                 require('&lt;&amp;&gt;' in transport, 'diagnostic markup was not escaped by real notification route')
                 run(['xdotool', 'mousemove', '26', '12', 'click', '3'])
                 until(lambda: native_window('_MENU'), 'native menu did not reopen for Exit')
@@ -428,14 +435,16 @@ def main():
                 require(fixture.wait(timeout=30) == 0, 'native fixture or actual Exit command failed')
                 measurements.append(dict(case=case, screen=dict(width=screen_width, height=screen_height),
                                          popup=geometry, notification=notification_geometry,
-                                         items=len(view['items']) + 1, full_transport_retained=True))
+                                         items=len(view['items']) + 1, bounded_transport_retained=True,
+                                         projection_limited=view['limited']))
                 time.sleep(.3)
             (proof / 'geometry.json').write_text(json.dumps(measurements, indent=2) + '\n')
             (proof / 'scope.txt').write_text(
                 'Actual production ksni builders registered to a real XFCE StatusNotifier host; GTK popup '
                 'and xfce4-notifyd notification windows measured on X11 and screenshotted for Latin/CJK '
-                'runtime diagnostics with newlines, tabs and carriage returns. Full originals and escaped '
-                'D-Bus notification bodies retained. Notification daemons may limit visible body height; '
+                'runtime diagnostics with newlines, tabs and carriage returns. The complete bounded '
+                'projection (including explicit omission markers) and escaped D-Bus notification '
+                'bodies are retained. Notification daemons may limit visible body height; '
                 'transport preservation is not a claim that every line is simultaneously visible or copyable. '
                 'No notification permissions granted. DBusMenu host fonts/geometry differ on other panels; '
                 '48 display cells is not a cross-desktop pixel guarantee. No hardware/permission controls '

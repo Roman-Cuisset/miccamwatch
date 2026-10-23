@@ -4,8 +4,8 @@
 Compiles unchanged native implementation files with a test-only entrypoint in a
 private temporary directory. Uses real NSWindow, NSMenu tracking and NSAlert,
 not menu mocks, Accessibility, device APIs or TCC grants. Captures the actual
-Overview, Settings and Diagnostics surfaces at the user's window size and the
-supported minimum, in native light/dark appearance. All fixture data is simulated.
+Overview, Settings and Diagnostics surfaces at narrow, minimum and roomy sizes
+in native light/dark and high-contrast appearances. All fixture data is simulated.
 Consultation and About PNGs show real AppKit content; menu-text PNGs are rendered fixtures.
 An optional display screenshot uses only preexisting permission.
 """
@@ -21,6 +21,7 @@ import tempfile
 
 HARNESS = r'''
 import AppKit
+import CoreGraphics
 
 func require(_ condition: @autoclosure () -> Bool, _ message: String) {
     if !condition() { fputs("FAIL: \(message)\n", stderr); exit(1) }
@@ -84,9 +85,26 @@ let rawCases = try! JSONSerialization.jsonObject(with: fixtureData) as! [[String
 let valid = rawCases[0]["frame"] as! [String: Any]
 func rejects(_ object: [String: Any]) -> Bool {
     let data = try! JSONSerialization.data(withJSONObject: object)
-    guard let decoded = try? JSONDecoder().decode(DesktopFrame.self, from: data) else { return true }
-    return !validDesktopState(decoded)
+    return (try? decodeDesktopFrame(data)) == nil
 }
+// Use the production wire entrypoint, including byte limits and malformed JSON.
+for data in [Data(), Data("[]".utf8), Data("{".utf8), Data([0xff]),
+             Data("{\"kind\":\"refresh\"}".utf8), Data("{\"kind\":\"show\",\"unknown\":null}".utf8)] {
+    require((try? decodeDesktopFrame(data)) == nil, "malformed wire frame accepted")
+}
+// Foundation accepts/transcodes these otherwise-valid JSON encodings by
+// default; protocol v4 deliberately accepts UTF-8 only, with no frame copy.
+for encoding in [String.Encoding.utf16, .utf16LittleEndian, .utf16BigEndian,
+                 .utf32, .utf32LittleEndian, .utf32BigEndian] {
+    let encoded = "{\"kind\":\"show\"}".data(using: encoding)!
+    require((try? decodeDesktopFrame(encoded)) == nil, "non-UTF8 JSON control frame accepted")
+}
+let control = Data("{\"kind\":\"show\"}".utf8)
+var boundary = control
+boundary.append(Data(repeating: 32, count: 65536 - control.count))
+require((try? decodeDesktopFrame(boundary)) != nil, "exact wire limit rejected")
+boundary.append(32)
+require((try? decodeDesktopFrame(boundary)) == nil, "over-limit wire frame accepted")
 var oversized = valid
 let validRows = valid["items"] as! [[String: Any]]
 oversized["items"] = Array(repeating: validRows[0], count: 20) + [validRows.last!]
@@ -122,7 +140,8 @@ require(rejects(oversizedDiagnostic), "unbounded expanded diagnostic accepted")
 var oversizedSummary = valid
 oversizedSummary["summary"] = String(repeating: "S", count: 2049)
 require(rejects(oversizedSummary), "expanded diagnostics leaked into compact status")
-for key in ["overview", "preferences", "feedback"] {
+for key in ["summary", "diagnostics", "limited", "visual", "items", "language", "version",
+            "protection", "overview", "preferences", "feedback"] {
     var missing = valid
     missing.removeValue(forKey: key)
     require(rejects(missing), "required v4 field missing: \(key)")
@@ -151,6 +170,49 @@ badOverview({ $0["observed_at"] = "2026-01-01T12:00:00+01:00" }, "non-UTC timest
 badOverview({ $0["observed_at"] = "not-a-time" }, "malformed timestamp accepted")
 badOverview({ $0["observed_at"] = NSNull() }, "active observation without time accepted")
 badOverview({ $0["obsolete"] = true }, "unknown overview field accepted")
+badOverview({ $0["observed_at"] = "2026-02-30T12:00:00Z" }, "impossible calendar date accepted")
+badOverview({ $0["observed_at"] = String(repeating: "0", count: 65) }, "unbounded timestamp accepted")
+for stamp in ["2026-10-22T12:00:00.999999999Z", "2026-10-22T23:59:59.999999999+00:00",
+              "2024-02-29T12:00:00Z"] {
+    var object = valid
+    var overview = object["overview"] as! [String: Any]
+    overview["observed_at"] = stamp
+    object["overview"] = overview
+    require(!rejects(object), "valid UTC timestamp rejected: \(stamp)")
+}
+badOverview({ $0["omitted_accesses"] = -1 }, "negative omission accepted")
+for pid in [-1, Int(UInt32.max) + 1] {
+    badOverview({
+        var rows = $0["accesses"] as! [[String: Any]]
+        rows[0]["pid"] = pid
+        $0["accesses"] = rows
+    }, "out-of-u32 pid accepted")
+}
+for key in ["application", "resource", "activity", "pid"] {
+    badOverview({
+        var rows = $0["accesses"] as! [[String: Any]]
+        rows[0].removeValue(forKey: key)
+        $0["accesses"] = rows
+    }, "missing access field accepted: \(key)")
+}
+for section in ["overview", "preferences", "protection"] {
+    let nested = valid[section] as! [String: Any]
+    for key in nested.keys {
+        var object = valid, missing = nested
+        missing.removeValue(forKey: key)
+        object[section] = missing
+        require(rejects(object), "missing nested field accepted: \(section).\(key)")
+    }
+    var object = valid, extra = nested
+    extra["obsolete"] = true
+    object[section] = extra
+    require(rejects(object), "unknown nested field accepted: \(section)")
+}
+badOverview({
+    var rows = $0["accesses"] as! [[String: Any]]
+    rows[0]["obsolete"] = true
+    $0["accesses"] = rows
+}, "unknown access field accepted")
 let validAccess = (valid["overview"] as! [String: Any])["accesses"] as! [[String: Any]]
 for (key, value) in [("application", String(repeating: "界", count: 86)), ("resource", "screen"), ("activity", "idle")] {
     badOverview({
@@ -167,6 +229,17 @@ badOverview({
 var badFeedback = valid
 badFeedback["feedback"] = String(repeating: "界", count: 683)
 require(rejects(badFeedback), "unbounded UTF8 feedback accepted")
+var feedbackBoundary = valid
+feedbackBoundary["feedback"] = String(repeating: "界", count: 682) + "AB"
+require(!rejects(feedbackBoundary), "exact UTF8 feedback limit rejected")
+var accessBoundary = valid
+var accessOverview = valid["overview"] as! [String: Any]
+var accessBoundaryRows = validAccess
+accessBoundaryRows[0]["application"] = String(repeating: "界", count: 85) + "A"
+accessBoundaryRows[0]["pid"] = Int(UInt32.max)
+accessOverview["accesses"] = accessBoundaryRows
+accessBoundary["overview"] = accessOverview
+require(!rejects(accessBoundary), "exact UTF8 application/u32 pid limit rejected")
 var badPreferences = valid
 var preferenceFields = valid["preferences"] as! [String: Any]
 preferenceFields["sound_enabled"] = 1
@@ -185,9 +258,43 @@ projection["items"] = validRows.map { row -> [String: Any] in
 }
 require(rejects(projection), "unbounded total text projection accepted")
 projection = valid
-projection["diagnostics"] = String(repeating: "\u{0000}", count: 9000)
+projection["diagnostics"] = String(repeating: "\u{0000}", count: 6000)
 require(rejects(projection), "escaped JSON text projection not bounded")
+// Keep this boundary below the wire limit so text accounting is exercised.
+var exactProjection = valid
+exactProjection["summary"] = ""
+exactProjection["diagnostics"] = String(repeating: "D", count: 32768)
+exactProjection["feedback"] = NSNull()
+var exactOverview = valid["overview"] as! [String: Any]
+var exactAccesses = validAccess
+exactAccesses[0]["application"] = ""
+exactOverview["accesses"] = exactAccesses
+exactProjection["overview"] = exactOverview
+var exactRows = validRows.map { row -> [String: Any] in
+    var row = row
+    row["label"] = ""
+    row.removeValue(forKey: "detail")
+    if let children = row["children"] as? [[String: Any]] {
+        row["children"] = children.map { child -> [String: Any] in
+            var child = child
+            child["label"] = ""
+            child.removeValue(forKey: "detail")
+            return child
+        }
+    }
+    return row
+}
+let detailBytes = 48000 - 32768 - ("2026-10-22T12:00:00Z".utf8.count)
+exactRows[0]["detail"] = String(repeating: "L", count: detailBytes)
+exactProjection["items"] = exactRows
+require(!rejects(exactProjection), "exact text projection limit rejected")
+exactRows[0]["detail"] = String(repeating: "L", count: detailBytes + 1)
+exactProjection["items"] = exactRows
+require(try! JSONSerialization.data(withJSONObject: exactProjection).count < 65536,
+        "projection regression fixture accidentally exceeds wire limit")
+require(rejects(exactProjection), "over-limit text projection accepted")
 var measurements = [[String: Any]]()
+var captures = [[String: Any]]()
 func descendants(_ root: NSView) -> [NSView] {
     [root] + root.subviews.flatMap { descendants($0) }
 }
@@ -197,9 +304,12 @@ func captureSections(_ consultation: DesktopConsultation, _ name: String) {
     simulated.font = .systemFont(ofSize: 10)
     simulated.textColor = .secondaryLabelColor
     simulated.alignment = .right
-    for appearance in [NSAppearance.Name.aqua, .darkAqua] {
-        window.appearance = NSAppearance(named: appearance)
-        for (sizeName, size) in [("user", NSSize(width: 645, height: 570)), ("minimum", window.minSize)] {
+    for appearance in [NSAppearance.Name.aqua, .darkAqua,
+                       .accessibilityHighContrastAqua, .accessibilityHighContrastDarkAqua] {
+        guard let nativeAppearance = NSAppearance(named: appearance) else { continue }
+        window.appearance = nativeAppearance
+        for (sizeName, size) in [("user", NSSize(width: 645, height: 570)), ("minimum", window.minSize),
+                                 ("roomy", NSSize(width: 900, height: 700))] {
             window.setFrame(NSRect(origin: window.frame.origin, size: size), display: true)
             for index in 0..<3 {
                 consultation.tabs.selectTabViewItem(at: index)
@@ -233,8 +343,12 @@ func captureSections(_ consultation: DesktopConsultation, _ name: String) {
                             "settings cannot scroll at smaller sizes")
                 }
                 simulated.frame = NSRect(x: 16, y: root.bounds.height - 14, width: root.bounds.width - 32, height: 12)
+                simulated.removeFromSuperview()
                 root.addSubview(simulated, positioned: .above, relativeTo: nil)
                 png(root, proof.appendingPathComponent("\(name)-\(appearance.rawValue)-\(sizeName)-\(index)-simulated.png"))
+                captures.append(["case": name, "appearance": appearance.rawValue, "size": sizeName,
+                                 "section": index, "window_width": window.frame.width,
+                                 "window_height": window.frame.height, "simulated": true])
             }
         }
     }
@@ -301,10 +415,10 @@ for test in cases {
     let cancel = Timer(timeInterval: 0.15, repeats: false) { _ in
         require(menu.size.width <= 400, "tracked NSMenu exceeds width bound")
         tracked = true
-        if test.name == "en" {
+        if test.name == "en" && CGPreflightScreenCaptureAccess() {
             let screenshot = Process()
             screenshot.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
-            screenshot.arguments = ["-x", proof.appendingPathComponent("en-native-menu.png").path]
+            screenshot.arguments = ["-x", proof.appendingPathComponent("en-native-menu-simulated.png").path]
             do {
                 try screenshot.run()
                 screenshot.waitUntilExit()
@@ -314,6 +428,9 @@ for test in cases {
                 try! error.localizedDescription.write(
                     to: proof.appendingPathComponent("native-menu-screenshot-unavailable.txt"), atomically: true, encoding: .utf8)
             }
+        } else if test.name == "en" {
+            try! "UNAVAILABLE: no preexisting Screen Recording authorization; no request was made.\n".write(
+                to: proof.appendingPathComponent("native-menu-screenshot-unavailable.txt"), atomically: true, encoding: .utf8)
         }
         menu.cancelTracking()
     }
@@ -326,7 +443,7 @@ for test in cases {
     let window = NSWindow(contentRect: fixture.bounds, styleMask: [.borderless], backing: .buffered, defer: false)
     window.contentView = fixture
     window.orderFront(nil)
-    png(fixture, proof.appendingPathComponent(test.name + "-menu-text-fixture.png"))
+    png(fixture, proof.appendingPathComponent(test.name + "-menu-text-fixture-simulated.png"))
     window.orderOut(nil)
     let open = menu.items[0]
     let about = menu.items[menu.items.count - 2]
@@ -342,7 +459,7 @@ for test in cases {
     let text = consultation.text
     require(text.string == content.diagnostic, "consultation lost full diagnostic")
     require(!text.isEditable && text.isSelectable, "consultation must be read-only and copyable")
-    require(consultation.tabs.selectedTabViewItem === consultation.tabs.tabViewItems[0], "initial screen must be Overview")
+    consultation.tabs.selectTabViewItem(at: 0)
     let overviewLabels = descendants(consultation.tabs.tabViewItems[0].view!).compactMap { $0 as? NSTextField }
     func overviewLabel(_ id: String) -> NSTextField {
         let label = overviewLabels.first { $0.identifier?.rawValue == id }
@@ -373,6 +490,11 @@ for test in cases {
     require(overviewLabel("effective_microphone").stringValue.contains(expectedMic) &&
             overviewLabel("effective_camera").stringValue.contains(expectedCamera),
             "native effective-control cards used requested state instead of observed facts")
+    for (resource, requested) in zip(["microphone", "camera"], protection.requested) {
+        let fact = requested.map { $0 ? localized.yes : localized.no } ?? localized.noRequest
+        require(overviewLabel("requested_" + resource).stringValue.contains(fact),
+                "requested protection was lost or conflated with effective control")
+    }
     require(overviewLabel("observed_at").stringValue.contains(observation.observed_at ?? localized.unknown),
             "native observation timestamp lost")
     for (index, access) in observation.accesses.enumerated() {
@@ -406,6 +528,39 @@ for test in cases {
     consultation.update(frame, diagnostic: content.diagnostic)
     require(consultation.tabs.selectedTabViewItem === consultation.tabs.tabViewItems[1] &&
             nativeWindow.firstResponder === settingsResponder, "refresh stole settings focus")
+    // A changed authoritative preference snapshot updates retained controls,
+    // rather than leaving a locally optimistic checkbox value behind.
+    var changedObject = rawCases.first { ($0["name"] as? String) == test.name }!["frame"] as! [String: Any]
+    var changedPreferences = changedObject["preferences"] as! [String: Any]
+    changedPreferences["notifications_enabled"] = !frame.preferences!.notifications_enabled
+    changedPreferences["sound_enabled"] = !frame.preferences!.sound_enabled
+    changedPreferences["history_enabled"] = !frame.preferences!.history_enabled
+    changedObject["preferences"] = changedPreferences
+    let changedFrame = try! decodeDesktopFrame(JSONSerialization.data(withJSONObject: changedObject))
+    consultation.update(changedFrame, diagnostic: content.diagnostic)
+    require(consultation.notifications.state != (frame.preferences!.notifications_enabled ? .on : .off) &&
+            consultation.sound.state != (frame.preferences!.sound_enabled ? .on : .off) &&
+            consultation.history.state != (frame.preferences!.history_enabled ? .on : .off),
+            "authoritative preference refresh did not update retained controls")
+    require(nativeWindow.firstResponder === settingsResponder, "preference refresh stole focus")
+    var unavailableObject = changedObject
+    var unavailableOverview = unavailableObject["overview"] as! [String: Any]
+    unavailableOverview["microphone"] = "unknown"
+    unavailableOverview["camera"] = "unknown"
+    unavailableOverview["observed_at"] = NSNull()
+    unavailableOverview["total_accesses"] = 0
+    unavailableOverview["omitted_accesses"] = 0
+    unavailableOverview["accesses"] = [[String: Any]]()
+    unavailableObject["overview"] = unavailableOverview
+    let unavailableFrame = try! decodeDesktopFrame(JSONSerialization.data(withJSONObject: unavailableObject))
+    consultation.update(unavailableFrame, diagnostic: "SIMULATED unavailable observation")
+    require(overviewLabel("observation_microphone").stringValue.contains(localized.unknown) &&
+            overviewLabel("observation_camera").stringValue.contains(localized.unknown) &&
+            !overviewLabel("access_empty").isHidden &&
+            (0..<8).allSatisfy { overviewLabel("access_\($0)").isHidden },
+            "failed refresh retained stale observed applications or converted unknown to idle")
+    require(nativeWindow.firstResponder === settingsResponder, "observation failure stole settings focus")
+    consultation.update(frame, diagnostic: content.diagnostic)
     for (name, button) in [("notifications", consultation.notifications), ("sound", consultation.sound), ("history", consultation.history)] {
         for state in [NSControl.StateValue.on, .off] {
             button.state = state == .on ? .off : .on
@@ -415,6 +570,8 @@ for test in cases {
     }
     let profileEntry = entries.first { $0.action == "profile" }!
     require(consultation.profile.isEnabled == profileEntry.enabled, "explicit config profile gate lost")
+    require((consultation.profile.selectedItem?.representedObject as? String) == test.selected_profile,
+            "authoritative selected profile was not retained through refresh")
     for (index, child) in profileEntry.children!.enumerated() {
         consultation.profile.selectItem(at: index)
         require(NSApp.sendAction(consultation.profile.action!, to: consultation.profile.target, from: consultation.profile),
@@ -431,6 +588,12 @@ for test in cases {
             isARepeat: false, keyCode: code)!
         return nativeWindow.performKeyEquivalent(with: event)
     }
+    for (key, index) in [("1", 0), ("2", 1), ("3", 2)] {
+        require(windowCommand(key, 0) &&
+                consultation.tabs.selectedTabViewItem === consultation.tabs.tabViewItems[index],
+                "keyboard section navigation unavailable")
+    }
+    nativeWindow.makeFirstResponder(text)
     require(windowCommand("a", 0) && text.selectedRange().length == (content.diagnostic as NSString).length,
             "consultation keyboard Select All unavailable")
     if checkClipboard {
@@ -456,12 +619,16 @@ for test in cases {
     }
     require(windowCommand("w", 13), "consultation keyboard Close unavailable")
     require(!nativeWindow.isVisible && !menu.items.isEmpty, "closing consultation damaged retained menu")
-    consultation.update(frame, diagnostic: content.diagnostic)
+    let hiddenDiagnostic = text.string
+    consultation.update(frame, diagnostic: content.diagnostic + "\nSimulated hidden refresh")
+    require(text.string == hiddenDiagnostic, "hidden refresh redundantly rendered the diagnostic document")
     require(!nativeWindow.isVisible, "hidden refresh unexpectedly opened consultation")
     require(NSApp.sendAction(open.action!, to: open.target, from: open), "reopen selector unavailable")
     require(consultation.window === nativeWindow && nativeWindow.windowNumber == identity && nativeWindow.isVisible,
             "reopening created a duplicate consultation")
     require(NSApp.windows.filter { $0 === nativeWindow }.count == 1, "duplicate consultation window")
+    require(text.string == content.diagnostic + "\nSimulated hidden refresh",
+            "reopen did not render the latest hidden snapshot")
     nativeWindow.performClose(nil)
     let alert = content.aboutAlert()
     require(alert.messageText == "MicCamWatch \(frame.version!)" && alert.informativeText == localized.description,
@@ -469,7 +636,7 @@ for test in cases {
     var inspected = false
     let inspect = Timer(timeInterval: 0.2, repeats: false) { _ in
         guard let root = NSApp.modalWindow?.contentView else { require(false, "native About did not render"); return }
-        png(root, proof.appendingPathComponent(test.name + "-about.png"))
+        png(root, proof.appendingPathComponent(test.name + "-about-simulated.png"))
         inspected = true
         NSApp.abortModal()
         NSApp.modalWindow?.orderOut(nil)
@@ -545,6 +712,8 @@ for appearance in [NSAppearance.Name.aqua, .darkAqua] {
 }
 let json = try! JSONSerialization.data(withJSONObject: measurements, options: [.prettyPrinted, .sortedKeys])
 try! json.write(to: proof.appendingPathComponent("native-menu-measurements.json"))
+try! JSONSerialization.data(withJSONObject: captures, options: [.prettyPrinted, .sortedKeys])
+    .write(to: proof.appendingPathComponent("native-surface-captures.json"))
 '''
 
 TRACKING_REGRESSION = r'''
@@ -752,6 +921,25 @@ def fixture_cases():
         frame['preferences'] = dict(notifications_enabled=True, sound_enabled=False,
                                     history_enabled=True, notifications_paused=False)
         frame['feedback'] = None
+    for name, overrides in (
+            ('ready-camera', dict(microphone='idle', camera='ready', total_accesses=1,
+                                 accesses=[dict(application='Camera preview (simulated)',
+                                                resource='camera', activity='ready', pid=None)])),
+            ('bounded-applications', dict(microphone='active', camera='ready',
+                                         total_accesses=12, omitted_accesses=4,
+                                         accesses=[dict(application=f'Simulated app {index} · ' + '界' * 40,
+                                                        resource='microphone' if index % 2 == 0 else 'camera',
+                                                        activity='active' if index % 2 == 0 else 'ready',
+                                                        pid=index + 100) for index in range(8)]))):
+        case = json.loads(json.dumps(cases[0]))
+        case['name'] = name
+        case['frame']['overview'].update(overrides)
+        if name == 'bounded-applications':
+            case['frame']['limited'] = True
+            case['frame']['feedback'] = 'SIMULATED failed action: permission was not granted. ' * 8
+            case['frame']['preferences'].update(notifications_enabled=False, sound_enabled=True,
+                                                history_enabled=False, notifications_paused=True)
+        cases.append(case)
     return cases
 
 
@@ -816,7 +1004,7 @@ def main():
             command += ['-framework', framework]
         for name, argv in (('build', command), ('surface', [str(executable), str(fixtures), str(proof),
                                                          '1' if args.isolated_clipboard else '0'])):
-            result = subprocess.run(argv, capture_output=True, text=True, timeout=180)
+            result = subprocess.run(argv, capture_output=True, text=True, timeout=300)
             (proof / (name + '.stdout')).write_text(result.stdout)
             (proof / (name + '.stderr')).write_text(result.stderr)
             (proof / (name + '.exit')).write_text(str(result.returncode) + '\n')
@@ -845,7 +1033,7 @@ def main():
     (proof / 'scope.txt').write_text(
         'Real production AppKit NSMenu intrinsic width and menu tracking; real enabled action dispatch; '
         'Simulated input data only; no claim of hardware capture coverage. '
-        'Real modeless consultation window: Overview/Settings/Diagnostics light/dark at 645x570 and minimum size, '
+        'Real modeless consultation window: Overview/Settings/Diagnostics light/dark/high-contrast at 645x570, minimum and roomy sizes, '
         'read-only full diagnostic copy, refresh tab/focus/selection/scroll retention, close and singleton reopen; '
         'localized native About with factual description and version in seven languages. '
         'Consultation/About PNGs are actual AppKit content snapshots; menu-text PNGs are rendered fixtures. '

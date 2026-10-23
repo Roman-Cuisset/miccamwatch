@@ -105,10 +105,16 @@ pub fn toggle_camera_state() -> Result<CameraPrivacyState> {
     request(Action::Toggle)
 }
 
-fn request(action: Action) -> Result<CameraPrivacyState> {
+/// Read-only prerequisites for requesting camera authorization, not proof of
+/// administrator consent, a running Polkit agent, or effective camera control.
+pub fn camera_control_preflight() -> Result<()> {
     store::trusted_executable(HELPER)
         .context("Linux USB camera helper is absent or unsafe; administrator review and explicit root setup are required: PREFIX/share/miccamwatch/linux-camera/install-camera-helper.sh --archive ABS --sha256 TRUSTED_HASH")?;
-    store::trusted_executable(PKEXEC).context("trusted /usr/bin/pkexec is unavailable")?;
+    store::trusted_executable(PKEXEC).context("trusted /usr/bin/pkexec is unavailable")
+}
+
+fn request(action: Action) -> Result<CameraPrivacyState> {
+    camera_control_preflight()?;
     let output = Command::new(PKEXEC)
         .env_clear()
         .env("LANG", "C.UTF-8")

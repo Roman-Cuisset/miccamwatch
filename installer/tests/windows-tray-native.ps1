@@ -1,6 +1,5 @@
 param(
     [string]$OutputDirectory = 'artifacts/native-windows-tray',
-    [switch]$IsolatedClipboard,
     [switch]$IsolatedDesktop
 )
 $ErrorActionPreference = 'Stop'
@@ -52,7 +51,6 @@ public static class McwNativeProof {
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hwnd, out RECT rect);
     [DllImport("user32.dll")] public static extern bool ScreenToClient(IntPtr hwnd, ref POINT point);
-    [DllImport("user32.dll")] public static extern bool GetMenuItemRect(IntPtr hwnd, IntPtr menu, uint item, out RECT rect);
     [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr hwnd, IntPtr hdc, uint flags);
     [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr hwnd, uint msg, IntPtr wparam, IntPtr lparam);
     [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr hwnd, uint msg, IntPtr wparam, IntPtr lparam);
@@ -106,7 +104,6 @@ $env:MCW_WINDOWS_NATIVE_PROOF_DIR = $directory
 $process = $null
 $fixtureProcess = $null
 $fixtureWindow = [IntPtr]::Zero
-$details = $null
 $previousCursor = [System.Windows.Forms.Cursor]::Position
 $shellMeasurements = @()
 $tooltipFailures = @()
@@ -445,43 +442,21 @@ try {
         if ($popup -eq [IntPtr]::Zero) { throw 'Real Windows popup did not appear on the input desktop.' }
         Start-Sleep -Milliseconds 300
         $bounds = Capture-NativeWindow $popup "$name-menu"
-        $row = New-Object McwNativeProof+RECT
-        if (-not [McwNativeProof]::GetMenuItemRect($owner, [IntPtr][long]$menu.menu, 1, [ref]$row)) { throw 'Native diagnostic menu row was not measurable.' }
         $limit = [Math]::Min(400 * [double]$menu.dpi / 96, [double]$menu.work_width * 0.75)
         if ($bounds.width -gt $limit) { throw "Native popup width $($bounds.width) exceeds compact bound $limit" }
         [void][McwNativeProof]::PostMessage($owner, 0x001f, [IntPtr]::Zero, [IntPtr]::Zero) # WM_CANCELMODE; no privacy action
-        $details = Wait-ProofFile "$name-details.json"
-        Start-Sleep -Milliseconds 300
-        $detailsBounds = Capture-NativeWindow ([IntPtr][long]$details.window) "$name-details" -RenderWindow
-        if ($detailsBounds.width -gt $menu.work_width -or $detailsBounds.height -gt $menu.work_height) {
-            throw 'Native details window exceeds the monitor work area.'
-        }
-        $expected = [IO.File]::ReadAllText((Join-Path $directory "$name-diagnostic.txt"))
-        $copiedUnits = $null
-        # A local user's clipboard may contain arbitrary delayed-render/OLE
-        # formats that cannot be snapshotted reliably. Never replace it.
-        # Only a disposable runner's explicitly isolated clipboard is exercised.
-        if ($IsolatedClipboard) {
-            [System.Windows.Forms.Clipboard]::Clear()
-            [void][McwNativeProof]::SendMessage([IntPtr][long]$details.window, 0x0111, [IntPtr]202, [IntPtr]::Zero) # actual Copy all command
-            $copied = [System.Windows.Forms.Clipboard]::GetText()
-            if (-not [string]::Equals($expected, $copied, [StringComparison]::Ordinal)) { throw 'Native Copy all did not preserve the complete diagnostic.' }
-            [IO.File]::WriteAllText((Join-Path $directory "$name-copied.txt"), $copied)
-            $copiedUnits = $copied.Length
-        }
-        $measurements += @{ case=$name; menu=$bounds; menu_width_limit=$limit; diagnostic_row=@{ left=$row.Left; top=$row.Top; right=$row.Right; bottom=$row.Bottom }; details=$detailsBounds; clipboard_verified=[bool]$IsolatedClipboard; copied_utf16_units=$copiedUnits; original_utf16_units=$details.document_utf16_units; text_width_limit=$menu.text_width_limit; dpi=$menu.dpi }
-        [void][McwNativeProof]::PostMessage([IntPtr][long]$details.window, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)
+        $measurements += @{ case=$name; menu=$bounds; menu_width_limit=$limit; text_width_limit=$menu.text_width_limit; dpi=$menu.dpi }
     }
-    if (-not $process.WaitForExit(30000)) { throw 'Native fixture did not finish after closing details.' }
+    if (-not $process.WaitForExit(30000)) { throw 'Native shell/menu fixture did not finish after dismissing menus.' }
     if ($process.ExitCode -ne 0 -or -not (Test-Path (Join-Path $directory 'complete'))) { throw "Native fixture failed ($($process.ExitCode)); see fixture logs." }
     $measurements | ConvertTo-Json -Depth 8 | Set-Content -Encoding UTF8 (Join-Path $directory 'measurements.json')
     ConvertTo-Json -InputObject @($shellMeasurements) -Depth 8 | Set-Content -Encoding UTF8 (Join-Path $directory 'shell-measurements.json')
     @{ passed=$tooltipFailures.Count -eq 0; failed_cases=@($tooltipFailures); observed_popup_count=$shellMeasurements.Count; owned_pointer_routed=$script:ownedPointerRouted; owned_click_routed=$script:ownedClickRouted } |
         ConvertTo-Json -Depth 6 | Set-Content -Encoding UTF8 (Join-Path $directory 'tooltip-qualification.json')
     if ($tooltipFailures.Count -ne 0) {
-        throw "Actual Explorer popup qualification failed for: $($tooltipFailures -join ', '). All reachable menu/details cases were still exercised; see tooltip-qualification.json."
+        throw "Actual Explorer popup qualification failed for: $($tooltipFailures -join ', '). All reachable menu cases were still exercised; see tooltip-qualification.json."
     }
-    Write-Output "Verified actual Explorer tooltip/UIA updates, native popup bounds and full wrapping details (clipboard exercised: $([bool]$IsolatedClipboard)): $directory"
+    Write-Output "Verified actual Explorer tooltip/UIA updates and native popup bounds; production desktop has its own windows-desktop-native.ps1 proof: $directory"
 } finally {
     $env:MCW_WINDOWS_NATIVE_PROOF_DIR = $previous
     [System.Windows.Forms.Cursor]::Position = $previousCursor
@@ -490,7 +465,6 @@ try {
             # Close only HWNDs already obtained from this retained fixture.
             # Never kill the process or target a product/SDK process by name.
             $windows = @($fixtureWindow)
-            if ($details) { $windows = @([IntPtr][long]$details.window) + $windows }
             foreach ($window in $windows) {
                 [uint32]$windowPid = 0
                 [void][McwNativeProof]::GetWindowThreadProcessId($window, [ref]$windowPid)

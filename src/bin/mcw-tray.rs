@@ -20,7 +20,9 @@ fn main() {
 }
 
 fn run() -> Result<()> {
-    let initial_window = std::env::args_os().skip(1).any(|argument| argument == "--open");
+    let initial_window = std::env::args_os()
+        .skip(1)
+        .any(|argument| argument == "--open");
     if initial_window && tray::open_running()? {
         return Ok(());
     }

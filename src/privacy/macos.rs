@@ -580,11 +580,57 @@ mod tests {
     }
 
     #[test]
+    fn passive_inspection_never_elevates_without_need_and_explicit_consent() {
+        for (request_admin, state, complete) in [
+            (false, "unknown", false),
+            (false, "allowed", true),
+            (true, "allowed", true),
+            (true, "system_managed", false),
+        ] {
+            let mut queries = Vec::new();
+            let result = camera_inspection_with(request_admin, |operation| {
+                queries.push(operation);
+                Ok(CameraProfile {
+                    state: state.into(),
+                    owned_installed: false,
+                    complete_inventory: complete,
+                    detail: "passive inventory".into(),
+                    authorization: "not_requested".into(),
+                })
+            })
+            .unwrap();
+            assert_eq!(queries, ["camera_status"]);
+            assert_eq!(result.state, state);
+            assert_eq!(result.complete_inventory, complete);
+            assert_eq!(
+                result.authorization,
+                CameraInspectionAuthorization::NotRequested
+            );
+            assert_eq!(result.administrator_required, state == "unknown");
+        }
+    }
+
+    #[test]
     fn explicit_inspection_can_recover_without_turning_cancel_or_denial_into_permission() {
         for (authorization, state, complete, expected) in [
-            ("cancelled", "unknown", false, CameraInspectionAuthorization::Cancelled),
-            ("denied", "unknown", false, CameraInspectionAuthorization::Denied),
-            ("granted", "allowed", true, CameraInspectionAuthorization::Granted),
+            (
+                "cancelled",
+                "unknown",
+                false,
+                CameraInspectionAuthorization::Cancelled,
+            ),
+            (
+                "denied",
+                "unknown",
+                false,
+                CameraInspectionAuthorization::Denied,
+            ),
+            (
+                "granted",
+                "allowed",
+                true,
+                CameraInspectionAuthorization::Granted,
+            ),
         ] {
             let result = camera_inspection_with(true, |operation| match operation {
                 "camera_status" => bail!("passive-query-marker"),
