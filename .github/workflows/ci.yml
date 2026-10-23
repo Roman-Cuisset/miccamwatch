@@ -4,6 +4,11 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+    inputs:
+      native-only:
+        description: Run Linux and macOS qualification while Windows is checked separately
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       native-only:
