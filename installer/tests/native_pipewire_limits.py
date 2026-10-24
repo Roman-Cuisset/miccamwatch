@@ -519,6 +519,12 @@ def baseline_proof(session, root, report):
         import native_resources
         require(native_resources.BASELINE_VERSION == "v0.16.1", "baseline is not immutable public v0.16.1")
         key = "linux-" + platform.machine().lower()
+        if key in native_resources.MISSING_BASELINES:
+            report.update(status="unavailable", available=False,
+                          version=native_resources.BASELINE_VERSION,
+                          reason=native_resources.MISSING_BASELINES[key],
+                          matching_architecture_comparison=False)
+            return
         require(key in native_resources.HASHES, "no independently pinned native baseline asset")
         binary = native_resources.fetch_baseline(root, key, report)
     except (ImportError, OSError) as error:

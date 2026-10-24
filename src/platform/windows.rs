@@ -1151,7 +1151,17 @@ fn camera_devices() -> Result<Vec<Device>> {
     let mut raw_activates: *mut Option<IMFActivate> = ptr::null_mut();
     let mut count = 0;
     unsafe { MFEnumDeviceSources(&attributes, &mut raw_activates, &mut count)? };
-    let activates = unsafe { slice::from_raw_parts_mut(raw_activates, count as usize) };
+    // MFEnumDeviceSources may return a null allocation for a successful empty
+    // inventory. Rust slices still require a non-null pointer at length zero.
+    let activates = if count == 0 {
+        &mut []
+    } else {
+        anyhow::ensure!(
+            !raw_activates.is_null(),
+            "Media Foundation returned a null activation array for {count} devices"
+        );
+        unsafe { slice::from_raw_parts_mut(raw_activates, count as usize) }
+    };
     let mut devices = Vec::with_capacity(count as usize);
     for activate in activates.iter_mut().filter_map(Option::take) {
         let Ok(id) = mf_string(
@@ -1176,8 +1186,15 @@ fn mf_string(attributes: &IMFAttributes, key: &windows::core::GUID) -> Result<St
     let mut value = PWSTR::null();
     let mut length = 0;
     unsafe { attributes.GetAllocatedString(key, &mut value, &mut length)? };
-    let result =
-        unsafe { String::from_utf16_lossy(slice::from_raw_parts(value.0, length as usize)) };
+    let result = if length == 0 {
+        String::new()
+    } else {
+        anyhow::ensure!(
+            !value.0.is_null(),
+            "Media Foundation returned a null string for {length} UTF-16 units"
+        );
+        unsafe { String::from_utf16_lossy(slice::from_raw_parts(value.0, length as usize)) }
+    };
     unsafe { CoTaskMemFree(Some(value.0.cast())) };
     Ok(result)
 }

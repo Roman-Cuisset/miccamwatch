@@ -30,6 +30,7 @@ pub(crate) fn stop_installed_tray() -> Result<bool> {
 
 pub fn update() -> Result<()> {
     let current = env::current_exe().context("failed to locate the installed mcw executable")?;
+    crate::uninstall::windows::ensure_binary_update_allowed(&current)?;
     let installation_lock = crate::autostart::lock_installation(&current)?;
     let tray = current.with_file_name("mcw-tray.exe");
     crate::uninstall::windows::validate_update_receipt(&current, &tray)?;

@@ -362,12 +362,18 @@ def validate_policy(path):
         fail('Policy must authorize only the fixed root camera helper path')
 
 
-def probe(path, option):
+def validate_executable(path, arch):
+    regular(path, 0o600)
     with path.open('rb') as source:
         header = source.read(20)
+    machine = {'x86_64': 62, 'aarch64': 183}[arch]
     if (len(header) != 20 or header[:6] != b'\x7fELF\x02\x01'
-            or header[7] not in (0, 3) or struct.unpack('<HH', header[16:20]) not in ((2, 62), (3, 62))):
-        fail(f'Not a Linux x86_64 ELF executable: {path.name}')
+            or header[7] not in (0, 3)
+            or struct.unpack('<HH', header[16:20]) not in ((2, machine), (3, machine))):
+        fail(f'Not a Linux {arch} ELF64 little-endian executable: {path.name}')
+
+
+def probe(path, option):
     os.chmod(path, 0o755)
     # This is the first execution of archive bytes, strictly after checksum match.
     result = subprocess.run([str(path), option], check=True, stdout=subprocess.PIPE,
@@ -384,7 +390,7 @@ def interrupted(signum, frame):
 def main():
     parser = argparse.ArgumentParser(
         description='Reviewed explicit root setup/removal of the fixed Linux USB camera helper. No network, elevation, autostart or device actions.',
-        epilog='Run only after an administrator reviews this installer and policy. --sha256 must come from a trusted source: SHA-256 proves archive integrity, not independent publisher authenticity. Requires Linux x86_64 and /usr/bin/python3. Updates/removal refuse pending restoration evidence; first use the matching old mcw camera allow. Explicit uninstall removes only integrity-valid empty journal/cache and preserves the operation lock; no user-prefix executable is run.')
+        epilog='Run only after an administrator reviews this installer and policy. --sha256 must come from a trusted source: SHA-256 proves archive integrity, not independent publisher authenticity. Requires Linux x86_64/aarch64 with glibc 2.35+ and /usr/bin/python3. Updates/removal refuse pending restoration evidence; first use the matching old mcw camera allow. Explicit uninstall removes only integrity-valid empty journal/cache and preserves the operation lock; no user-prefix executable is run.')
     parser.add_argument('--archive', help='Absolute path to the Linux release .tar.gz; copied freshly to private root storage before verification')
     parser.add_argument('--sha256', help='Expected trusted SHA-256 of the archive (64 hexadecimal characters)')
     parser.add_argument('--uninstall', action='store_true', help='Explicitly remove receipt-owned unchanged helper/policy and integrity-valid empty runtime journal/cache')
@@ -396,8 +402,16 @@ def main():
         parser.error('setup/update requires both --archive ABSOLUTE_PATH and --sha256 TRUSTED_HASH')
     if os.geteuid() != 0 or os.getuid() != 0:
         fail('Run this reviewed installer explicitly as root; it never elevates itself')
-    if platform.system() != 'Linux' or platform.machine() != 'x86_64':
-        fail('Only Linux x86_64 release archives are supported')
+    arch = platform.machine()
+    if platform.system() != 'Linux' or arch not in ('x86_64', 'aarch64'):
+        fail('Only Linux x86_64 and aarch64 release archives are supported')
+    try:
+        libc = os.confstr('CS_GNU_LIBC_VERSION')
+    except (OSError, ValueError):
+        libc = None
+    match = re.fullmatch(r'glibc ([0-9]+)\.([0-9]+)', libc or '')
+    if match is None or tuple(map(int, match.groups())) < (2, 35):
+        fail('Linux requires glibc 2.35+; 32-bit and musl systems are not supported')
     os.umask(0o077)
     if not args.uninstall:
         if not os.path.isabs(args.archive):
@@ -441,6 +455,9 @@ def main():
             extract_archive(archive, work)
             policy = work / (ACTION + '.policy')
             validate_policy(policy)
+            # No archive bytes are executed until both native ELF headers pass.
+            validate_executable(work / 'mcw', arch)
+            validate_executable(work / 'mcw-camera-helper', arch)
             reported = probe(work / 'mcw', '--version')
             if not reported.startswith('mcw ') or not VERSION.fullmatch(reported[4:]):
                 fail('Authenticated mcw returned an invalid exact version')

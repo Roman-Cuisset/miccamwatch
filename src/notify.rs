@@ -19,13 +19,13 @@ use windows::{
     core::HSTRING,
 };
 #[cfg(windows)]
-const APP_ID: &str = "MicCamWatch.MicCamWatch";
+pub(crate) const APP_ID: &HSTRING = windows::core::h!("MicCamWatch.MicCamWatch");
 
 #[cfg(windows)]
 pub fn ensure_identity() -> anyhow::Result<()> {
     let root = RegKey::predef(HKEY_CURRENT_USER);
     let (key, _) = root.create_subkey(format!(r"Software\Classes\AppUserModelId\{APP_ID}"))?;
-    key.set_value("DisplayName", &"miccamwatch")?;
+    key.set_value("DisplayName", &"MicCamWatch")?;
     key.set_value("ShowInSettings", &1u32)?;
     Ok(())
 }
@@ -45,13 +45,16 @@ pub fn notify_message(title: &str, detail: &str) -> windows::core::Result<()> {
 
 #[cfg(windows)]
 fn show_toast(title: &str, detail: &str) -> windows::core::Result<()> {
-    let xml: XmlDocument =
-        ToastNotificationManager::GetTemplateContent(ToastTemplateType::ToastText02)?;
-    let text = xml.GetElementsByTagName(&HSTRING::from("text"))?;
-    let title_node = text.Item(0)?;
-    title_node.AppendChild(&xml.CreateTextNode(&HSTRING::from(title))?)?;
-    let detail_node = text.Item(1)?;
-    detail_node.AppendChild(&xml.CreateTextNode(&HSTRING::from(detail))?)?;
+    let settings = crate::settings::Settings::load().map_err(|error| {
+        windows::core::Error::new(
+            windows::core::HRESULT(0x80004005u32 as i32),
+            format!("failed to read notification preferences: {error:#}"),
+        )
+    })?;
+    if !settings.notifications_enabled || settings.notifications_paused() {
+        return Ok(());
+    }
+    let xml = toast_document(title, detail, settings.sound_enabled)?;
     let toast = ToastNotification::CreateToastNotification(&xml)?;
     ensure_identity().map_err(|error| {
         windows::core::Error::new(
@@ -59,6 +62,56 @@ fn show_toast(title: &str, detail: &str) -> windows::core::Result<()> {
             format!("failed to register notification identity: {error:#}"),
         )
     })?;
-    let notifier = ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(APP_ID))?;
+    let notifier = ToastNotificationManager::CreateToastNotifierWithId(APP_ID)?;
     notifier.Show(&toast)
+}
+
+#[cfg(windows)]
+fn toast_document(title: &str, detail: &str, sound: bool) -> windows::core::Result<XmlDocument> {
+    let xml: XmlDocument =
+        ToastNotificationManager::GetTemplateContent(ToastTemplateType::ToastText02)?;
+    let text = xml.GetElementsByTagName(&HSTRING::from("text"))?;
+    let title_node = text.Item(0)?;
+    title_node.AppendChild(&xml.CreateTextNode(&HSTRING::from(title))?)?;
+    let detail_node = text.Item(1)?;
+    detail_node.AppendChild(&xml.CreateTextNode(&HSTRING::from(detail))?)?;
+    let audio = xml.CreateElement(&HSTRING::from("audio"))?;
+    audio.SetAttribute(
+        &HSTRING::from("silent"),
+        &HSTRING::from(if sound { "false" } else { "true" }),
+    )?;
+    xml.DocumentElement()?.AppendChild(&audio)?;
+    Ok(xml)
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+    use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoUninitialize};
+
+    #[test]
+    fn native_toast_audio_obeys_the_sound_preference_without_delivery() -> anyhow::Result<()> {
+        unsafe { CoInitializeEx(None, COINIT_MULTITHREADED).ok()? };
+        let result = (|| -> anyhow::Result<()> {
+            for sound in [false, true] {
+                let document = toast_document("MCW", "Preference qualification", sound)?;
+                let toast = ToastNotification::CreateToastNotification(&document)?;
+                let audio = toast
+                    .Content()?
+                    .GetElementsByTagName(&HSTRING::from("audio"))?;
+                assert_eq!(audio.Length()?, 1);
+                let silent = audio
+                    .Item(0)?
+                    .Attributes()?
+                    .GetNamedItem(&HSTRING::from("silent"))?;
+                assert_eq!(
+                    silent.InnerText()?.to_string(),
+                    if sound { "false" } else { "true" }
+                );
+            }
+            Ok(())
+        })();
+        unsafe { CoUninitialize() };
+        result
+    }
 }

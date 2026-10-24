@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import Darwin
 
 // Test executable only. Reads existing Accessibility authorization, never asks
 // for it and never changes TCC. No device APIs or injected capture fixtures.
@@ -15,14 +16,29 @@ app.setActivationPolicy(.accessory)
 app.finishLaunching()
 guard NSScreen.main != nil else { stop("UNAVAILABLE: logged-in Aqua/WindowServer display required", code: 77) }
 if CommandLine.arguments.count == 2 && CommandLine.arguments[1] == "gui" { exit(0) }
+// LaunchServices identity and activation policy are readable without granting
+// Accessibility. The short-lived outer app must not become a second Dock owner.
+if CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "identity" {
+    guard let pid = Int32(CommandLine.arguments[2]),
+          let owner = NSRunningApplication(processIdentifier: pid), !owner.isTerminated else {
+        stop("desktop helper is not a registered running application")
+    }
+    guard owner.bundleIdentifier == "com.roman-cuisset.miccamwatch.helper",
+          owner.localizedName == "MicCamWatch",
+          owner.activationPolicy == .accessory else {
+        stop("desktop helper has an unexpected LaunchServices identity, visible name or Dock policy")
+    }
+    print("{\"native_identity\":\"MicCamWatch\",\"bundle_identifier\":\"com.roman-cuisset.miccamwatch.helper\",\"activation_policy\":\"accessory\",\"helper_pid\":\(pid)}")
+    exit(0)
+}
 guard AXIsProcessTrusted() else {
     stop("UNAVAILABLE: smoke driver needs preexisting Accessibility permission to click the real Exit menu; no permission was requested", code: 77)
 }
 if CommandLine.arguments.count == 2 && CommandLine.arguments[1] == "accessibility" { exit(0) }
 guard CommandLine.arguments.count == 3,
-      ["quit", "window", "close-window"].contains(CommandLine.arguments[1]),
+      ["quit", "window", "close-window", "hidden-window"].contains(CommandLine.arguments[1]),
       let pid = Int32(CommandLine.arguments[2]) else {
-    stop("usage: app-smoke gui | accessibility | quit|window|close-window HELPER_PID")
+    stop("usage: app-smoke gui | accessibility | identity|quit|window|close-window|hidden-window HELPER_PID")
 }
 let operation = CommandLine.arguments[1]
 func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
@@ -33,37 +49,126 @@ func children(_ element: AXUIElement) -> [AXUIElement] {
     attribute(element, kAXChildrenAttribute) as? [AXUIElement] ?? []
 }
 func descendants(_ element: AXUIElement, depth: Int = 0) -> [AXUIElement] {
-    if depth > 8 { return [] }
+    if depth > 16 { return [] }
     return [element] + children(element).flatMap { descendants($0, depth: depth + 1) }
 }
 let application = AXUIElementCreateApplication(pid)
 AXUIElementSetMessagingTimeout(application, 3)
 let deadline = Date().addingTimeInterval(15)
+if operation == "hidden-window" {
+    let windows = attribute(application, kAXWindowsAttribute) as? [AXUIElement]
+    guard let windows = windows else { stop("background helper window visibility is unavailable") }
+    guard windows.isEmpty else { stop("background service unexpectedly surfaced a native window") }
+    print("{\"native_consultation\":\"hidden-window\",\"window_count\":0,\"helper_pid\":\(pid)}")
+    exit(0)
+}
+func windowFailureEvidence(error: AXError, windows: [AXUIElement]) {
+    let owner = NSRunningApplication(processIdentifier: pid)
+    var nativeWindows: [[String: Any]] = []
+    let listed = CGWindowListCopyWindowInfo(.optionAll, kCGNullWindowID) as? [[String: Any]] ?? []
+    for window in listed where (window[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == pid {
+        nativeWindows.append([
+            "number": window[kCGWindowNumber as String] ?? NSNull(),
+            "layer": window[kCGWindowLayer as String] ?? NSNull(),
+            "on_screen": window[kCGWindowIsOnscreen as String] ?? NSNull(),
+            "name": window[kCGWindowName as String] ?? NSNull(),
+            "bounds": window[kCGWindowBounds as String] ?? NSNull()
+        ])
+    }
+    let facts: [String: Any] = [
+        "helper_pid": pid, "accessibility_trusted": AXIsProcessTrusted(),
+        "ax_windows_error": error.rawValue, "ax_window_count": windows.count,
+        "ax_window_titles": windows.map { attribute($0, kAXTitleAttribute) as? String ?? "<unavailable>" },
+        "application_active": owner?.isActive ?? false,
+        "application_hidden": owner?.isHidden ?? false,
+        "application_finished_launching": owner?.isFinishedLaunching ?? false,
+        "application_terminated": owner?.isTerminated ?? true,
+        "native_windows": nativeWindows
+    ]
+    if let data = try? JSONSerialization.data(withJSONObject: facts, options: [.sortedKeys]),
+       let json = String(data: data, encoding: .utf8) {
+        fputs(json + "\n", stderr)
+    }
+}
 if operation != "quit" {
+    var lastWindows: [AXUIElement] = []
+    var lastWindowError = AXError.success
     while Date() < deadline {
-        let windows = attribute(application, kAXWindowsAttribute) as? [AXUIElement] ?? []
+        var rawWindows: CFTypeRef?
+        lastWindowError = AXUIElementCopyAttributeValue(application, kAXWindowsAttribute as CFString, &rawWindows)
+        let windows = rawWindows as? [AXUIElement] ?? []
+        lastWindows = windows
         let consultation = windows.filter { (attribute($0, kAXTitleAttribute) as? String) == "MicCamWatch" }
         if consultation.count == 1 {
             let window = consultation[0]
             guard (attribute(window, kAXRoleAttribute) as? String) == kAXWindowRole else {
                 stop("consultation is not a native window")
             }
-            guard descendants(window).contains(where: {
-                (attribute($0, kAXRoleAttribute) as? String) == kAXTextAreaRole
-            }) else { stop("consultation has no readable native snapshot document") }
+            guard let sections = descendants(window).first(where: {
+                (attribute($0, kAXRoleAttribute) as? String) == kAXTabGroupRole
+            }), let tabs = attribute(sections, kAXTabsAttribute) as? [AXUIElement], tabs.count == 3 else {
+                stop("consultation has no accessible native Overview/Settings/Diagnostics tabs")
+            }
+            let originalTab = tabs.first {
+                (attribute($0, kAXValueAttribute) as? NSNumber)?.boolValue == true
+            }
+            let originalFocus = attribute(application, kAXFocusedUIElementAttribute)
+            // Only local navigation: never press settings/device/admin controls.
+            guard AXUIElementPerformAction(tabs[1], kAXPressAction as CFString) == .success else {
+                stop("native Settings tab is not accessible")
+            }
+            let settings = descendants(window)
+            guard settings.filter({ (attribute($0, kAXRoleAttribute) as? String) == kAXCheckBoxRole }).count >= 3,
+                  settings.contains(where: { (attribute($0, kAXRoleAttribute) as? String) == kAXPopUpButtonRole }) else {
+                stop("native Settings lacks preference checkboxes or profile chooser")
+            }
+            guard AXUIElementPerformAction(tabs[2], kAXPressAction as CFString) == .success,
+                  descendants(window).contains(where: {
+                      (attribute($0, kAXRoleAttribute) as? String) == kAXTextAreaRole &&
+                      (attribute($0, kAXValueAttribute) as? String)?.isEmpty == false
+                  }) else { stop("native Diagnostics document is not accessible/readable") }
+            guard AXUIElementPerformAction(tabs[0], kAXPressAction as CFString) == .success else {
+                stop("native Overview tab is not accessible")
+            }
+            if let originalTab = originalTab {
+                guard AXUIElementPerformAction(originalTab, kAXPressAction as CFString) == .success else {
+                    stop("native section navigation could not restore the selected tab")
+                }
+            }
+            if let originalFocus = originalFocus, CFGetTypeID(originalFocus) == AXUIElementGetTypeID() {
+                // Focus restoration is local navigation, never a control press.
+                _ = AXUIElementSetAttributeValue(originalFocus as! AXUIElement,
+                                                kAXFocusedAttribute as CFString, kCFBooleanTrue)
+            }
             if operation == "close-window" {
                 guard let close = attribute(window, kAXCloseButtonAttribute),
                       CFGetTypeID(close) == AXUIElementGetTypeID(),
                       AXUIElementPerformAction(close as! AXUIElement, kAXPressAction as CFString) == .success else {
                     stop("native consultation close button unavailable")
                 }
+                let closeDeadline = Date().addingTimeInterval(3)
+                var closed = false
+                while Date() < closeDeadline {
+                    let remaining = attribute(application, kAXWindowsAttribute) as? [AXUIElement] ?? []
+                    if !remaining.contains(where: { (attribute($0, kAXTitleAttribute) as? String) == "MicCamWatch" }) {
+                        closed = true
+                        break
+                    }
+                    RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+                }
+                guard closed else { stop("native consultation close did not hide the window") }
+                guard Darwin.kill(pid, 0) == 0 || errno == EPERM else {
+                    stop("closing consultation terminated the desktop helper instead of retaining tray service")
+                }
             }
-            print("{\"native_consultation\":\"\(operation)\",\"window_count\":1,\"helper_pid\":\(pid)}")
+            let visibleCount = operation == "close-window" ? 0 : 1
+            print("{\"native_consultation\":\"\(operation)\",\"window_count\":\(visibleCount),\"observed_window_count_before\":1,\"native_sections\":3,\"helper_pid\":\(pid)}")
             exit(0)
         }
         if consultation.count > 1 { stop("duplicate native consultation windows") }
         RunLoop.current.run(until: Date().addingTimeInterval(0.1))
     }
+    windowFailureEvidence(error: lastWindowError, windows: lastWindows)
     stop("native consultation window never became accessible")
 }
 var pressed = false

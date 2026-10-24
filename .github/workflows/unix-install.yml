@@ -28,6 +28,10 @@ on:
         description: Older public release for cross-version proof
         default: ""
         type: string
+      public-linux-aarch64:
+        description: "Include native ARM using a published v0.21.0+ asset (not available in default v0.20.0)"
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -38,7 +42,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, macos-15, macos-15-intel]
+        # Historical v0.20.0 has no Linux ARM asset. Candidate ARM is always
+        # exercised by ci.yml; public ARM proof is an explicit post-publication opt-in.
+        os: ${{ fromJSON(inputs.public-linux-aarch64 && '["ubuntu-22.04","ubuntu-22.04-arm","macos-15","macos-15-intel"]' || '["ubuntu-22.04","macos-15","macos-15-intel"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     env:
@@ -54,6 +60,29 @@ jobs:
           repository: ${{ env.SOURCE_REPOSITORY }}
           ref: ${{ env.SOURCE_REF }}
           persist-credentials: false
+      - name: Validate public ARM capability without inventing a historical baseline
+        if: matrix.os == 'ubuntu-22.04-arm'
+        shell: bash
+        run: |
+          python3 -B - <<'PY'
+          import os, platform, re
+          assert platform.machine() == "aarch64", platform.machine()
+          for name in ("RELEASE_VERSION", "UPGRADE_FROM"):
+              version = os.environ[name]
+              if not version and name == "UPGRADE_FROM":
+                  continue
+              match = re.fullmatch(r"v(\d+)\.(\d+)\.(\d+)", version)
+              assert match and tuple(map(int, match.groups())) >= (0, 21, 0), (
+                  name, version, "Linux aarch64 has no public pre-v0.21.0 archive; select an actually published native release")
+          PY
+      - name: Retain actual public installer host identity
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/native-proof"
+          uname -a > "$RUNNER_TEMP/native-proof/uname.txt"
+          if [ "$RUNNER_OS" = Linux ]; then
+            getconf GNU_LIBC_VERSION > "$RUNNER_TEMP/native-proof/glibc.txt"
+          fi
       - name: Ensure supported shells (runner packages only)
         shell: bash
         run: |
@@ -141,9 +170,9 @@ jobs:
                               "--public-release", "--proof", str(proof)], check=True)
           PY
       - name: Upload public standalone migration evidence
-        if: always() && runner.os == 'macOS'
+        if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: public-standalone-${{ matrix.os }}
+          name: public-installer-${{ matrix.os }}
           if-no-files-found: ignore
           path: ${{ runner.temp }}/native-proof

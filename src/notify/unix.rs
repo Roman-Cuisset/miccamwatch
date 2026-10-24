@@ -49,7 +49,12 @@ pub fn notify_message(title: &str, detail: &str) -> Result<()> {
                     title,
                     body.as_ref(),
                     Vec::<&str>::new(),
-                    std::collections::HashMap::<&str, zbus::zvariant::OwnedValue>::new(),
+                    // The dispatcher owns the preference-gated capture chime.
+                    // Ask supporting desktops not to add a second/default sound.
+                    std::collections::HashMap::<&str, zbus::zvariant::OwnedValue>::from([(
+                        "suppress-sound",
+                        true.into(),
+                    )]),
                     -1i32,
                 ),
             )

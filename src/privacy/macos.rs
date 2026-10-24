@@ -106,12 +106,49 @@ fn inspection(profile: CameraProfile) -> Result<CameraInspection> {
 pub fn camera_inspection(request_admin: bool) -> Result<CameraInspection> {
     // No receipt is needed: diagnostics must work with corrupt/nonregular user
     // state and must never adopt ownership from a global profile match.
-    let current = inspection(camera_request("camera_status", None, None)?)?;
-    if !request_admin || !current.administrator_required {
-        return Ok(current);
+    camera_inspection_with(request_admin, |operation| {
+        camera_request(operation, None, None)
+    })
+}
+
+fn camera_inspection_with(
+    request_admin: bool,
+    mut query: impl FnMut(&'static str) -> Result<CameraProfile>,
+) -> Result<CameraInspection> {
+    let passive = query("camera_status").and_then(inspection);
+    let passive_error = match passive {
+        Ok(current) if !request_admin || !current.administrator_required => return Ok(current),
+        Ok(_) => None,
+        Err(error) if !request_admin => return Err(error),
+        Err(error) => Some(error),
+    };
+    // Only an explicit request may reach this independent, fixed read-only query.
+    let mut result = query("camera_status_admin")
+        .and_then(inspection)
+        .with_context(|| match &passive_error {
+            Some(error) => format!("Passive camera-profile preflight also failed: {error:#}"),
+            None => "Explicit administrator camera-profile inspection failed".to_owned(),
+        })?;
+    if let Some(error) = passive_error {
+        let bound = |text: &mut String, limit: usize| {
+            if text.len() > limit {
+                const OMITTED: &str = "\n[Inspection diagnostic truncated.]";
+                let mut end = limit - OMITTED.len();
+                while !text.is_char_boundary(end) {
+                    end -= 1;
+                }
+                text.truncate(end);
+                text.push_str(OMITTED);
+            }
+        };
+        let mut context = format!("\nPassive camera-profile preflight failed: {error:#}");
+        bound(&mut context, 2048);
+        // Preserve the independent authorization/cancellation explanation even
+        // when an ordinary-query error is much larger than the transport limit.
+        bound(&mut result.detail, 8192 - context.len());
+        result.detail.push_str(&context);
     }
-    // The privileged query accepts no journal identity, path, command or output file.
-    inspection(camera_request("camera_status_admin", None, None)?)
+    Ok(result)
 }
 #[derive(Debug, Serialize, Deserialize)]
 struct OwnedProfile {
@@ -530,5 +567,124 @@ mod tests {
         assert!(!restricted.administrator_required);
         assert!(inspection(profile("blocked", true, "granted")).is_err());
         assert!(inspection(profile("unknown", false, "unexpected")).is_err());
+    }
+
+    #[test]
+    fn passive_preflight_failure_requires_explicit_admin_consent() {
+        let error = camera_inspection_with(false, |operation| {
+            assert_eq!(operation, "camera_status");
+            bail!("passive-query-marker")
+        })
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("passive-query-marker"));
+    }
+
+    #[test]
+    fn passive_inspection_never_elevates_without_need_and_explicit_consent() {
+        for (request_admin, state, complete) in [
+            (false, "unknown", false),
+            (false, "allowed", true),
+            (true, "allowed", true),
+            (true, "system_managed", false),
+        ] {
+            let mut queries = Vec::new();
+            let result = camera_inspection_with(request_admin, |operation| {
+                queries.push(operation);
+                Ok(CameraProfile {
+                    state: state.into(),
+                    owned_installed: false,
+                    complete_inventory: complete,
+                    detail: "passive inventory".into(),
+                    authorization: "not_requested".into(),
+                })
+            })
+            .unwrap();
+            assert_eq!(queries, ["camera_status"]);
+            assert_eq!(result.state, state);
+            assert_eq!(result.complete_inventory, complete);
+            assert_eq!(
+                result.authorization,
+                CameraInspectionAuthorization::NotRequested
+            );
+            assert_eq!(result.administrator_required, state == "unknown");
+        }
+    }
+
+    #[test]
+    fn explicit_inspection_can_recover_without_turning_cancel_or_denial_into_permission() {
+        for (authorization, state, complete, expected) in [
+            (
+                "cancelled",
+                "unknown",
+                false,
+                CameraInspectionAuthorization::Cancelled,
+            ),
+            (
+                "denied",
+                "unknown",
+                false,
+                CameraInspectionAuthorization::Denied,
+            ),
+            (
+                "granted",
+                "allowed",
+                true,
+                CameraInspectionAuthorization::Granted,
+            ),
+        ] {
+            let result = camera_inspection_with(true, |operation| match operation {
+                "camera_status" => bail!("passive-query-marker"),
+                "camera_status_admin" => Ok(CameraProfile {
+                    state: state.into(),
+                    owned_installed: false,
+                    complete_inventory: complete,
+                    detail: "independent-result-marker".into(),
+                    authorization: authorization.into(),
+                }),
+                _ => panic!("unexpected camera operation"),
+            })
+            .unwrap();
+            assert_eq!(result.state, state);
+            assert_eq!(result.authorization, expected);
+            assert_eq!(result.complete_inventory, complete);
+            assert_eq!(result.administrator_required, !complete);
+            assert!(result.detail.contains("passive-query-marker"));
+            assert!(result.detail.contains("independent-result-marker"));
+        }
+    }
+
+    #[test]
+    fn failed_independent_inspection_preserves_both_query_errors() {
+        let error = camera_inspection_with(true, |operation| match operation {
+            "camera_status" => bail!("passive-query-marker"),
+            "camera_status_admin" => bail!("administrator-query-marker"),
+            _ => panic!("unexpected camera operation"),
+        })
+        .unwrap_err();
+        let diagnostic = format!("{error:#}");
+        assert!(diagnostic.contains("passive-query-marker"));
+        assert!(diagnostic.contains("administrator-query-marker"));
+    }
+
+    #[test]
+    fn recovered_inspection_diagnostic_stays_bounded_with_unicode_errors() {
+        let result = camera_inspection_with(true, |operation| match operation {
+            "camera_status" => bail!("{}", "界".repeat(5000)),
+            "camera_status_admin" => Ok(CameraProfile {
+                state: "allowed".into(),
+                owned_installed: false,
+                complete_inventory: true,
+                detail: "independent-result-marker".into(),
+                authorization: "granted".into(),
+            }),
+            _ => panic!("unexpected camera operation"),
+        })
+        .unwrap();
+        assert!(result.detail.len() <= 8192);
+        assert!(result.detail.contains("independent-result-marker"));
+        assert!(result.detail.contains('界'));
+        assert_eq!(result.state, "allowed");
+        assert_eq!(result.authorization, CameraInspectionAuthorization::Granted);
+        assert!(result.complete_inventory);
     }
 }

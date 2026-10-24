@@ -352,6 +352,27 @@ The old mapped-CLI cleanup warning remains separate. See the 0.19.0 corrections
 below and [ROADMAP](docs/ROADMAP.md); no installed application or security
 protection has been changed by that source work.
 
+## 0.21.0 — Native Linux ARM64 (unreleased)
+
+Development source adds `aarch64-unknown-linux-gnu` and the separate
+`miccamwatch-linux-aarch64.tar.gz` package alongside Linux x86_64. Native
+Ubuntu 22.04 ARM64 builds use the same glibc 2.35 and PipeWire/SPA baseline;
+the ordinary installer still rejects musl and unsupported 32-bit systems.
+
+Both Linux executables must pass ELF64, little-endian, executable-type, ABI
+and native-machine checks before either staged executable is probed. The
+administrator-only camera bootstrap retains its checksum, private-copy,
+ownership, protocol and restoration boundaries; no device action is enabled
+by installation.
+
+Native qualification is tracked in [ROADMAP](docs/ROADMAP.md). A hosted ARM64
+VM is not physical Raspberry Pi/SBC qualification, and USB camera control does
+not cover CSI cameras. There are no historical pre-0.21.0 Linux ARM64 release
+archives to use as migration or resource-comparison baselines.
+
+Public stable remains 0.20.0, without a Linux ARM64 asset. Do not infer
+publication or Raspberry Pi hardware support from this development section.
+
 ## 0.20.0 — Native consultation and scoped uninstall
 
 The macOS tray opens a singleton native consultation window with observed
@@ -910,7 +931,9 @@ mcw --config policy.toml config validate
 
 ## Privacy Control Center
 
-`mcw tray` keeps the monitor in the Windows notification area. Its menu controls microphone mute, camera privacy, one-hour notification pause, the active profile, and autostart. The tray runs as a single per-user instance; the CLI can inspect or stop it. A left or right click on the icon opens the menu; a double click raises a toast with the current summary.
+`mcw tray` keeps the monitor in the Windows notification area. Its menu controls microphone mute, camera privacy, one-hour notification pause, the active profile, and autostart. The tray runs as a single per-user instance; the CLI can inspect, open or stop it. A left or right click opens the menu; in 0.21.0 development, a double click opens the native consultation window.
+
+**0.21.0 development:** `mcw tray open` opens the retained native consultation, reusing the owned frontend when it is already running. Overview separates microphone/camera observations, current application identities and requested/effective protection; Settings exposes the existing preferences; Diagnostics keeps detailed evidence and limitations out of the main view. Closing the window hides it without stopping the tray or changing protection. Linux's consultation requires a GTK3 runtime; the CLI/headless path does not. Displaying or refreshing a window never grants capture permission or authorizes a device change. See [ROADMAP](docs/ROADMAP.md) for actual native qualification results and remaining hardware limits; this is not a published 0.21.0 release.
 
 In v0.19.0, Windows and Linux join macOS with four direct, checked
 profile choices: Balanced, Private, Meeting and Development. Selection uses the

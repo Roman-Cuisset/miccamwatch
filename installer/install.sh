@@ -14,6 +14,7 @@ VERSION=latest
 PREFIX=
 PATH_MODE=ask
 UNINSTALL=no
+REFRESH_DESKTOP=no
 EXPLICIT_PREFIX=no
 WORK=
 LOCK=
@@ -73,7 +74,7 @@ Usage: sh install.sh [--version v0.16.1] [--prefix ABSOLUTE_PREFIX]
 --prefix            Default: $HOME/.local. Executable: PREFIX/bin/mcw.
 --add-path          Explicitly add managed blocks to this user's shell startup files.
 --no-modify-path    Never change shell startup files.
---uninstall         Remove only receipt-owned, unchanged executable/payload/PATH blocks.
+--uninstall         Remove only receipt-owned, unchanged executable/payload/launcher/PATH files.
 --update-portable    macOS only: explicitly replace an owned standalone mcw in place.
 --current-sha256     Required current executable digest for portable replacement.
 --help              Show this help without making changes.
@@ -81,8 +82,10 @@ Usage: sh install.sh [--version v0.16.1] [--prefix ABSOLUTE_PREFIX]
 Without a PATH flag, an interactive terminal is asked (default: no).
 Noninteractive installs never prompt or change PATH without --add-path.
 The child installer cannot change the parent shell: open a new terminal afterward.
-Supported: Linux x86_64 with glibc 2.35+, macOS 15+ on Intel/Apple Silicon.
+Supported: Linux x86_64/aarch64 with glibc 2.35+, macOS 15+ on Intel/Apple Silicon.
 A Rosetta-translated shell receives the native Apple Silicon executable.
+Linux 0.21+ adds one MicCamWatch application-menu entry in XDG_DATA_HOME (default:
+$HOME/.local/share). Explicit launch opens the native window; it does not enable autostart.
 No autostart, device controls, elevation or Gatekeeper changes are performed.
 Checksums protect integrity, not independent publisher authenticity.
 HELP
@@ -110,6 +113,7 @@ while [ "$#" -gt 0 ]; do
             [ "$PATH_MODE" != add ] || die '--add-path and --no-modify-path are mutually exclusive.'
             PATH_MODE=never; shift ;;
         --uninstall) UNINSTALL=yes; shift ;;
+        --refresh-desktop) REFRESH_DESKTOP=yes; shift ;;
         *) die "Unknown option: $1 (use --help)." ;;
     esac
 done
@@ -139,11 +143,14 @@ OS=$(uname -s)
 ARCH=$(uname -m)
 case "$OS" in
     Linux)
-        [ "$ARCH" = x86_64 ] || die "Unsupported Linux architecture: $ARCH (only x86_64 is published)."
+        case "$ARCH" in
+            x86_64|aarch64) ASSET_ARCH=$ARCH ;;
+            *) die "Unsupported Linux architecture: $ARCH (only x86_64 and aarch64 are supported)." ;;
+        esac
         command -v getconf >/dev/null 2>&1 || die 'getconf is required to verify glibc.'
         GLIBC=$(getconf GNU_LIBC_VERSION 2>/dev/null) || die 'Linux requires glibc 2.35+; musl is not supported.'
         printf '%s\n' "$GLIBC" | awk '$1=="glibc" && $2 ~ /^[0-9]+\.[0-9]+$/ { split($2,v,"."); ok=(v[1]>2 || (v[1]==2 && v[2]>=35)) } END { exit !ok }' || die "Unsupported C library: $GLIBC; glibc 2.35+ is required."
-        PLATFORM=linux; ASSET_ARCH=x86_64 ;;
+        PLATFORM=linux ;;
     Darwin)
         MACOS=$(sw_vers -productVersion) || die 'Cannot determine the macOS version.'
         printf '%s\n' "$MACOS" | awk '/^[0-9]+\.[0-9]+(\.[0-9]+)?$/ { split($0,v,"."); ok=(v[1]>=15) } END { exit !ok }' || die "macOS 15+ is required; found $MACOS."
@@ -160,6 +167,11 @@ case "$OS" in
         PLATFORM=macos ;;
     *) die "Unsupported operating system: $OS. Only Linux and macOS are supported." ;;
 esac
+if [ "$REFRESH_DESKTOP" = yes ]; then
+    [ "$OS" = Linux ] && [ "$UNINSTALL" = no ] && [ "$PORTABLE_REQUESTED" = no ] &&
+        [ "$EXPLICIT_PREFIX" = yes ] && [ "$PATH_MODE" = never ] && [ "$VERSION" != latest ] ||
+        die 'Local desktop refresh requires Linux, --prefix, --version and --no-modify-path only.'
+fi
 
 for TOOL in awk grep sed tar mktemp cmp cp mv stat readlink dirname cat chmod rm rmdir mkdir; do
     command -v "$TOOL" >/dev/null 2>&1 || die "Required command is missing: $TOOL."
@@ -184,6 +196,29 @@ link_count() {
 }
 regular_file() {
     [ ! -L "$1" ] && [ -f "$1" ] && [ "$(link_count "$1")" = 1 ]
+}
+
+linux_executable() {
+    # cmp already belongs to the installer toolset. Linux GNU cmp bounds these
+    # binary comparisons without shell variables (which cannot preserve NULs).
+    regular_file "$1" || return 1
+    printf '\177ELF\002\001' > "$WORK/elf-ident"
+    printf '\000' > "$WORK/elf-abi"
+    printf '\003' > "$WORK/elf-linux-abi"
+    case "$ASSET_ARCH" in
+        x86_64)
+            printf '\002\000\076\000' > "$WORK/elf-exec"
+            printf '\003\000\076\000' > "$WORK/elf-dyn" ;;
+        aarch64)
+            printf '\002\000\267\000' > "$WORK/elf-exec"
+            printf '\003\000\267\000' > "$WORK/elf-dyn" ;;
+        *) return 1 ;;
+    esac
+    cmp -s -n 6 "$1" "$WORK/elf-ident" &&
+        { cmp -s -i 7:0 -n 1 "$1" "$WORK/elf-abi" ||
+          cmp -s -i 7:0 -n 1 "$1" "$WORK/elf-linux-abi"; } &&
+        { cmp -s -i 16:0 -n 4 "$1" "$WORK/elf-exec" ||
+          cmp -s -i 16:0 -n 4 "$1" "$WORK/elf-dyn"; }
 }
 
 portable_parent_safe() {
@@ -275,13 +310,16 @@ root_camera_installation_absent() {
         fi
     done
 }
-if [ "$OS" = Linux ]; then root_camera_installation_absent; fi
+# Desktop-only refresh never changes executable/camera assets or privileged
+# state. Full installation/removal retain their existing root-helper refusal.
+if [ "$OS" = Linux ] && [ "$REFRESH_DESKTOP" = no ]; then root_camera_installation_absent; fi
 
 if [ "$UNINSTALL" = yes ] && [ ! -e "$PREFIX" ] && [ ! -L "$PREFIX" ]; then
     say "Nothing to uninstall at $PREFIX."
     exit 0
 fi
 [ ! -L "$PREFIX" ] || die 'Prefix itself must not be a symbolic link.'
+[ "$REFRESH_DESKTOP" = no ] || [ -d "$PREFIX" ] || die 'Local desktop refresh requires an existing managed prefix.'
 mkdir -p "$PREFIX" || die "Cannot create prefix: $PREFIX."
 PREFIX=$(CDPATH= cd "$PREFIX" && pwd -P) || die 'Cannot resolve prefix.'
 valid_path "$PREFIX" || die 'Resolved prefix contains unsupported characters.'
@@ -292,6 +330,8 @@ if [ -n "$PORTABLE_TARGET" ]; then BIN=$PREFIX; TARGET=$PREFIX/mcw; else BIN=$PR
 STATE=$PREFIX/.miccamwatch-install
 CAMERA=$PREFIX/share/miccamwatch/linux-camera
 CAMERA_NAMES='mcw-camera-helper install-camera-helper.sh com.roman-cuisset.miccamwatch.camera.policy'
+DESKTOP_NAMES='desktop icon'
+LINUX_RECORDS='binary.sha256 camera-helper.sha256 camera-installer.sha256 camera-policy.sha256 desktop.path desktop.sha256 icon.path icon.sha256 version'
 LOCK_PATH=$PREFIX/.miccamwatch-install.lock
 mkdir "$LOCK_PATH" 2>/dev/null || die "Another installer is running, or $LOCK_PATH exists. After confirming no installer is running, remove only that empty lock directory."
 LOCK=$LOCK_PATH
@@ -312,6 +352,7 @@ elif [ -e "$STATE" ]; then
         regular_file "$STATE/version" || die 'Unsafe version receipt.'
     fi
 else
+    [ "$REFRESH_DESKTOP" = no ] || die 'Local desktop refresh requires an existing installer receipt.'
     if [ "$UNINSTALL" = yes ]; then
         say "No installer receipt at $PREFIX; no user files were removed."
         exit 0
@@ -364,6 +405,192 @@ owned_camera() {
         fi
     done
 }
+
+# Normal activation is separate from the opt-in, hidden session autostart.
+# Pin the data root in the receipt so later XDG environment changes never move
+# ownership to another user's or another installation's application entry.
+safe_desktop_directories() {
+    for DESKTOP_DIRECTORY in "$(dirname "$DESKTOP")" "$(dirname "$ICON")"; do
+        DIRECTORY=$DESKTOP_DIRECTORY
+        while :; do
+            [ ! -L "$DIRECTORY" ] || die "Refusing symbolic-link launcher ancestor: $DIRECTORY."
+            if [ -e "$DIRECTORY" ]; then
+                [ -d "$DIRECTORY" ] || die "Launcher ancestor is not a directory: $DIRECTORY."
+                DESKTOP_METADATA=$(stat -c '%u %a' "$DIRECTORY") || die 'Cannot inspect launcher ancestor.'
+                printf '%s\n' "$DESKTOP_METADATA" | awk -v uid="$(id -u)" '
+                    NF!=2 || ($1!=0 && $1!=uid) || $2 !~ /^[0-7]+$/ { bad=1 }
+                    { group=substr($2,length($2)-1,1)+0; other=substr($2,length($2),1)+0;
+                      sticky=length($2)==4 && substr($2,1,1)+0>=1 && substr($2,1,1)%2==1;
+                      if((group%4>=2 || other%4>=2) && !($1==0 && sticky)) bad=1 }
+                    END { exit bad || NR!=1 }' || die "Unsafe launcher ancestor: $DIRECTORY."
+            fi
+            [ "$DIRECTORY" != / ] || break
+            DIRECTORY=$(dirname "$DIRECTORY")
+        done
+    done
+}
+desktop_paths() {
+    DESKTOP_RECORDED=no
+    if [ -e "$STATE/desktop.path" ] || [ -e "$STATE/icon.path" ] ||
+       [ -e "$STATE/desktop.sha256" ] || [ -e "$STATE/icon.sha256" ]; then
+        for DESKTOP_RECORD in desktop.path desktop.sha256 icon.path icon.sha256; do
+            regular_file "$STATE/$DESKTOP_RECORD" || die 'Incomplete or unsafe launcher ownership receipt.'
+        done
+        DESKTOP=$(cat "$STATE/desktop.path")
+        ICON=$(cat "$STATE/icon.path")
+        printf '%s\n' "$DESKTOP" > "$WORK/desktop.path"
+        printf '%s\n' "$ICON" > "$WORK/icon.path"
+        cmp -s "$WORK/desktop.path" "$STATE/desktop.path" &&
+            cmp -s "$WORK/icon.path" "$STATE/icon.path" || die 'Malformed launcher path receipt.'
+        DATA_ROOT=${DESKTOP%/applications/com.roman-cuisset.miccamwatch.desktop}
+        DESKTOP_RECORDED=yes
+    else
+        DATA_ROOT=${XDG_DATA_HOME:-$HOME/.local/share}
+        DESKTOP=$DATA_ROOT/applications/com.roman-cuisset.miccamwatch.desktop
+        ICON=$DATA_ROOT/icons/hicolor/96x96/apps/com.roman-cuisset.miccamwatch.png
+    fi
+    valid_path "$DATA_ROOT" || die 'Application data root must be absolute without colon/control characters.'
+    case "$DATA_ROOT/" in *//*|*/./*|*/../*) die 'Application data root must contain only normal path components.' ;; esac
+    [ "$DESKTOP" = "$DATA_ROOT/applications/com.roman-cuisset.miccamwatch.desktop" ] &&
+        [ "$ICON" = "$DATA_ROOT/icons/hicolor/96x96/apps/com.roman-cuisset.miccamwatch.png" ] ||
+        die 'Launcher receipt paths do not name the conventional owned assets.'
+    safe_desktop_directories
+}
+asset_location() {
+    case "$ASSET_NAME" in
+        mcw) ASSET_TARGET=$TARGET; ASSET_STAGE=$STAGE; ASSET_RECORD=binary.sha256 ;;
+        desktop) ASSET_TARGET=$DESKTOP; ASSET_STAGE=$WORK/desktop; ASSET_RECORD=desktop.sha256 ;;
+        icon) ASSET_TARGET=$ICON; ASSET_STAGE=$WORK/icon; ASSET_RECORD=icon.sha256 ;;
+        *) ASSET_TARGET=$CAMERA/$ASSET_NAME; ASSET_STAGE=$CAMERA_STAGE/$ASSET_NAME
+           camera_record "$ASSET_NAME"; ASSET_RECORD=$CAMERA_RECORD ;;
+    esac
+}
+DESKTOP_REQUIRED=no
+asset_required() {
+    case "$ASSET_NAME" in
+        mcw) return 0 ;;
+        desktop|icon) [ "$DESKTOP_REQUIRED" = yes ] ;;
+        *) [ "$CAMERA_REQUIRED" = yes ] ;;
+    esac
+}
+owned_desktop() {
+    safe_desktop_directories
+    for ASSET_NAME in $DESKTOP_NAMES; do
+        asset_location
+        if [ -e "$ASSET_TARGET" ] || [ -L "$ASSET_TARGET" ]; then
+            regular_file "$ASSET_TARGET" || die "Refusing nonregular, symlink or hardlinked launcher asset: $ASSET_TARGET."
+            [ "$DESKTOP_RECORDED" = yes ] || die "Refusing unmanaged launcher asset: $ASSET_TARGET. Its owner must remove it or choose a separate XDG_DATA_HOME."
+            DESKTOP_HASH=$(sha_file "$ASSET_TARGET") || die 'Cannot checksum installed launcher asset.'
+            grep -Fx "$DESKTOP_HASH" "$STATE/$ASSET_RECORD" >/dev/null ||
+                die "Launcher asset changed outside the installer; preserving $ASSET_TARGET."
+        fi
+    done
+}
+desktop_string() {
+    # KeyFile values (Icon/TryExec) are not command arguments or field codes.
+    printf '%s' "$1" | awk '
+        { for(i=1;i<=length($0);i++) {
+            c=substr($0,i,1); if(c=="\\") printf "\\\\"; else printf "%s", c;
+        } }'
+}
+stage_desktop() {
+    command -v base64 >/dev/null 2>&1 || die 'base64 is required for the official application icon.'
+    [ -x /usr/bin/env ] || die '/usr/bin/env is required for application-menu activation.'
+    # Gio validates argv[0] BEFORE expanding %% field escapes. Keep the system
+    # executable first so a literal percent in PREFIX does not hide the entry.
+    # env execs the absolute target directly, with no shell or PATH lookup.
+    # The target still has Desktop Entry string and argv quoting layers.
+    DESKTOP_EXEC=$(printf '%s' "$TARGET" | awk '
+        BEGIN { printf "\"" }
+        { for(i=1;i<=length($0);i++) {
+            c=substr($0,i,1);
+            if(c=="\\") printf "\\\\\\\\";
+            else if(c=="\"" || c=="$" || c=="`") printf "\\\\%s", c;
+            else if(c=="%") printf "%%%%";
+            else printf "%s", c;
+        } }
+        END { printf "\"" }')
+    DESKTOP_ICON=$(desktop_string "$ICON")
+    DESKTOP_TRY_EXEC=$(desktop_string "$TARGET")
+    {
+        printf '%s\n' '[Desktop Entry]' 'Type=Application' 'Version=1.0' 'Name=MicCamWatch'
+        printf '%s\n' 'Comment=Microphone and camera privacy monitor'
+        printf 'TryExec=%s\nExec=/usr/bin/env -- %s tray open\nIcon=%s\n' "$DESKTOP_TRY_EXEC" "$DESKTOP_EXEC" "$DESKTOP_ICON"
+        printf '%s\n' 'Terminal=false' 'Categories=Utility;Security;' 'StartupNotify=false' 'StartupWMClass=MicCamWatch'
+    } > "$WORK/desktop"
+    # Exact 96x96 site/assets/favicon.png, also embedded by the retained GTK GUI.
+    # Embedded here because curl | sh and the updater have no adjacent assets.
+    base64 -d > "$WORK/icon" <<'MCW_OFFICIAL_ICON'
+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
+MCW_OFFICIAL_ICON
+    chmod 644 "$WORK/desktop" "$WORK/icon" || die 'Cannot set application asset permissions.'
+}
 helper_version_matches() {
     HELPER_REPORTED=$("$1" --protocol-version) || return 1
     # Accept JSON whitespace and either key order, but no extra keys or values.
@@ -382,7 +609,7 @@ helper_version_matches() {
         }'
 }
 asset_unchanged() {
-    [ "$ASSET_NAME" = mcw ] || safe_camera_directories
+    case "$ASSET_NAME" in mcw) ;; desktop|icon) safe_desktop_directories ;; *) safe_camera_directories ;; esac
     if [ -f "$WORK/old-hashes/$ASSET_NAME" ]; then
         regular_file "$ASSET_TARGET" || die "Asset changed concurrently; preserving $ASSET_TARGET."
         BEFORE_HASH=$(sha_file "$ASSET_TARGET") || die 'Cannot recheck installed asset.'
@@ -396,10 +623,12 @@ rollback_linux() {
     # Only touch assets still matching this transaction, never concurrent edits.
     while IFS= read -r ASSET_NAME; do
         [ -f "$WORK/replaced/$ASSET_NAME" ] || continue
-        if [ "$ASSET_NAME" = mcw ]; then ASSET_TARGET=$TARGET; else ASSET_TARGET=$CAMERA/$ASSET_NAME; fi
+        asset_location
         SAFE_RESTORE=yes
         if [ "$ASSET_NAME" = mcw ]; then
             [ ! -L "$BIN" ] && [ -d "$BIN" ] || SAFE_RESTORE=no
+        elif [ "$ASSET_NAME" = desktop ] || [ "$ASSET_NAME" = icon ]; then
+            (safe_desktop_directories) || SAFE_RESTORE=no
         else
             for DIRECTORY in "$PREFIX/share" "$PREFIX/share/miccamwatch" "$CAMERA"; do
                 [ ! -L "$DIRECTORY" ] && { [ ! -e "$DIRECTORY" ] || [ -d "$DIRECTORY" ]; } || SAFE_RESTORE=no
@@ -422,7 +651,7 @@ rollback_linux() {
     done < "$WORK/assets"
     if [ -L "$STATE" ] || [ ! -d "$STATE" ]; then ROLLBACK_OK=no; fi
     if [ "$ROLLBACK_OK" = yes ]; then
-        for RECEIPT in binary.sha256 camera-helper.sha256 camera-installer.sha256 camera-policy.sha256 version; do
+        for RECEIPT in $LINUX_RECORDS; do
             if [ -f "$WORK/old-receipts/$RECEIPT" ]; then
                 mv -f "$WORK/old-receipts/$RECEIPT" "$STATE/$RECEIPT" || ROLLBACK_OK=no
             else
@@ -436,7 +665,7 @@ rollback_linux() {
         WORK=
         return 1
     fi
-    warn 'Failed installation rolled back; previous executable and camera payload preserved.'
+    warn 'Failed installation rolled back; previous executable, camera payload and launcher assets preserved.'
 }
 refuse_running() {
     if [ "$OS" = Linux ]; then
@@ -496,6 +725,8 @@ validate_records() {
         ENTRY_NAME=${ENTRY##*/}
         case "$ENTRY_NAME" in
             format|prefix|binary.sha256|version|camera-helper.sha256|camera-installer.sha256|camera-policy.sha256) ;;
+            desktop.path|desktop.sha256|icon.path|icon.sha256)
+                [ "$OS" = Linux ] || die "Unknown receipt content was preserved: $ENTRY." ;;
             path-*.path|path-*.block)
                 ENTRY_INDEX=${ENTRY_NAME#path-}; ENTRY_INDEX=${ENTRY_INDEX%.*}
                 case "$ENTRY_INDEX" in ''|*[!0-9]*) die 'Invalid PATH receipt filename.' ;; esac ;;
@@ -517,7 +748,7 @@ validate_records() {
     done
 }
 validate_records
-if [ "$OS" = Linux ]; then owned_camera; fi
+if [ "$OS" = Linux ]; then owned_camera; desktop_paths; owned_desktop; fi
 
 if [ "$UNINSTALL" = yes ]; then
     PARTIAL=no
@@ -528,14 +759,15 @@ if [ "$UNINSTALL" = yes ]; then
     if [ "$OS" = Linux ]; then
         # Snapshot all assets and receipts before removing any of them.
         owned_camera
+        owned_desktop
         root_camera_installation_absent
         mkdir "$WORK/old-assets" "$WORK/old-hashes" "$WORK/new-hashes" "$WORK/old-receipts" "$WORK/replaced" || die 'Cannot stage uninstall rollback.'
-        printf '%s\n' mcw $CAMERA_NAMES > "$WORK/assets"
-        for RECEIPT in binary.sha256 camera-helper.sha256 camera-installer.sha256 camera-policy.sha256 version; do
+        printf '%s\n' mcw $CAMERA_NAMES $DESKTOP_NAMES > "$WORK/assets"
+        for RECEIPT in $LINUX_RECORDS; do
             if [ -f "$STATE/$RECEIPT" ]; then cp -p "$STATE/$RECEIPT" "$WORK/old-receipts/$RECEIPT" || die 'Cannot snapshot uninstall receipt.'; fi
         done
         while IFS= read -r ASSET_NAME; do
-            if [ "$ASSET_NAME" = mcw ]; then ASSET_TARGET=$TARGET; else ASSET_TARGET=$CAMERA/$ASSET_NAME; fi
+            asset_location
             if [ -e "$ASSET_TARGET" ]; then
                 cp -p "$ASSET_TARGET" "$WORK/old-assets/$ASSET_NAME" || die 'Cannot snapshot asset for uninstall.'
                 sha_file "$ASSET_TARGET" > "$WORK/old-hashes/$ASSET_NAME" || die 'Cannot checksum uninstall snapshot.'
@@ -543,14 +775,15 @@ if [ "$UNINSTALL" = yes ]; then
         done < "$WORK/assets"
         owned_binary
         owned_camera
+        owned_desktop
         TRANSACTION=yes
         while IFS= read -r ASSET_NAME; do
-            if [ "$ASSET_NAME" = mcw ]; then ASSET_TARGET=$TARGET; else ASSET_TARGET=$CAMERA/$ASSET_NAME; fi
+            asset_location
             asset_unchanged
             : > "$WORK/replaced/$ASSET_NAME"
             rm -f "$ASSET_TARGET" || die "Cannot remove $ASSET_TARGET."
         done < "$WORK/assets"
-        rm -f "$STATE/binary.sha256" "$STATE/version" "$STATE/camera-helper.sha256" "$STATE/camera-installer.sha256" "$STATE/camera-policy.sha256" || die 'Cannot remove ownership receipts.'
+        for RECEIPT in $LINUX_RECORDS; do rm -f "$STATE/$RECEIPT" || die 'Cannot remove ownership receipts.'; done
         TRANSACTION=no
         rmdir "$CAMERA" 2>/dev/null || :
         say 'No root camera installation was changed. Root runtime evidence and locks, preferences and user data were not removed.'
@@ -579,6 +812,19 @@ if [ "$UNINSTALL" = yes ]; then
     exit 0
 fi
 
+# The old updater calls the new binary's existing autostart refresh after its
+# installer subprocess (and installation lock) exits. This local-only path
+# repairs desktop ownership without downloading or replacing the mapped CLI.
+if [ "$REFRESH_DESKTOP" = yes ]; then
+    printf '%s\n' "$VERSION" > "$WORK/refresh.version"
+    regular_file "$STATE/version" && cmp -s "$WORK/refresh.version" "$STATE/version" ||
+        die 'Local desktop refresh version does not match the managed receipt.'
+    [ -n "$CURRENT_HASH" ] || die 'Local desktop refresh requires an owned executable.'
+    linux_executable "$TARGET" || die 'Local desktop refresh requires the matching native ELF executable.'
+    REPORTED=$("$TARGET" --version) || die 'Cannot validate the installed executable for desktop refresh.'
+    [ "$REPORTED" = "mcw ${VERSION#v}" ] || die 'Local desktop refresh executable version mismatch.'
+    CAMERA_REQUIRED=no
+else
 command -v curl >/dev/null 2>&1 || die 'curl is required for HTTPS downloads.'
 fetch() {
     curl --proto '=https' --proto-redir '=https' --tlsv1.2 --fail --location --silent --show-error --connect-timeout 30 --max-time 300 --output "$2" "$1"
@@ -625,6 +871,24 @@ mkdir -p "$BIN" || die "Cannot create $BIN."
 STAGE=$(mktemp "$BIN/.mcw-stage.XXXXXXXX") || die 'Cannot create same-directory executable staging file.'
 tar -xOzf "$WORK/package.tar.gz" mcw > "$STAGE" || die 'Cannot stream the executable from the archive.'
 [ -s "$STAGE" ] || die 'Archive executable is empty.'
+if [ "$OS" = Linux ]; then
+    linux_executable "$STAGE" || die "Not a Linux $ASSET_ARCH ELF64 little-endian executable: mcw; previous installation preserved."
+    # Validate both executables before running either one, including when a
+    # foreign ELF could otherwise be accepted by a host binfmt interpreter.
+    if [ "$CAMERA_REQUIRED" = yes ]; then
+        owned_camera
+        mkdir -p "$CAMERA" || die 'Cannot create camera payload directory.'
+        CAMERA_STAGE=$(mktemp -d "$CAMERA/.mcw-stage.XXXXXXXX") || die 'Cannot stage camera payload.'
+        for CAMERA_NAME in $CAMERA_NAMES; do
+            tar -xOzf "$WORK/package.tar.gz" "$CAMERA_NAME" > "$CAMERA_STAGE/$CAMERA_NAME" || die "Cannot extract $CAMERA_NAME; previous installation preserved."
+            [ -s "$CAMERA_STAGE/$CAMERA_NAME" ] || die "Empty camera payload: $CAMERA_NAME."
+        done
+        linux_executable "$CAMERA_STAGE/mcw-camera-helper" || die "Not a Linux $ASSET_ARCH ELF64 little-endian executable: mcw-camera-helper; previous installation preserved."
+        for CAMERA_NAME in $CAMERA_NAMES; do
+            case "$CAMERA_NAME" in *.policy) chmod 644 "$CAMERA_STAGE/$CAMERA_NAME" ;; *) chmod 755 "$CAMERA_STAGE/$CAMERA_NAME" ;; esac
+        done
+    fi
+fi
 chmod 755 "$STAGE" || die 'Cannot make staged executable runnable.'
 if [ -n "$PORTABLE_TARGET" ]; then
     owned_binary
@@ -669,41 +933,53 @@ if [ -n "$PORTABLE_TARGET" ]; then
     say "Updated $REPORTED in place at $TARGET. No receipt, PATH or user preferences were changed."
     exit 0
 fi
+fi
+# Linux's retained main window and tray open first ship in 0.21. Historical
+# explicit releases remain CLI-only rather than receiving a broken launcher.
+if [ "$OS" = Linux ] && printf '%s\n' "${VERSION#v}" |
+    awk -F '[.+-]' '{ exit !($1>0 || $2>=21) }'; then DESKTOP_REQUIRED=yes; fi
+if [ "$REFRESH_DESKTOP" = yes ] && [ "$DESKTOP_REQUIRED" = no ]; then
+    say 'Historical CLI-only installation has no desktop integration to refresh.'
+    exit 0
+fi
 if [ "$OS" = Linux ]; then
     owned_camera
     if [ "$CAMERA_REQUIRED" = yes ]; then
-        mkdir -p "$CAMERA" || die 'Cannot create camera payload directory.'
-        CAMERA_STAGE=$(mktemp -d "$CAMERA/.mcw-stage.XXXXXXXX") || die 'Cannot stage camera payload.'
-        for CAMERA_NAME in $CAMERA_NAMES; do
-            tar -xOzf "$WORK/package.tar.gz" "$CAMERA_NAME" > "$CAMERA_STAGE/$CAMERA_NAME" || die "Cannot extract $CAMERA_NAME; previous installation preserved."
-            [ -s "$CAMERA_STAGE/$CAMERA_NAME" ] || die "Empty camera payload: $CAMERA_NAME."
-            case "$CAMERA_NAME" in *.policy) chmod 644 "$CAMERA_STAGE/$CAMERA_NAME" ;; *) chmod 755 "$CAMERA_STAGE/$CAMERA_NAME" ;; esac
-        done
         helper_version_matches "$CAMERA_STAGE/mcw-camera-helper" || die 'Archived helper protocol/app version does not match mcw; previous installation preserved.'
     fi
     owned_binary
-    [ -z "$CURRENT_HASH" ] || refuse_running
+    if [ "$REFRESH_DESKTOP" = no ] && [ -n "$CURRENT_HASH" ]; then refuse_running; fi
     owned_camera
-    root_camera_installation_absent
+    if [ "$REFRESH_DESKTOP" = no ]; then root_camera_installation_absent; fi
+    if [ "$DESKTOP_REQUIRED" = yes ]; then stage_desktop; fi
+    if [ "$REFRESH_DESKTOP" = yes ] && [ "$DESKTOP_RECORDED" = yes ] &&
+        cmp -s "$WORK/desktop" "$DESKTOP" && cmp -s "$WORK/icon" "$ICON"; then
+        say 'Owned application-menu integration is already current.'
+        exit 0
+    fi
     mkdir "$WORK/old-assets" "$WORK/old-hashes" "$WORK/new-hashes" "$WORK/old-receipts" "$WORK/new-receipts" "$WORK/replaced" || die 'Cannot stage rollback snapshots.'
-    printf '%s\n' mcw $CAMERA_NAMES > "$WORK/assets"
-    for RECEIPT in binary.sha256 camera-helper.sha256 camera-installer.sha256 camera-policy.sha256 version; do
+    owned_desktop
+    if [ "$DESKTOP_REQUIRED" = yes ]; then
+        mkdir -p "$(dirname "$DESKTOP")" "$(dirname "$ICON")" || die 'Cannot create application menu directories.'
+    fi
+    safe_desktop_directories
+    if [ "$REFRESH_DESKTOP" = yes ]; then
+        printf '%s\n' $DESKTOP_NAMES > "$WORK/assets"
+    else
+        printf '%s\n' $CAMERA_NAMES $DESKTOP_NAMES mcw > "$WORK/assets"
+    fi
+    for RECEIPT in $LINUX_RECORDS; do
         if [ -f "$STATE/$RECEIPT" ]; then cp -p "$STATE/$RECEIPT" "$WORK/old-receipts/$RECEIPT" || die 'Cannot snapshot ownership receipt.'; fi
     done
     while IFS= read -r ASSET_NAME; do
-        if [ "$ASSET_NAME" = mcw ]; then
-            ASSET_TARGET=$TARGET; ASSET_STAGE=$STAGE; ASSET_RECORD=binary.sha256
-        else
-            ASSET_TARGET=$CAMERA/$ASSET_NAME; ASSET_STAGE=$CAMERA_STAGE/$ASSET_NAME
-            camera_record "$ASSET_NAME"; ASSET_RECORD=$CAMERA_RECORD
-        fi
+        asset_location
         : > "$WORK/new-receipts/$ASSET_RECORD"
         if [ -e "$ASSET_TARGET" ]; then
             cp -p "$ASSET_TARGET" "$WORK/old-assets/$ASSET_NAME" || die 'Cannot snapshot installed asset; previous installation preserved.'
             sha_file "$ASSET_TARGET" > "$WORK/old-hashes/$ASSET_NAME" || die 'Cannot checksum rollback asset.'
             cat "$WORK/old-hashes/$ASSET_NAME" >> "$WORK/new-receipts/$ASSET_RECORD"
         fi
-        if [ "$ASSET_NAME" = mcw ] || [ "$CAMERA_REQUIRED" = yes ]; then
+        if asset_required; then
             sha_file "$ASSET_STAGE" > "$WORK/new-hashes/$ASSET_NAME" || die 'Cannot checksum staged asset.'
             cat "$WORK/new-hashes/$ASSET_NAME" >> "$WORK/new-receipts/$ASSET_RECORD"
         fi
@@ -711,22 +987,29 @@ if [ "$OS" = Linux ]; then
     # Persist old/new ownership before any asset rename. Cleanup rolls back
     # ordinary failures and signals, including failures during finalization.
     TRANSACTION=yes
-    for ASSET_RECORD in binary.sha256 camera-helper.sha256 camera-installer.sha256 camera-policy.sha256; do
+    for ASSET_RECORD in binary.sha256 camera-helper.sha256 camera-installer.sha256 camera-policy.sha256 desktop.sha256 icon.sha256; do
         if [ -s "$WORK/new-receipts/$ASSET_RECORD" ]; then
             mv -f "$WORK/new-receipts/$ASSET_RECORD" "$STATE/$ASSET_RECORD" || die 'Cannot commit ownership journal.'
         fi
     done
+    if [ "$DESKTOP_REQUIRED" = yes ] || [ "$DESKTOP_RECORDED" = yes ]; then
+        printf '%s\n' "$DESKTOP" > "$WORK/new-receipts/desktop.path"
+        printf '%s\n' "$ICON" > "$WORK/new-receipts/icon.path"
+        for ASSET_RECORD in desktop.path icon.path; do
+            mv -f "$WORK/new-receipts/$ASSET_RECORD" "$STATE/$ASSET_RECORD" || die 'Cannot commit launcher path journal.'
+        done
+    fi
     # Payload first, CLI last: an execution failure restores the whole old set.
-    for ASSET_NAME in $CAMERA_NAMES mcw; do
-        if [ "$ASSET_NAME" = mcw ]; then ASSET_TARGET=$TARGET; ASSET_STAGE=$STAGE; else ASSET_TARGET=$CAMERA/$ASSET_NAME; ASSET_STAGE=$CAMERA_STAGE/$ASSET_NAME; fi
+    while IFS= read -r ASSET_NAME; do
+        asset_location
         asset_unchanged
         : > "$WORK/replaced/$ASSET_NAME"
-        if [ "$ASSET_NAME" = mcw ] || [ "$CAMERA_REQUIRED" = yes ]; then
+        if asset_required; then
             mv -f "$ASSET_STAGE" "$ASSET_TARGET" || die "Cannot replace $ASSET_NAME."
         else
             rm -f "$ASSET_TARGET" || die "Cannot remove obsolete payload $ASSET_NAME."
         fi
-    done
+    done < "$WORK/assets"
     STAGE=
     REPORTED=$("$TARGET" --version) || die 'Final installed-version validation failed.'
     [ "$REPORTED" = "mcw ${VERSION#v}" ] || die 'Final installed-version mismatch.'
@@ -734,7 +1017,7 @@ if [ "$OS" = Linux ]; then
         helper_version_matches "$CAMERA/mcw-camera-helper" || die 'Final installed helper protocol/app version mismatch.'
     fi
     while IFS= read -r ASSET_NAME; do
-        if [ "$ASSET_NAME" = mcw ]; then ASSET_RECORD=binary.sha256; else camera_record "$ASSET_NAME"; ASSET_RECORD=$CAMERA_RECORD; fi
+        asset_location
         if [ -f "$WORK/new-hashes/$ASSET_NAME" ]; then
             cp "$WORK/new-hashes/$ASSET_NAME" "$WORK/new-receipts/$ASSET_RECORD" || die 'Cannot finalize asset ownership.'
             mv -f "$WORK/new-receipts/$ASSET_RECORD" "$STATE/$ASSET_RECORD" || die 'Cannot finalize asset ownership receipt.'
@@ -742,6 +1025,9 @@ if [ "$OS" = Linux ]; then
             rm -f "$STATE/$ASSET_RECORD" || die 'Cannot remove obsolete payload receipt.'
         fi
     done < "$WORK/assets"
+    if [ "$DESKTOP_REQUIRED" = no ]; then
+        rm -f "$STATE/desktop.path" "$STATE/icon.path" || die 'Cannot remove obsolete launcher path receipts.'
+    fi
     printf '%s\n' "$VERSION" > "$WORK/new-receipts/version"
     mv -f "$WORK/new-receipts/version" "$STATE/version" || die 'Cannot finalize installed-version receipt.'
     TRANSACTION=no
@@ -782,6 +1068,10 @@ mv -f "$WORK/binary.sha256" "$STATE/binary.sha256" || die 'Installed executable 
 printf '%s\n' "$VERSION" > "$WORK/version"
 mv -f "$WORK/version" "$STATE/version" || die 'Installed executable is valid, but version receipt could not be saved.'
 fi
+if [ "$REFRESH_DESKTOP" = yes ]; then
+    say "Refreshed installer-owned application-menu integration: $DESKTOP"
+    exit 0
+fi
 detail "Native executable verified: $TARGET"
 if [ "$OS" = Linux ] && [ "$CAMERA_REQUIRED" = yes ]; then
     detail "Optional camera administration files: $CAMERA"
@@ -805,9 +1095,16 @@ finish_install() {
     say ''
     step "Installation completed: $REPORTED"
     say ''
-    say 'To open the dashboard, run:'
-    if [ "$IN_PATH" = yes ]; then say '  mcw top'
-    else say "  $QUOTED_TARGET top"; fi
+    if [ "$OS" = Linux ] && [ "$DESKTOP_REQUIRED" = yes ]; then
+        say 'Open MicCamWatch from your application menu, or run:'
+        if [ "$IN_PATH" = yes ]; then say '  mcw tray open'
+        else say "  $QUOTED_TARGET tray open"; fi
+        detail "Application menu entry: $DESKTOP"
+    else
+        say 'To open the dashboard, run:'
+        if [ "$IN_PATH" = yes ]; then say '  mcw top'
+        else say "  $QUOTED_TARGET top"; fi
+    fi
     if [ "$IN_PATH" != yes ]; then
         say ''
         say "If 'mcw' is not found in this terminal, run:"

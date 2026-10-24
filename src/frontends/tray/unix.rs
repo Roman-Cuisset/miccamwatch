@@ -11,7 +11,7 @@ use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 use std::fmt::Write as _;
 #[cfg(target_os = "macos")]
-use std::sync::mpsc::Receiver;
+use std::sync::{Mutex, mpsc::Receiver};
 use std::{
     fs::{self, File, OpenOptions},
     io::{BufRead, BufReader, Write},
@@ -20,7 +20,7 @@ use std::{
         io::AsRawFd,
         net::{UnixListener, UnixStream},
     },
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -30,7 +30,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", test))]
 const FRAME_LIMIT: usize = 65_536;
 const INTERVAL: Duration = Duration::from_secs(2);
 
@@ -52,6 +52,18 @@ enum Command {
     #[cfg(target_os = "macos")]
     #[serde(rename = "camera_inspect")]
     CameraInspect,
+    #[serde(rename = "notifications_enable")]
+    NotificationsEnable,
+    #[serde(rename = "notifications_disable")]
+    NotificationsDisable,
+    #[serde(rename = "sound_enable")]
+    SoundEnable,
+    #[serde(rename = "sound_disable")]
+    SoundDisable,
+    #[serde(rename = "history_enable")]
+    HistoryEnable,
+    #[serde(rename = "history_disable")]
+    HistoryDisable,
     Autostart,
     Exit,
 }
@@ -67,6 +79,12 @@ impl Command {
             "profile_private" => Some(Self::ProfilePrivate),
             "profile_meeting" => Some(Self::ProfileMeeting),
             "profile_development" => Some(Self::ProfileDevelopment),
+            "notifications_enable" => Some(Self::NotificationsEnable),
+            "notifications_disable" => Some(Self::NotificationsDisable),
+            "sound_enable" => Some(Self::SoundEnable),
+            "sound_disable" => Some(Self::SoundDisable),
+            "history_enable" => Some(Self::HistoryEnable),
+            "history_disable" => Some(Self::HistoryDisable),
             "autostart" => Some(Self::Autostart),
             "exit" => Some(Self::Exit),
             _ => None,
@@ -91,20 +109,17 @@ struct View {
     summary: String,
     visual: &'static str,
     items: Vec<MenuEntry>,
-    #[cfg(target_os = "macos")]
     diagnostics: String,
-    #[cfg(target_os = "macos")]
     limited: bool,
-    #[cfg(target_os = "macos")]
     language: &'static str,
-    #[cfg(target_os = "macos")]
     version: &'static str,
-    #[cfg(target_os = "macos")]
     protection: DesktopProtection,
+    overview: DesktopOverview,
+    preferences: DesktopPreferences,
+    feedback: Option<String>,
     #[cfg(target_os = "linux")]
     details_label: &'static str,
 }
-#[cfg(target_os = "macos")]
 #[derive(Clone, Serialize)]
 struct DesktopProtection {
     microphone: &'static str,
@@ -114,17 +129,146 @@ struct DesktopProtection {
     camera_on_lock: bool,
 }
 
-#[cfg(target_os = "macos")]
+#[derive(Clone, Serialize)]
+struct DesktopAccess {
+    application: String,
+    resource: crate::model::Resource,
+    activity: Activity,
+    pid: Option<u32>,
+}
+
+#[derive(Clone, Serialize)]
+struct DesktopOverview {
+    microphone: &'static str,
+    camera: &'static str,
+    observed_at: Option<String>,
+    total_accesses: usize,
+    omitted_accesses: usize,
+    accesses: Vec<DesktopAccess>,
+    #[serde(skip)]
+    text_limited: bool,
+}
+
+impl Default for DesktopOverview {
+    fn default() -> Self {
+        Self {
+            microphone: "unknown",
+            camera: "unknown",
+            observed_at: None,
+            total_accesses: 0,
+            omitted_accesses: 0,
+            accesses: Vec::new(),
+            text_limited: false,
+        }
+    }
+}
+
+impl DesktopOverview {
+    fn from_snapshot(snapshot: &Snapshot, observed_at: chrono::DateTime<chrono::Utc>) -> Self {
+        let mut text_limited = false;
+        let accesses: Vec<_> = snapshot
+            .accesses
+            .iter()
+            .take(8)
+            .map(|access| {
+                let (application, limited) = bounded_desktop_string(&access.application, 256);
+                text_limited |= limited;
+                DesktopAccess {
+                    application,
+                    resource: access.resource,
+                    activity: access.activity,
+                    pid: access.pid,
+                }
+            })
+            .collect();
+        Self {
+            microphone: desktop_resource_activity(snapshot, crate::model::Resource::Microphone),
+            camera: desktop_resource_activity(snapshot, crate::model::Resource::Camera),
+            observed_at: Some(observed_at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
+            total_accesses: snapshot.accesses.len(),
+            omitted_accesses: snapshot.accesses.len() - accesses.len(),
+            accesses,
+            text_limited,
+        }
+    }
+}
+
+fn desktop_resource_activity(
+    snapshot: &Snapshot,
+    resource: crate::model::Resource,
+) -> &'static str {
+    if snapshot
+        .accesses
+        .iter()
+        .any(|access| access.resource == resource && access.activity == Activity::Active)
+    {
+        return "active";
+    }
+    if snapshot
+        .accesses
+        .iter()
+        .any(|access| access.resource == resource && access.activity == Activity::Ready)
+    {
+        return "ready";
+    }
+    #[cfg(target_os = "macos")]
+    let collector = match resource {
+        crate::model::Resource::Microphone => "coreaudio_input",
+        crate::model::Resource::Camera => "coremediaio_video",
+    };
+    #[cfg(target_os = "linux")]
+    let collector = match resource {
+        crate::model::Resource::Microphone => "pipewire_audio",
+        crate::model::Resource::Camera => "pipewire_video",
+    };
+    // No rows is not proof of idle. Require the relevant collector to be
+    // present and healthy; degradation or a current gap cannot assert absence.
+    if !snapshot.observation_gaps.contains(&resource)
+        && snapshot
+            .collectors
+            .iter()
+            .any(|health| health.collector == collector)
+        && snapshot
+            .collectors
+            .iter()
+            .filter(|health| health.collector == collector)
+            .all(|health| health.state == CollectorState::Healthy)
+    {
+        "idle"
+    } else {
+        "unknown"
+    }
+}
+
+#[derive(Clone, Serialize)]
+struct DesktopPreferences {
+    notifications_enabled: bool,
+    sound_enabled: bool,
+    history_enabled: bool,
+    notifications_paused: bool,
+}
+
+fn bounded_desktop_string(text: &str, limit: usize) -> (String, bool) {
+    if text.len() <= limit {
+        return (text.to_owned(), false);
+    }
+    let mut end = limit - DESKTOP_OMISSION.len();
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    let mut bounded = String::with_capacity(limit);
+    bounded.push_str(&text[..end]);
+    bounded.push_str(DESKTOP_OMISSION);
+    (bounded, true)
+}
+
 const DESKTOP_TEXT_BUDGET: usize = 48_000;
-#[cfg(target_os = "macos")]
 const DESKTOP_DIAGNOSTIC_LIMIT: usize = 32_768;
-#[cfg(target_os = "macos")]
 const DESKTOP_OMISSION: &str =
     "\n[… more text omitted by bounded desktop transport; this field is incomplete.]";
 
 // Count JSON-escaped content, not just UTF-8: control characters can expand six
 // times. The remaining 17 KiB of a frame covers the bounded protocol structure.
-#[cfg(target_os = "macos")]
 fn desktop_text_cost(text: &str) -> usize {
     text.bytes()
         .map(|byte| match byte {
@@ -135,7 +279,6 @@ fn desktop_text_cost(text: &str) -> usize {
         .sum()
 }
 
-#[cfg(target_os = "macos")]
 fn project_desktop_text(
     text: &mut String,
     limit: usize,
@@ -171,7 +314,6 @@ fn project_desktop_text(
     true
 }
 
-#[cfg(target_os = "macos")]
 fn bound_desktop_view(view: &mut View) {
     fn field_count(entries: &[MenuEntry]) -> usize {
         entries
@@ -205,7 +347,26 @@ fn bound_desktop_view(view: &mut View) {
         limited
     }
     let mut budget = DESKTOP_TEXT_BUDGET;
-    let mut remaining = 2 + field_count(&view.items);
+    if let Some(observed_at) = &view.overview.observed_at {
+        budget -= desktop_text_cost(observed_at);
+    }
+    let mut remaining = 2
+        + field_count(&view.items)
+        + view.overview.accesses.len()
+        + usize::from(view.feedback.is_some());
+    // These fields have UTF-8 byte bounds as well as a share of the escaped
+    // text budget. Project them first so their omission markers stay in bounds.
+    for access in &mut view.overview.accesses {
+        view.limited |= project_desktop_text(
+            &mut access.application,
+            256 * 6,
+            &mut budget,
+            &mut remaining,
+        );
+    }
+    if let Some(feedback) = &mut view.feedback {
+        view.limited |= project_desktop_text(feedback, 2048 * 6, &mut budget, &mut remaining);
+    }
     view.limited |= project_desktop_text(&mut view.summary, 2048, &mut budget, &mut remaining);
     view.limited |= labels(&mut view.items, &mut budget, &mut remaining);
     view.limited |= project_desktop_text(
@@ -447,7 +608,6 @@ pub(crate) fn stop_current_installation() -> Result<bool> {
     }
 }
 
-#[cfg(target_os = "macos")]
 pub fn open_running() -> Result<bool> {
     match owned_control(b"open\n", false)? {
         None => Ok(false),
@@ -466,20 +626,162 @@ pub fn stop_running() -> Result<bool> {
         Some(reply) => bail!("native tray shutdown was not acknowledged: {reply}"),
     }
 }
+#[cfg(target_os = "macos")]
+#[derive(Default)]
+struct DesktopInput {
+    writer: Mutex<Option<std::process::ChildStdin>>,
+    closed: AtomicBool,
+}
+#[cfg(target_os = "macos")]
+impl DesktopInput {
+    fn write(&self, frame: &[u8]) -> Result<()> {
+        let mut writer = self
+            .writer
+            .lock()
+            .map_err(|_| anyhow::anyhow!("AppKit input lock poisoned"))?;
+        let input = writer.as_mut().context("AppKit helper input closed")?;
+        input.write_all(frame)?;
+        input.flush()?;
+        Ok(())
+    }
+    fn close(&self) {
+        self.closed.store(true, Ordering::Release);
+        if let Ok(mut writer) = self.writer.lock() {
+            writer.take();
+        }
+    }
+}
+
+struct StagedSocket {
+    directory: PathBuf,
+    path: PathBuf,
+    directory_identity: (u64, u64),
+    socket_identity: Option<(u64, u64)>,
+}
+impl StagedSocket {
+    fn new(destination: &Path) -> Result<Self> {
+        use std::os::unix::ffi::{OsStrExt, OsStringExt};
+        let template = destination
+            .parent()
+            .context("tray socket parent unavailable")?
+            .join(".sXXXXXX");
+        let mut template =
+            std::ffi::CString::new(template.into_os_string().into_vec())?.into_bytes_with_nul();
+        ensure!(
+            !unsafe { libc::mkdtemp(template.as_mut_ptr().cast()) }.is_null(),
+            "cannot create private tray socket staging directory: {}",
+            std::io::Error::last_os_error()
+        );
+        template.pop();
+        let directory = PathBuf::from(std::ffi::OsString::from_vec(template));
+        let metadata = fs::symlink_metadata(&directory)?;
+        ensure!(
+            metadata.is_dir() && metadata.uid() == uid() && metadata.mode() & 0o077 == 0,
+            "tray socket staging directory ownership or permissions are unsafe"
+        );
+        let path = directory.join("s");
+        ensure!(
+            path.as_os_str().as_bytes().len() < 104,
+            "staged tray socket path exceeds native Unix socket limit"
+        );
+        Ok(Self {
+            directory,
+            path,
+            directory_identity: (metadata.dev(), metadata.ino()),
+            socket_identity: None,
+        })
+    }
+
+    fn bind(&mut self) -> Result<UnixListener> {
+        let listener = UnixListener::bind(&self.path)?;
+        let metadata = fs::symlink_metadata(&self.path)?;
+        ensure!(
+            metadata.file_type().is_socket() && metadata.uid() == uid(),
+            "staged tray socket ownership is unsafe"
+        );
+        self.socket_identity = Some((metadata.dev(), metadata.ino()));
+        fs::set_permissions(&self.path, fs::Permissions::from_mode(0o600))?;
+        listener.set_nonblocking(true)?;
+        Ok(listener)
+    }
+
+    fn publish(&self, destination: &Path) -> Result<()> {
+        use std::os::unix::ffi::OsStrExt;
+        let metadata = fs::symlink_metadata(&self.path)?;
+        ensure!(
+            self.socket_identity == Some((metadata.dev(), metadata.ino()))
+                && metadata.file_type().is_socket()
+                && metadata.uid() == uid()
+                && metadata.mode() & 0o777 == 0o600,
+            "staged tray socket changed before publication"
+        );
+        let source = std::ffi::CString::new(self.path.as_os_str().as_bytes())?;
+        let destination = std::ffi::CString::new(destination.as_os_str().as_bytes())?;
+        #[cfg(target_os = "linux")]
+        let result = unsafe {
+            libc::renameat2(
+                libc::AT_FDCWD,
+                source.as_ptr(),
+                libc::AT_FDCWD,
+                destination.as_ptr(),
+                libc::RENAME_NOREPLACE,
+            )
+        };
+        #[cfg(target_os = "macos")]
+        let result =
+            unsafe { libc::renamex_np(source.as_ptr(), destination.as_ptr(), libc::RENAME_EXCL) };
+        if result != 0 {
+            return Err(std::io::Error::last_os_error())
+                .context("cannot exclusively publish native tray socket");
+        }
+        Ok(())
+    }
+}
+fn remove_owned_socket(path: &Path, identity: (u64, u64)) {
+    if let Ok(metadata) = fs::symlink_metadata(path)
+        && metadata.file_type().is_socket()
+        && metadata.uid() == uid()
+        && (metadata.dev(), metadata.ino()) == identity
+    {
+        let _ = fs::remove_file(path);
+    }
+}
+impl Drop for StagedSocket {
+    fn drop(&mut self) {
+        if let Ok(metadata) = fs::symlink_metadata(&self.directory)
+            && metadata.is_dir()
+            && !metadata.file_type().is_symlink()
+            && metadata.uid() == uid()
+            && (metadata.dev(), metadata.ino()) == self.directory_identity
+        {
+            if let Some(identity) = self.socket_identity {
+                remove_owned_socket(&self.path, identity);
+            }
+            let _ = fs::remove_dir(&self.directory);
+        }
+    }
+}
+
 struct Lifecycle {
     _lock: File,
     path: PathBuf,
+    socket_identity: (u64, u64),
     ready: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
     finished: Arc<AtomicBool>,
     clean_shutdown: Arc<AtomicBool>,
     server_exit: Arc<AtomicBool>,
-    #[cfg(target_os = "macos")]
     open_requested: Arc<AtomicBool>,
+    #[cfg(target_os = "macos")]
+    window_input: Arc<DesktopInput>,
     server: Option<thread::JoinHandle<()>>,
 }
+enum LeaseAcquisition {
+    Acquired(Lifecycle),
+    Contended,
+}
 impl Lifecycle {
-    fn acquire() -> Result<Self> {
+    fn acquire() -> Result<LeaseAcquisition> {
         let path = socket_path()?;
         let lock = OpenOptions::new()
             .create(true)
@@ -494,10 +796,17 @@ impl Lifecycle {
             metadata.is_file() && metadata.uid() == uid() && metadata.mode() & 0o077 == 0,
             "tray lock ownership or permissions are unsafe"
         );
-        ensure!(
-            unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0,
-            "the per-user native tray is already starting or running"
-        );
+        if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+            let error = std::io::Error::last_os_error();
+            if error.kind() == std::io::ErrorKind::WouldBlock {
+                return Ok(LeaseAcquisition::Contended);
+            }
+            return Err(error).context("cannot acquire native tray lease");
+        }
+        Self::bind(path, lock).map(LeaseAcquisition::Acquired)
+    }
+
+    fn bind(path: PathBuf, lock: File) -> Result<Self> {
         if let Ok(metadata) = fs::symlink_metadata(&path) {
             ensure!(
                 metadata.file_type().is_socket() && metadata.uid() == uid(),
@@ -505,18 +814,27 @@ impl Lifecycle {
             );
             fs::remove_file(&path)?;
         }
-        let listener = UnixListener::bind(&path)?;
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
-        listener.set_nonblocking(true)?;
+        // Bind only inside a private directory. Publish atomically after the
+        // socket is safe for consumers; never expose bind's umask-derived mode
+        // or replace an entry appearing while this owner prepares its socket.
+        let mut staged = StagedSocket::new(&path)?;
+        let listener = staged.bind()?;
+        let socket_identity = staged
+            .socket_identity
+            .context("staged tray socket identity unavailable")?;
+        staged.publish(&path)?;
+        drop(staged);
         let ready = Arc::new(AtomicBool::new(false));
         let stop = Arc::new(AtomicBool::new(false));
         let finished = Arc::new(AtomicBool::new(false));
         let clean_shutdown = Arc::new(AtomicBool::new(false));
         let server_exit = Arc::new(AtomicBool::new(false));
-        #[cfg(target_os = "macos")]
         let open_requested = Arc::new(AtomicBool::new(false));
-        #[cfg(target_os = "macos")]
         let server_open = open_requested.clone();
+        #[cfg(target_os = "macos")]
+        let window_input = Arc::new(DesktopInput::default());
+        #[cfg(target_os = "macos")]
+        let server_input = window_input.clone();
         let flags = (
             ready.clone(),
             stop.clone(),
@@ -558,16 +876,27 @@ impl Lifecycle {
                                 } else {
                                     "starting\n"
                                 }),
-                                #[cfg(target_os = "macos")]
                                 b"open" => {
                                     if flags.1.load(Ordering::Acquire)
                                         || flags.2.load(Ordering::Acquire)
                                     {
                                         Ok("stopping\n")
                                     } else {
-                                        // Coalesce duplicate launches even while AppKit
-                                        // initializes; its loop consumes this after start.
+                                        #[cfg(target_os = "macos")]
+                                        ensure!(
+                                            !server_input.closed.load(Ordering::Acquire),
+                                            "AppKit helper input closed; window request was not accepted"
+                                        );
                                         server_open.store(true, Ordering::Release);
+                                        #[cfg(target_os = "macos")]
+                                        if flags.0.load(Ordering::Acquire)
+                                            && server_open.swap(false, Ordering::AcqRel)
+                                        {
+                                            // Deliver independently of a slow device poll.
+                                            // Publishing before checking readiness also
+                                            // covers its transition without losing open.
+                                            server_input.write(b"{\"kind\":\"show\"}\n")?;
+                                        }
                                         Ok("opened\n")
                                     }
                                 }
@@ -613,15 +942,55 @@ impl Lifecycle {
         Ok(Self {
             _lock: lock,
             path,
+            socket_identity,
             ready,
             stop,
             finished,
             clean_shutdown,
             server_exit,
-            #[cfg(target_os = "macos")]
             open_requested,
+            #[cfg(target_os = "macos")]
+            window_input,
             server: Some(server),
         })
+    }
+
+    fn acquire_for_launch(initial_window: bool, explicit_policy: bool) -> Result<Option<Self>> {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            match Self::acquire()? {
+                LeaseAcquisition::Acquired(lifecycle) => return Ok(Some(lifecycle)),
+                LeaseAcquisition::Contended => {}
+            }
+            ensure!(
+                initial_window || !explicit_policy,
+                "MicCamWatch is already starting or running; an explicit policy cannot replace its active policy"
+            );
+            // The lease is acquired before the socket is bound. Losing that
+            // lease must not discard an explicit launch in this interval.
+            // Every reuse authenticates both namespace and executable image;
+            // lock contention alone never proves an owned native frontend.
+            if initial_window {
+                if open_running()? {
+                    return Ok(None);
+                }
+            } else if let Some(reply) = owned_control(b"ping\n", false)? {
+                match reply.as_str() {
+                    "ready" => return Ok(None),
+                    // Do not claim a successful background service until its
+                    // native host is ready; initialization can fail headlessly.
+                    "starting" => {}
+                    _ => bail!("owned tray startup was not acknowledged: {reply}"),
+                }
+            }
+            ensure!(
+                Instant::now() < deadline,
+                "MicCamWatch's native tray lease is held but its owned frontend did not become available; exit that tray via its menu and retry"
+            );
+            thread::sleep(Duration::from_millis(20));
+            // If startup exited, acquire its released lease normally. Never
+            // unlink an active owner's socket or force another process out.
+        }
     }
 }
 impl Drop for Lifecycle {
@@ -632,7 +1001,7 @@ impl Drop for Lifecycle {
         if let Some(server) = self.server.take() {
             let _ = server.join();
         }
-        let _ = fs::remove_file(&self.path);
+        remove_owned_socket(&self.path, self.socket_identity);
     }
 }
 
@@ -692,7 +1061,7 @@ fn words(lang: Language) -> Words {
             lock_unknown: "Session lock unknown; automatic controls unavailable",
             lock_status: "Session lock unknown",
             #[cfg(target_os = "linux")]
-            details: "Details…",
+            details: "Open MicCamWatch…",
             camera_inspect: "Inspect camera profiles (admin, read-only)",
             inspecting: "Read-only camera inspection awaiting administrator approval / running…",
             config_override: "Profile controlled by explicit --config; menu changes disabled",
@@ -721,7 +1090,7 @@ fn words(lang: Language) -> Words {
             lock_unknown: "Verrouillage inconnu ; contrôles automatiques indisponibles",
             lock_status: "Verrouillage inconnu",
             #[cfg(target_os = "linux")]
-            details: "Détails…",
+            details: "Ouvrir MicCamWatch…",
             camera_inspect: "Inspecter profils caméra (admin, lecture seule)",
             inspecting: "Inspection caméra en lecture seule : autorisation administrateur en attente / en cours…",
             config_override: "Profil contrôlé par --config explicite ; modifications désactivées",
@@ -750,7 +1119,7 @@ fn words(lang: Language) -> Words {
             lock_unknown: "Sitzungssperre unbekannt; automatische Steuerung nicht verfügbar",
             lock_status: "Sitzungssperre unbekannt",
             #[cfg(target_os = "linux")]
-            details: "Details…",
+            details: "MicCamWatch öffnen…",
             camera_inspect: "Kameraprofile prüfen (Admin, nur lesen)",
             inspecting: "Nur lesende Kameraprüfung wartet auf Administratorfreigabe / läuft…",
             config_override: "Profil durch explizites --config gesteuert; Menüänderungen deaktiviert",
@@ -779,7 +1148,7 @@ fn words(lang: Language) -> Words {
             lock_unknown: "Bloqueo de sesión desconocido; controles automáticos no disponibles",
             lock_status: "Bloqueo de sesión desconocido",
             #[cfg(target_os = "linux")]
-            details: "Detalles…",
+            details: "Abrir MicCamWatch…",
             camera_inspect: "Perfiles de cámara (admin, solo lectura)",
             inspecting: "Inspección de cámara de solo lectura: esperando aprobación de administrador / en curso…",
             config_override: "Perfil controlado por --config explícito; cambios desactivados",
@@ -808,7 +1177,7 @@ fn words(lang: Language) -> Words {
             lock_unknown: "セッションロック不明・自動制御は利用できません",
             lock_status: "セッションロック不明",
             #[cfg(target_os = "linux")]
-            details: "詳細…",
+            details: "MicCamWatchを開く…",
             camera_inspect: "カメラプロファイル（管理者・読み取り専用）",
             inspecting: "読み取り専用カメラ調査：管理者承認待ち／実行中…",
             config_override: "明示的な --config がプロファイルを制御・メニュー変更は無効",
@@ -837,7 +1206,7 @@ fn words(lang: Language) -> Words {
             lock_unknown: "会话锁定状态未知；自动控制不可用",
             lock_status: "会话锁定状态未知",
             #[cfg(target_os = "linux")]
-            details: "详细信息…",
+            details: "打开 MicCamWatch…",
             camera_inspect: "检查摄像头配置（管理员；只读）",
             inspecting: "只读摄像头检查：等待管理员授权／进行中…",
             config_override: "由显式 --config 控制配置；已禁用菜单更改",
@@ -866,7 +1235,7 @@ fn words(lang: Language) -> Words {
             lock_unknown: "Блокировка сеанса неизвестна; автоматическое управление недоступно",
             lock_status: "Блокировка сеанса неизвестна",
             #[cfg(target_os = "linux")]
-            details: "Подробности…",
+            details: "Открыть MicCamWatch…",
             camera_inspect: "Профили камер (админ, только чтение)",
             inspecting: "Проверка камеры только для чтения: ожидание разрешения администратора / выполняется…",
             config_override: "Профиль задан явным --config; изменения в меню отключены",
@@ -941,6 +1310,17 @@ fn observation_status(snapshot: &Snapshot, lang: Language) -> (String, &'static 
             .collectors
             .iter()
             .any(|health| health.state == CollectorState::Unavailable);
+    #[cfg(target_os = "macos")]
+    let expected = ["coreaudio_input", "coremediaio_video"];
+    #[cfg(target_os = "linux")]
+    let expected = ["pipewire_audio", "pipewire_video"];
+    let unavailable = unavailable
+        || expected.iter().any(|collector| {
+            !snapshot
+                .collectors
+                .iter()
+                .any(|health| health.collector == *collector)
+        });
     let partial = !snapshot.observation_gaps.is_empty()
         || snapshot
             .collectors
@@ -994,22 +1374,11 @@ fn observation_status(snapshot: &Snapshot, lang: Language) -> (String, &'static 
             crate::model::Resource::Microphone,
             crate::model::Resource::Camera,
         ] {
-            let activity = if snapshot
-                .accesses
-                .iter()
-                .any(|a| a.resource == resource && a.activity == Activity::Active)
-            {
-                lang.state_str(None, Activity::Active)
-            } else if snapshot
-                .accesses
-                .iter()
-                .any(|a| a.resource == resource && a.activity == Activity::Ready)
-            {
-                lang.state_str(None, Activity::Ready)
-            } else if unavailable || snapshot.observation_gaps.contains(&resource) {
-                words(lang).state_unknown
-            } else {
-                words(lang).idle
+            let activity = match desktop_resource_activity(snapshot, resource) {
+                "active" => lang.state_str(None, Activity::Active),
+                "ready" => lang.state_str(None, Activity::Ready),
+                "idle" => words(lang).idle,
+                _ => words(lang).state_unknown,
             };
             if !summary.is_empty() {
                 summary.push_str(" · ");
@@ -1055,6 +1424,19 @@ fn observation_status(snapshot: &Snapshot, lang: Language) -> (String, &'static 
             );
         }
     }
+    #[cfg(target_os = "macos")]
+    for collector in ["coreaudio_input", "coremediaio_video"] {
+        if !snapshot
+            .collectors
+            .iter()
+            .any(|health| health.collector == collector)
+        {
+            let _ = write!(
+                summary,
+                "\n\n{collector}: collector absent from current observation; activity is unknown"
+            );
+        }
+    }
     for resource in &snapshot.observation_gaps {
         let _ = write!(
             summary,
@@ -1067,7 +1449,6 @@ fn observation_status(snapshot: &Snapshot, lang: Language) -> (String, &'static 
 
 #[derive(Default)]
 struct CameraInspectionUi {
-    #[cfg(target_os = "macos")]
     system_managed: bool,
     inventory_incomplete: bool,
     administrator_required: bool,
@@ -1084,6 +1465,14 @@ struct CameraInspectionWorker {
 
 #[cfg(target_os = "macos")]
 impl CameraInspectionWorker {
+    fn observe_passive_state(&mut self, state: crate::privacy::CameraPrivacyState) {
+        self.ui.system_managed = state == crate::privacy::CameraPrivacyState::SystemManaged;
+        self.ui.inventory_incomplete = false;
+        self.ui.administrator_required = false;
+        // Keep the timestamped point-in-time inspection result as diagnostics.
+        // A current passive success supersedes only its obsolete action guidance.
+    }
+
     fn start(&mut self, lang: Language) -> Result<()> {
         if self.pending.is_some()
             || !(self.ui.inventory_incomplete || self.ui.administrator_required)
@@ -1142,6 +1531,8 @@ struct MenuContext<'a> {
     inspection: &'a CameraInspectionUi,
     #[cfg(target_os = "macos")]
     requested: [Option<bool>; 2],
+    #[cfg(target_os = "macos")]
+    overview: &'a DesktopOverview,
 }
 
 fn make_view(
@@ -1159,9 +1550,17 @@ fn make_view(
         inspection,
         #[cfg(target_os = "macos")]
         requested,
+        #[cfg(target_os = "macos")]
+        overview,
     } = context;
+    let (desktop_feedback, feedback_limited) = match feedback {
+        Some(text) => {
+            let (text, limited) = bounded_desktop_string(text, 2048);
+            (Some(text), limited)
+        }
+        None => (None, false),
+    };
     let (summary, visual) = status;
-    #[cfg(target_os = "macos")]
     let (summary, diagnostics) = {
         let compact = summary.lines().next().unwrap_or(&summary).to_owned();
         (compact, summary)
@@ -1218,7 +1617,7 @@ fn make_view(
             children: None,
         });
     }
-    items.push(entry(
+    let camera_entry = entry(
         "camera",
         if cfg!(target_os = "linux") {
             if camera_blocked {
@@ -1232,7 +1631,17 @@ fn make_view(
             text.camera
         },
         cfg!(target_os = "macos") || camera_error.is_none(),
-    ));
+    );
+    #[cfg(target_os = "linux")]
+    let camera_entry = {
+        let mut camera_entry = camera_entry;
+        if let Err(error) = crate::privacy::camera_control_preflight() {
+            camera_entry.enabled = false;
+            camera_entry.detail = Some(format!("{error:#}"));
+        }
+        camera_entry
+    };
+    items.push(camera_entry);
     if inspection.inventory_incomplete || inspection.administrator_required {
         items.push(entry(
             "camera_inspect",
@@ -1308,19 +1717,14 @@ fn make_view(
         &text,
     ));
     items.push(entry("exit", text.exit, true));
-    let view = View {
+    let mut view = View {
         kind: "state",
         summary,
-        #[cfg(target_os = "macos")]
         diagnostics,
-        #[cfg(target_os = "macos")]
-        limited: false,
+        limited: feedback_limited,
         visual,
-        #[cfg(target_os = "macos")]
         language: lang.code(),
-        #[cfg(target_os = "macos")]
         version: env!("CARGO_PKG_VERSION"),
-        #[cfg(target_os = "macos")]
         protection: DesktopProtection {
             microphone: match mute {
                 MicrophoneMuteState::Muted => "muted",
@@ -1337,20 +1741,30 @@ fn make_view(
             } else {
                 "absent"
             },
+            #[cfg(target_os = "macos")]
             requested,
+            #[cfg(target_os = "linux")]
+            requested: [None; 2],
             microphone_on_lock: settings.mute_on_lock,
             camera_on_lock: settings.block_camera_on_lock,
         },
+        #[cfg(target_os = "macos")]
+        overview: overview.clone(),
+        #[cfg(target_os = "linux")]
+        overview: DesktopOverview::default(),
+        preferences: DesktopPreferences {
+            notifications_enabled: settings.notifications_enabled,
+            sound_enabled: settings.sound_enabled,
+            history_enabled: settings.history_enabled,
+            notifications_paused: settings.notifications_paused(),
+        },
+        feedback: desktop_feedback,
         #[cfg(target_os = "linux")]
         details_label: text.details,
         items,
     };
-    #[cfg(target_os = "macos")]
-    let view = {
-        let mut bounded = view;
-        bound_desktop_view(&mut bounded);
-        bounded
-    };
+    view.limited |= view.overview.text_limited;
+    bound_desktop_view(&mut view);
     view
 }
 
@@ -1361,14 +1775,15 @@ pub fn run_tray(
     mut settings: Settings,
     explicit_policy: bool,
     eventlog: bool,
-    #[cfg(target_os = "macos")] initial_window: bool,
+    initial_window: bool,
 ) -> Result<()> {
-    let lifecycle = Lifecycle::acquire()?;
+    let Some(lifecycle) = Lifecycle::acquire_for_launch(initial_window, explicit_policy)? else {
+        return Ok(());
+    };
     let (sender, actions) = mpsc::sync_channel(32);
-    #[cfg(target_os = "macos")]
     let mut inspection = CameraInspectionWorker::default();
-    #[cfg(target_os = "linux")]
-    let inspection = CameraInspectionWorker::default();
+    #[cfg(target_os = "macos")]
+    let mut overview = DesktopOverview::default();
     let initial = make_view(
         (words(lang).degraded.to_owned(), "error"),
         MicrophoneMuteState::Unavailable,
@@ -1382,14 +1797,30 @@ pub fn run_tray(
             inspection: &inspection.ui,
             #[cfg(target_os = "macos")]
             requested: [None; 2],
+            #[cfg(target_os = "macos")]
+            overview: &overview,
         },
     );
+    #[cfg(target_os = "linux")]
     let mut host = DesktopHost::start(sender, lifecycle.ready.clone(), initial)?;
+    #[cfg(target_os = "macos")]
+    let mut host = DesktopHost::start(
+        sender,
+        lifecycle.ready.clone(),
+        initial,
+        lifecycle.window_input.clone(),
+    )?;
+    #[cfg(target_os = "macos")]
+    if initial_window {
+        // The initial unavailable state is already native-ready. Opening must
+        // not wait for the first potentially slow device/privacy observation.
+        host.show_window()?;
+    }
     let mut tracker = TransitionTracker::default();
     let mut dispatcher = EventDispatcher::new(
         lang,
         false,
-        false,
+        true,
         None,
         eventlog,
         settings.sound_enabled,
@@ -1415,7 +1846,7 @@ pub fn run_tray(
     let mut lock = SessionLockState::Unknown;
     #[cfg(target_os = "macos")]
     let mut requested = [None; 2];
-    #[cfg(target_os = "macos")]
+    #[cfg(target_os = "linux")]
     let mut show_initial_window = initial_window;
     let outcome = (|| -> Result<()> {
         loop {
@@ -1423,9 +1854,18 @@ pub fn run_tray(
                 break;
             }
             host.check()?;
-            #[cfg(target_os = "macos")]
-            if lifecycle.open_requested.swap(false, Ordering::AcqRel) {
-                host.show_window()?;
+            #[cfg(target_os = "linux")]
+            if let Some(error) = host.take_window_error() {
+                feedback = Some(format!("{}: {error}", words(lang).failed));
+                action_error = true;
+                next_poll = Instant::now();
+            }
+            if lifecycle.open_requested.swap(false, Ordering::AcqRel)
+                && let Err(error) = host.show_window()
+            {
+                feedback = Some(format!("{}: {error:#}", words(lang).failed));
+                action_error = true;
+                next_poll = Instant::now();
             }
             #[cfg(target_os = "macos")]
             if inspection.poll() {
@@ -1491,12 +1931,25 @@ pub fn run_tray(
                 }
                 match monitor.snapshot((&filter).into()) {
                     Ok(snapshot) => {
+                        #[cfg(target_os = "macos")]
+                        {
+                            overview =
+                                DesktopOverview::from_snapshot(&snapshot, chrono::Utc::now());
+                        }
+                        #[cfg(target_os = "linux")]
+                        host.observe(Some(&snapshot));
                         tracker.reconcile(&snapshot, |access, action| {
                             dispatcher.dispatch(access, action)
                         })?;
                         (summary, visual) = observation_status(&snapshot, lang);
                     }
                     Err(error) => {
+                        #[cfg(target_os = "macos")]
+                        {
+                            overview = DesktopOverview::default();
+                        }
+                        #[cfg(target_os = "linux")]
+                        host.observe(None);
                         tracker.observation_gap();
                         visual = "error";
                         summary = format!("{}: {error:#}", words(lang).degraded);
@@ -1539,6 +1992,8 @@ pub fn run_tray(
                     Ok(state) => {
                         // Mixed/stale ownership still offers explicit restoration.
                         camera_blocked = state != crate::privacy::CameraPrivacyState::Allowed;
+                        inspection.ui.system_managed =
+                            state == crate::privacy::CameraPrivacyState::SystemManaged;
                         camera_error = None;
                     }
                     Err(error) => {
@@ -1549,10 +2004,8 @@ pub fn run_tray(
                 match crate::privacy::camera_state() {
                     Ok(state) => {
                         camera_blocked = state == crate::privacy::CameraPrivacyState::Blocked;
-                        inspection.ui.system_managed =
-                            state == crate::privacy::CameraPrivacyState::SystemManaged;
+                        inspection.observe_passive_state(state);
                         camera_error = None;
-                        inspection.ui.inventory_incomplete = false;
                         if camera_pending_target == Some(camera_blocked) {
                             camera_pending_target = None;
                             feedback = Some(words(lang).done.to_owned());
@@ -1579,20 +2032,40 @@ pub fn run_tray(
                         inspection: &inspection.ui,
                         #[cfg(target_os = "macos")]
                         requested,
+                        #[cfg(target_os = "macos")]
+                        overview: &overview,
                     },
                 ))?;
-                #[cfg(target_os = "macos")]
+                #[cfg(target_os = "linux")]
                 if show_initial_window {
-                    host.show_window()?;
+                    if let Err(error) = host.show_window() {
+                        feedback = Some(format!("{}: {error:#}", words(lang).failed));
+                        action_error = true;
+                        next_poll = Instant::now();
+                    }
                     show_initial_window = false;
                 }
             }
             match actions.recv_timeout(Duration::from_millis(100)) {
                 Ok(Command::Exit) => break,
                 Ok(command) => {
-                    #[cfg(target_os = "macos")]
                     if matches!(command, Command::Status) {
-                        host.show_window()?;
+                        if let Err(error) = host.show_window() {
+                            feedback = Some(format!("{}: {error:#}", words(lang).failed));
+                            action_error = true;
+                            next_poll = Instant::now();
+                        }
+                        continue;
+                    }
+                    #[cfg(target_os = "linux")]
+                    if !host.allows(command) {
+                        feedback = Some(format!(
+                            "{}: {}",
+                            words(lang).failed,
+                            words(lang).unavailable
+                        ));
+                        action_error = true;
+                        next_poll = Instant::now();
                         continue;
                     }
                     #[cfg(target_os = "macos")]
@@ -1610,34 +2083,15 @@ pub fn run_tray(
                     }
                     let result: Result<()> = (|| {
                         match command {
-                            Command::Status => {
-                                #[cfg(target_os = "macos")]
-                                host.show_window()?;
-                                #[cfg(target_os = "linux")]
-                                crate::notify::notify_message(
-                                    "MicCamWatch",
-                                    &diagnostic_document(&make_view(
-                                        (
-                                            summary.clone(),
-                                            if action_error { "error" } else { visual },
-                                        ),
-                                        mute,
-                                        (camera_blocked, camera_error.as_deref()),
-                                        &settings,
-                                        lang,
-                                        &feedback,
-                                        MenuContext {
-                                            lock,
-                                            explicit_policy,
-                                            inspection: &inspection.ui,
-                                        },
-                                    )),
-                                )?;
-                            }
+                            Command::Status => unreachable!(),
                             Command::Mic => {
                                 #[cfg(target_os = "macos")]
                                 {
                                     requested[0] = Some(mute != MicrophoneMuteState::Muted);
+                                }
+                                #[cfg(target_os = "linux")]
+                                {
+                                    host.requested[0] = Some(mute != MicrophoneMuteState::Muted);
                                 }
                                 monitor.toggle_microphone_mute()?;
                             }
@@ -1652,8 +2106,12 @@ pub fn run_tray(
                                 }
                                 #[cfg(target_os = "linux")]
                                 {
-                                    camera_blocked = crate::privacy::toggle_camera_state()?
-                                        != crate::privacy::CameraPrivacyState::Allowed;
+                                    host.requested[1] = Some(!camera_blocked);
+                                    let state = crate::privacy::toggle_camera_state()?;
+                                    camera_blocked =
+                                        state != crate::privacy::CameraPrivacyState::Allowed;
+                                    inspection.ui.system_managed =
+                                        state == crate::privacy::CameraPrivacyState::SystemManaged;
                                     camera_error = None;
                                 }
                             }
@@ -1666,6 +2124,14 @@ pub fn run_tray(
                                             Some(chrono::Utc::now() + chrono::Duration::minutes(30))
                                         };
                                 })?;
+                            }
+                            Command::NotificationsEnable
+                            | Command::NotificationsDisable
+                            | Command::SoundEnable
+                            | Command::SoundDisable
+                            | Command::HistoryEnable
+                            | Command::HistoryDisable => {
+                                settings = select_desktop_preference(command)?;
                             }
                             Command::ProfileBalanced
                             | Command::ProfilePrivate
@@ -1711,6 +2177,8 @@ pub fn run_tray(
                             inspection: &inspection.ui,
                             #[cfg(target_os = "macos")]
                             requested,
+                            #[cfg(target_os = "macos")]
+                            overview: &overview,
                         },
                     ))?;
                 }
@@ -1748,7 +2216,7 @@ pub fn run_tray(
 
 #[cfg(target_os = "linux")]
 fn diagnostic_document(view: &View) -> String {
-    let capacity = view.summary.len()
+    let capacity = view.diagnostics.len()
         + view
             .items
             .iter()
@@ -1758,7 +2226,7 @@ fn diagnostic_document(view: &View) -> String {
             })
             .sum::<usize>();
     let mut document = String::with_capacity(capacity);
-    document.push_str(&view.summary);
+    document.push_str(&view.diagnostics);
     for entry in &view.items {
         let original = entry.detail.as_deref().unwrap_or(&entry.label);
         if original != view.summary {
@@ -1768,6 +2236,18 @@ fn diagnostic_document(view: &View) -> String {
     }
     document
 }
+fn select_desktop_preference(command: Command) -> Result<Settings> {
+    Settings::update(|current| match command {
+        Command::NotificationsEnable => current.notifications_enabled = true,
+        Command::NotificationsDisable => current.notifications_enabled = false,
+        Command::SoundEnable => current.sound_enabled = true,
+        Command::SoundDisable => current.sound_enabled = false,
+        Command::HistoryEnable => current.history_enabled = true,
+        Command::HistoryDisable => current.history_enabled = false,
+        _ => unreachable!("not a desktop preference assignment"),
+    })
+}
+
 fn select_profile(command: Command, explicit_policy: bool, lang: Language) -> Result<Settings> {
     ensure!(!explicit_policy, "{}", words(lang).config_override);
     let profile = match command {
@@ -1917,7 +2397,7 @@ impl ksni::Tray for LinuxTray {
         let mut menu: Vec<ksni::MenuItem<Self>> =
             self.view.items.iter().map(linux_menu_entry).collect();
         menu.insert(
-            menu.len().saturating_sub(1),
+            0,
             ksni::menu::StandardItem {
                 label: linux_menu_label(self.view.details_label),
                 activate: Box::new(|this: &mut Self| {
@@ -1941,8 +2421,17 @@ impl ksni::Tray for LinuxTray {
     }
 }
 #[cfg(target_os = "linux")]
+#[path = "linux_desktop.rs"]
+mod linux_desktop;
+
+#[cfg(target_os = "linux")]
 struct DesktopHost {
     handle: ksni::blocking::Handle<LinuxTray>,
+    view: View,
+    actions: SyncSender<Command>,
+    window: Option<linux_desktop::Desktop>,
+    overview: DesktopOverview,
+    requested: [Option<bool>; 2],
 }
 #[cfg(target_os = "linux")]
 impl DesktopHost {
@@ -1950,19 +2439,79 @@ impl DesktopHost {
         use ksni::blocking::TrayMethods;
         // ksni's default registration verifies that an actual compatible SNI host exists.
         // In particular, do not use assume_sni_available on GNOME without AppIndicator.
-        let handle = LinuxTray { view, actions, ready: ready.clone() }.spawn()
+        let handle = LinuxTray { view: view.clone(), actions: actions.clone(), ready: ready.clone() }.spawn()
             .context("native tray requires a session D-Bus and a registered StatusNotifierItem desktop host (e.g. KDE, or GNOME AppIndicator)")?;
         ensure!(
             !handle.is_closed(),
             "native desktop host disappeared during tray registration"
         );
         ready.store(true, Ordering::Release);
-        Ok(Self { handle })
+        Ok(Self {
+            handle,
+            view,
+            actions,
+            window: None,
+            overview: DesktopOverview::default(),
+            requested: [None; 2],
+        })
     }
-    fn update(&mut self, view: View) -> Result<()> {
+    fn observe(&mut self, snapshot: Option<&Snapshot>) {
+        self.overview = snapshot.map_or_else(DesktopOverview::default, |snapshot| {
+            DesktopOverview::from_snapshot(snapshot, chrono::Utc::now())
+        });
+    }
+    fn update(&mut self, mut view: View) -> Result<()> {
+        view.overview = self.overview.clone();
+        view.protection.requested = self.requested;
+        view.limited |= view.overview.text_limited;
+        bound_desktop_view(&mut view);
+        self.view = view.clone();
+        if let Some(window) = &self.window {
+            window.update(view.clone());
+        }
         self.handle
             .update(|tray| tray.view = view)
             .context("Linux tray service closed")
+    }
+    fn show_window(&mut self) -> Result<()> {
+        if self
+            .window
+            .as_ref()
+            .is_some_and(linux_desktop::Desktop::finished)
+        {
+            self.window.take();
+        }
+        if let Some(window) = &self.window {
+            window.open();
+        } else {
+            self.window = Some(linux_desktop::Desktop::start(
+                self.view.clone(),
+                self.actions.clone(),
+            )?);
+        }
+        Ok(())
+    }
+    fn take_window_error(&self) -> Option<String> {
+        self.window
+            .as_ref()
+            .and_then(linux_desktop::Desktop::take_error)
+    }
+    fn allows(&self, command: Command) -> bool {
+        let action = match command {
+            Command::Mic => "mic",
+            Command::Camera => "camera",
+            Command::Autostart => "autostart",
+            Command::Pause => "pause",
+            Command::ProfileBalanced
+            | Command::ProfilePrivate
+            | Command::ProfileMeeting
+            | Command::ProfileDevelopment => "profile",
+            _ => return true,
+        };
+        self.view
+            .items
+            .iter()
+            .any(|entry| entry.action == action && entry.enabled)
     }
     fn check(&mut self) -> Result<()> {
         ensure!(
@@ -1972,6 +2521,7 @@ impl DesktopHost {
         Ok(())
     }
     fn shutdown(&mut self) -> Result<()> {
+        self.window.take();
         if !self.handle.is_closed() {
             self.handle.shutdown().wait();
         }
@@ -1981,6 +2531,7 @@ impl DesktopHost {
 #[cfg(target_os = "linux")]
 impl Drop for DesktopHost {
     fn drop(&mut self) {
+        self.window.take();
         if !self.handle.is_closed() {
             self.handle.shutdown().wait();
         }
@@ -1998,24 +2549,34 @@ struct DesktopEvent {
 #[cfg(target_os = "macos")]
 struct DesktopHost {
     child: std::process::Child,
-    stdin: Option<std::process::ChildStdin>,
+    stdin: Arc<DesktopInput>,
     events: Receiver<Result<DesktopEvent>>,
     ready: Arc<AtomicBool>,
 }
 #[cfg(target_os = "macos")]
 impl DesktopHost {
-    fn start(actions: SyncSender<Command>, ready: Arc<AtomicBool>, view: View) -> Result<Self> {
+    fn start(
+        actions: SyncSender<Command>,
+        ready: Arc<AtomicBool>,
+        view: View,
+        input: Arc<DesktopInput>,
+    ) -> Result<Self> {
         let mut child = crate::platform::macos::desktop_process(&["desktop"])?;
         let stdin = child
             .stdin
             .take()
             .context("AppKit helper stdin unavailable")?;
+        *input
+            .writer
+            .lock()
+            .map_err(|_| anyhow::anyhow!("AppKit input lock poisoned"))? = Some(stdin);
         let stdout = child
             .stdout
             .take()
             .context("AppKit helper stdout unavailable")?;
         let (sender, events) = mpsc::sync_channel(32);
         let readiness = ready.clone();
+        let readiness_input = input.clone();
         thread::spawn(move || {
             let mut reader = BufReader::new(stdout);
             let result = (|| -> Result<()> {
@@ -2031,10 +2592,11 @@ impl DesktopHost {
                             .send(action)
                             .context("tray action receiver closed")?;
                     } else {
-                        if event.kind == "ready" && event.protocol == Some(3) {
+                        if event.kind == "ready" && event.protocol == Some(4) {
                             readiness.store(true, Ordering::Release);
                         }
                         if event.kind == "error" || event.kind == "stopped" {
+                            readiness_input.close();
                             readiness.store(false, Ordering::Release);
                         }
                         sender
@@ -2044,6 +2606,7 @@ impl DesktopHost {
                 }
                 bail!("AppKit helper closed its event stream")
             })();
+            readiness_input.close();
             readiness.store(false, Ordering::Release);
             if let Err(error) = result {
                 let _ = sender.send(Err(error));
@@ -2051,7 +2614,7 @@ impl DesktopHost {
         });
         let mut host = Self {
             child,
-            stdin: Some(stdin),
+            stdin: input,
             events,
             ready,
         };
@@ -2063,7 +2626,7 @@ impl DesktopHost {
         {
             DesktopEvent {
                 kind,
-                protocol: Some(3),
+                protocol: Some(4),
                 ..
             } if kind == "ready" => Ok(host),
             event => bail!(
@@ -2074,20 +2637,16 @@ impl DesktopHost {
     }
     fn update(&mut self, view: View) -> Result<()> {
         let mut frame = serde_json::to_vec(&view)?;
-        debug_assert!(
+        ensure!(
             frame.len() <= FRAME_LIMIT,
             "bounded desktop projection exceeded frame budget"
         );
         frame.push(b'\n');
-        let stdin = self.stdin.as_mut().context("AppKit helper input closed")?;
-        stdin.write_all(&frame)?;
-        stdin.flush()?;
+        self.stdin.write(&frame)?;
         Ok(())
     }
     fn show_window(&mut self) -> Result<()> {
-        let stdin = self.stdin.as_mut().context("AppKit helper input closed")?;
-        stdin.write_all(b"{\"kind\":\"show\"}\n")?;
-        stdin.flush()?;
+        self.stdin.write(b"{\"kind\":\"show\"}\n")?;
         Ok(())
     }
     fn check(&mut self) -> Result<()> {
@@ -2109,8 +2668,15 @@ impl DesktopHost {
         Ok(())
     }
     fn shutdown(&mut self) -> Result<()> {
+        self.stdin.closed.store(true, Ordering::Release);
         self.ready.store(false, Ordering::Release);
-        if let Some(mut stdin) = self.stdin.take() {
+        let input = self
+            .stdin
+            .writer
+            .lock()
+            .map_err(|_| anyhow::anyhow!("AppKit input lock poisoned"))?
+            .take();
+        if let Some(mut stdin) = input {
             stdin.write_all(b"{\"kind\":\"stop\"}\n")?;
             drop(stdin);
         }
@@ -2133,7 +2699,7 @@ impl DesktopHost {
 impl Drop for DesktopHost {
     fn drop(&mut self) {
         self.ready.store(false, Ordering::Release);
-        self.stdin.take();
+        self.stdin.close();
         if self.child.try_wait().ok().flatten().is_none() {
             let _ = self.child.kill();
         }
@@ -2146,7 +2712,6 @@ mod menu_tests {
     use super::*;
     use crate::model::{Access, CollectorHealth, Confidence, EnforcementDecision, Resource, Risk};
 
-    #[cfg(target_os = "macos")]
     fn run_isolated_menu_fixture(test: &str) -> bool {
         if std::env::var("MCW_TEST_MENU_CASE").as_deref() == Ok(test) {
             return false;
@@ -2154,7 +2719,10 @@ mod menu_tests {
         // make_view reads real autostart state, whose ownership store creates
         // directories even for a status query. Isolate that production path in
         // a child, never by changing process-global HOME during parallel tests.
-        let directory = tempfile::tempdir().unwrap();
+        let directory = tempfile::Builder::new()
+            .prefix("mcw-tray-")
+            .tempdir_in("/tmp")
+            .unwrap();
         let home = directory.path().canonicalize().unwrap();
         let output = std::process::Command::new(std::env::current_exe().unwrap())
             .args([
@@ -2182,13 +2750,285 @@ mod menu_tests {
         true
     }
 
+    fn held_startup_lease() -> (PathBuf, File) {
+        let path = socket_path().unwrap();
+        let lock = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(path.with_extension("lock"))
+            .unwrap();
+        assert_eq!(
+            unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+            0
+        );
+        assert!(matches!(
+            Lifecycle::acquire().unwrap(),
+            LeaseAcquisition::Contended
+        ));
+        assert!(!path.exists());
+        (path, lock)
+    }
+
+    #[test]
+    fn cold_explicit_launch_waits_for_socket_and_queues_open() {
+        if run_isolated_menu_fixture(
+            "frontends::tray::menu_tests::cold_explicit_launch_waits_for_socket_and_queues_open",
+        ) {
+            return;
+        }
+        let (path, lock) = held_startup_lease();
+        let (sent, received) = mpsc::channel();
+        let client = thread::spawn(move || {
+            assert!(
+                sent.send(Lifecycle::acquire_for_launch(true, false))
+                    .is_ok()
+            );
+        });
+        assert!(received.recv_timeout(Duration::from_millis(100)).is_err());
+        let owner = Lifecycle::bind(path, lock).unwrap();
+        assert!(!owner.ready.load(Ordering::Acquire));
+        assert!(
+            received
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap()
+                .unwrap()
+                .is_none()
+        );
+        assert!(owner.open_requested.load(Ordering::Acquire));
+        client.join().unwrap();
+    }
+
+    #[test]
+    fn cold_background_duplicate_waits_for_native_readiness_without_opening() {
+        if run_isolated_menu_fixture(
+            "frontends::tray::menu_tests::cold_background_duplicate_waits_for_native_readiness_without_opening",
+        ) {
+            return;
+        }
+        let (path, lock) = held_startup_lease();
+        let (sent, received) = mpsc::channel();
+        let client = thread::spawn(move || {
+            assert!(
+                sent.send(Lifecycle::acquire_for_launch(false, false))
+                    .is_ok()
+            );
+        });
+        assert!(received.recv_timeout(Duration::from_millis(100)).is_err());
+        let owner = Lifecycle::bind(path, lock).unwrap();
+        assert!(received.recv_timeout(Duration::from_millis(100)).is_err());
+        assert!(!owner.open_requested.load(Ordering::Acquire));
+        owner.ready.store(true, Ordering::Release);
+        assert!(
+            received
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap()
+                .unwrap()
+                .is_none()
+        );
+        assert!(!owner.open_requested.load(Ordering::Acquire));
+        client.join().unwrap();
+    }
+
+    #[test]
+    fn cold_launch_reacquires_released_lease_and_rejects_unsafe_lock() {
+        if run_isolated_menu_fixture(
+            "frontends::tray::menu_tests::cold_launch_reacquires_released_lease_and_rejects_unsafe_lock",
+        ) {
+            return;
+        }
+        let (path, lock) = held_startup_lease();
+        let (sent, received) = mpsc::channel();
+        let client = thread::spawn(move || {
+            assert!(
+                sent.send(Lifecycle::acquire_for_launch(true, false))
+                    .is_ok()
+            );
+        });
+        assert!(received.recv_timeout(Duration::from_millis(100)).is_err());
+        drop(lock);
+        let replacement = received
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .unwrap();
+        assert!(replacement.is_some());
+        drop(replacement);
+        client.join().unwrap();
+        fs::set_permissions(
+            path.with_extension("lock"),
+            fs::Permissions::from_mode(0o666),
+        )
+        .unwrap();
+        assert!(Lifecycle::acquire_for_launch(true, false).is_err());
+    }
+
+    #[test]
+    fn cold_launch_refuses_foreign_namespace_without_sending_open() {
+        if run_isolated_menu_fixture(
+            "frontends::tray::menu_tests::cold_launch_refuses_foreign_namespace_without_sending_open",
+        ) {
+            return;
+        }
+        let (path, _lock) = held_startup_lease();
+        let listener = UnixListener::bind(&path).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            assert_eq!(read_frame(&mut reader, 16).unwrap().unwrap(), b"owner");
+            let mut namespace = ControlNamespace::current().unwrap();
+            namespace.config.push("foreign");
+            serde_json::to_writer(&mut stream, &namespace).unwrap();
+            stream.write_all(b"\n").unwrap();
+            assert!(read_frame(&mut reader, 16).unwrap().is_none());
+        });
+        assert!(Lifecycle::acquire_for_launch(true, false).is_err());
+        server.join().unwrap();
+        fs::remove_file(path).unwrap();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn authenticated_open_refuses_closed_native_input_despite_stale_readiness() {
+        if run_isolated_menu_fixture(
+            "frontends::tray::menu_tests::authenticated_open_refuses_closed_native_input_despite_stale_readiness",
+        ) {
+            return;
+        }
+        let owner = match Lifecycle::acquire().unwrap() {
+            LeaseAcquisition::Acquired(owner) => owner,
+            LeaseAcquisition::Contended => panic!("isolated owner lease was contended"),
+        };
+        owner.ready.store(true, Ordering::Release);
+        owner.window_input.close();
+        // A stale readiness observation must not acknowledge an open against
+        // a disconnected native transport or leave it queued for later.
+        assert!(owner.ready.load(Ordering::Acquire));
+        assert!(open_running().is_err());
+        assert!(!owner.open_requested.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn control_socket_is_private_until_prepared_publication() {
+        if run_isolated_menu_fixture(
+            "frontends::tray::menu_tests::control_socket_is_private_until_prepared_publication",
+        ) {
+            return;
+        }
+        let destination = socket_path().unwrap();
+        let mut staged = StagedSocket::new(&destination).unwrap();
+        let directory = staged.directory.clone();
+        assert_eq!(
+            fs::symlink_metadata(&directory).unwrap().mode() & 0o777,
+            0o700
+        );
+        let listener = staged.bind().unwrap();
+        assert_eq!(
+            fs::symlink_metadata(&staged.path).unwrap().mode() & 0o777,
+            0o600
+        );
+        let flags = unsafe { libc::fcntl(listener.as_raw_fd(), libc::F_GETFL) };
+        assert!(flags >= 0 && flags & libc::O_NONBLOCK != 0);
+        assert!(connect_control().unwrap().is_none());
+        staged.publish(&destination).unwrap();
+        let identity = staged.socket_identity.unwrap();
+        drop(staged);
+        assert!(!directory.exists());
+        let consumer = connect_control()
+            .unwrap()
+            .expect("published socket was unavailable to the real consumer");
+        let (peer, _) = listener.accept().unwrap();
+        verify_peer(&peer).unwrap();
+        drop(consumer);
+        drop(peer);
+        drop(listener);
+        remove_owned_socket(&destination, identity);
+        assert!(!destination.exists());
+    }
+
+    #[test]
+    fn socket_publication_refuses_foreign_destination_and_cleans_own_staging() {
+        if run_isolated_menu_fixture(
+            "frontends::tray::menu_tests::socket_publication_refuses_foreign_destination_and_cleans_own_staging",
+        ) {
+            return;
+        }
+        let destination = socket_path().unwrap();
+        let mut staged = StagedSocket::new(&destination).unwrap();
+        let directory = staged.directory.clone();
+        let listener = staged.bind().unwrap();
+        let mut foreign = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .mode(0o600)
+            .open(&destination)
+            .unwrap();
+        foreign.write_all(b"unrelated destination").unwrap();
+        let before = foreign.metadata().unwrap();
+        assert!(staged.publish(&destination).is_err());
+        assert!(connect_control().is_err());
+        let after = fs::symlink_metadata(&destination).unwrap();
+        assert_eq!((before.dev(), before.ino()), (after.dev(), after.ino()));
+        assert_eq!(fs::read(&destination).unwrap(), b"unrelated destination");
+        drop(staged);
+        drop(listener);
+        assert!(!directory.exists());
+        assert!(destination.is_file());
+    }
+
+    #[test]
+    fn lifecycle_cleanup_preserves_replacement_socket() {
+        if run_isolated_menu_fixture(
+            "frontends::tray::menu_tests::lifecycle_cleanup_preserves_replacement_socket",
+        ) {
+            return;
+        }
+        let owner = match Lifecycle::acquire().unwrap() {
+            LeaseAcquisition::Acquired(owner) => owner,
+            LeaseAcquisition::Contended => panic!("isolated owner lease was contended"),
+        };
+        let destination = owner.path.clone();
+        let retired = destination.with_extension("retired");
+        fs::rename(&destination, &retired).unwrap();
+        let foreign = UnixListener::bind(&destination).unwrap();
+        fs::set_permissions(&destination, fs::Permissions::from_mode(0o600)).unwrap();
+        let before = fs::symlink_metadata(&destination).unwrap();
+        drop(owner);
+        let after = fs::symlink_metadata(&destination).unwrap();
+        assert_eq!((before.dev(), before.ino()), (after.dev(), after.ino()));
+        drop(foreign);
+        fs::remove_file(destination).unwrap();
+        fs::remove_file(retired).unwrap();
+    }
+
     fn observed() -> Snapshot {
         Snapshot {
-            collectors: vec![CollectorHealth {
-                collector: "coremediaio_video",
-                state: CollectorState::Degraded,
-                detail: Some("running-state does not identify the client".into()),
-            }],
+            collectors: vec![
+                CollectorHealth {
+                    collector: if cfg!(target_os = "linux") {
+                        "pipewire_video"
+                    } else {
+                        "coremediaio_video"
+                    },
+                    state: CollectorState::Degraded,
+                    detail: Some("running-state does not identify the client".into()),
+                },
+                CollectorHealth {
+                    collector: if cfg!(target_os = "linux") {
+                        "pipewire_audio"
+                    } else {
+                        "coreaudio_input"
+                    },
+                    state: CollectorState::Healthy,
+                    detail: None,
+                },
+            ],
             accesses: vec![Access {
                 key: "input-client".into(),
                 resource: Resource::Microphone,
@@ -2222,7 +3062,7 @@ mod menu_tests {
         assert!(first.contains("corespeechd"));
         #[cfg(target_os = "macos")]
         assert!(first.contains("MIC: ACTIVE") && summary.contains("corespeechd"));
-        assert!(detail.contains("coremediaio_video"));
+        assert!(detail.contains(snapshot.collectors[0].collector));
         assert!(detail.contains(snapshot.collectors[0].detail.as_deref().unwrap()));
         snapshot.collectors[0].state = CollectorState::Healthy;
         assert_eq!(observation_status(&snapshot, Language::En).1, "active");
@@ -2242,6 +3082,278 @@ mod menu_tests {
         assert!(summary.contains("corespeechd"));
         #[cfg(target_os = "macos")]
         assert!(summary.lines().next().unwrap().contains("MIC: ACTIVE"));
+    }
+
+    #[test]
+    fn current_overview_requires_resource_coverage_and_retains_positive_observations() {
+        let observed_at = chrono::DateTime::parse_from_rfc3339("2026-10-22T12:34:56Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let mut snapshot = observed();
+        snapshot.accesses[0].activity = Activity::Ready;
+        let overview = DesktopOverview::from_snapshot(&snapshot, observed_at);
+        assert_eq!(overview.microphone, "ready");
+        assert_eq!(overview.camera, "unknown");
+        assert_eq!(
+            overview.observed_at.as_deref(),
+            Some("2026-10-22T12:34:56Z")
+        );
+        snapshot.accesses.clear();
+        let overview = DesktopOverview::from_snapshot(&snapshot, observed_at);
+        assert_eq!(overview.microphone, "idle");
+        assert_eq!(overview.camera, "unknown");
+        snapshot.observation_gaps.push(Resource::Microphone);
+        assert_eq!(
+            DesktopOverview::from_snapshot(&snapshot, observed_at).microphone,
+            "unknown"
+        );
+        snapshot.observation_gaps.clear();
+        snapshot.collectors[1].state = CollectorState::Degraded;
+        assert_eq!(
+            DesktopOverview::from_snapshot(&snapshot, observed_at).microphone,
+            "unknown"
+        );
+        snapshot.collectors[1].state = CollectorState::Unavailable;
+        assert_eq!(
+            DesktopOverview::from_snapshot(&snapshot, observed_at).microphone,
+            "unknown"
+        );
+        snapshot.collectors.remove(1);
+        assert_eq!(
+            DesktopOverview::from_snapshot(&snapshot, observed_at).microphone,
+            "unknown"
+        );
+        assert_eq!(observation_status(&snapshot, Language::En).1, "error");
+        snapshot.accesses = observed().accesses;
+        assert_eq!(
+            DesktopOverview::from_snapshot(&snapshot, observed_at).microphone,
+            "active"
+        );
+        let cleared = DesktopOverview::default();
+        assert_eq!(cleared.microphone, "unknown");
+        assert_eq!(cleared.camera, "unknown");
+        assert!(cleared.observed_at.is_none());
+        assert_eq!(cleared.total_accesses, 0);
+        assert_eq!(cleared.omitted_accesses, 0);
+        assert!(cleared.accesses.is_empty());
+    }
+
+    #[test]
+    fn desktop_preference_assignments_are_idempotent_and_merge_latest_settings() {
+        if run_isolated_menu_fixture(
+            "frontends::tray::menu_tests::desktop_preference_assignments_are_idempotent_and_merge_latest_settings",
+        ) {
+            return;
+        }
+        Settings::update(|current| {
+            current.show_ready = true;
+            current.mute_on_lock = true;
+            current.block_camera_on_lock = true;
+            current.restore_on_unlock = false;
+            current.pause_notifications_until =
+                Some(chrono::Utc::now() + chrono::Duration::minutes(30));
+        })
+        .unwrap();
+        for (action, field, enabled) in [
+            ("notifications_disable", "notifications_enabled", false),
+            ("notifications_enable", "notifications_enabled", true),
+            ("sound_enable", "sound_enabled", true),
+            ("sound_disable", "sound_enabled", false),
+            ("history_disable", "history_enabled", false),
+            ("history_enable", "history_enabled", true),
+        ] {
+            // A concurrent settings writer's latest unrelated value must survive.
+            let latest =
+                Settings::update(|current| current.profile = PrivacyProfile::Private).unwrap();
+            let mut expected = serde_json::to_value(latest).unwrap();
+            expected[field] = serde_json::json!(enabled);
+            let command: Command = serde_json::from_value(serde_json::json!(action)).unwrap();
+            for _ in 0..2 {
+                let saved = select_desktop_preference(command).unwrap();
+                assert_eq!(serde_json::to_value(saved).unwrap(), expected);
+                assert_eq!(
+                    serde_json::to_value(Settings::load().unwrap()).unwrap(),
+                    expected
+                );
+            }
+            assert!(select_profile(Command::ProfileBalanced, true, Language::En).is_err());
+            assert_eq!(
+                serde_json::to_value(Settings::load().unwrap()).unwrap(),
+                expected
+            );
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn incomplete_inspection_worker(
+        authorization: crate::privacy::CameraInspectionAuthorization,
+    ) -> CameraInspectionWorker {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        sender
+            .send(Ok(crate::privacy::CameraInspection {
+                observed_at: chrono::DateTime::parse_from_rfc3339("2026-10-22T12:34:56Z")
+                    .unwrap()
+                    .with_timezone(&chrono::Utc),
+                state: "unknown",
+                complete_inventory: false,
+                administrator_required: true,
+                authorization,
+                detail: "Simulated incomplete inventory; no physical camera proof.".to_owned(),
+            }))
+            .unwrap();
+        let mut worker = CameraInspectionWorker {
+            pending: Some(receiver),
+            ui: CameraInspectionUi {
+                inventory_incomplete: true,
+                running: true,
+                ..Default::default()
+            },
+        };
+        assert!(worker.poll());
+        assert!(worker.pending.is_none());
+        assert!(!worker.ui.running);
+        assert!(worker.ui.administrator_required);
+        worker
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn passive_recovery_retires_inspection_guidance_without_erasing_historical_evidence() {
+        if run_isolated_menu_fixture(
+            "frontends::tray::menu_tests::passive_recovery_retires_inspection_guidance_without_erasing_historical_evidence",
+        ) {
+            return;
+        }
+        for authorization in [
+            crate::privacy::CameraInspectionAuthorization::Cancelled,
+            crate::privacy::CameraInspectionAuthorization::Denied,
+        ] {
+            for passive in [
+                crate::privacy::CameraPrivacyState::Allowed,
+                crate::privacy::CameraPrivacyState::Blocked,
+                crate::privacy::CameraPrivacyState::SystemManaged,
+            ] {
+                let mut worker = incomplete_inspection_worker(authorization);
+                let historical = worker.ui.detail.clone();
+                worker.observe_passive_state(passive);
+                assert!(!worker.ui.inventory_incomplete);
+                assert!(!worker.ui.administrator_required);
+                assert_eq!(worker.ui.detail, historical);
+                let feedback = Some("Unrelated earlier action failed".to_owned());
+                let snapshot = observed();
+                let overview = DesktopOverview::from_snapshot(&snapshot, chrono::Utc::now());
+                let frame = make_view(
+                    observation_status(&snapshot, Language::En),
+                    MicrophoneMuteState::Unmuted,
+                    (passive == crate::privacy::CameraPrivacyState::Blocked, None),
+                    &Settings::default(),
+                    Language::En,
+                    &feedback,
+                    MenuContext {
+                        lock: SessionLockState::Unknown,
+                        explicit_policy: false,
+                        inspection: &worker.ui,
+                        requested: [None; 2],
+                        overview: &overview,
+                    },
+                );
+                assert!(
+                    !frame
+                        .items
+                        .iter()
+                        .any(|entry| entry.action == "camera_inspect")
+                );
+                assert!(frame.items.iter().any(|entry| entry.detail == historical));
+                assert_eq!(frame.feedback, feedback);
+                assert_eq!(
+                    frame.protection.camera,
+                    match passive {
+                        crate::privacy::CameraPrivacyState::Allowed => "absent",
+                        crate::privacy::CameraPrivacyState::Blocked => "owned",
+                        crate::privacy::CameraPrivacyState::SystemManaged => "system_managed",
+                    }
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn desktop_projection_bounds_current_rows_utf8_and_escaped_text() {
+        if run_isolated_menu_fixture(
+            "frontends::tray::menu_tests::desktop_projection_bounds_current_rows_utf8_and_escaped_text",
+        ) {
+            return;
+        }
+        let mut snapshot = observed();
+        let template = snapshot.accesses[0].clone();
+        snapshot.accesses = (0..12)
+            .map(|index| {
+                let mut access = template.clone();
+                access.application = format!("{index}:{}", "\u{1}\\\"界".repeat(2000));
+                access.pid = None;
+                access
+            })
+            .collect();
+        let overview = DesktopOverview::from_snapshot(&snapshot, chrono::Utc::now());
+        let feedback = Some("\u{1}\\\"界".repeat(10_000));
+        let frame = make_view(
+            observation_status(&snapshot, Language::En),
+            MicrophoneMuteState::Unavailable,
+            (false, Some("current camera inventory unknown")),
+            &Settings::default(),
+            Language::En,
+            &feedback,
+            MenuContext {
+                lock: SessionLockState::Unknown,
+                explicit_policy: false,
+                inspection: &CameraInspectionUi::default(),
+                #[cfg(target_os = "macos")]
+                requested: [None; 2],
+                #[cfg(target_os = "macos")]
+                overview: &overview,
+            },
+        );
+        #[cfg(target_os = "linux")]
+        let frame = {
+            let mut frame = frame;
+            frame.overview = overview;
+            bound_desktop_view(&mut frame);
+            frame
+        };
+        assert!(frame.limited);
+        assert_eq!(frame.overview.total_accesses, 12);
+        assert_eq!(frame.overview.accesses.len(), 8);
+        assert_eq!(frame.overview.omitted_accesses, 4);
+        for access in &frame.overview.accesses {
+            assert!(access.application.len() <= 256);
+            assert!(access.application.ends_with(DESKTOP_OMISSION));
+        }
+        assert!(frame.feedback.as_ref().unwrap().len() <= 2048);
+        assert!(frame.feedback.as_ref().unwrap().ends_with(DESKTOP_OMISSION));
+        fn menu_cost(entries: &[MenuEntry]) -> usize {
+            entries
+                .iter()
+                .map(|entry| {
+                    desktop_text_cost(&entry.label)
+                        + entry.detail.as_deref().map_or(0, desktop_text_cost)
+                        + entry.children.as_deref().map_or(0, menu_cost)
+                })
+                .sum()
+        }
+        let cost = desktop_text_cost(&frame.summary)
+            + desktop_text_cost(&frame.diagnostics)
+            + menu_cost(&frame.items)
+            + frame
+                .overview
+                .accesses
+                .iter()
+                .map(|access| desktop_text_cost(&access.application))
+                .sum::<usize>()
+            + desktop_text_cost(frame.feedback.as_ref().unwrap())
+            + desktop_text_cost(frame.overview.observed_at.as_ref().unwrap());
+        assert!(cost <= DESKTOP_TEXT_BUDGET);
+        assert!(serde_json::to_vec(&frame).unwrap().len() <= FRAME_LIMIT);
+        assert!(serde_json::to_value(&frame).unwrap()["overview"]["accesses"][0]["pid"].is_null());
     }
 
     #[cfg(target_os = "macos")]
@@ -2266,6 +3378,7 @@ mod menu_tests {
                 explicit_policy: false,
                 inspection: &inspection,
                 requested: [Some(true), Some(true)],
+                overview: &DesktopOverview::from_snapshot(&observed(), chrono::Utc::now()),
             },
         );
         assert_eq!(state.protection.requested, [Some(true), Some(true)]);
@@ -2288,6 +3401,34 @@ mod menu_tests {
             frame["protection"]["requested"],
             serde_json::json!([true, true])
         );
+        assert_eq!(frame["overview"]["microphone"], "active");
+        assert_eq!(frame["overview"]["camera"], "unknown");
+        assert_eq!(frame["overview"]["total_accesses"], 1);
+        assert_eq!(frame["overview"]["omitted_accesses"], 0);
+        assert_eq!(
+            frame["overview"]["accesses"][0]["application"],
+            "corespeechd"
+        );
+        assert_eq!(
+            frame["preferences"]["notifications_enabled"],
+            settings.notifications_enabled
+        );
+        assert_eq!(
+            frame["preferences"]["sound_enabled"],
+            settings.sound_enabled
+        );
+        assert_eq!(
+            frame["preferences"]["history_enabled"],
+            settings.history_enabled
+        );
+        assert_eq!(
+            frame["preferences"]["notifications_paused"],
+            settings.notifications_paused()
+        );
+        assert_eq!(
+            frame["feedback"],
+            "Partial action: original control state retained"
+        );
         assert!(frame.get("details_label").is_none());
         inspection.system_managed = true;
         let managed = make_view(
@@ -2299,13 +3440,36 @@ mod menu_tests {
             &None,
             MenuContext {
                 lock: SessionLockState::Unlocked,
-                explicit_policy: false,
+                explicit_policy: true,
                 inspection: &inspection,
                 requested: [None; 2],
+                overview: &DesktopOverview::default(),
             },
         );
         assert_eq!(managed.protection.camera, "system_managed");
         assert_eq!(managed.protection.requested, [None; 2]);
+        assert_eq!(managed.overview.microphone, "unknown");
+        assert_eq!(managed.overview.camera, "unknown");
+        assert!(managed.overview.observed_at.is_none());
+        assert!(managed.overview.accesses.is_empty());
+        assert!(managed.feedback.is_none());
+        let profile = managed
+            .items
+            .iter()
+            .find(|entry| entry.action == "profile")
+            .unwrap();
+        assert!(!profile.enabled);
+        assert!(
+            profile
+                .children
+                .as_ref()
+                .unwrap()
+                .iter()
+                .all(|entry| { !entry.enabled && entry.checked == Some(false) })
+        );
+        let managed_frame = serde_json::to_value(&managed).unwrap();
+        assert!(managed_frame["overview"]["observed_at"].is_null());
+        assert!(managed_frame["feedback"].is_null());
         let mut snapshot = observed();
         snapshot.accesses.clear();
         snapshot.collectors[0].state = CollectorState::Healthy;
@@ -2389,6 +3553,7 @@ mod menu_tests {
                 detail: escaped.then(|| "Inspection remains read-only: \u{1}\n\\\"界".repeat(3000)),
                 ..Default::default()
             };
+            let overview = DesktopOverview::from_snapshot(&snapshot, chrono::Utc::now());
             let view = make_view(
                 observation_status(&snapshot, Language::En),
                 MicrophoneMuteState::Unmuted,
@@ -2401,10 +3566,16 @@ mod menu_tests {
                     explicit_policy: false,
                     inspection: &inspection,
                     requested: [None; 2],
+                    overview: &overview,
                 },
             );
             assert!(view.summary.len() <= 2048);
             assert!(view.diagnostics.len() <= DESKTOP_DIAGNOSTIC_LIMIT);
+            assert_eq!(view.overview.total_accesses, count as usize);
+            assert_eq!(view.overview.accesses.len(), 8);
+            assert_eq!(view.overview.omitted_accesses, count as usize - 8);
+            assert!(view.overview.observed_at.is_some());
+            assert!(view.feedback.as_ref().is_none_or(|text| text.len() <= 2048));
             assert!(
                 view.diagnostics
                     .contains(&format!("Observed accesses: {count}"))
@@ -2431,6 +3602,48 @@ mod menu_tests {
                 "omission_expected": count > 20 || escaped,
             }));
         }
+        let mut worker =
+            incomplete_inspection_worker(crate::privacy::CameraInspectionAuthorization::Cancelled);
+        let historical = worker.ui.detail.clone().unwrap();
+        worker.observe_passive_state(crate::privacy::CameraPrivacyState::SystemManaged);
+        let snapshot = observed();
+        let overview = DesktopOverview::from_snapshot(&snapshot, chrono::Utc::now());
+        let view = make_view(
+            observation_status(&snapshot, Language::En),
+            MicrophoneMuteState::Unmuted,
+            (false, None),
+            &Settings::default(),
+            Language::En,
+            &Some("Unrelated earlier action failed".to_owned()),
+            MenuContext {
+                lock: SessionLockState::Unknown,
+                explicit_policy: false,
+                inspection: &worker.ui,
+                requested: [None; 2],
+                overview: &overview,
+            },
+        );
+        assert!(
+            !view
+                .items
+                .iter()
+                .any(|entry| entry.action == "camera_inspect")
+        );
+        assert!(
+            view.items
+                .iter()
+                .any(|entry| entry.detail.as_deref() == Some(historical.as_str()))
+        );
+        assert_eq!(view.protection.camera, "system_managed");
+        cases.push(serde_json::json!({
+            "name": "producer-passive-recovery",
+            "frame": view,
+            "selected_profile": "profile_balanced",
+            "expected_text": ["corespeechd"],
+            "expected_accesses": 1,
+            "omission_expected": false,
+            "expected_inspection_detail": historical,
+        }));
         std::fs::write(output, serde_json::to_vec_pretty(&cases).unwrap()).unwrap();
     }
 }

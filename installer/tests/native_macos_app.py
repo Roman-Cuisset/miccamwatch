@@ -5,12 +5,13 @@ Run only on a disposable macOS 15+ ordinary-user runner. open --env isolates
 Finder launches. LaunchAgent scenarios additionally require a GitHub-hosted
 runner and absent login-account product state, because launchd does not inherit
 the invoking CLI's private HOME. Never overwrite existing login-account state.
-Aqua and preexisting Accessibility are prerequisites for native Exit proof;
-absence is unavailable/partial (exit 77), never PASS. Does not grant TCC,
-remove quarantine, bypass Gatekeeper or control capture devices.
+Aqua and preexisting Accessibility are prerequisites for native Exit and hidden
+background-window proof; absence is unavailable/partial (exit 77), never PASS.
+Does not grant TCC, remove quarantine, bypass Gatekeeper or control capture devices.
 """
 import argparse
 import ctypes
+import fcntl
 import hashlib
 import json
 import os
@@ -18,6 +19,7 @@ from pathlib import Path
 import platform
 import plistlib
 import pwd
+import select
 import stat
 import subprocess
 import shutil
@@ -193,6 +195,10 @@ def main():
                 record('compile-native-driver', ['xcrun', 'swiftc', '-O',
                        repo / 'installer/macos/app_smoke.swift', '-framework', 'AppKit',
                        '-framework', 'ApplicationServices', '-o', driver])
+                barrier = work / 'launch-race.dylib'
+                record('compile-launch-barrier', ['xcrun', 'clang', '-dynamiclib', '-O2',
+                       '-Wall', '-Wextra', '-Werror', repo / 'installer/tests/macos_launch_race.c',
+                       '-o', barrier])
                 preflight = record('gui-prerequisites', [driver, 'gui'], codes=(0, 77))
                 if preflight.returncode == 77:
                     report.update(status='unavailable', gui=preflight.stderr.decode().strip())
@@ -249,11 +255,17 @@ def main():
                     require(len(helpers) == 1, 'persistent AppKit desktop helper child not found')
                     return owner, helpers[0]
 
-                def finder_open(name, duplicate=False):
-                    launch = ['/usr/bin/open', '-a', app]
+                def finder_command(name):
+                    launch = ['/usr/bin/open', '-a', app,
+                              '--stdout', proof / (name + '-app.stdout'),
+                              '--stderr', proof / (name + '-app.stderr')]
                     for key in ('HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_STATE_HOME',
                                 'XDG_RUNTIME_DIR', 'LANG', 'LC_ALL'):
                         launch.extend(['--env', key + '=' + env[key]])
+                    return launch
+
+                def finder_open(name, duplicate=False):
+                    launch = finder_command(name)
                     record(name, launch, env=env)
                     until(running, name + ': app never reached native readiness')
                     until(lambda: not any(path == str(app / 'Contents/MacOS/MicCamWatch')
@@ -261,6 +273,7 @@ def main():
                           name + ': native launcher did not retire')
                     record(name + '-readiness', [cli, 'tray', 'status'], env=env)
                     owner, helper = tray_processes()
+                    record(name + '-native-identity', [driver, 'identity', helper])
                     if native_exit:
                         record(name + '-native-consultation', [driver, 'window', helper])
                     if duplicate:
@@ -303,8 +316,89 @@ def main():
                     report[result_key] = 'passed'
                     unchanged_state(name)
 
+                def inspect_background(name):
+                    owner, helper = tray_processes()
+                    record(name + '-native-identity', [driver, 'identity', helper])
+                    if native_exit:
+                        record(name + '-hidden-window', [driver, 'hidden-window', helper])
+                        report.setdefault('background_service_hidden_window', []).append(name)
+                    else:
+                        report['background_service_hidden_window_unavailable'] = (
+                            'existing Accessibility authorization required')
+                    return owner, helper
+
                 registration = home / 'Library/LaunchAgents/com.roman-cuisset.miccamwatch.tray.plist'
                 receipt = home / 'config/MicCamWatch/autostart/autostart.json'
+
+                # Hold a genuine background owner after flock but before publication,
+                # then deliver the real LaunchServices activation in that gap.
+                # Only the owner is interposed; AppKit and Finder stay native.
+                cold_socket = next(path for path in preserved if path.name == 'history.jsonl').parent / 'tray-runtime/control.sock'
+                ready_read, ready_write = os.pipe()
+                release_read, release_write = os.pipe()
+                cold_env = dict(env, DYLD_INSERT_LIBRARIES=str(barrier),
+                                MCW_COLD_SOCKET=str(cold_socket),
+                                MCW_COLD_READY_FD=str(ready_write),
+                                MCW_COLD_RELEASE_FD=str(release_read))
+                with (proof / 'cold-background.stdout').open('wb') as output, (
+                        proof / 'cold-background.stderr').open('wb') as error:
+                    active = subprocess.Popen([str(cli), 'tray', 'run'], env=cold_env,
+                                              stdout=output, stderr=error,
+                                              pass_fds=(ready_write, release_read))
+                    os.close(ready_write)
+                    os.close(release_read)
+                    released = False
+                    try:
+                        require(select.select([ready_read], [], [], 30)[0] and
+                                os.read(ready_read, 1) == b'L',
+                                'background owner never reached the real lease-before-publication barrier')
+                        require(not cold_socket.exists() and active.poll() is None,
+                                'cold barrier did not retain a live owner before socket publication')
+                        with cold_socket.with_suffix('.lock').open('r+b') as lease:
+                            try:
+                                fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                            except BlockingIOError:
+                                pass
+                            else:
+                                raise AssertionError('background owner did not actually hold the native lease')
+                        record('cold-finder-open', finder_command('cold-finder-open'), env=env)
+                        time.sleep(.5)
+                        require(active.poll() is None and not cold_socket.exists(),
+                                'background owner escaped its pre-publication barrier')
+                        require(len([pid for pid, _, path in processes() if path == str(cli)]) == 2,
+                                'explicit Finder open was lost instead of waiting for the cold owner')
+                        os.write(release_write, b'R')
+                        released = True
+                        until(lambda: len([pid for pid, _, path in processes()
+                                           if path == str(cli)]) == 1 and
+                              not any(path == str(app / 'Contents/MacOS/MicCamWatch')
+                                      for _, _, path in processes()),
+                              'cold open did not retire its forwarding client and launcher')
+                        until(running, 'cold background owner never reached native readiness')
+                        owner, helper = tray_processes()
+                        require(owner == active.pid, 'cold explicit launch replaced the background owner')
+                        record('cold-native-identity', [driver, 'identity', helper])
+                        if native_exit:
+                            record('cold-native-window', [driver, 'window', helper])
+                            report['cold_background_finder_open'] = 'passed'
+                        else:
+                            report['cold_background_finder_open'] = (
+                                'owner retained; native window unavailable without existing Accessibility')
+                        quit_app('cold')
+                    finally:
+                        if not released:
+                            try:
+                                os.write(release_write, b'R')
+                            except BrokenPipeError:
+                                pass
+                        os.close(release_write)
+                        os.close(ready_read)
+                        until(lambda: active.poll() is not None or running(),
+                              'cold owner neither exited nor exposed authenticated cleanup')
+                        if active.poll() is None:
+                            record('cold-cleanup-stop', [cli, 'tray', 'stop'], env=env)
+                        active.wait(timeout=45)
+
                 finder_open('finder-open', duplicate=True)
                 require(not registration.exists(), 'app launch installed autostart registration')
                 record('autostart-not-enabled', [cli, 'autostart', 'status'], env=env, codes=(1,))
@@ -408,6 +502,7 @@ def main():
                     record('explicit-autostart-enable', [cli, 'autostart', 'enable'], env=env)
                     record('explicit-autostart-enabled', [cli, 'autostart', 'status'], env=env)
                     until(lambda: running(login_env), 'owned LaunchAgent never reached login readiness')
+                    inspect_background('enabled-login-background')
                     quit_app('enabled-login', login_env)
                     enabled_registration = registration.read_bytes(), receipt.read_bytes()
                     replace_bundle('manual-replacement-enabled')
@@ -435,6 +530,7 @@ def main():
                     require(plistlib.loads(registration.read_bytes())['ProgramArguments'] ==
                             [str(cli), 'tray', 'run'], 'explicit refresh did not repoint enabled intent')
                     until(lambda: running(login_env), 'repointed enabled service did not reach readiness')
+                    inspect_background('moved-enabled-login-background')
                     quit_app('moved-enabled-login', login_env)
                     report['enabled_owned_intent_replacement_refresh'] = 'passed'
 

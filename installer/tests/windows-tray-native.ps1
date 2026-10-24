@@ -1,6 +1,5 @@
 param(
     [string]$OutputDirectory = 'artifacts/native-windows-tray',
-    [switch]$IsolatedClipboard,
     [switch]$IsolatedDesktop
 )
 $ErrorActionPreference = 'Stop'
@@ -52,7 +51,6 @@ public static class McwNativeProof {
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hwnd, out RECT rect);
     [DllImport("user32.dll")] public static extern bool ScreenToClient(IntPtr hwnd, ref POINT point);
-    [DllImport("user32.dll")] public static extern bool GetMenuItemRect(IntPtr hwnd, IntPtr menu, uint item, out RECT rect);
     [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr hwnd, IntPtr hdc, uint flags);
     [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr hwnd, uint msg, IntPtr wparam, IntPtr lparam);
     [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr hwnd, uint msg, IntPtr wparam, IntPtr lparam);
@@ -106,7 +104,6 @@ $env:MCW_WINDOWS_NATIVE_PROOF_DIR = $directory
 $process = $null
 $fixtureProcess = $null
 $fixtureWindow = [IntPtr]::Zero
-$details = $null
 $previousCursor = [System.Windows.Forms.Cursor]::Position
 $shellMeasurements = @()
 $tooltipFailures = @()
@@ -279,6 +276,25 @@ function Confirm-FixturePointerRouting {
         ConvertTo-Json -Depth 6 | Set-Content -Encoding UTF8 (Join-Path $directory 'pointer-routing.json')
     [McwNativeProof]::MovePointerTo(0, 0)
 }
+function Get-FixtureHoverTarget([string]$expected, $identity) {
+    try {
+        $button = Get-FixtureShellButton $expected $identity
+        if (-not $button -or $button.Current.IsOffscreen) { return $null }
+        $rect = New-Object McwNativeProof+RECT
+        if ([McwNativeProof]::Shell_NotifyIconGetRect([ref]$identity, [ref]$rect) -ne 0) {
+            throw 'The owned notification icon disappeared while acquiring its hover target.'
+        }
+        $bounds = $button.Current.BoundingRectangle
+        $x = [int](($rect.Left + $rect.Right) / 2)
+        $y = [int](($rect.Top + $rect.Bottom) / 2)
+        if ($bounds.IsEmpty -or -not $bounds.Contains($x, $y) -or
+            -not [System.Windows.Forms.SystemInformation]::VirtualScreen.Contains($x, $y)) { return $null }
+        return @{ button=$button; bounds=$bounds; rect=$rect; x=$x; y=$y }
+    } catch [System.Windows.Automation.ElementNotAvailableException] {
+        # Explorer may move an icon between overflow and the visible taskbar.
+        return $null
+    }
+}
 function Confirm-FixtureShellTooltip([string]$name) {
     $shell = Wait-ProofFile "$name-shell.json"
     Confirm-FixtureOwner ([IntPtr][long]$shell.owner)
@@ -291,27 +307,31 @@ function Confirm-FixtureShellTooltip([string]$name) {
         throw 'Explorer did not register the actual fixture notification icon.'
     }
     if ($shell.capacity -ne 128 -or $shell.utf16_units -gt 127) { throw 'Invalid native tooltip capacity.' }
-    $deadline = (Get-Date).AddSeconds(30)
-    $button = $null
-    while (-not $button -and (Get-Date) -lt $deadline) {
-        $button = Get-FixtureShellButton $shell.tooltip $identity
-        if (-not $button) { Start-Sleep -Milliseconds 200 }
-    }
-    if (-not $button) { throw 'Fixture shell icon is not UIA-accessible, including overflow. Requires an unlocked English hosted Explorer desktop.' }
-    $bounds = $button.Current.BoundingRectangle
-    if ($bounds.IsEmpty -or $bounds.Width -le 0 -or $bounds.Height -le 0) { throw 'Fixture shell icon has no visible bounds.' }
-    # Leave the last tooltip before entering the next icon/status. This forces
-    # Explorer to show freshly updated native text rather than a stale hover.
+    # Leave the previous hover before locating the visible icon. Leaving an
+    # overflow flyout after lookup can dismiss it and invalidate its bounds.
     [McwNativeProof]::MovePointerTo(0, 0)
     Start-Sleep -Milliseconds 200
-    [McwNativeProof]::MovePointerTo([int]($bounds.X + $bounds.Width / 2), [int]($bounds.Y + $bounds.Height / 2))
+    $deadline = (Get-Date).AddSeconds(30)
+    $target = $null
+    while (-not $target -and (Get-Date) -lt $deadline) {
+        $target = Get-FixtureHoverTarget $shell.tooltip $identity
+        if (-not $target) { Start-Sleep -Milliseconds 200 }
+    }
+    if (-not $target) { throw 'Fixture shell icon is not UIA-accessible, including overflow. Requires an unlocked English hosted Explorer desktop.' }
+    $button = $target.button
+    $bounds = $target.bounds
+    $rect = $target.rect
+    $hoverX = $target.x
+    $hoverY = $target.y
+    $hoverTargets = @(@{ x=$hoverX; y=$hoverY })
+    [McwNativeProof]::MovePointerTo($hoverX, $hoverY)
     Start-Sleep -Milliseconds 1000
     Capture-NativeDesktop "$name-shell-hover"
     [IO.File]::WriteAllText((Join-Path $directory "$name-shell-inspect"), 'inspect native callbacks')
     $inputEvidence = Wait-ProofFile "$name-shell-input.json"
     $hitPoint = New-Object McwNativeProof+POINT
-    $hitPoint.X = [int]($bounds.X + $bounds.Width / 2)
-    $hitPoint.Y = [int]($bounds.Y + $bounds.Height / 2)
+    $hitPoint.X = $hoverX
+    $hitPoint.Y = $hoverY
     $hitWindow = [McwNativeProof]::WindowFromPoint($hitPoint)
     [uint32]$hitPid = 0
     [void][McwNativeProof]::GetWindowThreadProcessId($hitWindow, [ref]$hitPid)
@@ -328,6 +348,22 @@ function Confirm-FixtureShellTooltip([string]$name) {
     $tooltip = $null
     $tipWindow = [IntPtr]::Zero
     while (-not $tooltip -and (Get-Date) -lt $deadline) {
+        # A real NIM_MODIFY/hover can relocate the icon out of overflow.
+        # Follow only a fresh UIA target containing the same owned native icon;
+        # keep the original deadline and require the actual tooltip popup.
+        $fresh = Get-FixtureHoverTarget $shell.tooltip $identity
+        if (-not $fresh) { Start-Sleep -Milliseconds 100; continue }
+        $button = $fresh.button
+        $bounds = $fresh.bounds
+        $rect = $fresh.rect
+        if ($fresh.x -ne $hoverX -or $fresh.y -ne $hoverY -or
+            [System.Windows.Forms.Cursor]::Position.X -ne $fresh.x -or
+            [System.Windows.Forms.Cursor]::Position.Y -ne $fresh.y) {
+            $hoverX = $fresh.x
+            $hoverY = $fresh.y
+            $hoverTargets += @{ x=$hoverX; y=$hoverY }
+            [McwNativeProof]::MovePointerTo($hoverX, $hoverY)
+        }
         foreach ($window in @(Get-ShellWindows)) {
             try {
                 if ($window.Current.IsOffscreen) { continue }
@@ -350,8 +386,8 @@ function Confirm-FixtureShellTooltip([string]$name) {
                         if ($nativeWindow -eq [IntPtr]::Zero) { continue }
                         $popup = New-Object McwNativeProof+RECT
                         if (-not [McwNativeProof]::GetWindowRect($nativeWindow, [ref]$popup)) { continue }
-                        $x = $bounds.X + $bounds.Width / 2
-                        $y = $bounds.Y + $bounds.Height / 2
+                        $x = $hoverX
+                        $y = $hoverY
                         if ($x -ge $popup.Left -and $x -lt $popup.Right -and
                             $y -ge $popup.Top -and $y -lt $popup.Bottom) { continue }
                         $tooltip = $tip
@@ -373,6 +409,7 @@ function Confirm-FixtureShellTooltip([string]$name) {
             button=@{left=$bounds.Left; top=$bounds.Top; right=$bounds.Right; bottom=$bounds.Bottom};
             cursor=@{x=[System.Windows.Forms.Cursor]::Position.X; y=[System.Windows.Forms.Cursor]::Position.Y};
             native_input=$inputEvidence;
+            hover_targets=$hoverTargets;
             observed=@($observed | Select-Object -Unique)
         }
         ConvertTo-Json -InputObject $diagnostic -Depth 6 | Set-Content -Encoding UTF8 (Join-Path $directory "$name-shell-observed.json")
@@ -403,6 +440,7 @@ function Confirm-FixtureShellTooltip([string]$name) {
         case=$name; accessible_name=$button.Current.Name; tooltip=$tooltip.Current.Name;
         tooltip_bounds=$tipBounds; native_utf16_units=$shell.utf16_units;
         native_input=$inputEvidence;
+        hover_targets=$hoverTargets;
         shell_rect=@{left=$rect.Left; top=$rect.Top; right=$rect.Right; bottom=$rect.Bottom}
     }
     [McwNativeProof]::MovePointerTo(0, 0)
@@ -445,43 +483,21 @@ try {
         if ($popup -eq [IntPtr]::Zero) { throw 'Real Windows popup did not appear on the input desktop.' }
         Start-Sleep -Milliseconds 300
         $bounds = Capture-NativeWindow $popup "$name-menu"
-        $row = New-Object McwNativeProof+RECT
-        if (-not [McwNativeProof]::GetMenuItemRect($owner, [IntPtr][long]$menu.menu, 1, [ref]$row)) { throw 'Native diagnostic menu row was not measurable.' }
         $limit = [Math]::Min(400 * [double]$menu.dpi / 96, [double]$menu.work_width * 0.75)
         if ($bounds.width -gt $limit) { throw "Native popup width $($bounds.width) exceeds compact bound $limit" }
         [void][McwNativeProof]::PostMessage($owner, 0x001f, [IntPtr]::Zero, [IntPtr]::Zero) # WM_CANCELMODE; no privacy action
-        $details = Wait-ProofFile "$name-details.json"
-        Start-Sleep -Milliseconds 300
-        $detailsBounds = Capture-NativeWindow ([IntPtr][long]$details.window) "$name-details" -RenderWindow
-        if ($detailsBounds.width -gt $menu.work_width -or $detailsBounds.height -gt $menu.work_height) {
-            throw 'Native details window exceeds the monitor work area.'
-        }
-        $expected = [IO.File]::ReadAllText((Join-Path $directory "$name-diagnostic.txt"))
-        $copiedUnits = $null
-        # A local user's clipboard may contain arbitrary delayed-render/OLE
-        # formats that cannot be snapshotted reliably. Never replace it.
-        # Only a disposable runner's explicitly isolated clipboard is exercised.
-        if ($IsolatedClipboard) {
-            [System.Windows.Forms.Clipboard]::Clear()
-            [void][McwNativeProof]::SendMessage([IntPtr][long]$details.window, 0x0111, [IntPtr]202, [IntPtr]::Zero) # actual Copy all command
-            $copied = [System.Windows.Forms.Clipboard]::GetText()
-            if (-not [string]::Equals($expected, $copied, [StringComparison]::Ordinal)) { throw 'Native Copy all did not preserve the complete diagnostic.' }
-            [IO.File]::WriteAllText((Join-Path $directory "$name-copied.txt"), $copied)
-            $copiedUnits = $copied.Length
-        }
-        $measurements += @{ case=$name; menu=$bounds; menu_width_limit=$limit; diagnostic_row=@{ left=$row.Left; top=$row.Top; right=$row.Right; bottom=$row.Bottom }; details=$detailsBounds; clipboard_verified=[bool]$IsolatedClipboard; copied_utf16_units=$copiedUnits; original_utf16_units=$details.document_utf16_units; text_width_limit=$menu.text_width_limit; dpi=$menu.dpi }
-        [void][McwNativeProof]::PostMessage([IntPtr][long]$details.window, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)
+        $measurements += @{ case=$name; menu=$bounds; menu_width_limit=$limit; text_width_limit=$menu.text_width_limit; dpi=$menu.dpi }
     }
-    if (-not $process.WaitForExit(30000)) { throw 'Native fixture did not finish after closing details.' }
+    if (-not $process.WaitForExit(30000)) { throw 'Native shell/menu fixture did not finish after dismissing menus.' }
     if ($process.ExitCode -ne 0 -or -not (Test-Path (Join-Path $directory 'complete'))) { throw "Native fixture failed ($($process.ExitCode)); see fixture logs." }
     $measurements | ConvertTo-Json -Depth 8 | Set-Content -Encoding UTF8 (Join-Path $directory 'measurements.json')
     ConvertTo-Json -InputObject @($shellMeasurements) -Depth 8 | Set-Content -Encoding UTF8 (Join-Path $directory 'shell-measurements.json')
     @{ passed=$tooltipFailures.Count -eq 0; failed_cases=@($tooltipFailures); observed_popup_count=$shellMeasurements.Count; owned_pointer_routed=$script:ownedPointerRouted; owned_click_routed=$script:ownedClickRouted } |
         ConvertTo-Json -Depth 6 | Set-Content -Encoding UTF8 (Join-Path $directory 'tooltip-qualification.json')
     if ($tooltipFailures.Count -ne 0) {
-        throw "Actual Explorer popup qualification failed for: $($tooltipFailures -join ', '). All reachable menu/details cases were still exercised; see tooltip-qualification.json."
+        throw "Actual Explorer popup qualification failed for: $($tooltipFailures -join ', '). All reachable menu cases were still exercised; see tooltip-qualification.json."
     }
-    Write-Output "Verified actual Explorer tooltip/UIA updates, native popup bounds and full wrapping details (clipboard exercised: $([bool]$IsolatedClipboard)): $directory"
+    Write-Output "Verified actual Explorer tooltip/UIA updates and native popup bounds; production desktop has its own windows-desktop-native.ps1 proof: $directory"
 } finally {
     $env:MCW_WINDOWS_NATIVE_PROOF_DIR = $previous
     [System.Windows.Forms.Cursor]::Position = $previousCursor
@@ -490,7 +506,6 @@ try {
             # Close only HWNDs already obtained from this retained fixture.
             # Never kill the process or target a product/SDK process by name.
             $windows = @($fixtureWindow)
-            if ($details) { $windows = @([IntPtr][long]$details.window) + $windows }
             foreach ($window in $windows) {
                 [uint32]$windowPid = 0
                 [void][McwNativeProof]::GetWindowThreadProcessId($window, [ref]$windowPid)

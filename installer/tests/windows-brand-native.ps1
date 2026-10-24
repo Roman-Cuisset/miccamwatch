@@ -1,11 +1,12 @@
 param(
     [Parameter(Mandatory = $true)][string]$MsiPath,
     [Parameter(Mandatory = $true)][string]$OutputDirectory,
-    [switch]$IsolatedRunner
+    [switch]$IsolatedRunner,
+    [switch]$ApplicationIntegration
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-# This qualification never runs the application or touches device/privacy controls.
+# Icon-only by default; -ApplicationIntegration also qualifies the real installed app.
 # Only an explicitly disposable GitHub-hosted Windows VM may install this fixture.
 if (-not $IsolatedRunner -or $env:OS -ne 'Windows_NT' -or
     $env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') {
@@ -53,6 +54,7 @@ $report = [ordered]@{
 $failure = $null
 $installAttempted = $false
 $script:mcwBrandMsiIncomplete = $false
+$applicationProof = Join-Path $proof 'application'
 $productCode = $null
 $installer = $null
 function Get-UserPathSnapshot {
@@ -253,6 +255,14 @@ try {
         (Test-Path -LiteralPath $shortcut) -or (Test-Path -LiteralPath (Join-Path ([Environment]::GetFolderPath('CommonPrograms')) 'MicCamWatch.lnk'))) {
         throw 'Existing MCW registration/shortcut: refusing fixture installation.'
     }
+    if ($ApplicationIntegration) {
+        foreach ($name in @('mcw','mcw-tray')) {
+            foreach ($process in [Diagnostics.Process]::GetProcessesByName($name)) {
+                try { throw "Existing $name PID $($process.Id); refusing application fixture installation." }
+                finally { $process.Dispose() }
+            }
+        }
+    }
     Save-Report
     $installAttempted = $true
     # Scope is authored perUser. An unquoted empty ALLUSERS value consumes the
@@ -295,7 +305,7 @@ try {
         try {
             $expectedTray = Join-Path $installDirectory 'mcw-tray.exe'
             $report.shortcutDetails = @{ target = $link.TargetPath; arguments = $link.Arguments; iconLocation = $link.IconLocation; workingDirectory = $link.WorkingDirectory }
-            if (-not [string]::Equals($link.TargetPath, $expectedTray, [StringComparison]::OrdinalIgnoreCase) -or $link.Arguments) {
+            if (-not [string]::Equals($link.TargetPath, $expectedTray, [StringComparison]::OrdinalIgnoreCase)) {
                 throw 'Real Start Menu shortcut does not target the owned installed tray executable.'
             }
         } finally { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($link) }
@@ -332,6 +342,11 @@ try {
             Compare-Image 'installed-apps' 'extract' $iconFile $iconIndex $size $expectedNative
         }
     } finally { [void][McwBrandNative]::SetThreadDpiAwarenessContext($previousDpi) }
+    if ($ApplicationIntegration) {
+        & (Join-Path $PSScriptRoot 'windows-application-native.ps1') -InstallDirectory $installDirectory `
+            -ShortcutPath $shortcut -ProductCode $productCode -OutputDirectory $applicationProof -IsolatedRunner
+        $report['applicationIntegration'] = Join-Path $applicationProof 'result.json'
+    }
     $report.status = 'passed'
 } catch {
     $failure = $_
@@ -340,7 +355,20 @@ try {
 } finally {
     # Keep the MSI, receipt metadata, native PNGs, logs, and partial installation
     # evidence. Uninstall only the product absent before our own /i attempt.
-    if ($script:mcwBrandMsiIncomplete) {
+    $applicationCleanupSafe = $true
+    if ($ApplicationIntegration -and (Test-Path -LiteralPath $applicationProof)) {
+        $applicationCleanupSafe = $false
+        $applicationResult = Join-Path $applicationProof 'result.json'
+        if (Test-Path -LiteralPath $applicationResult -PathType Leaf) {
+            try { $applicationCleanupSafe = (Get-Content -LiteralPath $applicationResult -Raw | ConvertFrom-Json).cleanupSafe -eq $true }
+            catch { $report.limitations += "Unreadable application cleanup authority: $_" }
+        }
+    }
+    if (-not $applicationCleanupSafe) {
+        $report.cleanup = @{ status='application-process-retained'; productCode=$productCode; evidence=$applicationProof }
+        $report.status = 'failed'
+        if ($null -eq $failure) { $failure = 'Application cleanup did not prove all exact owned processes exited; MSI retained without forced termination.' }
+    } elseif ($script:mcwBrandMsiIncomplete) {
         $report.cleanup = @{ status='incomplete-installer-retained'; productCode=$productCode }
     } elseif ($installAttempted -and $productCode -and $null -ne $installer) {
         try {

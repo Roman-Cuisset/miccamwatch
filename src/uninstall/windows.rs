@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -530,10 +530,6 @@ fn ordinary_user() -> Result<()> {
 }
 
 fn owner_guidance(current: &Path) -> Result<bool> {
-    use winreg::{
-        RegKey,
-        enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE},
-    };
     let parent = current.parent().context("executable has no directory")?;
     safe_ancestors(parent)?;
     if parent.file_name().is_some_and(|name| name == "bin") {
@@ -566,6 +562,36 @@ fn owner_guidance(current: &Path) -> Result<bool> {
             }
         }
     }
+    match registered_owner(parent)? {
+        Some(RegisteredOwner::Msi(product_code)) => {
+            eprintln!(
+                "Windows Installer registration matches this installation. Explicitly restore protection and exit its frontends, then run: msiexec.exe /x {product_code}. The MSI owns PATH/shortcuts/payload removal. No MSI operation, elevation or success was claimed."
+            );
+            Ok(true)
+        }
+        Some(RegisteredOwner::Managed) => {
+            eprintln!(
+                "A registered MicCamWatch installation matches this directory; use Windows Settings > Apps > Installed apps > MicCamWatch > Uninstall after explicit restoration and normal frontend exit. No registered command was executed or success claimed."
+            );
+            Ok(true)
+        }
+        None => Ok(false),
+    }
+}
+
+enum RegisteredOwner {
+    Msi(String),
+    Managed,
+}
+
+fn registered_owner(parent: &Path) -> Result<Option<RegisteredOwner>> {
+    use winreg::{
+        RegKey,
+        enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE},
+    };
+    let parent = parent
+        .canonicalize()
+        .context("cannot resolve the installed MicCamWatch directory")?;
     for hive in [HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE] {
         let root = RegKey::predef(hive);
         for view in [
@@ -597,26 +623,35 @@ fn owner_guidance(current: &Path) -> Result<bool> {
                     .as_ref()
                     .or(standard.as_ref())
                     .is_some_and(|location| {
-                        location.canonicalize().ok() == parent.canonicalize().ok()
+                        location
+                            .canonicalize()
+                            .is_ok_and(|location| location == parent)
                     });
                 if matches {
                     if valid_product_code(&key)
                         && product.get_value::<u32, _>("WindowsInstaller").ok() == Some(1)
                     {
-                        eprintln!(
-                            "Windows Installer registration matches this installation. Explicitly restore protection and exit its frontends, then run: msiexec.exe /x {key}. The MSI owns PATH/shortcuts/payload removal. No MSI operation, elevation or success was claimed."
-                        );
-                    } else {
-                        eprintln!(
-                            "A registered MicCamWatch installation matches this directory; use Windows Settings > Apps > Installed apps > MicCamWatch > Uninstall after explicit restoration and normal frontend exit. No registered command was executed or success claimed."
-                        );
+                        return Ok(Some(RegisteredOwner::Msi(key)));
                     }
-                    return Ok(true);
+                    return Ok(Some(RegisteredOwner::Managed));
                 }
             }
         }
     }
-    Ok(false)
+    Ok(None)
+}
+
+pub(crate) fn ensure_binary_update_allowed(current: &Path) -> Result<()> {
+    let parent = current.parent().context("executable has no directory")?;
+    match registered_owner(parent)? {
+        Some(RegisteredOwner::Msi(product_code)) => bail!(
+            "mcw update refuses binary-only replacement of this Windows Installer-managed installation (product {product_code}). Upgrade using the official MicCamWatch MSI from https://github.com/Roman-Cuisset/miccamwatch/releases/latest; run that MSI to upgrade this installed product so Windows Installer updates its version, repair metadata, PATH and shortcuts together with mcw/mcw-tray. No download, staging, frontend shutdown or installation changes were performed; no automatic MSI upgrade or elevation was attempted."
+        ),
+        Some(RegisteredOwner::Managed) => bail!(
+            "mcw update refuses binary-only replacement of this registered MicCamWatch installation. Use its registered installer/manager to upgrade; for official MicCamWatch MSI installations, run the official MSI from https://github.com/Roman-Cuisset/miccamwatch/releases/latest so the manager retains ownership of the binaries, version, repair metadata, PATH and shortcuts. No download, staging, frontend shutdown or installation changes were performed; no automatic MSI upgrade or elevation was attempted."
+        ),
+        None => Ok(()),
+    }
 }
 fn valid_product_code(value: &str) -> bool {
     value.len() == 38

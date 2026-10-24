@@ -4,6 +4,20 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+    inputs:
+      native-only:
+        description: Skip Windows qualification while native Unix targets are checked
+        type: boolean
+        default: false
+      native-platform:
+        description: Select platform family; native-only separately skips Windows
+        type: choice
+        default: all
+        options:
+          - all
+          - linux
+          - macos
+          - windows
   workflow_call:
     inputs:
       native-only:
@@ -122,10 +136,22 @@ jobs:
           name: native-proof-windows-profiles
           if-no-files-found: warn
           path: ${{ runner.temp }}/native-windows-profiles
-      - name: Verify compact native Windows tray and complete copyable details
+      - name: Verify retained native Windows desktop and preferences
+        if: ${{ !cancelled() && steps.windows_tests.outcome == 'success' }}
+        timeout-minutes: 12
+        shell: powershell
+        run: powershell.exe -NoProfile -STA -File installer/tests/windows-desktop-native.ps1 -OutputDirectory "${{ runner.temp }}/native-windows-desktop"
+      - name: Upload native Windows desktop evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-proof-windows-desktop
+          if-no-files-found: warn
+          path: ${{ runner.temp }}/native-windows-desktop
+      - name: Verify compact native Windows tray and Shell tooltip
         if: ${{ !cancelled() && steps.windows_tests.outcome == 'success' }}
         shell: powershell
-        run: powershell.exe -NoProfile -STA -File installer/tests/windows-tray-native.ps1 -OutputDirectory "${{ runner.temp }}/native-windows-tray" -IsolatedDesktop -IsolatedClipboard
+        run: powershell.exe -NoProfile -STA -File installer/tests/windows-tray-native.ps1 -OutputDirectory "${{ runner.temp }}/native-windows-tray" -IsolatedDesktop
       - name: Upload native Windows tray visual evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -133,40 +159,39 @@ jobs:
           name: native-proof-windows-tray
           if-no-files-found: warn
           path: ${{ runner.temp }}/native-windows-tray
-      - name: Build and smoke-test per-user MSI
+      - name: Build and qualify the installed Windows application
         # Packaging is independent of Shell hover; its failure still fails the job.
         if: ${{ !cancelled() && steps.windows_tests.outcome == 'success' && steps.windows_release.outcome == 'success' }}
+        timeout-minutes: 12
         shell: pwsh
         run: |
           dotnet tool restore
           $version = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages[0].version
           dotnet wix build installer/miccamwatch.wxs -d Version=$version -d Executable=target/release/mcw.exe -d TrayExecutable=target/release/mcw-tray.exe -o target/miccamwatch-windows-x86_64.msi
           $msi = (Resolve-Path target/miccamwatch-windows-x86_64.msi).Path
-          $install = Start-Process msiexec.exe -ArgumentList @('/i', $msi, '/qn', '/norestart') -Wait -PassThru
-          if ($install.ExitCode -ne 0) { throw "MSI install failed with code $($install.ExitCode)" }
-          $installed = Join-Path $env:LOCALAPPDATA 'Programs\MicCamWatch\mcw.exe'
-          $installedTray = Join-Path $env:LOCALAPPDATA 'Programs\MicCamWatch\mcw-tray.exe'
-          if (-not (Test-Path $installed)) { throw "Installed CLI executable is missing" }
-          if (-not (Test-Path $installedTray)) { throw "Installed tray executable is missing" }
-          $reported = & $installed --version
-          if ($reported -ne "mcw $version") { throw "Installed version mismatch: $reported" }
-          $uninstall = Start-Process msiexec.exe -ArgumentList @('/x', $msi, '/qn', '/norestart') -Wait -PassThru
-          if ($uninstall.ExitCode -ne 0) { throw "MSI uninstall failed with code $($uninstall.ExitCode)" }
+          & powershell.exe -NoProfile -NonInteractive -STA -File installer/tests/windows-brand-native.ps1 -MsiPath $msi -OutputDirectory "$env:RUNNER_TEMP/windows-application-proof" -IsolatedRunner -ApplicationIntegration
+          if ($LASTEXITCODE -ne 0) { throw 'Installed Windows application qualification failed; inspect retained native evidence' }
+      - name: Upload installed Windows application evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-proof-windows-application
+          if-no-files-found: warn
+          path: ${{ runner.temp }}/windows-application-proof
 
   portable:
+    if: ${{ inputs.native-platform != 'windows' }}
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - runner: ubuntu-22.04
-            platform: linux
-            arch: x86_64
-          - runner: macos-15
-            platform: macos
-            arch: aarch64
-          - runner: macos-15-intel
-            platform: macos
-            arch: x86_64
+        include: >-
+          ${{ fromJSON(
+            inputs.native-platform == 'macos' &&
+            '[{"runner":"macos-15","platform":"macos","arch":"aarch64"},{"runner":"macos-15-intel","platform":"macos","arch":"x86_64"}]' ||
+            inputs.native-platform == 'linux' &&
+            '[{"runner":"ubuntu-22.04","platform":"linux","arch":"x86_64"},{"runner":"ubuntu-22.04-arm","platform":"linux","arch":"aarch64"}]' ||
+            '[{"runner":"ubuntu-22.04","platform":"linux","arch":"x86_64"},{"runner":"ubuntu-22.04-arm","platform":"linux","arch":"aarch64"},{"runner":"macos-15","platform":"macos","arch":"aarch64"},{"runner":"macos-15-intel","platform":"macos","arch":"x86_64"}]'
+          ) }}
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -177,7 +202,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y pkg-config libpipewire-0.3-dev libspa-0.2-dev libclang-dev pipewire pipewire-bin gnupg dbus-x11 xvfb openbox xfce4-panel xfconf xfce4-notifyd libnotify-bin x11-utils xdotool imagemagick pulseaudio gnome-session-canberra libcanberra-pulse sound-theme-freedesktop zsh fish strace fonts-noto-cjk python3-gi
+          sudo apt-get install -y pkg-config libpipewire-0.3-dev libspa-0.2-dev libclang-dev pipewire pipewire-bin gnupg dbus-x11 xvfb openbox xfce4-panel xfconf xfce4-notifyd libnotify-bin libgtk-3-0 gnome-themes-extra-data x11-utils xdotool imagemagick pulseaudio gnome-session-canberra libcanberra-pulse sound-theme-freedesktop zsh fish strace fonts-noto-cjk python3-gi
           # Hosted images can leave system directories writable by everyone.
           # Secure the fixed helper ancestry only on this disposable VM;
           # production installers retain their fail-closed ancestry checks.
@@ -195,7 +220,7 @@ jobs:
           done
           pkg-config --modversion libpipewire-0.3
           pw-dump --version
-      - name: Verify native architecture and minimum macOS version
+      - name: Verify native architecture and record actual build baseline
         shell: bash
         env:
           EXPECTED_ARCH: ${{ matrix.arch }}
@@ -204,6 +229,45 @@ jobs:
           actual=$(uname -m)
           case "$actual" in arm64) actual=aarch64 ;; esac
           test "$actual" = "$EXPECTED_ARCH"
+          mkdir -p "$RUNNER_TEMP/native-proof"
+          uname -a | tee "$RUNNER_TEMP/native-proof/uname.txt"
+          rustc -vV | tee "$RUNNER_TEMP/native-proof/rustc.txt"
+          if [ "$RUNNER_OS" = Linux ]; then
+            EXPECTED_ARCH="$EXPECTED_ARCH" python3 -B - <<'PY'
+          import json, os, pathlib, subprocess
+          proof = pathlib.Path(os.environ["RUNNER_TEMP"]) / "native-proof"
+          def actual(*args):
+              return subprocess.check_output(args, text=True).strip()
+          arch = os.environ["EXPECTED_ARCH"]
+          target = arch + "-unknown-linux-gnu"
+          rustc = actual("rustc", "-vV")
+          assert "host: " + target in rustc.splitlines(), rustc
+          assert os.environ.get("CARGO_BUILD_TARGET", target) == target, "Cross-compilation is not native qualification"
+          debian_arch, multiarch = {"aarch64": ("arm64", "aarch64-linux-gnu"),
+                                   "x86_64": ("amd64", "x86_64-linux-gnu")}[arch]
+          assert actual("dpkg", "--print-architecture") == debian_arch
+          assert actual("cc", "-dumpmachine") == multiarch
+          glibc = actual("getconf", "GNU_LIBC_VERSION")
+          assert glibc == "glibc 2.35", ("Ubuntu 22.04 baseline changed", glibc)
+          packages = {}
+          for package in ("libpipewire-0.3", "libspa-0.2"):
+              version = actual("pkg-config", "--modversion", package)
+              if package == "libpipewire-0.3":
+                  assert tuple(map(int, version.split("."))) >= (0, 3, 48), (package, version)
+              else:
+                  assert version == "0.2", (package, "SPA API version", version)
+              libdir = actual("pkg-config", "--variable=libdir", package)
+              assert libdir == "/usr/lib/" + multiarch, (package, libdir)
+              packages[package] = dict(version=version, libdir=libdir,
+                                       cflags=actual("pkg-config", "--cflags", package),
+                                       libs=actual("pkg-config", "--libs", package))
+          report = dict(uname=actual("uname", "-a"), rustc=rustc, native_target=target,
+                        compiler=actual("cc", "--version"), multiarch=multiarch, glibc=glibc,
+                        package_versions=actual("dpkg-query", "-W", "libpipewire-0.3-dev", "libspa-0.2-dev", "libclang-dev", "libc6"),
+                        pkg_config=packages, physical_pi_qualification=False)
+          (proof / "linux-native-baseline.json").write_text(json.dumps(report, indent=2) + "\n")
+          PY
+          fi
           if [ "$RUNNER_OS" = macOS ]; then
             version=$(sw_vers -productVersion)
             echo "macOS runtime: $version"
@@ -220,6 +284,40 @@ jobs:
         run: cargo test --locked -p libspa --lib native_headers_builder_roundtrip_after_growth -- --nocapture
       - run: cargo build --locked ${{ matrix.platform == 'linux' && '--features linux-camera-helper' || '' }}
       - run: cargo build --release --locked ${{ matrix.platform == 'linux' && '--features linux-camera-helper' || '' }}
+      - name: Verify both native Linux ELF payloads and retain generated bindings
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          EXPECTED_ARCH: ${{ matrix.arch }}
+        run: |
+          python3 -B - <<'PY'
+          import hashlib, json, os, pathlib, re, shutil, struct, subprocess
+          proof = pathlib.Path(os.environ["RUNNER_TEMP"]) / "native-proof"
+          expected = {"x86_64": 62, "aarch64": 183}[os.environ["EXPECTED_ARCH"]]
+          payloads = {}
+          for name in ("mcw", "mcw-camera-helper"):
+              path = pathlib.Path("target/release") / name
+              header = path.read_bytes()[:20]
+              assert header[:6] == b"\x7fELF\x02\x01", (name, "Expected ELF64 little-endian")
+              machine = struct.unpack_from("<H", header, 18)[0]
+              assert machine == expected, (name, machine, expected)
+              elf = subprocess.check_output(["readelf", "-h", "-V", str(path)], text=True)
+              versions = sorted({tuple(map(int, match.split("."))) for match in re.findall(r"GLIBC_([0-9]+(?:\.[0-9]+)+)", elf)})
+              assert versions and max(versions) <= (2, 35), (name, versions)
+              (proof / (name + ".readelf.txt")).write_text(elf)
+              payloads[name] = dict(elf_class=64, little_endian=True, e_machine=machine,
+                                    glibc_requirements=[".".join(map(str, v)) for v in versions],
+                                    sha256=hashlib.sha256(path.read_bytes()).hexdigest())
+          bindings = list(pathlib.Path("target/release/build").glob("libspa-sys-*/out/bindings.rs"))
+          assert bindings, "Native libspa bindgen output missing"
+          outputs = []
+          for index, path in enumerate(bindings):
+              destination = proof / f"libspa-native-bindings-{index}.rs"
+              shutil.copyfile(path, destination)
+              outputs.append(dict(source=str(path), proof=destination.name,
+                                  sha256=hashlib.sha256(path.read_bytes()).hexdigest()))
+          (proof / "linux-elf.json").write_text(json.dumps(dict(payloads=payloads, native_bindings=outputs), indent=2) + "\n")
+          PY
       - name: Build native macOS app and disk image
         if: runner.os == 'macOS'
         shell: bash
@@ -699,7 +797,7 @@ jobs:
           version=$(python3 -c 'import json, subprocess; print("v" + json.loads(subprocess.check_output(["cargo", "metadata", "--no-deps", "--format-version", "1"]))["packages"][0]["version"])')
           python3 -B installer/tests/native_camera.py \
             --source-file "$GITHUB_WORKSPACE/installer/install.sh" \
-            --archive "$GITHUB_WORKSPACE/miccamwatch-linux-x86_64.tar.gz" \
+            --archive "$GITHUB_WORKSPACE/miccamwatch-linux-${{ matrix.arch }}.tar.gz" \
             --root-installer "$RUNNER_TEMP/native-proof/package/install-camera-helper.sh" \
             --version "$version" \
             --proof "$RUNNER_TEMP/native-proof/linux-camera"
@@ -754,6 +852,16 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: dbus-run-session -- xvfb-run --auto-servernum --server-args="-screen 0 1280x800x24" python3 "$RUNNER_TEMP/native-smoke.py"
+      - name: Verify retained native GTK desktop and preferences
+        if: ${{ !cancelled() && runner.os == 'Linux' && env.MCW_RELEASE_BINARY != '' }}
+        timeout-minutes: 12
+        shell: bash
+        run: |
+          version=$("$MCW_RELEASE_BINARY" --version)
+          version=${version#mcw }
+          MCW_NATIVE_LINUX_ISOLATED=1 dbus-run-session -- xvfb-run -a -s '-screen 0 1280x1000x24' python3 -B installer/tests/native_linux_desktop.py \
+            --proof "$RUNNER_TEMP/native-proof/linux-desktop" \
+            --launcher-archive "$GITHUB_WORKSPACE/miccamwatch-linux-${{ matrix.arch }}.tar.gz" --launcher-version "v$version"
       - name: Verify direct native Linux profile selection and persistence
         if: ${{ !cancelled() && runner.os == 'Linux' && env.MCW_RELEASE_BINARY != '' }}
         timeout-minutes: 10

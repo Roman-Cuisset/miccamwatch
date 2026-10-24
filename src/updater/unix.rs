@@ -30,6 +30,9 @@ const CAMERA_PAYLOAD: [(&str, &str); 3] = [
     ),
 ];
 
+#[cfg(target_os = "linux")]
+const DESKTOP_RECEIPTS: [&str; 4] = ["desktop.path", "desktop.sha256", "icon.path", "icon.sha256"];
+
 // All variable data travels as positional argv. The script never evaluates a
 // receipt, interpolates a filename into shell code, or excludes a running PID.
 // exec replaces the updater itself BEFORE the installer's running-target guard.
@@ -157,6 +160,64 @@ pub fn update() -> Result<()> {
     // Successful exec never returns and the shell's trap owns cleanup. On an
     // exec error Rust retains ownership of the private staging directory.
     Err(error).context("cannot hand off the update to /bin/sh; installation was not changed")
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn supports_linux_desktop(version: &str) -> Result<bool> {
+    Ok(Version::parse(version)?.core >= [0, 21, 0])
+}
+
+/// Complete the first managed upgrade from an older updater whose embedded
+/// installer predates the visible Linux launcher. This is called only by the
+/// existing post-update autostart-refresh flow; it does not change that intent.
+#[cfg(target_os = "linux")]
+pub fn refresh_desktop_integration() -> Result<()> {
+    if !supports_linux_desktop(env!("CARGO_PKG_VERSION"))? {
+        return Ok(());
+    }
+    ordinary_user()?;
+    let current = std::env::current_exe().context("cannot locate installed mcw")?;
+    if current.file_name() != Some(OsStr::new("mcw"))
+        || current.parent().and_then(Path::file_name) != Some(OsStr::new("bin"))
+    {
+        return Ok(());
+    }
+    let prefix = current.parent().and_then(Path::parent).unwrap();
+    let _prefix_directory = Directory::open(prefix, false)?;
+    match std::fs::symlink_metadata(prefix.join(".miccamwatch-install")) {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            // Cargo and system packages own their own integration. Never
+            // fabricate a public-installer receipt for those installations.
+            return Ok(());
+        }
+        Err(error) => return Err(error).context("cannot inspect desktop-refresh ownership"),
+    }
+    let Installation::Managed { prefix } = Installation::inspect_at(&current)?;
+    let staging = Staging::new(&prefix)?;
+    staging.write("install.sh", INSTALLER.as_bytes())?;
+    // The old install subprocess has exited and released its directory lock
+    // before invoking the new binary's autostart refresh. The child takes the
+    // same lock and rechecks ownership, but its asset set excludes the mapped
+    // CLI and camera payload. No running-target exclusion is introduced.
+    let output = Command::new("/bin/sh")
+        .arg(staging.path.join("install.sh"))
+        .arg("--refresh-desktop")
+        .arg("--prefix")
+        .arg(&prefix)
+        .arg("--version")
+        .arg(format!("v{}", env!("CARGO_PKG_VERSION")))
+        .arg("--no-modify-path")
+        .stdin(Stdio::null())
+        .output()
+        .context("cannot execute local owned-desktop refresh")?;
+    if !output.status.success() {
+        bail!(
+            "local application-menu refresh failed; existing assets were preserved: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(())
 }
 
 pub(crate) struct ManagedUninstall {
@@ -398,7 +459,10 @@ impl Installation {
         }
         verify_executable_version(current)?;
         #[cfg(target_os = "linux")]
-        inspect_camera_payload(&prefix, &receipt)?;
+        {
+            inspect_camera_payload(&prefix, &receipt)?;
+            inspect_desktop_assets(&receipt)?;
+        }
         Ok(Self::Managed { prefix })
     }
 
@@ -590,6 +654,118 @@ fn inspect_camera_payload(prefix: &Path, receipt: &Directory) -> Result<()> {
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
+fn inspect_desktop_assets(receipt: &Directory) -> Result<()> {
+    let desktop_path = receipt.read("desktop.path")?;
+    let desktop_hashes = receipt.read("desktop.sha256")?;
+    let icon_path = receipt.read("icon.path")?;
+    let icon_hashes = receipt.read("icon.sha256")?;
+    if desktop_path.is_none()
+        && desktop_hashes.is_none()
+        && icon_path.is_none()
+        && icon_hashes.is_none()
+    {
+        // Historical format-1 installations predate the visible launcher, but
+        // an unrelated registration must still refuse before uninstall stops UI.
+        let root = match std::env::var_os("XDG_DATA_HOME").filter(|value| !value.is_empty()) {
+            Some(root) => PathBuf::from(root),
+            None => PathBuf::from(std::env::var_os("HOME").context("HOME is not set")?)
+                .join(".local/share"),
+        };
+        for suffix in [
+            "applications/com.roman-cuisset.miccamwatch.desktop",
+            "icons/hicolor/96x96/apps/com.roman-cuisset.miccamwatch.png",
+        ] {
+            let path = root.join(suffix);
+            let path = path.to_str().context("Linux launcher path is not UTF-8")?;
+            validate_desktop_path(path)?;
+            inspect_desktop_asset(path, None)?;
+        }
+        return Ok(());
+    }
+    let required = |bytes: Option<Vec<u8>>| {
+        bytes.context("incomplete Linux launcher ownership receipt; installed files were preserved")
+    };
+    let desktop_path = required(desktop_path)?;
+    let icon_path = required(icon_path)?;
+    let desktop_hashes = required(desktop_hashes)?;
+    let icon_hashes = required(icon_hashes)?;
+    let desktop_path = desktop_receipt_path(&desktop_path)?;
+    let icon_path = desktop_receipt_path(&icon_path)?;
+    let root = desktop_path
+        .strip_suffix("/applications/com.roman-cuisset.miccamwatch.desktop")
+        .context("launcher receipt does not name the conventional application entry")?;
+    if root.is_empty()
+        || icon_path.strip_suffix("/icons/hicolor/96x96/apps/com.roman-cuisset.miccamwatch.png")
+            != Some(root)
+    {
+        bail!("launcher receipt assets do not share their original data root");
+    }
+    for (path, hashes) in [
+        (desktop_path, desktop_hashes.as_slice()),
+        (icon_path, icon_hashes.as_slice()),
+    ] {
+        inspect_desktop_asset(path, Some(hashes))?;
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn inspect_desktop_asset(path: &str, hashes: Option<&[u8]>) -> Result<()> {
+    let hashes = hashes.map(checksum_receipt).transpose()?;
+    let path = Path::new(path);
+    let directory = match Directory::open(path.parent().unwrap(), false) {
+        Ok(directory) => directory,
+        Err(error)
+            if error
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound) =>
+        {
+            // Missing owned assets are repairable without adopting any other
+            // registration. Ancestors already traversed remain no-follow.
+            return Ok(());
+        }
+        Err(error) => return Err(error).context("unsafe Linux launcher ancestor"),
+    };
+    if let Some(file) = directory.file(path.file_name().unwrap())? {
+        let hashes = hashes
+            .context("unmanaged Linux launcher asset; its owner must remove it before retrying")?;
+        let digest = sha256(file)?;
+        if !hashes.iter().any(|hash| *hash == digest) {
+            bail!(
+                "launcher asset {} was changed outside the public installer; it was preserved",
+                path.display()
+            );
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn desktop_receipt_path(bytes: &[u8]) -> Result<&str> {
+    let path = std::str::from_utf8(bytes)
+        .context("Linux launcher receipt path is not UTF-8")?
+        .strip_suffix('\n')
+        .context("Linux launcher receipt path is not newline terminated")?;
+    validate_desktop_path(path)?;
+    Ok(path)
+}
+
+#[cfg(target_os = "linux")]
+fn validate_desktop_path(path: &str) -> Result<()> {
+    if !path.starts_with('/')
+        || path
+            .bytes()
+            .any(|byte| byte.is_ascii_control() || byte == b':')
+        || path[1..]
+            .split('/')
+            .any(|component| component.is_empty() || matches!(component, "." | ".."))
+    {
+        bail!("Linux launcher receipt path is not a safe absolute normalized path");
+    }
+    Ok(())
+}
+
 fn validate_receipt_files(receipt: &Directory) -> Result<()> {
     for name in receipt.names()? {
         let text = name
@@ -615,7 +791,8 @@ fn receipt_name(name: &str) -> Result<Option<&str>> {
         return Ok(None);
     }
     #[cfg(target_os = "linux")]
-    if CAMERA_PAYLOAD.iter().any(|(_, record)| *record == name) {
+    if CAMERA_PAYLOAD.iter().any(|(_, record)| *record == name) || DESKTOP_RECEIPTS.contains(&name)
+    {
         return Ok(None);
     }
     let rest = name
@@ -886,6 +1063,86 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_launcher_preflight_preserves_foreign_modified_and_unsafe_assets() -> Result<()> {
+        use std::os::unix::fs::symlink;
+
+        let scratch = Scratch::new()?;
+        let state_path = scratch.0.join("receipt");
+        let receipt = Directory::open(&state_path, true)?;
+        let root = scratch.0.join("data 日本語");
+        let desktop = root.join("applications/com.roman-cuisset.miccamwatch.desktop");
+        let icon = root.join("icons/hicolor/96x96/apps/com.roman-cuisset.miccamwatch.png");
+        for (name, path) in [("desktop", &desktop), ("icon", &icon)] {
+            let parent = Directory::open(path.parent().unwrap(), true)?;
+            let file_name = path.file_name().unwrap().to_str().unwrap();
+            parent.create_file(file_name, b"owned filesystem fixture\n")?;
+            let digest = sha256(parent.file(OsStr::new(file_name))?.unwrap())?;
+            receipt.create_file(
+                &format!("{name}.path"),
+                format!("{}\n", path.display()).as_bytes(),
+            )?;
+            receipt.create_file(&format!("{name}.sha256"), format!("{digest}\n").as_bytes())?;
+        }
+        validate_receipt_files(&receipt)?;
+        inspect_desktop_assets(&receipt)?;
+        assert!(inspect_desktop_asset(desktop.to_str().unwrap(), None).is_err());
+        let original = std::fs::read(&desktop)?;
+        std::fs::write(&desktop, b"user changed this registration\n")?;
+        assert!(inspect_desktop_assets(&receipt).is_err());
+        assert_eq!(
+            std::fs::read(&desktop)?,
+            b"user changed this registration\n"
+        );
+        std::fs::write(&desktop, &original)?;
+        let foreign = scratch.0.join("foreign");
+        std::fs::hard_link(&desktop, &foreign)?;
+        assert!(inspect_desktop_assets(&receipt).is_err());
+        std::fs::remove_file(&foreign)?;
+        std::fs::rename(&desktop, &foreign)?;
+        symlink(&foreign, &desktop)?;
+        assert!(inspect_desktop_assets(&receipt).is_err());
+        assert_eq!(std::fs::read(&foreign)?, original);
+        std::fs::remove_file(&desktop)?;
+        std::fs::rename(&foreign, &desktop)?;
+        let parent = desktop.parent().unwrap();
+        let moved_parent = scratch.0.join("foreign-applications");
+        std::fs::rename(parent, &moved_parent)?;
+        symlink(&moved_parent, parent)?;
+        assert!(inspect_desktop_assets(&receipt).is_err());
+        std::fs::remove_file(parent)?;
+        std::fs::rename(&moved_parent, parent)?;
+        std::fs::remove_file(state_path.join("icon.path"))?;
+        assert!(inspect_desktop_assets(&receipt).is_err());
+        std::fs::write(
+            state_path.join("icon.path"),
+            format!(
+                "{}/elsewhere/{}\n",
+                root.display(),
+                icon.file_name().unwrap().to_str().unwrap()
+            ),
+        )?;
+        assert!(inspect_desktop_assets(&receipt).is_err());
+        std::fs::write(
+            state_path.join("icon.path"),
+            format!("{}\n", icon.display()),
+        )?;
+        std::fs::remove_file(&desktop)?;
+        std::fs::remove_file(&icon)?;
+        inspect_desktop_assets(&receipt)?;
+        assert!(!desktop.exists() && !icon.exists());
+        for path in [
+            "/data/../applications/x\n",
+            "/data//x\n",
+            "relative\n",
+            "/data/x\n\n",
+        ] {
+            assert!(desktop_receipt_path(path.as_bytes()).is_err());
+        }
+        Ok(())
+    }
+
     #[test]
     fn managed_layout_without_valid_receipt_never_becomes_portable() -> Result<()> {
         let scratch = Scratch::new()?;
@@ -1025,6 +1282,10 @@ mod tests {
         assert_eq!(receipt_name("path-12.block")?, None);
         #[cfg(target_os = "linux")]
         for (_, record) in CAMERA_PAYLOAD {
+            assert_eq!(receipt_name(record)?, None);
+        }
+        #[cfg(target_os = "linux")]
+        for record in DESKTOP_RECEIPTS {
             assert_eq!(receipt_name(record)?, None);
         }
         for invalid in [
