@@ -1694,3 +1694,25 @@ L'objectif historique 15 MB reste **souple et non atteint sur Windows et macOS**
 - AST Python et formatage Rust réussis après ces deux changements. Prochaine qualification : **Linux x64/ARM64 uniquement** ; les succès Windows/macOS ne sont pas relancés inutilement. Arbre suivi propre avant reprise à `e1f1a0f`, cinq exclusions et autres worktrees intacts ; README, site/confidentialité, `main`, tags et releases inchangés.
 
 **Qualification Linux ciblée en cours :** correctifs **`519dc1c`** sauvegardés sur la seule branche de développement ; run [`40078682137`](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/40078682137), source `519dc1c`, `native-only=true`, `native-platform=linux`. Attendre ses deux reçus installés et ses captures avant de clôturer. Les captures GTK installée et AppKit clair/sombre/minimum du run précédent ont été réellement examinées ; les données AppKit marquées `SIMULATED` ne sont pas une preuve matérielle.
+
+### Qualification finale — expérience applicative unifiée
+
+Les échecs de ce lot sont clôturés par les preuves natives ci-dessous, sans réépingler WM_CLASS, simuler une ouverture ou assouplir l'authentification. Les sources des plateformes déjà réussies sont inchangées dans les commits suivants.
+
+| Cibles | Source fonctionnelle qualifiée | Qualification native complète |
+| --- | --- | --- |
+| Windows | `3f52ee4` | [`40062931635`](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/40062931635), MSI/CLI/GUI/`.lnk`, HWND retenu, Shell, update portable et refus de double propriété MSI |
+| macOS Intel / Apple Silicon | `4931e00` | [`40065426316`](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/40065426316), publication sécurisée, AppKit, Finder à froid, fenêtre retenue, bundle/LaunchAgent et retrait normal |
+| Linux x64 / ARM64 | `519dc1c` | [`40078682137`](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/40078682137), GTK/Gio installés, ELF, frontières de privilèges, profils et menu natif |
+
+- **Linux réellement confirmé après correction** : les deux `installed-launcher/results.json` et `wm-class.txt` ont été lus. Classe exacte `MicCamWatch`, même owner et même XID après activation répétée, Alt+F4, masquage et réouverture ; démarrage de fond caché et ouverture concurrente préservée. Les stderr confirment les véritables refus de namespace et d'asset modifié, pas un chemin absent/trop long. Retrait via la CLI et l'installateur réellement réussi, fichiers utilisateur conservés.
+- **Couverture GTK** : 21 cas réussis **par architecture**, sept langues (`de/en/es/fr/ja/ru/zh`) et Adwaita/Adwaita sombre/HighContrast ; aucun cas en échec. Captures installée ARM et réglages russes sombres au minimum réellement examinées. Sur x64, le reçu identifie la vraie migration du producteur 0.20 ; sur ARM, il reste `null`, puisqu'aucune ancienne installation ARM publique n'est inventée.
+- **Sauvegarde** : correctifs fonctionnels `29e0f32`, `3f52ee4`, `4931e00`, `519dc1c` et checkpoints documentaires conservés sur `work/linux-arm64-021`. La présente clôture ne modifie que la documentation. Comparaison finale nulle avec la base `a29dcc5` pour README/site/PRIVACY ; `origin/main` reste `dc40e95bc9c1c6a14386eb5e773f01b62b47aa71`. Aucune release, aucun tag, déploiement public ou remplacement de l'installation du PC.
+
+**Limites et prochain point de reprise :**
+
+1. Ne pas refaire ces qualifications sur les sources inchangées. Vérifications manuelles restantes : Windows 10/DPI multiples, lecteur d'écran, regroupement réel taskbar/Dock et installation MSI avec token utilisateur standard ; le runner Windows était administrateur.
+2. Linux ARM64 est qualifié nativement sur runner hébergé, **pas sur Raspberry Pi ou autre appareil physique**. Wayland réel, périphériques USB/micro/caméra, sessions/login/reboot et permissions matérielles restent des validations distinctes ; les données GUI simulées et l'inventaire vide ne prouvent pas une protection.
+3. Le PC conserve ses deux racines Cargo/MSI observées ; aucune consolidation automatique. Choisir une installation canonique puis restaurer/quitter normalement avant un retrait explicitement autorisé, sans supprimer une copie ou voler un owner en cours.
+4. Les réserves de distribution restent inchangées : `VERSIONINFO` absent des EXE constatés, signature Windows/Developer ID macOS seulement avec de vrais certificats ; aucun contournement SmartScreen/Gatekeeper. Le refus de self-update MSI n'est pas un moteur de mise à jour MSI ni une preuve de désinstallation forcée avec protections actives.
+5. Prochain lot demandé : réorganisation du README, **non commencée ici**. Une intégration ultérieure de `main` doit conserver les corrections SEO/confidentialité et les deux historiques de ROADMAP. Ne pas publier 0.21.0 ni pousser `main` sans nouvel accord.
