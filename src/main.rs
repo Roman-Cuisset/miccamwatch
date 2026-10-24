@@ -68,6 +68,15 @@ fn run() -> Result<u8> {
     if matches!(&cli.command, Command::Uninstall) {
         return uninstall::run();
     }
+    #[cfg(windows)]
+    if let Command::Tray { command, .. } = &cli.command
+        && matches!(command, None | Some(TrayCommand::Run | TrayCommand::Open))
+        && (cli.config.is_none() || matches!(command, Some(TrayCommand::Open)))
+        && tray::reuse_running(matches!(command, Some(TrayCommand::Open)))?
+    {
+        return Ok(0);
+    }
+    #[cfg(unix)]
     if matches!(
         &cli.command,
         Command::Tray {
@@ -93,6 +102,8 @@ fn run() -> Result<u8> {
         // Installer refresh depends only on the existing owned registration,
         // not on whether an unrelated capture policy currently validates.
         autostart::refresh_if_enabled(env!("CARGO_PKG_VERSION"))?;
+        #[cfg(target_os = "linux")]
+        updater::refresh_desktop_integration()?;
         return Ok(0);
     }
     let no_color = match &cli.command {
@@ -267,9 +278,10 @@ fn run() -> Result<u8> {
         }
         Command::Tray { command, .. } => match command.unwrap_or(TrayCommand::Run) {
             TrayCommand::Run => {
+                #[cfg(unix)]
                 let monitor = PlatformMonitor::new(policy.clone())?;
                 #[cfg(windows)]
-                tray::run_tray(monitor, policy, lang, settings, cli.config.is_some(), false)?;
+                tray::run_tray(policy, lang, settings, cli.config.is_some(), false)?;
                 #[cfg(unix)]
                 tray::run_tray(
                     monitor,
@@ -283,9 +295,10 @@ fn run() -> Result<u8> {
                 Ok(0)
             }
             TrayCommand::Open => {
+                #[cfg(unix)]
                 let monitor = PlatformMonitor::new(policy.clone())?;
                 #[cfg(windows)]
-                tray::run_tray(monitor, policy, lang, settings, cli.config.is_some(), true)?;
+                tray::run_tray(policy, lang, settings, cli.config.is_some(), true)?;
                 #[cfg(unix)]
                 tray::run_tray(
                     monitor,

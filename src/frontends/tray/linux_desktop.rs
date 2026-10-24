@@ -65,6 +65,9 @@ macro_rules! gtk_api {
     };
 }
 gtk_api! {
+    g_set_prgname: unsafe extern "C" fn(*const c_char),
+    g_set_application_name: unsafe extern "C" fn(*const c_char),
+    gdk_set_program_class: unsafe extern "C" fn(*const c_char),
     gtk_init_check: unsafe extern "C" fn(*mut c_int, *mut *mut *mut c_char) -> c_int,
     gtk_window_new: unsafe extern "C" fn(c_int) -> Widget,
     gtk_window_set_title: unsafe extern "C" fn(Widget, *const c_char),
@@ -1026,6 +1029,11 @@ unsafe fn connect(
     }
 }
 fn run(api: Api, shared: Arc<Shared>, actions: SyncSender<Command>) -> Result<()> {
+    unsafe {
+        (api.g_set_prgname)(c"com.roman-cuisset.miccamwatch".as_ptr());
+        (api.g_set_application_name)(c"MicCamWatch".as_ptr());
+        (api.gdk_set_program_class)(c"MicCamWatch".as_ptr());
+    }
     ensure!(
         unsafe { (api.gtk_init_check)(ptr::null_mut(), ptr::null_mut()) } != 0,
         "Native window unavailable: GTK cannot connect to a display. Run mcw tray open as your desktop user inside the graphical Wayland/X11 session (DISPLAY or WAYLAND_DISPLAY required), not through a headless/root helper. Tray and CLI remain available."

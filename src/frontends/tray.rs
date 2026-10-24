@@ -30,7 +30,7 @@ use windows::{
     Win32::{
         Foundation::{
             CloseHandle, ERROR_ALREADY_EXISTS, GetLastError, HANDLE, HWND, LPARAM, LRESULT, POINT,
-            RECT, SIZE, WPARAM,
+            RECT, SIZE, WAIT_ABANDONED, WAIT_OBJECT_0, WAIT_TIMEOUT, WPARAM,
         },
         Graphics::Gdi::{
             BI_RGB, BITMAPINFO, BITMAPINFOHEADER, COLOR_WINDOW, CreateBitmap, CreateDIBSection,
@@ -38,11 +38,11 @@ use windows::{
             GetSysColorBrush, GetTextExtentPoint32W, HFONT, MONITOR_DEFAULTTONEAREST, MONITORINFO,
             MonitorFromWindow, ReleaseDC, SelectObject,
         },
-        System::Threading::{CreateMutexW, GetCurrentProcessId},
+        System::Threading::{CreateMutexW, GetCurrentProcessId, WaitForSingleObject},
         UI::{
             Shell::{
                 NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW,
-                Shell_NotifyIconW,
+                SetCurrentProcessExplicitAppUserModelID, Shell_NotifyIconW,
             },
             WindowsAndMessaging::{
                 AppendMenuW, CREATESTRUCTW, CreateIconIndirect, CreatePopupMenu, CreateWindowExW,
@@ -103,6 +103,7 @@ const WM_RESTORE_RESULT: u32 = WM_APP + 4;
 pub(crate) const WM_UPDATE_STOP: u32 = WM_APP + 41;
 pub(crate) const UPDATE_STOPPED: usize = 0x4d435731;
 pub(crate) const UPDATE_BUSY: usize = 0x4d435732;
+pub(crate) const WM_OPEN_DESKTOP: u32 = WM_APP + 42;
 const TIMER_POLL_ID: usize = 1;
 const CAMERA_POLL_INTERVAL: Duration = Duration::from_secs(5);
 const CMD_TOGGLE_MUTE: usize = 101;
@@ -480,7 +481,6 @@ fn next_refresh<T>(receiver: &Receiver<T>, pending_microphone: usize) -> Option<
 }
 
 pub fn run_tray(
-    _monitor: PlatformMonitor,
     policy: crate::config::Policy,
     lang: Language,
     settings: Settings,
@@ -491,7 +491,34 @@ pub fn run_tray(
     let mutex_name = format_wide("Local\\MicCamWatch.Tray");
     let _mutex = MutexGuard(unsafe { CreateMutexW(None, true, PCWSTR(mutex_name.as_ptr()))? });
     if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
-        anyhow::bail!("MicCamWatch tray is already running");
+        anyhow::ensure!(
+            !explicit_policy || initial_window,
+            "MicCamWatch is already running; an explicit policy cannot replace its active policy"
+        );
+        // An autostart owner may hold the lease before its HWND is ready.
+        // Reuse that owner, never start a second set of workers or lose an open.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if reuse_running(initial_window)? {
+                return Ok(());
+            }
+            match unsafe { WaitForSingleObject(_mutex.0, 0) } {
+                WAIT_OBJECT_0 | WAIT_ABANDONED => break,
+                WAIT_TIMEOUT => {}
+                _ => {
+                    return Err(windows::core::Error::from_thread())
+                        .context("cannot observe the existing MicCamWatch startup lease");
+                }
+            }
+            anyhow::ensure!(
+                Instant::now() < deadline,
+                "MicCamWatch is starting or unavailable; its existing owner was preserved; retry opening the application"
+            );
+            thread::sleep(Duration::from_millis(50));
+        }
+    }
+    unsafe {
+        SetCurrentProcessExplicitAppUserModelID(PCWSTR(crate::notify::APP_ID.as_ptr()))?;
     }
     let hwnd_cell = Arc::new(AtomicIsize::new(0));
     let camera_dirty = Arc::new(AtomicBool::new(false));
@@ -672,13 +699,18 @@ pub fn stop_running() -> Result<bool> {
     crate::updater::stop_installed_tray()
 }
 
-/// Request the existing tray's modeless desktop window without touching devices.
-pub fn open_running() -> Result<bool> {
-    let class = format_wide("MicCamWatchTrayClass");
-    let Ok(hwnd) = (unsafe { FindWindowW(PCWSTR(class.as_ptr()), PCWSTR::null()) }) else {
+/// Reuse only this installed pair and application-data namespace.
+/// Background launches do not reveal the retained desktop.
+pub fn reuse_running(open_window: bool) -> Result<bool> {
+    let current = std::env::current_exe().context("cannot locate MicCamWatch installation")?;
+    let cli = current.with_file_name("mcw.exe");
+    let companion = current.with_file_name("mcw-tray.exe");
+    let Some(running) = crate::updater::process::installed_running_tray(&cli, &companion)? else {
         return Ok(false);
     };
-    unsafe { PostMessageW(Some(hwnd), WM_COMMAND, WPARAM(CMD_DETAILS), LPARAM(0))? };
+    if open_window {
+        running.open_window()?;
+    }
     Ok(true)
 }
 
@@ -699,6 +731,12 @@ unsafe extern "system" fn tray_wnd_proc(
         return LRESULT(1);
     }
     match message {
+        WM_OPEN_DESKTOP => {
+            if wparam.0 != unsafe { GetCurrentProcessId() } as usize {
+                return LRESULT(0);
+            }
+            LRESULT(open_desktop(hwnd) as isize)
+        }
         WM_UPDATE_STOP => {
             if wparam.0 != unsafe { GetCurrentProcessId() } as usize {
                 return LRESULT(0);
@@ -718,7 +756,9 @@ unsafe extern "system" fn tray_wnd_proc(
         WM_TRAY_CALLBACK => {
             match lparam.0 as u32 {
                 WM_LBUTTONUP | WM_RBUTTONUP => show_context_menu(hwnd),
-                WM_LBUTTONDBLCLK => open_desktop(hwnd),
+                WM_LBUTTONDBLCLK => {
+                    open_desktop(hwnd);
+                }
                 _ => {}
             }
             LRESULT(0)
@@ -741,7 +781,9 @@ unsafe extern "system" fn tray_wnd_proc(
                 CMD_PROFILE_PRIVATE => select_profile(hwnd, PrivacyProfile::Private),
                 CMD_PROFILE_MEETING => select_profile(hwnd, PrivacyProfile::Meeting),
                 CMD_PROFILE_DEVELOPMENT => select_profile(hwnd, PrivacyProfile::Development),
-                CMD_DETAILS => open_desktop(hwnd),
+                CMD_DETAILS => {
+                    open_desktop(hwnd);
+                }
                 CMD_EXIT if request_safe_close(hwnd) == UPDATE_BUSY => {
                     if let Some(state) = state(hwnd) {
                         notify_async(
@@ -1949,11 +1991,11 @@ fn diagnostic_document(summary: &str) -> String {
     document
 }
 
-fn open_desktop(hwnd: HWND) {
+fn open_desktop(hwnd: HWND) -> bool {
     let Some((existing, view)) =
         state(hwnd).map(|s| (s.desktop.take(), windows_desktop::View::from_state(s)))
     else {
-        return;
+        return false;
     };
     // No TrayAppState reference survives native calls, which may synchronously
     // send owner notifications. The desktop has its own scoped callback storage.
@@ -1967,8 +2009,12 @@ fn open_desktop(hwnd: HWND) {
     match desktop {
         Ok(desktop) => {
             desktop.show();
+            let visible = desktop.is_visible();
             if let Some(s) = state(hwnd) {
                 s.desktop = Some(desktop);
+                visible
+            } else {
+                false
             }
         }
         Err(error) => {
@@ -1976,6 +2022,7 @@ fn open_desktop(hwnd: HWND) {
                 s.settings_error = Some(format!("MicCamWatch window: {error:#}"));
                 notify_async(s, "MicCamWatch", &format!("{error:#}"));
             }
+            false
         }
     }
 }

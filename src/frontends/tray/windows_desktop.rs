@@ -12,7 +12,7 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::UI::Controls::DRAWITEMSTRUCT;
 use windows::Win32::UI::WindowsAndMessaging::{
     GetWindowTextW, HWND_BOTTOM, SW_HIDE, SW_RESTORE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-    SetWindowPos, WM_NCDESTROY, WS_VISIBLE,
+    SetWindowPos, WM_NCDESTROY, WS_EX_APPWINDOW, WS_EX_CONTROLPARENT, WS_VISIBLE,
 };
 
 const PAGE_TOP: i32 = 156;
@@ -1012,7 +1012,7 @@ impl DesktopWindow {
         let pointer = (&*data as *const RefCell<WindowState>).cast::<std::ffi::c_void>();
         let hwnd = unsafe {
             CreateWindowExW(
-                WINDOW_EX_STYLE(0x00010000),
+                WS_EX_APPWINDOW | WS_EX_CONTROLPARENT,
                 PCWSTR(class.as_ptr()),
                 PCWSTR(title.as_ptr()),
                 WS_OVERLAPPEDWINDOW | WS_VSCROLL | WINDOW_STYLE(0x02000000),

@@ -684,6 +684,10 @@ def fixtures(script, root, shells, version, asset, binary, camera):
     })
     control.invoke(script, "--add-path", env=env, version=version)
     control.version(version)
+    if platform.system() == "Linux" and tuple(map(int, version[1:].split("."))) < (0, 21, 0):
+        require(not (Path(control.env["XDG_DATA_HOME"]) / "applications/com.roman-cuisset.miccamwatch.desktop").exists()
+                and not (control.prefix / ".miccamwatch-install/desktop.path").exists(),
+                "historical Linux CLI release received an unsupported tray open launcher")
     control.invoke(script, "--uninstall", "--no-modify-path", version=version)
     print("PASS fixture positive control: actual release executable installed and runnable")
 
@@ -832,6 +836,158 @@ def fixtures(script, root, shells, version, asset, binary, camera):
     print("PASS modified PATH: preserve customization/receipt, then safely complete after explicit repair")
     if camera:
         camera_fixtures(script, root, shells, version, asset, binary, camera)
+    if platform.system() == "Linux" and tuple(map(int, version[1:].split("."))) >= (0, 21, 0):
+        linux_desktop_fixtures(script, root, shells, version, asset, binary, camera)
+
+
+def linux_desktop_fixtures(script, root, shells, version, asset, binary, camera):
+    """Exercise installed launcher artifacts and ownership, never the user's desktop."""
+    identity = "com.roman-cuisset.miccamwatch"
+
+    def paths(sandbox):
+        data = Path(sandbox.env["XDG_DATA_HOME"])
+        return (data / "applications" / (identity + ".desktop"),
+                data / "icons/hicolor/96x96/apps" / (identity + ".png"))
+
+    def transport(sandbox):
+        archive = sandbox.root / asset
+        archive.write_bytes(archive_bytes(binary, camera=camera))
+        sums = sandbox.root / "SHA256SUMS"
+        sums.write_text(f"{digest(archive.read_bytes())}  {asset}\n")
+        return fixture_environment(sandbox, {
+            f"{RELEASE_ROOT}/{version}/{asset}": str(archive),
+            f"{RELEASE_ROOT}/{version}/SHA256SUMS": str(sums),
+        })[0]
+
+    def snapshot(sandbox):
+        result = {}
+        for base in (sandbox.prefix, Path(sandbox.env["XDG_DATA_HOME"])):
+            if not base.exists():
+                continue
+            for path in base.rglob("*"):
+                metadata = path.lstat()
+                if path.is_symlink():
+                    result[str(path)] = ("link", os.readlink(path))
+                elif path.is_file():
+                    result[str(path)] = (metadata.st_mode, metadata.st_nlink, path.read_bytes())
+        return result
+
+    positive = Sandbox(root, "linux-launcher-é 日本語", "bash", shells["bash"])
+    positive.prefix = positive.home / "install 日本語 %f \\slash 'quote\" $literal; [brackets]"
+    positive.binary = positive.prefix / "bin/mcw"
+    env = transport(positive)
+    positive.invoke(script, "--no-modify-path", env=env, version=version)
+    desktop, icon = paths(positive)
+    receipt = positive.prefix / ".miccamwatch-install"
+    require(not (Path(positive.env["XDG_CONFIG_HOME"]) / "autostart").exists(),
+            "installing an app-menu launcher enabled session autostart")
+    baseline = snapshot(positive)
+    moved_environment = dict(env, XDG_DATA_HOME=str(positive.home / "different data root"))
+    positive.invoke(script, "--no-modify-path", env=moved_environment, version=version)
+    require(snapshot(positive) == baseline and not Path(moved_environment["XDG_DATA_HOME"]).exists(),
+            "same-version refresh moved the owned launcher or created a duplicate entry")
+    duplicate = Sandbox(root, "linux-launcher-duplicate-prefix", "bash", shells["bash"])
+    duplicate.env["XDG_DATA_HOME"] = positive.env["XDG_DATA_HOME"]
+    duplicate_env = transport(duplicate)
+    refused = duplicate.invoke(script, "--no-modify-path", env=duplicate_env, version=version, codes=None)
+    require(refused.returncode != 0 and not duplicate.binary.exists() and snapshot(positive) == baseline,
+            "a second prefix adopted or replaced the existing application-menu identity")
+    # Explicitly model the historical format-1 absence, not a published old
+    # release claim. Refresh must add only missing, previously unowned assets.
+    for name, path in (("desktop", desktop), ("icon", icon)):
+        path.unlink()
+        (receipt / (name + ".path")).unlink()
+        (receipt / (name + ".sha256")).unlink()
+    request_log = Path(json.loads(Path(env["MCW_TEST_CURL_PLAN"]).read_text())["log"])
+    requests_before = request_log.read_bytes()
+    binary_before = positive.binary.stat().st_ino, positive.binary.read_bytes()
+    positive.invoke(script, "--refresh-desktop", "--no-modify-path", env=env, version=version)
+    require(snapshot(positive) == baseline
+            and (positive.binary.stat().st_ino, positive.binary.read_bytes()) == binary_before
+            and request_log.read_bytes() == requests_before,
+            "offline legacy launcher refresh changed the CLI or used release transport")
+    icon.unlink()
+    positive.invoke(script, "--no-modify-path", env=env, version=version)
+    require(snapshot(positive) == baseline, "missing owned icon could not be safely repaired")
+    wrapper_dir = Path(env["PATH"].split(os.pathsep)[0])
+    marker = positive.root / "injected-icon-removal-failure"
+    real_rm = shutil.which("rm", path=positive.env["PATH"])
+    wrapper = wrapper_dir / "rm"
+    wrapper.write_text(
+        "#!/bin/sh\nlast=\nfor arg do last=$arg; done\n"
+        "if [ \"$last\" = " + shlex.quote(str(icon)) + " ] && [ ! -e " + shlex.quote(str(marker)) + " ]; then\n"
+        "  : > " + shlex.quote(str(marker)) + "\n  exit 1\nfi\nexec " + shlex.quote(real_rm) + ' "$@"\n'
+    )
+    wrapper.chmod(0o755)
+    failed = positive.invoke(script, "--uninstall", "--no-modify-path", env=env, version=version, codes=None)
+    require(failed.returncode != 0 and marker.exists() and snapshot(positive) == baseline,
+            "failed icon removal did not restore the launcher, executable, payload and all receipts")
+    saved = positive.saved_user_data()
+    positive.invoke(script, "--uninstall", "--no-modify-path", env=moved_environment, version=version)
+    require(not desktop.exists() and not icon.exists() and not positive.binary.exists(),
+            "uninstall retained installer-owned launcher assets")
+    require(all(path.read_bytes() == content for path, content in saved.items()),
+            "launcher uninstall removed unrelated preferences, history or user files")
+
+    for name in ("desktop", "icon"):
+        foreign = Sandbox(root, "linux-launcher-foreign-" + name, "bash", shells["bash"])
+        env = transport(foreign)
+        target = paths(foreign)[0 if name == "desktop" else 1]
+        target.parent.mkdir(parents=True)
+        target.write_bytes(b"user-owned registration or artwork\n")
+        refused = foreign.invoke(script, "--no-modify-path", env=env, version=version, codes=None)
+        require(refused.returncode != 0 and target.read_bytes() == b"user-owned registration or artwork\n"
+                and not foreign.binary.exists(), "installer replaced an unmanaged launcher asset")
+        target.unlink()
+
+    for name in ("desktop", "icon"):
+        for mutation in ("modified", "symlink", "hardlink", "partial-receipt", "ancestor-symlink"):
+            sandbox = Sandbox(root, "linux-launcher-" + name + "-" + mutation, "bash", shells["bash"])
+            env = transport(sandbox)
+            sandbox.invoke(script, "--no-modify-path", env=env, version=version)
+            target = paths(sandbox)[0 if name == "desktop" else 1]
+            original = target.read_bytes()
+            external = sandbox.root / "foreign-asset"
+            record = sandbox.prefix / ".miccamwatch-install" / (name + ".path")
+            if mutation == "modified":
+                target.write_bytes(original + b"\nuser modification\n")
+            elif mutation == "symlink":
+                external.write_bytes(original)
+                target.unlink()
+                target.symlink_to(external)
+            elif mutation == "hardlink":
+                os.link(target, external)
+            elif mutation == "partial-receipt":
+                record.unlink()
+            else:
+                parent = target.parent
+                external.mkdir()
+                shutil.move(str(target), str(external / target.name))
+                parent.rmdir()
+                parent.symlink_to(external, target_is_directory=True)
+            before = snapshot(sandbox)
+            for flags in (("--no-modify-path",), ("--uninstall", "--no-modify-path"),
+                          ("--refresh-desktop", "--no-modify-path")):
+                refused = sandbox.invoke(script, *flags, env=env, version=version, codes=None)
+                require(refused.returncode != 0 and snapshot(sandbox) == before,
+                        f"{mutation} {name} refusal altered installation, receipts or foreign data")
+            if mutation == "symlink":
+                target.unlink()
+                target.write_bytes(original)
+            elif mutation == "hardlink":
+                external.unlink()
+            elif mutation == "partial-receipt":
+                record.write_text(str(target) + "\n")
+            elif mutation == "ancestor-symlink":
+                target.parent.unlink()
+                target.parent.mkdir()
+                shutil.move(str(external / target.name), str(target))
+            else:
+                target.write_bytes(original)
+            sandbox.invoke(script, "--uninstall", "--no-modify-path", env=env, version=version)
+            require(not sandbox.binary.exists() and not target.exists(),
+                    "repaired launcher installation could not be safely removed")
+    print("PASS Linux app launcher: pinned paths, refresh/removal and foreign/modified/link preservation; native activation is a separate proof")
 
 
 def camera_fixtures(script, root, shells, version, asset, binary, camera):
@@ -847,8 +1003,9 @@ def camera_fixtures(script, root, shells, version, asset, binary, camera):
         })[0]
 
     def snapshots(sandbox):
-        return {path.relative_to(sandbox.prefix): path.read_bytes()
-                for path in sandbox.prefix.rglob("*") if path.is_file() and not path.is_symlink()}
+        return {str(path): path.read_bytes()
+                for base in (sandbox.prefix, Path(sandbox.env["XDG_DATA_HOME"]))
+                for path in base.rglob("*") if path.is_file() and not path.is_symlink()}
 
     def usable(sandbox):
         require(run([sandbox.binary, "--version"], env=sandbox.env).stdout.strip() == f"mcw {version[1:]}",

@@ -14,8 +14,8 @@ use windows::{
             QueryFullProcessImageNameW, STARTUPINFOW, WaitForSingleObject,
         },
         UI::WindowsAndMessaging::{
-            FindWindowW, GetWindowThreadProcessId, SMTO_ABORTIFHUNG, SMTO_BLOCK,
-            SendMessageTimeoutW,
+            AllowSetForegroundWindow, FindWindowW, GetWindowThreadProcessId, SMTO_ABORTIFHUNG,
+            SMTO_BLOCK, SendMessageTimeoutW,
         },
     },
     core::{PCWSTR, PWSTR},
@@ -184,6 +184,35 @@ fn same_target(image: &Path, target: &Path) -> Result<bool> {
 }
 
 impl RunningTray {
+    pub(crate) fn open_window(&self) -> Result<()> {
+        let mut pid = 0;
+        unsafe { GetWindowThreadProcessId(self.window, Some(&mut pid)) };
+        if pid != self.pid || unsafe { WaitForSingleObject(self.process, 0) } != WAIT_TIMEOUT {
+            bail!("MicCamWatch owner changed before activation; no other window was opened");
+        }
+        // Only the explicit foreground launcher can grant this; failure never
+        // authorizes stealing input queues or bypassing foreground restrictions.
+        let _ = unsafe { AllowSetForegroundWindow(self.pid) };
+        let mut reply = 0;
+        let sent = unsafe {
+            SendMessageTimeoutW(
+                self.window,
+                crate::frontends::tray::WM_OPEN_DESKTOP,
+                WPARAM(self.pid as usize),
+                LPARAM(0),
+                SMTO_ABORTIFHUNG | SMTO_BLOCK,
+                5000,
+                Some(&mut reply),
+            )
+        };
+        if sent.0 == 0 || reply != 1 {
+            bail!(
+                "MicCamWatch did not confirm opening its window; the existing owner was preserved"
+            );
+        }
+        Ok(())
+    }
+
     pub fn launch_context(&self, target: &Path) -> Result<LaunchContext> {
         let (directory, environment) =
             crate::platform::process_launch_directory_environment(self.process)

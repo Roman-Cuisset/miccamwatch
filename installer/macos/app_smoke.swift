@@ -16,14 +16,29 @@ app.setActivationPolicy(.accessory)
 app.finishLaunching()
 guard NSScreen.main != nil else { stop("UNAVAILABLE: logged-in Aqua/WindowServer display required", code: 77) }
 if CommandLine.arguments.count == 2 && CommandLine.arguments[1] == "gui" { exit(0) }
+// LaunchServices identity and activation policy are readable without granting
+// Accessibility. The short-lived outer app must not become a second Dock owner.
+if CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "identity" {
+    guard let pid = Int32(CommandLine.arguments[2]),
+          let owner = NSRunningApplication(processIdentifier: pid), !owner.isTerminated else {
+        stop("desktop helper is not a registered running application")
+    }
+    guard owner.bundleIdentifier == "com.roman-cuisset.miccamwatch.helper",
+          owner.localizedName == "MicCamWatch",
+          owner.activationPolicy == .accessory else {
+        stop("desktop helper has an unexpected LaunchServices identity, visible name or Dock policy")
+    }
+    print("{\"native_identity\":\"MicCamWatch\",\"bundle_identifier\":\"com.roman-cuisset.miccamwatch.helper\",\"activation_policy\":\"accessory\",\"helper_pid\":\(pid)}")
+    exit(0)
+}
 guard AXIsProcessTrusted() else {
     stop("UNAVAILABLE: smoke driver needs preexisting Accessibility permission to click the real Exit menu; no permission was requested", code: 77)
 }
 if CommandLine.arguments.count == 2 && CommandLine.arguments[1] == "accessibility" { exit(0) }
 guard CommandLine.arguments.count == 3,
-      ["quit", "window", "close-window"].contains(CommandLine.arguments[1]),
+      ["quit", "window", "close-window", "hidden-window"].contains(CommandLine.arguments[1]),
       let pid = Int32(CommandLine.arguments[2]) else {
-    stop("usage: app-smoke gui | accessibility | quit|window|close-window HELPER_PID")
+    stop("usage: app-smoke gui | accessibility | identity|quit|window|close-window|hidden-window HELPER_PID")
 }
 let operation = CommandLine.arguments[1]
 func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
@@ -40,6 +55,13 @@ func descendants(_ element: AXUIElement, depth: Int = 0) -> [AXUIElement] {
 let application = AXUIElementCreateApplication(pid)
 AXUIElementSetMessagingTimeout(application, 3)
 let deadline = Date().addingTimeInterval(15)
+if operation == "hidden-window" {
+    let windows = attribute(application, kAXWindowsAttribute) as? [AXUIElement]
+    guard let windows = windows else { stop("background helper window visibility is unavailable") }
+    guard windows.isEmpty else { stop("background service unexpectedly surfaced a native window") }
+    print("{\"native_consultation\":\"hidden-window\",\"window_count\":0,\"helper_pid\":\(pid)}")
+    exit(0)
+}
 if operation != "quit" {
     while Date() < deadline {
         let windows = attribute(application, kAXWindowsAttribute) as? [AXUIElement] ?? []

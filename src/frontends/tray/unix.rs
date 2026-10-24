@@ -637,8 +637,12 @@ struct Lifecycle {
     open_requested: Arc<AtomicBool>,
     server: Option<thread::JoinHandle<()>>,
 }
+enum LeaseAcquisition {
+    Acquired(Lifecycle),
+    Contended,
+}
 impl Lifecycle {
-    fn acquire() -> Result<Self> {
+    fn acquire() -> Result<LeaseAcquisition> {
         let path = socket_path()?;
         let lock = OpenOptions::new()
             .create(true)
@@ -653,10 +657,17 @@ impl Lifecycle {
             metadata.is_file() && metadata.uid() == uid() && metadata.mode() & 0o077 == 0,
             "tray lock ownership or permissions are unsafe"
         );
-        ensure!(
-            unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0,
-            "the per-user native tray is already starting or running"
-        );
+        if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+            let error = std::io::Error::last_os_error();
+            if error.kind() == std::io::ErrorKind::WouldBlock {
+                return Ok(LeaseAcquisition::Contended);
+            }
+            return Err(error).context("cannot acquire native tray lease");
+        }
+        Self::bind(path, lock).map(LeaseAcquisition::Acquired)
+    }
+
+    fn bind(path: PathBuf, lock: File) -> Result<Self> {
         if let Ok(metadata) = fs::symlink_metadata(&path) {
             ensure!(
                 metadata.file_type().is_socket() && metadata.uid() == uid(),
@@ -777,6 +788,44 @@ impl Lifecycle {
             open_requested,
             server: Some(server),
         })
+    }
+
+    fn acquire_for_launch(initial_window: bool, explicit_policy: bool) -> Result<Option<Self>> {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            match Self::acquire()? {
+                LeaseAcquisition::Acquired(lifecycle) => return Ok(Some(lifecycle)),
+                LeaseAcquisition::Contended => {}
+            }
+            ensure!(
+                initial_window || !explicit_policy,
+                "MicCamWatch is already starting or running; an explicit policy cannot replace its active policy"
+            );
+            // The lease is acquired before the socket is bound. Losing that
+            // lease must not discard an explicit launch in this interval.
+            // Every reuse authenticates both namespace and executable image;
+            // lock contention alone never proves an owned native frontend.
+            if initial_window {
+                if open_running()? {
+                    return Ok(None);
+                }
+            } else if let Some(reply) = owned_control(b"ping\n", false)? {
+                match reply.as_str() {
+                    "ready" => return Ok(None),
+                    // Do not claim a successful background service until its
+                    // native host is ready; initialization can fail headlessly.
+                    "starting" => {}
+                    _ => bail!("owned tray startup was not acknowledged: {reply}"),
+                }
+            }
+            ensure!(
+                Instant::now() < deadline,
+                "MicCamWatch's native tray lease is held but its owned frontend did not become available; exit that tray via its menu and retry"
+            );
+            thread::sleep(Duration::from_millis(20));
+            // If startup exited, acquire its released lease normally. Never
+            // unlink an active owner's socket or force another process out.
+        }
     }
 }
 impl Drop for Lifecycle {
@@ -1563,7 +1612,9 @@ pub fn run_tray(
     eventlog: bool,
     initial_window: bool,
 ) -> Result<()> {
-    let lifecycle = Lifecycle::acquire()?;
+    let Some(lifecycle) = Lifecycle::acquire_for_launch(initial_window, explicit_policy)? else {
+        return Ok(());
+    };
     let (sender, actions) = mpsc::sync_channel(32);
     let mut inspection = CameraInspectionWorker::default();
     #[cfg(target_os = "macos")]
@@ -2472,7 +2523,10 @@ mod menu_tests {
         // make_view reads real autostart state, whose ownership store creates
         // directories even for a status query. Isolate that production path in
         // a child, never by changing process-global HOME during parallel tests.
-        let directory = tempfile::tempdir().unwrap();
+        let directory = tempfile::Builder::new()
+            .prefix("mcw-tray-")
+            .tempdir_in("/tmp")
+            .unwrap();
         let home = directory.path().canonicalize().unwrap();
         let output = std::process::Command::new(std::env::current_exe().unwrap())
             .args([
@@ -2498,6 +2552,157 @@ mod menu_tests {
             String::from_utf8_lossy(&output.stderr)
         );
         true
+    }
+
+    fn held_startup_lease() -> (PathBuf, File) {
+        let path = socket_path().unwrap();
+        let lock = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(path.with_extension("lock"))
+            .unwrap();
+        assert_eq!(
+            unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+            0
+        );
+        assert!(matches!(
+            Lifecycle::acquire().unwrap(),
+            LeaseAcquisition::Contended
+        ));
+        assert!(!path.exists());
+        (path, lock)
+    }
+
+    #[test]
+    fn cold_explicit_launch_waits_for_socket_and_queues_open() {
+        if run_isolated_menu_fixture(
+            "frontends::tray::menu_tests::cold_explicit_launch_waits_for_socket_and_queues_open",
+        ) {
+            return;
+        }
+        let (path, lock) = held_startup_lease();
+        let (sent, received) = mpsc::channel();
+        let client = thread::spawn(move || {
+            assert!(
+                sent.send(Lifecycle::acquire_for_launch(true, false))
+                    .is_ok()
+            );
+        });
+        assert!(received.recv_timeout(Duration::from_millis(100)).is_err());
+        let owner = Lifecycle::bind(path, lock).unwrap();
+        assert!(!owner.ready.load(Ordering::Acquire));
+        assert!(
+            received
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap()
+                .unwrap()
+                .is_none()
+        );
+        assert!(owner.open_requested.load(Ordering::Acquire));
+        client.join().unwrap();
+    }
+
+    #[test]
+    fn cold_background_duplicate_waits_for_native_readiness_without_opening() {
+        if run_isolated_menu_fixture(
+            "frontends::tray::menu_tests::cold_background_duplicate_waits_for_native_readiness_without_opening",
+        ) {
+            return;
+        }
+        let (path, lock) = held_startup_lease();
+        let (sent, received) = mpsc::channel();
+        let client = thread::spawn(move || {
+            assert!(
+                sent.send(Lifecycle::acquire_for_launch(false, false))
+                    .is_ok()
+            );
+        });
+        assert!(received.recv_timeout(Duration::from_millis(100)).is_err());
+        let owner = Lifecycle::bind(path, lock).unwrap();
+        assert!(received.recv_timeout(Duration::from_millis(100)).is_err());
+        assert!(!owner.open_requested.load(Ordering::Acquire));
+        owner.ready.store(true, Ordering::Release);
+        assert!(
+            received
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap()
+                .unwrap()
+                .is_none()
+        );
+        assert!(!owner.open_requested.load(Ordering::Acquire));
+        client.join().unwrap();
+    }
+
+    #[test]
+    fn cold_launch_reacquires_released_lease_and_rejects_unsafe_lock() {
+        if run_isolated_menu_fixture(
+            "frontends::tray::menu_tests::cold_launch_reacquires_released_lease_and_rejects_unsafe_lock",
+        ) {
+            return;
+        }
+        let (path, lock) = held_startup_lease();
+        let (sent, received) = mpsc::channel();
+        let client = thread::spawn(move || {
+            assert!(
+                sent.send(Lifecycle::acquire_for_launch(true, false))
+                    .is_ok()
+            );
+        });
+        assert!(received.recv_timeout(Duration::from_millis(100)).is_err());
+        drop(lock);
+        let replacement = received
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .unwrap();
+        assert!(replacement.is_some());
+        drop(replacement);
+        client.join().unwrap();
+        fs::set_permissions(
+            path.with_extension("lock"),
+            fs::Permissions::from_mode(0o666),
+        )
+        .unwrap();
+        assert!(Lifecycle::acquire_for_launch(true, false).is_err());
+    }
+
+    #[test]
+    fn cold_launch_refuses_foreign_namespace_without_sending_open() {
+        if run_isolated_menu_fixture(
+            "frontends::tray::menu_tests::cold_launch_refuses_foreign_namespace_without_sending_open",
+        ) {
+            return;
+        }
+        let (path, _lock) = held_startup_lease();
+        let listener = UnixListener::bind(&path).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            assert_eq!(read_frame(&mut reader, 16).unwrap().unwrap(), b"owner");
+            let mut namespace = ControlNamespace::current().unwrap();
+            namespace.config.push("foreign");
+            serde_json::to_writer(&mut stream, &namespace).unwrap();
+            stream.write_all(b"\n").unwrap();
+            assert!(read_frame(&mut reader, 16).unwrap().is_none());
+        });
+        let error = match Lifecycle::acquire_for_launch(true, false) {
+            Err(error) => error,
+            Ok(_) => panic!("foreign namespace was reused"),
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("another configuration/data namespace")
+        );
+        server.join().unwrap();
+        fs::remove_file(path).unwrap();
     }
 
     fn observed() -> Snapshot {

@@ -159,25 +159,25 @@ jobs:
           name: native-proof-windows-tray
           if-no-files-found: warn
           path: ${{ runner.temp }}/native-windows-tray
-      - name: Build and smoke-test per-user MSI
+      - name: Build and qualify the installed Windows application
         # Packaging is independent of Shell hover; its failure still fails the job.
         if: ${{ !cancelled() && steps.windows_tests.outcome == 'success' && steps.windows_release.outcome == 'success' }}
+        timeout-minutes: 12
         shell: pwsh
         run: |
           dotnet tool restore
           $version = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages[0].version
           dotnet wix build installer/miccamwatch.wxs -d Version=$version -d Executable=target/release/mcw.exe -d TrayExecutable=target/release/mcw-tray.exe -o target/miccamwatch-windows-x86_64.msi
           $msi = (Resolve-Path target/miccamwatch-windows-x86_64.msi).Path
-          $install = Start-Process msiexec.exe -ArgumentList @('/i', $msi, '/qn', '/norestart') -Wait -PassThru
-          if ($install.ExitCode -ne 0) { throw "MSI install failed with code $($install.ExitCode)" }
-          $installed = Join-Path $env:LOCALAPPDATA 'Programs\MicCamWatch\mcw.exe'
-          $installedTray = Join-Path $env:LOCALAPPDATA 'Programs\MicCamWatch\mcw-tray.exe'
-          if (-not (Test-Path $installed)) { throw "Installed CLI executable is missing" }
-          if (-not (Test-Path $installedTray)) { throw "Installed tray executable is missing" }
-          $reported = & $installed --version
-          if ($reported -ne "mcw $version") { throw "Installed version mismatch: $reported" }
-          $uninstall = Start-Process msiexec.exe -ArgumentList @('/x', $msi, '/qn', '/norestart') -Wait -PassThru
-          if ($uninstall.ExitCode -ne 0) { throw "MSI uninstall failed with code $($uninstall.ExitCode)" }
+          & powershell.exe -NoProfile -NonInteractive -STA -File installer/tests/windows-brand-native.ps1 -MsiPath $msi -OutputDirectory "$env:RUNNER_TEMP/windows-application-proof" -IsolatedRunner -ApplicationIntegration
+          if ($LASTEXITCODE -ne 0) { throw 'Installed Windows application qualification failed; inspect retained native evidence' }
+      - name: Upload installed Windows application evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-proof-windows-application
+          if-no-files-found: warn
+          path: ${{ runner.temp }}/windows-application-proof
 
   portable:
     if: ${{ inputs.native-platform != 'windows' }}
@@ -856,7 +856,12 @@ jobs:
         if: ${{ !cancelled() && runner.os == 'Linux' && env.MCW_RELEASE_BINARY != '' }}
         timeout-minutes: 12
         shell: bash
-        run: MCW_NATIVE_LINUX_ISOLATED=1 dbus-run-session -- xvfb-run -a -s '-screen 0 1280x1000x24' python3 -B installer/tests/native_linux_desktop.py --proof "$RUNNER_TEMP/native-proof/linux-desktop"
+        run: |
+          version=$("$MCW_RELEASE_BINARY" --version)
+          version=${version#mcw }
+          MCW_NATIVE_LINUX_ISOLATED=1 dbus-run-session -- xvfb-run -a -s '-screen 0 1280x1000x24' python3 -B installer/tests/native_linux_desktop.py \
+            --proof "$RUNNER_TEMP/native-proof/linux-desktop" \
+            --launcher-archive "$GITHUB_WORKSPACE/miccamwatch-linux-${{ matrix.arch }}.tar.gz" --launcher-version "v$version"
       - name: Verify direct native Linux profile selection and persistence
         if: ${{ !cancelled() && runner.os == 'Linux' && env.MCW_RELEASE_BINARY != '' }}
         timeout-minutes: 10

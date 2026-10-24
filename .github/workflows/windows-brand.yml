@@ -12,6 +12,7 @@ on:
       - 'installer/miccamwatch.rc'
       - 'installer/miccamwatch.wxs'
       - 'installer/tests/windows-brand-native.ps1'
+      - 'installer/tests/windows-application-native.ps1'
       - 'site/assets/mark.svg'
       - '.github/workflows/windows-brand.yml'
 
@@ -55,7 +56,7 @@ jobs:
           $fixture = Join-Path $env:GITHUB_WORKSPACE 'installer/tests/windows-brand-native.ps1'
           $msi = Join-Path $env:GITHUB_WORKSPACE 'target/mcw-brand-fixture.msi'
           $proof = Join-Path $env:RUNNER_TEMP 'windows-brand-proof'
-          & powershell.exe -NoProfile -NonInteractive -STA -File $fixture -MsiPath $msi -OutputDirectory $proof -IsolatedRunner
+          & powershell.exe -NoProfile -NonInteractive -STA -File $fixture -MsiPath $msi -OutputDirectory $proof -IsolatedRunner -ApplicationIntegration
           if ($LASTEXITCODE -ne 0) { throw 'Native interactive Shell proof failed; inspect retained installer and image evidence' }
       - name: Retain native bitmaps, visual sheet, receipts and failure evidence
         if: always()

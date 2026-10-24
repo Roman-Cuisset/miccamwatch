@@ -5,17 +5,21 @@ use miccamwatch::{
     config::Policy,
     frontends::tray,
     i18n::Language,
-    platform::PlatformMonitor,
     settings::{self, Settings},
 };
+use std::process::ExitCode;
 use windows::{
     Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW},
     core::PCWSTR,
 };
 
-fn main() {
-    if let Err(error) = run() {
-        show_error(&format!("MicCamWatch tray failed:\n\n{error:#}"));
+fn main() -> ExitCode {
+    match run() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            show_error(&format!("MicCamWatch could not start:\n\n{error:#}"));
+            ExitCode::from(2)
+        }
     }
 }
 
@@ -23,7 +27,7 @@ fn run() -> Result<()> {
     let initial_window = std::env::args_os()
         .skip(1)
         .any(|argument| argument == "--open");
-    if initial_window && tray::open_running()? {
+    if tray::reuse_running(initial_window)? {
         return Ok(());
     }
     let settings = Settings::load()?;
@@ -34,8 +38,7 @@ fn run() -> Result<()> {
         .as_deref()
         .and_then(Language::from_code)
         .unwrap_or_else(Language::detect);
-    let monitor = PlatformMonitor::new(policy.clone())?;
-    tray::run_tray(monitor, policy, lang, settings, false, initial_window)
+    tray::run_tray(policy, lang, settings, false, initial_window)
 }
 
 fn show_error(message: &str) {

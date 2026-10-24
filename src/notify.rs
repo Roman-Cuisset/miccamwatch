@@ -19,13 +19,13 @@ use windows::{
     core::HSTRING,
 };
 #[cfg(windows)]
-const APP_ID: &str = "MicCamWatch.MicCamWatch";
+pub(crate) const APP_ID: &HSTRING = windows::core::h!("MicCamWatch.MicCamWatch");
 
 #[cfg(windows)]
 pub fn ensure_identity() -> anyhow::Result<()> {
     let root = RegKey::predef(HKEY_CURRENT_USER);
     let (key, _) = root.create_subkey(format!(r"Software\Classes\AppUserModelId\{APP_ID}"))?;
-    key.set_value("DisplayName", &"miccamwatch")?;
+    key.set_value("DisplayName", &"MicCamWatch")?;
     key.set_value("ShowInSettings", &1u32)?;
     Ok(())
 }
@@ -62,7 +62,7 @@ fn show_toast(title: &str, detail: &str) -> windows::core::Result<()> {
             format!("failed to register notification identity: {error:#}"),
         )
     })?;
-    let notifier = ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(APP_ID))?;
+    let notifier = ToastNotificationManager::CreateToastNotifierWithId(APP_ID)?;
     notifier.Show(&toast)
 }
 
