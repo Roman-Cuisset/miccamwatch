@@ -208,6 +208,26 @@ async function assertOutputUnchanged(previous) {
   if (!marker.equals(previous.markerBytes)) throw new Error('site-dist ownership changed during export; refusing to replace it.');
 }
 
+async function publishedInstaller(release) {
+  let installer = await readRegularFile(path.join(root, 'installer', 'install.sh'));
+  let actualDigest = createHash('sha256').update(installer).digest('hex');
+  if (actualDigest !== release.installerSha256) {
+    const url = `https://raw.githubusercontent.com/Roman-Cuisset/miccamwatch/${release.source}/installer/install.sh`;
+    const response = await fetch(url, { redirect: 'error', signal: AbortSignal.timeout(30_000) });
+    if (!response.ok) throw new Error(`Published installer request failed: HTTP ${response.status}. Output was not modified.`);
+    installer = Buffer.from(await response.arrayBuffer());
+    actualDigest = createHash('sha256').update(installer).digest('hex');
+    if (actualDigest === release.installerSha256) {
+      console.log(`Using verified published installer from ${release.source}; development installer differs.`);
+    }
+  }
+  if (actualDigest !== release.installerSha256) {
+    throw new Error(`Canonical installer SHA256 mismatch: expected ${release.installerSha256}, found ${actualDigest}. Output was not modified.`);
+  }
+  if (/__MCW_[A-Z0-9_]+__/.test(installer.toString('utf8'))) throw new Error('Canonical installer contains unresolved template tokens.');
+  return installer;
+}
+
 async function build() {
   await requireDirectory(sourceDirectory);
   await requireDirectory(path.join(root, 'installer'));
@@ -218,12 +238,7 @@ async function build() {
     throw new Error('site/origin.json must contain only a productionOrigin HTTPS string.');
   }
   const origin = configuredOrigin(publication.productionOrigin);
-  const installer = await readRegularFile(path.join(root, 'installer', 'install.sh'));
-  const actualDigest = createHash('sha256').update(installer).digest('hex');
-  if (actualDigest !== release.installerSha256) {
-    throw new Error(`Canonical installer SHA256 mismatch: expected ${release.installerSha256}, found ${actualDigest}. Output was not modified.`);
-  }
-  if (/__MCW_[A-Z0-9_]+__/.test(installer.toString('utf8'))) throw new Error('Canonical installer contains unresolved template tokens.');
+  const installer = await publishedInstaller(release);
   const catalogs = await readCatalogs();
   await requireDirectory(path.join(sourceDirectory, 'templates'));
   const templates = new Map();

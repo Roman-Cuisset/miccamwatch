@@ -39,6 +39,14 @@ assets, and the exported installer. The exporter validates release facts,
 catalogs, technical tokens, and canonical installer integrity rather than silently
 falling back to another language.
 
+The exported installer must match the SHA-256 in `site/release.json`, even when
+the application checkout is newer. A matching local `installer/install.sh` is
+reused; otherwise the builder fetches that file from the exact published
+40-character source commit on GitHub over HTTPS, without redirects, and verifies
+the same digest before writing output. That build requires network access.
+An unavailable source or mismatched digest stops the export without replacing
+existing output. Never update the public release pin just to build a candidate.
+
 The root remains English; locale choice is explicit, not an automatic redirect.
 Keep the seven locales, canonical URLs, `hreflang`, sitemap, and root `WebSite`
 metadata coherent. The root privacy URL is a permanent public entry point.
