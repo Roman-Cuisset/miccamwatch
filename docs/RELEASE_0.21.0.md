@@ -121,6 +121,14 @@ Before publication, retain decisions/evidence against the frozen final source fo
 
 The failed Windows ordinary-account workflow is a blocking gate. Other unchecked items remain unvalidated scope, not implicit success or physical support claims. Physical ARM testing is not replaced by native hosted ARM results. Close any additional mandatory gate in the approved release scope or obtain an explicit scope decision; never silently waive acceptance or promise untested hardware compatibility.
 
+### Reproducible Windows standard-user gate
+
+Use [Windows interactive standard-user qualification](WINDOWS_STANDARD_USER.md), not a new run of the known noninteractive batch launcher. The candidate's existing `native-uninstall.yml` offers manual subset `windows-standard`, reusing the new VM workflow from the same selected source. A fresh real local standard login in a disposable guest must own the visible `WinSta0` input desktop, real Explorer and loaded profile. The test rejects filtered/restricted administrators, moved/session-zero tokens, foreign products/data and personal physical hosts; real device inventory must positively report zero capture endpoints/cameras before native removal cases.
+
+The workflow must finish the existing real portable, MSI shortcut/tray/window lifecycle, MSI manager delegation/removal, genuine Cargo uninstall and retained-data/refusal cases. It requires both native `status=passed` and the **same installed MSI** application's `passed`, `cleanupSafe`, `requireStandardUser` and `standardUserQualified` proof. A timeout/failure retains state instead of force-removing it.
+
+No appropriate VM runner was registered when checked on 2026-10-24. The full scenario remains **not executed**. Parser/C# compilation and read-only context/refusal smoke checks do not close this gate, even if their manual `windows-context` job succeeds. Keep **NOT READY FOR RELEASE** until authentic interactive evidence is retained and reviewed. No personal-PC installation/device action is an authorized fallback.
+
 ## Ordered publication plan — future approval required
 
 1. **Freeze the development candidate.** Preserve the integrated GUI/ARM/docs work, protected worktrees/untracked exclusions and unchanged production site/privacy. Record the final full commit SHA only after all intended edits land. Development-branch pushes alone are allowed under the current authorization.

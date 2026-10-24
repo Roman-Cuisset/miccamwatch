@@ -22,6 +22,9 @@ try {
         $ast=[Management.Automation.Language.Parser]::ParseFile($path,[ref]$tokens,[ref]$errors)
         if ($errors.Count) { throw "PowerShell parse failed for ${name}: $($errors | Out-String)" }
         $report.parsedScripts+= $name
+        # Our own compiler call uses an AST-derived variable, not a fixture
+        # definition. Parse this script but do not recursively compile itself.
+        if ($name -ceq 'windows-context-smoke.ps1') { continue }
         # Compile the actual literal C# definitions, not the application script.
         # No constructors or native application lifecycle methods are invoked.
         foreach ($command in $ast.FindAll({param($node) $node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'Add-Type'},$true)) {

@@ -1,7 +1,7 @@
 param(
     [switch]$Observe,
     [switch]$ValidateHost,
-    [switch]$RequireStandardUser
+    [Alias('RequireStandardUser')][switch]$ValidateFixtureStandardUser
 )
 # Read-only context observation and explicit disposable-VM admission.
 # No account/token/ACL/service/device/desktop changes are performed here.
@@ -231,4 +231,4 @@ function Assert-McwDisposableFixtureHost {
         disposalAuthority='Explicit operator-provisioned ephemeral guest; metadata is not cryptographic attestation.'}
 }
 if ($Observe) { Get-McwStandardUserContext | ConvertTo-Json -Depth 12 -Compress }
-if ($ValidateHost) { Assert-McwDisposableFixtureHost -RequireStandardUser:$RequireStandardUser | ConvertTo-Json -Depth 12 -Compress }
+if ($ValidateHost) { Assert-McwDisposableFixtureHost -RequireStandardUser:$ValidateFixtureStandardUser | ConvertTo-Json -Depth 12 -Compress }
