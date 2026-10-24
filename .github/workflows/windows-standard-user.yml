@@ -1,0 +1,56 @@
+name: Windows disposable standard-user qualification
+
+on:
+  workflow_dispatch:
+    inputs:
+      acknowledge_disposable_vm:
+        description: 'I provisioned a disposable Windows VM with a fresh interactive standard user, no personal data or capture-device forwarding; retain failures and revert the VM afterward.'
+        type: boolean
+        required: true
+        default: false
+  workflow_call:
+    inputs:
+      acknowledge_disposable_vm:
+        description: 'Explicit disposable guest acknowledgement, supplied by the trusted manual caller.'
+        type: boolean
+        required: true
+        default: false
+
+permissions:
+  contents: read
+
+# Never interrupt a live native consumer or MSI operation with another dispatch.
+concurrency:
+  group: windows-standard-user-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  standard-user:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: [self-hosted, Windows, X64, mcw-standard-disposable]
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - name: Check out the explicitly selected qualification ref
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Qualify the actual interactive standard-user guest
+        env:
+          MCW_STANDARD_VM_ACKNOWLEDGED: ${{ inputs.acknowledge_disposable_vm }}
+        run: |
+          & powershell.exe -NoLogo -NoProfile -NonInteractive -STA -File installer/tests/windows-standard-user.ps1 -AcknowledgeDisposableVm $env:MCW_STANDARD_VM_ACKNOWLEDGED
+          if ($LASTEXITCODE -ne 0) { throw 'Standard-user qualification failed; inspect retained private evidence and do not clean the guest.' }
+      - name: Retain private context, commands, results, and failed state
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-standard-user-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/mcw-standard-user-proof
+            ${{ runner.temp }}/mcw-cargo-uninstall
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 7

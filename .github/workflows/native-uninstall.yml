@@ -4,10 +4,14 @@ on:
   workflow_dispatch:
     inputs:
       platform:
-        description: "Native subset; pull requests and default dispatch keep the full matrix"
+        description: "Native subset; windows-context is readonly, windows-standard requires a dedicated interactive VM"
         type: choice
         default: all
-        options: [all, windows, unix]
+        options: [all, windows, unix, windows-context, windows-standard]
+      acknowledge_disposable_vm:
+        description: "Only for windows-standard: fresh disposable interactive standard-user VM, no personal data or capture-device forwarding"
+        type: boolean
+        default: false
   pull_request:
     paths:
       - 'src/uninstall/**'
@@ -21,6 +25,8 @@ on:
       - 'installer/tests/native_uninstall.py'
       - 'installer/tests/windows_uninstall_lock.py'
       - 'installer/tests/windows_ordinary.py'
+      - 'installer/tests/windows-fixture-context.ps1'
+      - 'installer/tests/windows-application-native.ps1'
       - '.github/workflows/native-uninstall.yml'
 
 permissions:
@@ -28,7 +34,7 @@ permissions:
 
 jobs:
   unix:
-    if: inputs.platform != 'windows'
+    if: inputs.platform != 'windows' && inputs.platform != 'windows-context' && inputs.platform != 'windows-standard'
     strategy:
       fail-fast: false
       matrix:
@@ -122,8 +128,34 @@ jobs:
           retention-days: 7
           include-hidden-files: true
 
+  windows_context:
+    if: github.event_name == 'workflow_dispatch' && inputs.platform == 'windows-context'
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Exercise actual context observation and safety refusal, not GUI qualification
+        shell: powershell
+        run: |
+          & installer/tests/windows-context-smoke.ps1 -OutputDirectory (Join-Path $env:RUNNER_TEMP 'windows-context-smoke')
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: windows-context-smoke
+          path: ${{ runner.temp }}/windows-context-smoke
+          if-no-files-found: error
+          retention-days: 7
+
+  windows_standard:
+    if: github.event_name == 'workflow_dispatch' && inputs.platform == 'windows-standard'
+    uses: ./.github/workflows/windows-standard-user.yml
+    with:
+      acknowledge_disposable_vm: ${{ inputs.acknowledge_disposable_vm }}
+
   windows:
-    if: inputs.platform != 'unix'
+    if: inputs.platform != 'unix' && inputs.platform != 'windows-context' && inputs.platform != 'windows-standard'
     runs-on: windows-latest
     timeout-minutes: 40
     steps:

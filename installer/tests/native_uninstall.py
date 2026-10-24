@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Real consumer uninstall contracts; disposable hosted runners only.
+"""Real consumer uninstall contracts; explicitly disposable fixture hosts only.
 
 Unix uses the production installer to produce ownership/PATH receipts around
 real native artifacts (the existing controlled transport, never a fake mcw).
@@ -794,8 +794,13 @@ def main():
     parser.add_argument("--msi", type=Path)
     parser.add_argument("--proof", type=Path, required=True)
     args = parser.parse_args()
-    require(os.environ.get("GITHUB_ACTIONS") == "true" and os.environ.get("RUNNER_ENVIRONMENT") == "github-hosted",
-            "this destructive fixture is restricted to disposable GitHub-hosted runners")
+    hosted = (os.environ.get("GITHUB_ACTIONS") == "true"
+              and os.environ.get("RUNNER_ENVIRONMENT") == "github-hosted")
+    possible_standard_vm = (platform.system() == "Windows"
+                            and os.environ.get("GITHUB_ACTIONS") == "true"
+                            and os.environ.get("RUNNER_ENVIRONMENT") == "self-hosted")
+    require(hosted or possible_standard_vm,
+            "this destructive fixture requires a genuine disposable hosted runner or explicitly admitted standard-user VM")
     args.proof = args.proof.resolve()
     args.proof.parent.mkdir(parents=True, exist_ok=True)
     _evidence_directory = args.proof.parent
@@ -807,6 +812,33 @@ def main():
     try:
         args.binary = args.binary.resolve()
         args.repository = args.repository.resolve()
+        if platform.system() == "Windows":
+            # Observe the genuine inherited profile/token before private data
+            # redirection. A batch account with Explorer is not an interactive
+            # standard-user desktop. The shared gate also rejects personal
+            # self-hosted machines and filtered/restricted administrator tokens.
+            powershell = Path(os.environ["SystemRoot"]) / "System32/WindowsPowerShell/v1.0/powershell.exe"
+            admission = run([powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-File",
+                             args.repository / "installer/tests/windows-fixture-context.ps1",
+                             "-ValidateHost", "-RequireStandardUser"], os.environ)
+            context = json.loads(admission.stdout.lstrip("\ufeff"))
+            require(context["kind"] in ("github-hosted", "dedicated-standard-vm")
+                    and context["standardUserContext"] is not None,
+                    "strict standard-user context was not established")
+            proof["windows_genuine_interactive_standard_context"] = True
+            # Portable refusal cases exercise ownership code. Admit no real
+            # capture hardware even if this entry point is invoked directly.
+            doctor = json.loads(run([args.binary, "--lang", "en", "doctor", "--json", "--no-color"],
+                                    os.environ).stdout.lstrip("\ufeff"))
+            require(isinstance(doctor, list), "production doctor must return its diagnostic-check array")
+            for check_id, expected in (("microphone_devices", "0 capture device(s) detected"),
+                                       ("camera_devices", "0 camera device(s) detected")):
+                matches = [check for check in doctor if check["name"] == check_id]
+                require(len(matches) == 1 and matches[0].get("status") == "warning"
+                        and matches[0].get("detail") == expected,
+                        "standard-user fixture requires positively observed zero capture devices; unavailable inventory is not absence")
+            proof["windows_no_capture_hardware"] = True
+            save_proof(args, proof)
         # Keep macOS sockets independent of the hosted runner's long TMPDIR.
         root = Path(tempfile.mkdtemp(prefix="mu-" if platform.system() == "Darwin" else "mcw-uninstall-native-",
                                      dir="/tmp" if platform.system() == "Darwin" else None)).resolve()
