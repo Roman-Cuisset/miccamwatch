@@ -1,6 +1,6 @@
 # Roadmap technique MicCamWatch
 
-Dernière mise à jour : **2026-10-22**. Responsable : lead architecture/développement.
+Dernière mise à jour : **2026-10-24**. Responsable : lead architecture/développement.
 Base publiée : [v0.20.0 stable/latest](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.20.0), source `a26522028eafe02591f58c03ceb5c367f2d5d60b`, tag annoté `547f6185a0579876041d1ae7ebcdd6feccdcb5cf`, releaseID 420936561, publiée le 22/10 à 16:13:39Z. [Release native 39807585260](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/39807585260) réussie : neuf assets publics taille/digest API, huit entrées SHA256SUMS et huit sujets de provenance signée SLSA v1 vérifiés ; Windows EXE/MSI non signés, macOS ad-hoc.
 
 **Publication 0.20.0 effectuée le 22/10 :** les fichiers publics, leurs sommes et leur provenance sont vérifiés. Le site et les pins du dépôt sont alignés après cette vérification ; aucune publication externe Homebrew/AUR effectuée. Les essais PC autorisés ont utilisé des installations de test isolées puis retirées, sans remplacement de l'installation habituelle ni commande de protection micro/caméra.
@@ -1716,3 +1716,34 @@ Les échecs de ce lot sont clôturés par les preuves natives ci-dessous, sans r
 3. Le PC conserve ses deux racines Cargo/MSI observées ; aucune consolidation automatique. Choisir une installation canonique puis restaurer/quitter normalement avant un retrait explicitement autorisé, sans supprimer une copie ou voler un owner en cours.
 4. Les réserves de distribution restent inchangées : `VERSIONINFO` absent des EXE constatés, signature Windows/Developer ID macOS seulement avec de vrais certificats ; aucun contournement SmartScreen/Gatekeeper. Le refus de self-update MSI n'est pas un moteur de mise à jour MSI ni une preuve de désinstallation forcée avec protections actives.
 5. Prochain lot demandé : réorganisation du README, **non commencée ici**. Une intégration ultérieure de `main` doit conserver les corrections SEO/confidentialité et les deux historiques de ROADMAP. Ne pas publier 0.21.0 ni pousser `main` sans nouvel accord.
+
+## 2026-10-24 — Réorganisation documentaire : README et guides
+
+### Isolation et versions
+
+- Branche **`docs/readme-020-021`**, nouveau worktree `mcw-readme-docs-20261024`, créée depuis `origin/main` **`dc40e95`** : elle n'embarque aucun commit applicatif GUI/ARM64. Le worktree original reste sur **`work/linux-arm64-021` à `cafd98d`** ; ses cinq éléments non suivis et les autres worktrees ne sont ni déplacés ni nettoyés.
+- **Public = 0.20.0**, source `a26522028eafe02591f58c03ceb5c367f2d5d60b`, neuf assets réellement listés par l'API ; **0.21.0 = candidat non publié**, dont les preuves sont référencées par commits/runs immuables dans `VALIDATION.md`. Le nouveau texte ne transforme ni ARM64 hébergé en certification physique, ni les nouvelles fenêtres Windows/Linux en fonctions du téléchargement stable.
+- Le README de la base publique passe de **1 142 à 230 lignes**. Titre, badges, liens officiels, fonctionnalités et deux captures conservés ; les captures sont explicitement identifiées comme de véritables vues Windows **0.17.1**, pas des fenêtres 0.21 ni une preuve matérielle.
+
+### Répartition sans perte des précautions et preuves
+
+| Document | Rôle |
+| --- | --- |
+| `README.md` | Présentation, canaux de version, plateformes, démarrage sûr, commandes courantes, limites essentielles et navigation |
+| `docs/README.md` | Index par besoin utilisateur/développeur, références et journaux historiques clairement séparés |
+| `docs/INSTALLATION.md` | Assets 0.20, vérification, MSI/ZIP/DMG/Unix, privilèges, mises à jour, retrait, anciennes migrations et builds |
+| `docs/USAGE.md` | Commandes, interfaces, profils, paramètres, limites, politique/enforcement, JSON/historique/confidentialité et dépannage |
+| `docs/VALIDATION.md` | Matrices publique/candidate, CI versus matériel, sources et limites de reproduction |
+| `docs/RELEASE_HISTORY.md` | Historique chronologique, liens de preuve immuables et table de correspondance des anciennes sections |
+| `docs/WEBSITE.md` | Build statique, langues/canoniques, configuration Cloudflare et déploiement seulement après accord |
+
+- Les **43 URL distinctes de release/run/advisory** de l'ancien README restent accessibles dans l'ensemble documentaire. Mesures détaillées et contrats déjà canoniques dans `ARCHITECTURE.md`/`SIGNING.md` sont référencés plutôt que recopiés ; ces fichiers et le journal historique Linux/macOS restent inchangés.
+- Corrections d'instructions : `--add-path` est bien valide en 0.20 ; le défaut était de demander le checksum de `mcw-install.sh` dans un manifeste qui ne couvre pas ce script. Source d'installateur immuable, vérification des payloads séparée, pas d'endpoint alternatif ancien recommandé, blocage global Windows distingué du contrôle USB Linux ponctuel, profil de confidentialité distinct du profil TOML, rotation et absence d'expiration par âge explicites. Les commandes destructrices sont une référence en tableau, pas un bloc à coller intégralement.
+
+### Vérifications et point de reprise
+
+- **Rendu GitHub GFM réel des sept documents d'entrée/guides réussi**, 209 liens/ressources relatifs et ancres résolus, couverture des 43 anciennes preuves conservée. Audit HTTP de 115 destinations publiques ; l'ancien lien Ubuntu `packages.ubuntu.com` répond 500 en HEAD et GET, remplacé dans le guide courant par la source officielle Launchpad vérifiée 200, sans changer le nom ni le prérequis du paquet.
+- **Smoke du vrai CLI public 0.20.0**, ZIP vérifié contre digest API et entrée exacte `SHA256SUMS` (`add9b3dc…d11579e`), seul `mcw.exe` extrait dans un périmètre temporaire : version, neuf surfaces d'aide et véritable validation du TOML documenté passent. APPDATA/LOCALAPPDATA privés ; aucun monitoring/tray/contrôle, update, uninstall ou autostart exécuté. `sh installer/install.sh --help` confirme réellement les options sans installation.
+- Premier commit documentaire **`abd0468080f08b700efb713b8f077fd59174b5f4`**, poussé uniquement vers `origin/docs/readme-020-021` avec `[skip ci]` ; aucune pull request créée. La présentation de la branche publique `main` reste inchangée en attendant une autorisation d'intégration.
+- **Surface GitHub réellement affichée et examinée** : README en desktop 1280 px sombre et mobile 390 px sombre/clair ; les sept images (cinq badges et deux captures) chargent. La séparation stable/candidat reste lisible sur mobile, sans débordement horizontal global observé du README, de l'index et du guide du site. Navigation réelle par les liens HTML : installation → usage → validation → historique → index → guide du site → retour au README. Pages accessibles sans connexion dans le navigateur de contrôle.
+- Aucun build/test applicatif ou matériel relancé pour ce lot documentaire ; aucune modification source, installateur, site, confidentialité ou release. Les réponses HTTP sont un constat de disponibilité à cette date, pas une garantie future. Prochaine étape : revue de cette branche documentaire, puis intégration ciblée seulement après accord, en conservant les historiques ROADMAP des deux branches. **Aucune fusion `main`, aucun tag, aucune release et aucun déploiement Cloudflare autorisés par ce travail.**
