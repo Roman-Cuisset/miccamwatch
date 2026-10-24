@@ -31,8 +31,8 @@ package or proof of physical hardware compatibility.
 ## Release status and evidence
 
 - [Validation](VALIDATION.md) is the concise starting point for public 0.20.0,
-  unpublished 0.21.0, historical native CI, pending exact integrated-candidate
-  qualification, and the remaining hardware/manual limits.
+  unpublished 0.21.0, recorded integrated-candidate qualification,
+  the open Windows uninstall gate, and the remaining hardware/manual limits.
 - [Draft 0.21.0 release checklist](RELEASE_0.21.0.md) lists the expected packages,
   verification commands, open gates and separately authorized publication steps.
 - [Release history](RELEASE_HISTORY.md) preserves changes, immutable proof links,

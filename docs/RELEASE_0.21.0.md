@@ -39,10 +39,10 @@
 
 | Target | Package/interface and prerequisites | Qualification boundary |
 | --- | --- | --- |
-| Windows 10/11 x86_64 | Portable ZIP or per-user MSI; Win32 window, Notification Area and CLI/TUI | Hosted native Windows proof exists on the earlier platform source. Standard-user-token MSI, Windows 10, other DPI/multi-monitor configurations, real taskbar grouping and screen readers remain manual gates. |
+| Windows 10/11 x86_64 | Portable ZIP or per-user MSI; Win32 window, Notification Area and CLI/TUI | Integrated native CI passed on `4b90fd6`, including installed MSI under an elevated runner. The separate ordinary-account uninstall workflow failed before MSI/Cargo coverage; Windows 10, other DPI/multi-monitor configurations, taskbar grouping and screen readers remain unqualified. |
 | Linux x86_64, GNU/glibc 2.35+ | Archive with CLI and camera helper; user PipeWire service for observation; GTK3 and graphical session for consultation; StatusNotifier host for tray | Hosted Xvfb/XFCE/isolated PipeWire is not every Wayland/login session or physical capture proof. GTK is loaded when consultation opens; absent GTK/session produces a GUI prerequisite error without converting headless CLI into a GUI dependency. |
 | Linux aarch64, GNU/glibc 2.35+ | Native ARM64 archive; same PipeWire/GTK/session requirements and optional separately authorized USB camera helper | Native hosted ARM is **not physical Raspberry Pi/SBC validation**. No general Raspberry Pi OS/peripheral compatibility, ARMv7, musl or CSI camera-control claim. |
-| macOS 15+ aarch64 | Apple Silicon CLI archive or application DMG; Aqua session for native application/menu | Earlier native AppKit/Finder lifecycle proof exists; human TCC/profile approval and physical capture/enforcement remain separate. |
+| macOS 15+ aarch64 | Apple Silicon CLI archive or application DMG; Aqua session for native application/menu | Integrated AppKit/Finder lifecycle and cleanup passed on `4b90fd6`; human TCC/profile approval and physical capture/enforcement remain separate. |
 | macOS 15+ x86_64 | Intel CLI archive or application DMG; same native/session requirements | Same limits; ad-hoc app sealing is not Developer ID signing, notarization or Gatekeeper clearance. |
 
 **Safety limits apply to all targets.** Requested protection, effective SDK/device/profile readback and observed capture are different facts. Unknown/partial coverage is not safe inactivity. Software microphone mute does not revoke every capture path. macOS camera client/PID and frame flow remain unknown; automatic lock policy is unsupported there. Linux direct ALSA/V4L2 and non-USB/CSI devices are not covered by USB-helper enforcement. Windows camera control requires explicit UAC and owns only its own changes. Close/Exit, update and uninstall are not substitutes for explicit release and completed owned restoration. Never disable Defender, SmartScreen, Gatekeeper, TCC, SIP, quarantine or organizational controls to qualify/install a package.
@@ -65,6 +65,19 @@ GitHub-generated source ZIP/tar archives are **not** part of this count. This ta
 | 10 | `SHA256SUMS` | Unified manifest for the preceding nine files; no self-hash |
 
 The nine `miccamwatch-*` files are SHA-256 manifest entries and provenance subjects. `SHA256SUMS` is uploaded but **not itself attested** by the current workflow; the installer script is not a release-manifest payload. Do not claim a separately signed checksum manifest or a binary-complete per-package SBOM audit from repository SBOM generation alone.
+
+### Retained CI payload digests — not the future release manifest
+
+The exact integrated source `4b90fd6bdfc2aaddf6218a64ce71f6554e06c789` was exercised by [CI 40106706806](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/40106706806). The four extracted Linux payloads below were hashed and matched to `linux-elf.json`; both retained macOS DMGs were hashed locally. These are **unpublished CI bytes**, not final release/archive hashes, a generated `SHA256SUMS`, or release provenance. The ordinary CI did not generate the Release workflow's attestations.
+
+| Retained CI payload | Observed SHA-256 |
+| --- | --- |
+| `native-proof-linux-x86_64/package/mcw` | `7412540ea705b723a72eb71773961e4c29fcc94a5af671611329d449210e2a1f` |
+| `native-proof-linux-x86_64/package/mcw-camera-helper` | `9dbd68f7718f9c1e96569cdcc7762ef4fcf014d1d030b82688f6f0e02a1f6f4b` |
+| `native-proof-linux-aarch64/package/mcw` | `7ffbf41a860efcd8f052eb8cbaa16167b3e01d7cef0fcc4e080db370a0078af8` |
+| `native-proof-linux-aarch64/package/mcw-camera-helper` | `516acda3ca22d9e7d86ee27215151e44ad2cdd88cedc614da7444f08c5a6ea88` |
+| `macos-app-aarch64/miccamwatch-macos-aarch64.dmg` | `2e85b75174734c60e225cb2114c2d2bcf6349fef0eaefe30cf04a3ac55493afd` |
+| `macos-app-x86_64/miccamwatch-macos-x86_64.dmg` | `4ac88ee16374e976d0c748ea68b3fb06fbcf43da78b046d77254ccee7b8dd274` |
 
 ## What the existing release workflow actually gates
 
@@ -91,19 +104,22 @@ Earlier successful platform-source evidence is retained, not rebranded as qualif
 
 These are an aggregate on earlier unchanged platform sources, **not one complete green run of the integrated candidate**. See [Validation](VALIDATION.md#candidate-0210) for prior failures and scope. GUI observation fixtures are explicitly simulated; actual native surfaces, preferences and lifecycles are exercised. AppKit mounted/composited view images are not automatically WindowServer screenshots.
 
+The fresh integrated run above now passed all five targets; actual lifecycle and GUI receipts were reviewed. Separate [uninstall qualification 40106709656](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/40106709656), on the same source, passed the four Unix targets but **failed Windows** after successful portable removal without a frontend. Its genuine ordinary account could not register a tray icon on a noninteractive `Service-…` station; MSI/Cargo cases after that point did not execute. An actual Explorer process does not by itself establish an interactive `WinSta0` desktop. The exact Shell API refusal cause remains unproved. See [the detailed qualification record](VALIDATION.md#integrated-native-qualification--2026-10-24). **Verdict: NOT READY FOR RELEASE.**
+
 Before publication, retain decisions/evidence against the frozen final source for every item:
 
-- [ ] Fresh complete CI of the exact integrated revision: Windows plus Linux x64/ARM64 and macOS Intel/ARM, all required jobs and native receipt/artifact inspection. Record commit, run URL, actual skips/failures, cleanup and limitations; do not carry earlier run colors forward.
-- [ ] Review seven-language/native theme/minimum-size views, preserved focus/selection/scroll, explicit versus hidden activation and foreign-namespace refusal. Keep simulated observations clearly labeled; no hardware-success claim from screenshots.
-- [ ] Windows: authorized standard-user-token MSI install/upgrade/repair/removal; Windows 10 and relevant DPI/multi-monitor/theme/taskbar/keyboard/screen-reader checks. The earlier `runneradmin` MSI run was not standard-token proof.
+- [x] Fresh complete CI on `4b90fd6`: all five native jobs passed; actual logs, lifecycle, refusal and cleanup receipts inspected. Later documentation-only evidence commits are not relabelled as that tested revision.
+- [x] Automated seven-language/theme/geometry coverage and representative native views examined, including preserved focus/selection/scroll and retained-window behavior. Simulated observations remain labeled. One ARM installed launch capture is a blank initial frame; the cold-launch image and GTK fixture views render, so do not treat every lifecycle screenshot as painted-content proof.
+- [ ] **Blocking:** provide a disposable interactive standard-user Windows desktop and complete the currently failed frontend/uninstall/MSI/Cargo qualification without bypassing ownership, UAC or ACL checks.
+- [ ] Additional Windows manual coverage: standard-user MSI upgrade/repair, Windows 10, relevant DPI/multi-monitor/global-theme/taskbar/keyboard/screen-reader behavior. Elevated installed-application CI is not proof of those contexts.
 - [ ] Linux: real Wayland/other supported desktops, session startup/reboot and accessibility. Xvfb/XFCE/Gio receipts alone do not close these gates.
 - [ ] macOS: authorized real-user Finder reopen, menu/consultation lifecycle, notifications and manual OS authorization/profile flows, keeping cancellation and incomplete readback visible. No grant or bypass by automation.
 - [ ] Physical ARM: authorized Raspberry Pi/SBC with recorded board/OS/architecture/glibc/GTK/PipeWire/Polkit versions, observable microphone and compatible USB webcam where available; actual desktop, permissions, hotplug and owned restoration/recovery. A native hosted ARM VM is not this evidence; non-USB/CSI control remains out of scope.
 - [ ] Physical controls: separately authorized microphone/camera capture, supported mute/block/readback/restoration and real lock transitions on applicable platforms; report exclusive/driver paths and unavailable hardware without guessing. Historical other-version physical reports are not final-candidate certification.
-- [ ] Resource reports include candidate/helper/guard descendants and sampling/shared-page limits. Missing historical ARM baseline stays unqualified; do not claim global 15 MB success.
+- [x] Resource reports include candidate/helper/guard descendants and sampling/shared-page limits. All candidate functional modes passed; the global 15 MB soft target remains unmet, including Windows/macOS tray. Missing historical ARM baseline stays unqualified. Windows measured `watch` was deliberately terminated by its retained process identity after the full 20-second measurement; its exit code 1 is not a spontaneous startup failure.
 - [ ] Record final Windows signing identity/timestamp or explicit unsigned status; macOS ad-hoc/unnotarized limits; no universal antivirus/SmartScreen/Gatekeeper clearance.
 
-Unchecked gates remain open. If hardware/manual prerequisites cannot be obtained, stop and present the exact missing evidence to the owner for an explicit publication-scope decision; do not mark them passed, promise physical support or silently waive acceptance.
+The failed Windows ordinary-account workflow is a blocking gate. Other unchecked items remain unvalidated scope, not implicit success or physical support claims. Physical ARM testing is not replaced by native hosted ARM results. Close any additional mandatory gate in the approved release scope or obtain an explicit scope decision; never silently waive acceptance or promise untested hardware compatibility.
 
 ## Ordered publication plan — future approval required
 

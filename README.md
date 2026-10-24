@@ -45,7 +45,7 @@ screenshots of the unreleased 0.21.0 windows. Their
 
 **The downloads below install 0.20.0, not 0.21.0.** The candidate is on
 [`release/0.21.0-candidate`](https://github.com/Roman-Cuisset/miccamwatch/tree/release/0.21.0-candidate).
-Earlier platform CI passed separately; exact integrated-candidate qualification is pending.
+Five-target CI passed on `4b90fd6`; standard-user Windows uninstall qualification remains open.
 See [validation and release status](docs/VALIDATION.md) for evidence and hardware limits.
 
 ## Features
