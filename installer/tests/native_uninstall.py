@@ -9,6 +9,9 @@ Private command/frontend output and the first failure are retained beside the
 sanitized report, including failures before any native scenario completes.
 Windows exercises both frontend hosts; readiness failures retain SDK diagnostics
 and, after a companion exits, the same backend's actual console error output.
+The Windows MSI case reuses its installed Start Menu application for strict
+genuine-standard-user interactive qualification before delegation/removal.
+Application evidence is private; failed/unknown cleanup retains the same MSI.
 Unix sockets use compact data namespaces; adversarial install paths stay intact.
 """
 import argparse
@@ -639,31 +642,146 @@ def cargo_case(args, root, proof):
 
 
 def msi_case(args, root, proof):
+    import base64
     import re
     require(args.msi is not None and args.msi.is_file(), "Workflow did not build the genuine MSI")
     home = root / "MSI manager"
     env = environment(home)
     install = home / "MSI owned exact directory"
     msiexec = Path(os.environ["SystemRoot"]) / "System32" / "msiexec.exe"
+    powershell = Path(os.environ["SystemRoot"]) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
     package = args.msi.resolve()
+    native_env = os.environ.copy()
+    native_env["MCW_NATIVE_MSI"] = str(package)
+    path_snapshot = r"""
+function Get-UserPathSnapshot {
+    $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $false)
+    try {
+        if ($null -ne $key -and @($key.GetValueNames()) -icontains 'PATH') {
+            return @{ present=$true; kind=$key.GetValueKind('PATH').ToString()
+                raw=$key.GetValue('PATH',$null,[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames) }
+        }
+        return @{ present=$false; kind=$null; raw=$null }
+    } finally { if ($null -ne $key) { $key.Dispose() } }
+}
+"""
+
+    def inspect_msi(script):
+        encoded = base64.b64encode(("$ErrorActionPreference='Stop'\n" + path_snapshot + script)
+                                   .encode("utf-16le")).decode("ascii")
+        result = run([powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
+                     native_env)
+        return json.loads(result.stdout.lstrip("\ufeff"))
+
+    # Borrow the branding fixture's authoritative identity/foreign-product and
+    # shortcut guards BEFORE installing, never upgrade a different user's MCW.
+    before_install = inspect_msi(r"""
+$installer = New-Object -ComObject WindowsInstaller.Installer
+$database = $installer.OpenDatabase($env:MCW_NATIVE_MSI,0)
+$view = $database.OpenView('SELECT `Property`, `Value` FROM `Property`')
+$properties = @{}
+try {
+    $view.Execute()
+    while ($null -ne ($record = $view.Fetch())) {
+        try { $properties[$record.StringData(1)]=$record.StringData(2) }
+        finally { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($record) }
+    }
+} finally {
+    $view.Close()
+    foreach ($com in @($view,$database)) { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($com) }
+}
+try {
+    $product=$properties['ProductCode']
+    if ($properties['ProductName'] -cne 'MicCamWatch' -or
+        $properties['UpgradeCode'] -cne '{8FC9317B-4517-4E83-9F52-CF3257584BF6}' -or
+        $product -notmatch '^\{[0-9A-Fa-f-]{36}\}$') { throw 'Unexpected MSI fixture identity.' }
+    $related=$installer.RelatedProducts($properties['UpgradeCode'])
+    try { $count=$related.GetType().InvokeMember('Count',[Reflection.BindingFlags]::GetProperty,$null,$related,$null) }
+    finally { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($related) }
+    $shortcut=Join-Path ([Environment]::GetFolderPath('Programs')) 'MicCamWatch.lnk'
+    $common=Join-Path ([Environment]::GetFolderPath('CommonPrograms')) 'MicCamWatch.lnk'
+    if ($count -isnot [int] -or $count -ne 0 -or $installer.ProductState($product) -ne -1 -or
+        (Test-Path -LiteralPath $shortcut) -or (Test-Path -LiteralPath $common)) {
+        throw 'Existing MCW registration/shortcut: refusing MSI installation.'
+    }
+    if (@(Get-Process -Name 'mcw','mcw-tray' -ErrorAction SilentlyContinue).Count -ne 0) {
+        throw 'Existing MCW process: refusing MSI installation.'
+    }
+    @{ productCode=$product; shortcut=$shortcut; userPath=(Get-UserPathSnapshot) } | ConvertTo-Json -Depth 6 -Compress
+} finally { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($installer) }
+""")
+    product_code = before_install["productCode"]
+    require(re.fullmatch(r"\{[0-9A-Fa-f-]{36}\}", product_code), "Unreadable MSI product identity")
+    package_hash = sha(package)
+    install_log = args.proof.parent / "private-msi-install.log"
     # MSI parses NAME="value with spaces" itself; CRT quoting the whole
     # assignment instead displays its usage dialog, even with /qn.
-    command_line = f'"{msiexec}" /i "{package}" INSTALLFOLDER="{install}" /qn /norestart'
-    installed = capture([msiexec, "/i", package, f"INSTALLFOLDER={install}", "/qn", "/norestart"],
-                        os.environ, 180, native_command_line=command_line)
+    command_line = (f'"{msiexec}" /i "{package}" INSTALLFOLDER="{install}" '
+                    f'/qn /norestart /L*V "{install_log}"')
+    installed = capture([msiexec, "/i", package, f"INSTALLFOLDER={install}", "/qn", "/norestart",
+                         "/L*V", install_log], os.environ, 180, native_command_line=command_line)
     require(installed.returncode in (0, 3010), "Actual MSI installation failed; see native command evidence")
     binary = install / "mcw.exe"
     require(binary.is_file(), "MSI did not install its actual payload")
+    application_proof = args.proof.parent / "private-msi-application"
+    # Use the same genuine temporary MSI/Start Menu link, not a second public
+    # product. Preserve the actual account/profile environment for its strict
+    # context observation; the consumer isolates only app data after that proof.
+    application = run([powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-File",
+                       args.repository / "installer/tests/windows-application-native.ps1",
+                       "-InstallDirectory", install, "-ShortcutPath", before_install["shortcut"],
+                       "-ProductCode", product_code, "-OutputDirectory", application_proof,
+                       "-IsolatedRunner", "-RequireStandardUser"], os.environ,
+                      allowed=None, timeout=600)
+    application_result = application_proof / "result.json"
+    require(application_result.is_file(), "Installed application consumer left no cleanup/context authority; MSI retained")
+    application_report = json.loads(application_result.read_text(encoding="utf-8-sig"))
+    require(application.returncode == 0 and application_report.get("status") == "passed"
+            and application_report.get("cleanupSafe") is True
+            and application_report.get("requireStandardUser") is True
+            and application_report.get("standardUserQualified") is True,
+            "Installed standard-user application integration or cooperative cleanup failed; MSI retained")
+    require(application_report.get("productCode") == product_code
+            and Path(application_report["installation"]).resolve() == install.resolve()
+            and Path(application_report["shortcut"]).resolve() == Path(before_install["shortcut"]).resolve(),
+            "Application proof did not qualify the exact owned MSI installation; MSI retained")
+    proof["windows_standard_user_installed_shortcut_reopen_concurrent_owner"] = True
+    proof["windows_installed_application_evidence"] = "private-msi-application/result.json"
+    save_proof(args, proof)
     preferences, history = settings(binary, env)
     before = sha(binary), data_snapshot(preferences, history)
     delegated = run([binary, "uninstall"], env, allowed=(2,))
     product = re.search(r"msiexec\.exe /x (\{[0-9A-Fa-f-]{36}\})", delegated.stderr)
-    require(product is not None, "MCW did not identify the exact registered MSI product")
+    require(product is not None and product.group(1).lower() == product_code.lower(),
+            "MCW did not identify the exact registered MSI product")
     require(before == (sha(binary), data_snapshot(preferences, history)),
             "Manager delegation changed MSI payload or user data")
-    run([msiexec, "/x", product.group(1), "/qn", "/norestart"], os.environ)
+    require(sha(package) == package_hash, "Retained MSI package changed; refusing manager removal")
+    # Failed/timed-out application/installer operations never reach removal.
+    # capture retains timed-out processes and main retains the whole sandbox.
+    run([msiexec, "/x", product_code, "/qn", "/norestart", "/L*V",
+         args.proof.parent / "private-msi-uninstall.log"], os.environ, allowed=(0, 3010))
     require(not binary.exists() and before[1] == data_snapshot(preferences, history),
             "Actual MSI procedure did not remove its payload while retaining user data")
+    native_env["MCW_NATIVE_PRODUCT"] = product_code
+    after_removal = inspect_msi(r"""
+$installer=New-Object -ComObject WindowsInstaller.Installer
+try {
+    if ($installer.ProductState($env:MCW_NATIVE_PRODUCT) -ne -1 -or
+        (Test-Path -LiteralPath (Join-Path ([Environment]::GetFolderPath('Programs')) 'MicCamWatch.lnk'))) {
+        throw 'MSI cleanup retained its actual registration or Start Menu shortcut.'
+    }
+    @{ userPath=(Get-UserPathSnapshot) } | ConvertTo-Json -Depth 6 -Compress
+} finally { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($installer) }
+""")
+    # As in the branding fixture, ignore only incidental empty delimiters;
+    # preserve unexpanded entries, their exact ordering and interpretation.
+    before_path, after_path = before_install["userPath"], after_removal["userPath"]
+    before_entries = [entry for entry in (before_path["raw"] or "").split(";") if entry]
+    after_entries = [entry for entry in (after_path["raw"] or "").split(";") if entry]
+    require(before_entries == after_entries and (not before_entries or before_path["kind"] == after_path["kind"]),
+            "MSI cleanup changed, lost or reordered existing unexpanded user PATH entries")
+    proof["windows_msi_user_path_entries_preserved"] = True
     proof["genuine_msi_exact_product_delegation_and_manager_removal"] = True
 
 

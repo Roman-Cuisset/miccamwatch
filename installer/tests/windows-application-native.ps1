@@ -3,12 +3,13 @@ param(
     [Parameter(Mandatory = $true)][string]$ShortcutPath,
     [Parameter(Mandatory = $true)][string]$ProductCode,
     [Parameter(Mandatory = $true)][string]$OutputDirectory,
-    [switch]$IsolatedRunner
+    [switch]$IsolatedRunner,
+    [switch]$RequireStandardUser
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-# Called by windows-brand-native.ps1 after its guarded per-user MSI install and
-# branding checks, before that same script uninstalls/restores the user's PATH.
+# Called after a guarded per-user MSI install by windows-brand-native.ps1 or
+# native_uninstall.py, before that owner delegates/removes the same MSI.
 # Never set/fake hosted-runner environment variables to run this on a user PC.
 if (-not $IsolatedRunner -or $env:OS -cne 'Windows_NT' -or $env:GITHUB_ACTIONS -cne 'true' -or
     $env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or -not [Environment]::UserInteractive) {
@@ -39,6 +40,7 @@ $gui = Join-Path $install 'mcw-tray.exe'
 $report = [ordered]@{
     status='running'; cleanupSafe=$false; productCode=$ProductCode; installation=$install; shortcut=$shortcut
     observerSid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    requireStandardUser=[bool]$RequireStandardUser; standardUserQualified=$false; context=$null
     methods=@('actual installed MSI payload and Start Menu .lnk', 'retained process handles and native HWND/class/style observations', 'real Shell launches without CreateNoWindow for GUI', 'loopback proxy tripwire and staging filesystem events for actual MSI update refusal')
     launches=@(); observations=@(); cleanup=@(); error=$null
     limitations=@('No physical device-control or recording validation. Settings disable all protection, notification, sound and history actions. No desktop control/WM_COMMAND, autostart, device, UAC, clipboard or physical pointer action is requested.')
@@ -66,6 +68,115 @@ using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
+public static class McwAppContext {
+    [StructLayout(LayoutKind.Sequential)] struct LUID { public uint Low; public int High; }
+    [StructLayout(LayoutKind.Sequential)] struct Statistics {
+        public LUID Token, Authentication; public long Expiration; public uint Type, Impersonation;
+        public uint Charged, Available, Groups, Privileges; public LUID Modified;
+    }
+    [StructLayout(LayoutKind.Sequential)] struct UnicodeText { public ushort Length, Maximum; public IntPtr Buffer; }
+    [StructLayout(LayoutKind.Sequential)] struct Logon {
+        public uint Size; public LUID Id; public UnicodeText User, Domain, Package; public uint Type, Session;
+    }
+    [StructLayout(LayoutKind.Sequential)] struct UserInfo {
+        public IntPtr Name, Password; public uint PasswordAge, Privilege; public IntPtr Home, Comment;
+        public uint Flags; public IntPtr Script;
+    }
+    [StructLayout(LayoutKind.Sequential)] struct UserSid {
+        public IntPtr Name, FullName, Comment; public uint Flags; public IntPtr Sid;
+    }
+    [DllImport("advapi32.dll", SetLastError=true)] static extern bool OpenProcessToken(IntPtr process,uint access,out IntPtr token);
+    [DllImport("advapi32.dll", SetLastError=true)] static extern bool GetTokenInformation(IntPtr token,int kind,IntPtr data,uint length,out uint needed);
+    [DllImport("advapi32.dll")] static extern bool IsTokenRestricted(IntPtr token);
+    [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
+    [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
+    [DllImport("user32.dll")] static extern IntPtr GetProcessWindowStation();
+    [DllImport("user32.dll")] static extern IntPtr GetThreadDesktop(uint thread);
+    [DllImport("user32.dll", SetLastError=true)] static extern IntPtr OpenInputDesktop(uint flags,bool inherit,uint access);
+    [DllImport("user32.dll")] static extern bool CloseDesktop(IntPtr desktop);
+    [DllImport("user32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool GetUserObjectInformationW(IntPtr handle,int index,StringBuilder name,uint bytes,out uint needed);
+    [DllImport("userenv.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool GetUserProfileDirectoryW(IntPtr token,StringBuilder path,ref uint length);
+    [DllImport("secur32.dll")] static extern uint LsaGetLogonSessionData(ref LUID id,out IntPtr data);
+    [DllImport("secur32.dll")] static extern uint LsaFreeReturnBuffer(IntPtr data);
+    [DllImport("netapi32.dll", CharSet=CharSet.Unicode)] static extern uint NetUserGetInfo(string server,string name,uint level,out IntPtr data);
+    [DllImport("netapi32.dll", CharSet=CharSet.Unicode)] static extern uint NetUserGetLocalGroups(string server,string name,uint level,uint flags,out IntPtr data,uint maximum,out uint count,out uint total);
+    [DllImport("netapi32.dll")] static extern uint NetApiBufferFree(IntPtr data);
+    static IntPtr TokenData(IntPtr token,int kind) {
+        uint size; GetTokenInformation(token,kind,IntPtr.Zero,0,out size);
+        if(size==0) throw new Win32Exception();
+        var data=Marshal.AllocHGlobal((int)size);
+        if(!GetTokenInformation(token,kind,data,size,out size)) { Marshal.FreeHGlobal(data); throw new Win32Exception(); }
+        return data;
+    }
+    static int TokenInt(IntPtr token,int kind) {
+        var data=TokenData(token,kind); try { return Marshal.ReadInt32(data); } finally { Marshal.FreeHGlobal(data); }
+    }
+    static string ObjectName(IntPtr handle) {
+        var text=new StringBuilder(1024); uint needed;
+        if(handle==IntPtr.Zero || !GetUserObjectInformationW(handle,2,text,(uint)text.Capacity*2,out needed)) throw new Win32Exception();
+        return text.ToString();
+    }
+    public static Dictionary<string,object> Observe() {
+        var result=new Dictionary<string,object>();
+        using(var identity=System.Security.Principal.WindowsIdentity.GetCurrent())
+        using(var process=Process.GetCurrentProcess()) {
+            result["sid"]=identity.User.Value; result["name"]=identity.Name;
+            result["authenticationType"]=identity.AuthenticationType;
+            result["administratorRole"]=new System.Security.Principal.WindowsPrincipal(identity).IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator);
+            var groups=new List<string>(); foreach(var group in identity.Groups) groups.Add(group.Value);
+            result["tokenGroupSids"]=groups.ToArray();
+            result["accountDomain"]=Environment.UserDomainName; result["computer"]=Environment.MachineName;
+            result["sessionId"]=process.SessionId;
+            result["windowStation"]=ObjectName(GetProcessWindowStation());
+            result["desktop"]=ObjectName(GetThreadDesktop(GetCurrentThreadId()));
+            var input=OpenInputDesktop(0,false,1);
+            if(input==IntPtr.Zero) throw new Win32Exception();
+            try { result["inputDesktop"]=ObjectName(input); } finally { CloseDesktop(input); }
+            IntPtr token;
+            if(!OpenProcessToken(process.Handle,8,out token)) throw new Win32Exception();
+            try {
+                result["elevated"]=TokenInt(token,20)!=0; result["elevationType"]=TokenInt(token,18);
+                result["hasRestrictions"]=TokenInt(token,21)!=0; result["restricted"]=IsTokenRestricted(token);
+                result["tokenSessionId"]=TokenInt(token,12);
+                var data=TokenData(token,10); Statistics statistics;
+                try { statistics=(Statistics)Marshal.PtrToStructure(data,typeof(Statistics)); } finally { Marshal.FreeHGlobal(data); }
+                result["tokenType"]=statistics.Type;
+                result["authenticationId"]=statistics.Authentication.High.ToString("X8")+":"+statistics.Authentication.Low.ToString("X8");
+                IntPtr logon; uint status=LsaGetLogonSessionData(ref statistics.Authentication,out logon);
+                if(status!=0 || logon==IntPtr.Zero) throw new InvalidOperationException("Cannot inspect actual logon session: "+status);
+                try {
+                    var session=(Logon)Marshal.PtrToStructure(logon,typeof(Logon));
+                    result["logonType"]=session.Type; result["logonSessionId"]=session.Session;
+                } finally { LsaFreeReturnBuffer(logon); }
+                var profile=new StringBuilder(32768); uint length=(uint)profile.Capacity;
+                if(!GetUserProfileDirectoryW(token,profile,ref length)) throw new Win32Exception();
+                result["profileDirectory"]=profile.ToString();
+            } finally { CloseHandle(token); }
+            // Query the underlying local account, not merely the possibly
+            // filtered token. Reject an admin whose token was stripped.
+            IntPtr account; uint code=NetUserGetInfo(null,Environment.UserName,1,out account);
+            if(code!=0) throw new InvalidOperationException("Cannot inspect local account privilege: "+code);
+            try { result["accountPrivilege"]=((UserInfo)Marshal.PtrToStructure(account,typeof(UserInfo))).Privilege; }
+            finally { NetApiBufferFree(account); }
+            code=NetUserGetInfo(null,Environment.UserName,23,out account);
+            if(code!=0) throw new InvalidOperationException("Cannot inspect local account SID: "+code);
+            try { result["accountSid"]=new System.Security.Principal.SecurityIdentifier(((UserSid)Marshal.PtrToStructure(account,typeof(UserSid))).Sid).Value; }
+            finally { NetApiBufferFree(account); }
+            uint count,total; IntPtr localGroups;
+            code=NetUserGetLocalGroups(null,Environment.UserName,0,1,out localGroups,0xffffffff,out count,out total);
+            if(code!=0 || count!=total) throw new InvalidOperationException("Cannot inspect complete underlying account groups: "+code);
+            try {
+                var sids=new List<string>();
+                for(int index=0;index<count;index++) {
+                    string name=Marshal.PtrToStringUni(Marshal.ReadIntPtr(localGroups,index*IntPtr.Size));
+                    sids.Add(new System.Security.Principal.NTAccount(name).Translate(typeof(System.Security.Principal.SecurityIdentifier)).Value);
+                }
+                result["accountLocalGroupSids"]=sids.ToArray();
+            } finally { if(localGroups!=IntPtr.Zero) NetApiBufferFree(localGroups); }
+        }
+        return result;
+    }
+}
 public sealed class McwAppWindow {
     public long Hwnd; public uint Pid; public string Class, Title; public bool Visible; public long ExStyle;
 }
@@ -198,6 +309,43 @@ public sealed class McwAppStagingObserver : IDisposable {
     public void Dispose() { watcher.EnableRaisingEvents=false; }
 }
 '@
+    if ($RequireStandardUser) {
+        # Observe before the deliberate private application-data redirection.
+        # Default branding CI remains distinct and is never labeled standard.
+        $context=[McwAppContext]::Observe()
+        $context['environmentProfile']=$env:USERPROFILE
+        $context['environmentAppData']=$env:APPDATA
+        $context['environmentLocalAppData']=$env:LOCALAPPDATA
+        $context['userInteractive']=[Environment]::UserInteractive
+        $profileKey="HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\$($context.sid)"
+        $context['registeredProfile']=[Environment]::ExpandEnvironmentVariables([string](Get-ItemProperty -LiteralPath $profileKey -Name ProfileImagePath).ProfileImagePath)
+        $context['profileHiveLoaded']=Test-Path -LiteralPath "Registry::HKEY_USERS\$($context.sid)"
+        $report.context=$context
+        Save-ApplicationReport
+        if ($context.elevated -or $context.administratorRole -or $context.elevationType -ne 1 -or
+            $context.hasRestrictions -or $context.restricted -or $context.tokenType -ne 1 -or
+            $context.tokenGroupSids -contains 'S-1-5-32-544' -or $context.accountLocalGroupSids -contains 'S-1-5-32-544' -or
+            $context.accountPrivilege -ne 1 -or $context.accountSid -cne $context.sid -or
+            $context.accountDomain -ine $context.computer) {
+            throw 'RequireStandardUser needs a genuine local nonadmin account and unrestricted default primary token, never a filtered/restricted administrator.'
+        }
+        if ($context.sessionId -le 0 -or $context.tokenSessionId -ne $context.sessionId -or
+            $context.logonSessionId -ne $context.sessionId -or $context.logonType -notin @(2,10) -or
+            $context.windowStation -cne 'WinSta0' -or $context.desktop -cne $context.inputDesktop -or
+            -not $context.userInteractive) {
+            throw 'RequireStandardUser needs an actual interactive/remote-interactive logon on the accessible WinSta0 input desktop; no desktop switch or session-zero approximation.'
+        }
+        foreach ($actual in @($context.environmentProfile,$context.registeredProfile)) {
+            if (-not [string]::Equals([IO.Path]::GetFullPath($actual).TrimEnd('\'),$context.profileDirectory.TrimEnd('\'),[StringComparison]::OrdinalIgnoreCase)) { throw 'Actual token profile, registered profile and inherited USERPROFILE must agree.' }
+        }
+        if (-not $context.profileHiveLoaded -or -not (Test-Path -LiteralPath $context.profileDirectory -PathType Container) -or
+            -not [string]::Equals($env:APPDATA,[Environment]::GetFolderPath('ApplicationData'),[StringComparison]::OrdinalIgnoreCase) -or
+            -not [string]::Equals($env:LOCALAPPDATA,[Environment]::GetFolderPath('LocalApplicationData'),[StringComparison]::OrdinalIgnoreCase)) {
+            throw 'RequireStandardUser needs the genuinely loaded account profile and actual account application-data folders.'
+        }
+        $report.standardUserQualified=$true
+        Save-ApplicationReport
+    }
     # Refuse even a different-install/user MCW; never take over or stop it.
     foreach ($name in @('mcw','mcw-tray')) {
         foreach ($process in [Diagnostics.Process]::GetProcessesByName($name)) {
