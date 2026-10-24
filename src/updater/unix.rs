@@ -162,12 +162,17 @@ pub fn update() -> Result<()> {
     Err(error).context("cannot hand off the update to /bin/sh; installation was not changed")
 }
 
+#[cfg(target_os = "linux")]
+pub(crate) fn supports_linux_desktop(version: &str) -> Result<bool> {
+    Ok(Version::parse(version)?.core >= [0, 21, 0])
+}
+
 /// Complete the first managed upgrade from an older updater whose embedded
 /// installer predates the visible Linux launcher. This is called only by the
 /// existing post-update autostart-refresh flow; it does not change that intent.
 #[cfg(target_os = "linux")]
 pub fn refresh_desktop_integration() -> Result<()> {
-    if Version::parse(env!("CARGO_PKG_VERSION"))?.core < [0, 21, 0] {
+    if !supports_linux_desktop(env!("CARGO_PKG_VERSION"))? {
         return Ok(());
     }
     ordinary_user()?;

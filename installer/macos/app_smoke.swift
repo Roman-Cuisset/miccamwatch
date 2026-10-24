@@ -62,9 +62,42 @@ if operation == "hidden-window" {
     print("{\"native_consultation\":\"hidden-window\",\"window_count\":0,\"helper_pid\":\(pid)}")
     exit(0)
 }
+func windowFailureEvidence(error: AXError, windows: [AXUIElement]) {
+    let owner = NSRunningApplication(processIdentifier: pid)
+    var nativeWindows: [[String: Any]] = []
+    let listed = CGWindowListCopyWindowInfo(.optionAll, kCGNullWindowID) as? [[String: Any]] ?? []
+    for window in listed where (window[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == pid {
+        nativeWindows.append([
+            "number": window[kCGWindowNumber as String] ?? NSNull(),
+            "layer": window[kCGWindowLayer as String] ?? NSNull(),
+            "on_screen": window[kCGWindowIsOnscreen as String] ?? NSNull(),
+            "name": window[kCGWindowName as String] ?? NSNull(),
+            "bounds": window[kCGWindowBounds as String] ?? NSNull()
+        ])
+    }
+    let facts: [String: Any] = [
+        "helper_pid": pid, "accessibility_trusted": AXIsProcessTrusted(),
+        "ax_windows_error": error.rawValue, "ax_window_count": windows.count,
+        "ax_window_titles": windows.map { attribute($0, kAXTitleAttribute) as? String ?? "<unavailable>" },
+        "application_active": owner?.isActive ?? false,
+        "application_hidden": owner?.isHidden ?? false,
+        "application_finished_launching": owner?.isFinishedLaunching ?? false,
+        "application_terminated": owner?.isTerminated ?? true,
+        "native_windows": nativeWindows
+    ]
+    if let data = try? JSONSerialization.data(withJSONObject: facts, options: [.sortedKeys]),
+       let json = String(data: data, encoding: .utf8) {
+        fputs(json + "\n", stderr)
+    }
+}
 if operation != "quit" {
+    var lastWindows: [AXUIElement] = []
+    var lastWindowError = AXError.success
     while Date() < deadline {
-        let windows = attribute(application, kAXWindowsAttribute) as? [AXUIElement] ?? []
+        var rawWindows: CFTypeRef?
+        lastWindowError = AXUIElementCopyAttributeValue(application, kAXWindowsAttribute as CFString, &rawWindows)
+        let windows = rawWindows as? [AXUIElement] ?? []
+        lastWindows = windows
         let consultation = windows.filter { (attribute($0, kAXTitleAttribute) as? String) == "MicCamWatch" }
         if consultation.count == 1 {
             let window = consultation[0]
@@ -135,6 +168,7 @@ if operation != "quit" {
         if consultation.count > 1 { stop("duplicate native consultation windows") }
         RunLoop.current.run(until: Date().addingTimeInterval(0.1))
     }
+    windowFailureEvidence(error: lastWindowError, windows: lastWindows)
     stop("native consultation window never became accessible")
 }
 var pressed = false

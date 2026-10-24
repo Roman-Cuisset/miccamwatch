@@ -255,15 +255,17 @@ def main():
                     require(len(helpers) == 1, 'persistent AppKit desktop helper child not found')
                     return owner, helpers[0]
 
-                def finder_command():
-                    launch = ['/usr/bin/open', '-a', app]
+                def finder_command(name):
+                    launch = ['/usr/bin/open', '-a', app,
+                              '--stdout', proof / (name + '-app.stdout'),
+                              '--stderr', proof / (name + '-app.stderr')]
                     for key in ('HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_STATE_HOME',
                                 'XDG_RUNTIME_DIR', 'LANG', 'LC_ALL'):
                         launch.extend(['--env', key + '=' + env[key]])
                     return launch
 
                 def finder_open(name, duplicate=False):
-                    launch = finder_command()
+                    launch = finder_command(name)
                     record(name, launch, env=env)
                     until(running, name + ': app never reached native readiness')
                     until(lambda: not any(path == str(app / 'Contents/MacOS/MicCamWatch')
@@ -359,7 +361,7 @@ def main():
                                 pass
                             else:
                                 raise AssertionError('background owner did not actually hold the native lease')
-                        record('cold-finder-open', finder_command(), env=env)
+                        record('cold-finder-open', finder_command('cold-finder-open'), env=env)
                         time.sleep(.5)
                         require(active.poll() is None and not cold_socket.exists(),
                                 'background owner escaped its pre-bind barrier')

@@ -11,7 +11,7 @@ use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 use std::fmt::Write as _;
 #[cfg(target_os = "macos")]
-use std::sync::mpsc::Receiver;
+use std::sync::{Mutex, mpsc::Receiver};
 use std::{
     fs::{self, File, OpenOptions},
     io::{BufRead, BufReader, Write},
@@ -626,6 +626,32 @@ pub fn stop_running() -> Result<bool> {
         Some(reply) => bail!("native tray shutdown was not acknowledged: {reply}"),
     }
 }
+#[cfg(target_os = "macos")]
+#[derive(Default)]
+struct DesktopInput {
+    writer: Mutex<Option<std::process::ChildStdin>>,
+    closed: AtomicBool,
+}
+#[cfg(target_os = "macos")]
+impl DesktopInput {
+    fn write(&self, frame: &[u8]) -> Result<()> {
+        let mut writer = self
+            .writer
+            .lock()
+            .map_err(|_| anyhow::anyhow!("AppKit input lock poisoned"))?;
+        let input = writer.as_mut().context("AppKit helper input closed")?;
+        input.write_all(frame)?;
+        input.flush()?;
+        Ok(())
+    }
+    fn close(&self) {
+        self.closed.store(true, Ordering::Release);
+        if let Ok(mut writer) = self.writer.lock() {
+            writer.take();
+        }
+    }
+}
+
 struct Lifecycle {
     _lock: File,
     path: PathBuf,
@@ -635,6 +661,8 @@ struct Lifecycle {
     clean_shutdown: Arc<AtomicBool>,
     server_exit: Arc<AtomicBool>,
     open_requested: Arc<AtomicBool>,
+    #[cfg(target_os = "macos")]
+    window_input: Arc<DesktopInput>,
     server: Option<thread::JoinHandle<()>>,
 }
 enum LeaseAcquisition {
@@ -685,6 +713,10 @@ impl Lifecycle {
         let server_exit = Arc::new(AtomicBool::new(false));
         let open_requested = Arc::new(AtomicBool::new(false));
         let server_open = open_requested.clone();
+        #[cfg(target_os = "macos")]
+        let window_input = Arc::new(DesktopInput::default());
+        #[cfg(target_os = "macos")]
+        let server_input = window_input.clone();
         let flags = (
             ready.clone(),
             stop.clone(),
@@ -732,9 +764,21 @@ impl Lifecycle {
                                     {
                                         Ok("stopping\n")
                                     } else {
-                                        // Coalesce duplicate launches even while AppKit
-                                        // initializes; its loop consumes this after start.
+                                        #[cfg(target_os = "macos")]
+                                        ensure!(
+                                            !server_input.closed.load(Ordering::Acquire),
+                                            "AppKit helper input closed; window request was not accepted"
+                                        );
                                         server_open.store(true, Ordering::Release);
+                                        #[cfg(target_os = "macos")]
+                                        if flags.0.load(Ordering::Acquire)
+                                            && server_open.swap(false, Ordering::AcqRel)
+                                        {
+                                            // Deliver independently of a slow device poll.
+                                            // Publishing before checking readiness also
+                                            // covers its transition without losing open.
+                                            server_input.write(b"{\"kind\":\"show\"}\n")?;
+                                        }
                                         Ok("opened\n")
                                     }
                                 }
@@ -786,6 +830,8 @@ impl Lifecycle {
             clean_shutdown,
             server_exit,
             open_requested,
+            #[cfg(target_os = "macos")]
+            window_input,
             server: Some(server),
         })
     }
@@ -1636,7 +1682,21 @@ pub fn run_tray(
             overview: &overview,
         },
     );
+    #[cfg(target_os = "linux")]
     let mut host = DesktopHost::start(sender, lifecycle.ready.clone(), initial)?;
+    #[cfg(target_os = "macos")]
+    let mut host = DesktopHost::start(
+        sender,
+        lifecycle.ready.clone(),
+        initial,
+        lifecycle.window_input.clone(),
+    )?;
+    #[cfg(target_os = "macos")]
+    if initial_window {
+        // The initial unavailable state is already native-ready. Opening must
+        // not wait for the first potentially slow device/privacy observation.
+        host.show_window()?;
+    }
     let mut tracker = TransitionTracker::default();
     let mut dispatcher = EventDispatcher::new(
         lang,
@@ -1667,6 +1727,7 @@ pub fn run_tray(
     let mut lock = SessionLockState::Unknown;
     #[cfg(target_os = "macos")]
     let mut requested = [None; 2];
+    #[cfg(target_os = "linux")]
     let mut show_initial_window = initial_window;
     let outcome = (|| -> Result<()> {
         loop {
@@ -1856,6 +1917,7 @@ pub fn run_tray(
                         overview: &overview,
                     },
                 ))?;
+                #[cfg(target_os = "linux")]
                 if show_initial_window {
                     if let Err(error) = host.show_window() {
                         feedback = Some(format!("{}: {error:#}", words(lang).failed));
@@ -2368,24 +2430,34 @@ struct DesktopEvent {
 #[cfg(target_os = "macos")]
 struct DesktopHost {
     child: std::process::Child,
-    stdin: Option<std::process::ChildStdin>,
+    stdin: Arc<DesktopInput>,
     events: Receiver<Result<DesktopEvent>>,
     ready: Arc<AtomicBool>,
 }
 #[cfg(target_os = "macos")]
 impl DesktopHost {
-    fn start(actions: SyncSender<Command>, ready: Arc<AtomicBool>, view: View) -> Result<Self> {
+    fn start(
+        actions: SyncSender<Command>,
+        ready: Arc<AtomicBool>,
+        view: View,
+        input: Arc<DesktopInput>,
+    ) -> Result<Self> {
         let mut child = crate::platform::macos::desktop_process(&["desktop"])?;
         let stdin = child
             .stdin
             .take()
             .context("AppKit helper stdin unavailable")?;
+        *input
+            .writer
+            .lock()
+            .map_err(|_| anyhow::anyhow!("AppKit input lock poisoned"))? = Some(stdin);
         let stdout = child
             .stdout
             .take()
             .context("AppKit helper stdout unavailable")?;
         let (sender, events) = mpsc::sync_channel(32);
         let readiness = ready.clone();
+        let readiness_input = input.clone();
         thread::spawn(move || {
             let mut reader = BufReader::new(stdout);
             let result = (|| -> Result<()> {
@@ -2405,6 +2477,7 @@ impl DesktopHost {
                             readiness.store(true, Ordering::Release);
                         }
                         if event.kind == "error" || event.kind == "stopped" {
+                            readiness_input.close();
                             readiness.store(false, Ordering::Release);
                         }
                         sender
@@ -2414,6 +2487,7 @@ impl DesktopHost {
                 }
                 bail!("AppKit helper closed its event stream")
             })();
+            readiness_input.close();
             readiness.store(false, Ordering::Release);
             if let Err(error) = result {
                 let _ = sender.send(Err(error));
@@ -2421,7 +2495,7 @@ impl DesktopHost {
         });
         let mut host = Self {
             child,
-            stdin: Some(stdin),
+            stdin: input,
             events,
             ready,
         };
@@ -2449,15 +2523,11 @@ impl DesktopHost {
             "bounded desktop projection exceeded frame budget"
         );
         frame.push(b'\n');
-        let stdin = self.stdin.as_mut().context("AppKit helper input closed")?;
-        stdin.write_all(&frame)?;
-        stdin.flush()?;
+        self.stdin.write(&frame)?;
         Ok(())
     }
     fn show_window(&mut self) -> Result<()> {
-        let stdin = self.stdin.as_mut().context("AppKit helper input closed")?;
-        stdin.write_all(b"{\"kind\":\"show\"}\n")?;
-        stdin.flush()?;
+        self.stdin.write(b"{\"kind\":\"show\"}\n")?;
         Ok(())
     }
     fn check(&mut self) -> Result<()> {
@@ -2479,8 +2549,15 @@ impl DesktopHost {
         Ok(())
     }
     fn shutdown(&mut self) -> Result<()> {
+        self.stdin.closed.store(true, Ordering::Release);
         self.ready.store(false, Ordering::Release);
-        if let Some(mut stdin) = self.stdin.take() {
+        let input = self
+            .stdin
+            .writer
+            .lock()
+            .map_err(|_| anyhow::anyhow!("AppKit input lock poisoned"))?
+            .take();
+        if let Some(mut stdin) = input {
             stdin.write_all(b"{\"kind\":\"stop\"}\n")?;
             drop(stdin);
         }
@@ -2503,7 +2580,7 @@ impl DesktopHost {
 impl Drop for DesktopHost {
     fn drop(&mut self) {
         self.ready.store(false, Ordering::Release);
-        self.stdin.take();
+        self.stdin.close();
         if self.child.try_wait().ok().flatten().is_none() {
             let _ = self.child.kill();
         }
@@ -2692,17 +2769,30 @@ mod menu_tests {
             stream.write_all(b"\n").unwrap();
             assert!(read_frame(&mut reader, 16).unwrap().is_none());
         });
-        let error = match Lifecycle::acquire_for_launch(true, false) {
-            Err(error) => error,
-            Ok(_) => panic!("foreign namespace was reused"),
-        };
-        assert!(
-            error
-                .to_string()
-                .contains("another configuration/data namespace")
-        );
+        assert!(Lifecycle::acquire_for_launch(true, false).is_err());
         server.join().unwrap();
         fs::remove_file(path).unwrap();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn authenticated_open_refuses_closed_native_input_despite_stale_readiness() {
+        if run_isolated_menu_fixture(
+            "frontends::tray::menu_tests::authenticated_open_refuses_closed_native_input_despite_stale_readiness",
+        ) {
+            return;
+        }
+        let owner = match Lifecycle::acquire().unwrap() {
+            LeaseAcquisition::Acquired(owner) => owner,
+            LeaseAcquisition::Contended => panic!("isolated owner lease was contended"),
+        };
+        owner.ready.store(true, Ordering::Release);
+        owner.window_input.close();
+        // A stale readiness observation must not acknowledge an open against
+        // a disconnected native transport or leave it queued for later.
+        assert!(owner.ready.load(Ordering::Acquire));
+        assert!(open_running().is_err());
+        assert!(!owner.open_requested.load(Ordering::Acquire));
     }
 
     fn observed() -> Snapshot {

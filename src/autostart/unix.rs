@@ -493,9 +493,32 @@ fn registration_bytes(entry: &Registration) -> Result<Vec<u8>> {
         bail!("unsafe autostart executable or version");
     }
     #[cfg(target_os = "linux")]
-    return Ok(format!("[Desktop Entry]\nType=Application\nName=MicCamWatch\nComment=MicCamWatch {} desktop-session tray\nExec={} tray run\nTerminal=false\nX-MicCamWatch-Managed=1\n", entry.version, desktop_argument(executable)).into_bytes());
+    {
+        if !crate::updater::supports_linux_desktop(&entry.version)? {
+            // Exact historical producer only: receipt reconstruction must not
+            // declare an unchanged pre-0.21 registration foreign during update.
+            return Ok(format!("[Desktop Entry]\nType=Application\nName=MicCamWatch\nComment=MicCamWatch {} desktop-session tray\nExec={} tray run\nTerminal=false\nX-MicCamWatch-Managed=1\n", entry.version, desktop_argument(executable)).into_bytes());
+        }
+        // Gio checks argv[0] before %% expansion. env keeps that check independent
+        // of reserved characters in the target; TryExec checks the raw target.
+        Ok(format!("[Desktop Entry]\nType=Application\nName=MicCamWatch\nComment=MicCamWatch {} desktop-session tray\nTryExec={}\nExec=/usr/bin/env -- {} tray run\nTerminal=false\nX-MicCamWatch-Managed=1\n", entry.version, desktop_string(executable), desktop_argument(executable)).into_bytes())
+    }
     #[cfg(target_os = "macos")]
     return Ok(format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\"><dict>\n<key>Label</key><string>{LABEL}</string>\n<key>ProgramArguments</key><array><string>{}</string><string>tray</string><string>run</string></array>\n<key>RunAtLoad</key><true/>\n<key>LimitLoadToSessionType</key><string>Aqua</string>\n<key>ProcessType</key><string>Interactive</string>\n<key>MicCamWatchVersion</key><string>{}</string>\n</dict></plist>\n", xml(executable), xml(&entry.version)).into_bytes());
+}
+
+#[cfg(target_os = "linux")]
+fn desktop_string(value: &str) -> String {
+    // TryExec is a KeyFile string, not argv: no quoting or %% field escaping.
+    let mut encoded = String::with_capacity(value.len());
+    for character in value.chars() {
+        if character == '\\' {
+            encoded.push_str("\\\\");
+        } else {
+            encoded.push(character);
+        }
+    }
+    encoded
 }
 
 #[cfg(target_os = "linux")]
@@ -1135,6 +1158,69 @@ mod tests {
             desktop_argument("/home/O'Brien/(mcw);&"),
             "\"/home/O'Brien/(mcw);&\""
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_refresh_migrates_only_exact_historical_registration() -> Result<()> {
+        let temporary = Temporary::new()?;
+        let state = Directory::open(&temporary.0.join("state"), true)?;
+        let lock = state.lock("autostart.lock")?;
+        let path = temporary
+            .0
+            .join("startup/com.roman-cuisset.miccamwatch.desktop");
+        let store = Store {
+            state,
+            target: Directory::open(path.parent().unwrap(), true)?,
+            name: path.file_name().unwrap().to_str().unwrap().to_owned(),
+            path,
+            _lock: lock,
+        };
+        let old = Registration {
+            executable: temporary.0.join("old %f \\slash \"quote\" $literal/mcw"),
+            version: "0.20.0".to_owned(),
+        };
+        // Exact published pre-0.21 bytes, independently persisted as the
+        // historical registration and its format-1 metadata receipt.
+        let old_bytes = format!("[Desktop Entry]\nType=Application\nName=MicCamWatch\nComment=MicCamWatch 0.20.0 desktop-session tray\nExec={} tray run\nTerminal=false\nX-MicCamWatch-Managed=1\n", desktop_argument(old.executable.to_str().unwrap())).into_bytes();
+        store.target.replace(&store.name, None, Some(&old_bytes))?;
+        let old_record = store.save_receipt(vec![old.clone()], None)?;
+        assert_eq!(store.snapshot()?.registration, Some(old.clone()));
+        let mut changed = old_bytes.clone();
+        changed.extend_from_slice(b"# user customization\n");
+        store
+            .target
+            .replace(&store.name, Some(&old_bytes), Some(&changed))?;
+        assert!(enable_in(&store, env!("CARGO_PKG_VERSION"), false).is_err());
+        assert_eq!(store.target.read(&store.name)?, Some(changed.clone()));
+        assert_eq!(store.state.read(RECORD)?, Some(old_record));
+        store
+            .target
+            .replace(&store.name, Some(&changed), Some(&old_bytes))?;
+        enable_in(&store, env!("CARGO_PKG_VERSION"), false)?;
+        let migrated = store.snapshot()?;
+        assert_eq!(
+            migrated.registration.as_ref().unwrap().version,
+            env!("CARGO_PKG_VERSION")
+        );
+        assert_eq!(
+            migrated.registration.as_ref().unwrap().executable,
+            std::env::current_exe()?
+        );
+        // Old bytes do not become a fallback for a current-version receipt.
+        store
+            .target
+            .replace(&store.name, migrated.bytes.as_deref(), Some(&old_bytes))?;
+        store.save_receipt(
+            vec![Registration {
+                executable: old.executable,
+                version: env!("CARGO_PKG_VERSION").to_owned(),
+            }],
+            migrated.record.as_deref(),
+        )?;
+        assert!(store.snapshot().is_err());
+        assert_eq!(store.target.read(&store.name)?, Some(old_bytes));
+        Ok(())
     }
 
     #[cfg(target_os = "macos")]

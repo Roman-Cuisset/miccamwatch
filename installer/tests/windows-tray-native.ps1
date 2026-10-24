@@ -276,6 +276,25 @@ function Confirm-FixturePointerRouting {
         ConvertTo-Json -Depth 6 | Set-Content -Encoding UTF8 (Join-Path $directory 'pointer-routing.json')
     [McwNativeProof]::MovePointerTo(0, 0)
 }
+function Get-FixtureHoverTarget([string]$expected, $identity) {
+    try {
+        $button = Get-FixtureShellButton $expected $identity
+        if (-not $button -or $button.Current.IsOffscreen) { return $null }
+        $rect = New-Object McwNativeProof+RECT
+        if ([McwNativeProof]::Shell_NotifyIconGetRect([ref]$identity, [ref]$rect) -ne 0) {
+            throw 'The owned notification icon disappeared while acquiring its hover target.'
+        }
+        $bounds = $button.Current.BoundingRectangle
+        $x = [int](($rect.Left + $rect.Right) / 2)
+        $y = [int](($rect.Top + $rect.Bottom) / 2)
+        if ($bounds.IsEmpty -or -not $bounds.Contains($x, $y) -or
+            -not [System.Windows.Forms.SystemInformation]::VirtualScreen.Contains($x, $y)) { return $null }
+        return @{ button=$button; bounds=$bounds; rect=$rect; x=$x; y=$y }
+    } catch [System.Windows.Automation.ElementNotAvailableException] {
+        # Explorer may move an icon between overflow and the visible taskbar.
+        return $null
+    }
+}
 function Confirm-FixtureShellTooltip([string]$name) {
     $shell = Wait-ProofFile "$name-shell.json"
     Confirm-FixtureOwner ([IntPtr][long]$shell.owner)
@@ -293,22 +312,26 @@ function Confirm-FixtureShellTooltip([string]$name) {
     [McwNativeProof]::MovePointerTo(0, 0)
     Start-Sleep -Milliseconds 200
     $deadline = (Get-Date).AddSeconds(30)
-    $button = $null
-    while (-not $button -and (Get-Date) -lt $deadline) {
-        $button = Get-FixtureShellButton $shell.tooltip $identity
-        if (-not $button) { Start-Sleep -Milliseconds 200 }
+    $target = $null
+    while (-not $target -and (Get-Date) -lt $deadline) {
+        $target = Get-FixtureHoverTarget $shell.tooltip $identity
+        if (-not $target) { Start-Sleep -Milliseconds 200 }
     }
-    if (-not $button) { throw 'Fixture shell icon is not UIA-accessible, including overflow. Requires an unlocked English hosted Explorer desktop.' }
-    $bounds = $button.Current.BoundingRectangle
-    if ($bounds.IsEmpty -or $bounds.Width -le 0 -or $bounds.Height -le 0) { throw 'Fixture shell icon has no visible bounds.' }
-    [McwNativeProof]::MovePointerTo([int]($bounds.X + $bounds.Width / 2), [int]($bounds.Y + $bounds.Height / 2))
+    if (-not $target) { throw 'Fixture shell icon is not UIA-accessible, including overflow. Requires an unlocked English hosted Explorer desktop.' }
+    $button = $target.button
+    $bounds = $target.bounds
+    $rect = $target.rect
+    $hoverX = $target.x
+    $hoverY = $target.y
+    $hoverTargets = @(@{ x=$hoverX; y=$hoverY })
+    [McwNativeProof]::MovePointerTo($hoverX, $hoverY)
     Start-Sleep -Milliseconds 1000
     Capture-NativeDesktop "$name-shell-hover"
     [IO.File]::WriteAllText((Join-Path $directory "$name-shell-inspect"), 'inspect native callbacks')
     $inputEvidence = Wait-ProofFile "$name-shell-input.json"
     $hitPoint = New-Object McwNativeProof+POINT
-    $hitPoint.X = [int]($bounds.X + $bounds.Width / 2)
-    $hitPoint.Y = [int]($bounds.Y + $bounds.Height / 2)
+    $hitPoint.X = $hoverX
+    $hitPoint.Y = $hoverY
     $hitWindow = [McwNativeProof]::WindowFromPoint($hitPoint)
     [uint32]$hitPid = 0
     [void][McwNativeProof]::GetWindowThreadProcessId($hitWindow, [ref]$hitPid)
@@ -325,6 +348,22 @@ function Confirm-FixtureShellTooltip([string]$name) {
     $tooltip = $null
     $tipWindow = [IntPtr]::Zero
     while (-not $tooltip -and (Get-Date) -lt $deadline) {
+        # A real NIM_MODIFY/hover can relocate the icon out of overflow.
+        # Follow only a fresh UIA target containing the same owned native icon;
+        # keep the original deadline and require the actual tooltip popup.
+        $fresh = Get-FixtureHoverTarget $shell.tooltip $identity
+        if (-not $fresh) { Start-Sleep -Milliseconds 100; continue }
+        $button = $fresh.button
+        $bounds = $fresh.bounds
+        $rect = $fresh.rect
+        if ($fresh.x -ne $hoverX -or $fresh.y -ne $hoverY -or
+            [System.Windows.Forms.Cursor]::Position.X -ne $fresh.x -or
+            [System.Windows.Forms.Cursor]::Position.Y -ne $fresh.y) {
+            $hoverX = $fresh.x
+            $hoverY = $fresh.y
+            $hoverTargets += @{ x=$hoverX; y=$hoverY }
+            [McwNativeProof]::MovePointerTo($hoverX, $hoverY)
+        }
         foreach ($window in @(Get-ShellWindows)) {
             try {
                 if ($window.Current.IsOffscreen) { continue }
@@ -347,8 +386,8 @@ function Confirm-FixtureShellTooltip([string]$name) {
                         if ($nativeWindow -eq [IntPtr]::Zero) { continue }
                         $popup = New-Object McwNativeProof+RECT
                         if (-not [McwNativeProof]::GetWindowRect($nativeWindow, [ref]$popup)) { continue }
-                        $x = $bounds.X + $bounds.Width / 2
-                        $y = $bounds.Y + $bounds.Height / 2
+                        $x = $hoverX
+                        $y = $hoverY
                         if ($x -ge $popup.Left -and $x -lt $popup.Right -and
                             $y -ge $popup.Top -and $y -lt $popup.Bottom) { continue }
                         $tooltip = $tip
@@ -370,6 +409,7 @@ function Confirm-FixtureShellTooltip([string]$name) {
             button=@{left=$bounds.Left; top=$bounds.Top; right=$bounds.Right; bottom=$bounds.Bottom};
             cursor=@{x=[System.Windows.Forms.Cursor]::Position.X; y=[System.Windows.Forms.Cursor]::Position.Y};
             native_input=$inputEvidence;
+            hover_targets=$hoverTargets;
             observed=@($observed | Select-Object -Unique)
         }
         ConvertTo-Json -InputObject $diagnostic -Depth 6 | Set-Content -Encoding UTF8 (Join-Path $directory "$name-shell-observed.json")
@@ -400,6 +440,7 @@ function Confirm-FixtureShellTooltip([string]$name) {
         case=$name; accessible_name=$button.Current.Name; tooltip=$tooltip.Current.Name;
         tooltip_bounds=$tipBounds; native_utf16_units=$shell.utf16_units;
         native_input=$inputEvidence;
+        hover_targets=$hoverTargets;
         shell_rect=@{left=$rect.Left; top=$rect.Top; right=$rect.Right; bottom=$rect.Bottom}
     }
     [McwNativeProof]::MovePointerTo(0, 0)

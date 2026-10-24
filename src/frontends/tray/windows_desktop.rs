@@ -1429,9 +1429,11 @@ impl WindowState {
                 GetDpiForWindow(hwnd).max(96),
             ) != 0
             {
-                metrics.lfMessageFont.lfHeight = metrics.lfMessageFont.lfHeight * 3 / 2;
-                metrics.lfMessageFont.lfWeight = 600;
-                let f = CreateFontIndirectW(&metrics.lfMessageFont);
+                // Headings must use the same native family as the body/menu,
+                // not the independently configurable message-box font.
+                metrics.lfMenuFont.lfHeight = metrics.lfMenuFont.lfHeight * 3 / 2;
+                metrics.lfMenuFont.lfWeight = 600;
+                let f = CreateFontIndirectW(&metrics.lfMenuFont);
                 (!f.is_invalid()).then_some(f)
             } else {
                 None

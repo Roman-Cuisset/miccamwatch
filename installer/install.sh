@@ -486,10 +486,20 @@ owned_desktop() {
         fi
     done
 }
+desktop_string() {
+    # KeyFile values (Icon/TryExec) are not command arguments or field codes.
+    printf '%s' "$1" | awk '
+        { for(i=1;i<=length($0);i++) {
+            c=substr($0,i,1); if(c=="\\") printf "\\\\"; else printf "%s", c;
+        } }'
+}
 stage_desktop() {
     command -v base64 >/dev/null 2>&1 || die 'base64 is required for the official application icon.'
-    # Desktop Entry string unescaping precedes Exec argument parsing. Encode
-    # both layers, and double percent signs so paths cannot inject field codes.
+    [ -x /usr/bin/env ] || die '/usr/bin/env is required for application-menu activation.'
+    # Gio validates argv[0] BEFORE expanding %% field escapes. Keep the system
+    # executable first so a literal percent in PREFIX does not hide the entry.
+    # env execs the absolute target directly, with no shell or PATH lookup.
+    # The target still has Desktop Entry string and argv quoting layers.
     DESKTOP_EXEC=$(printf '%s' "$TARGET" | awk '
         BEGIN { printf "\"" }
         { for(i=1;i<=length($0);i++) {
@@ -500,14 +510,12 @@ stage_desktop() {
             else printf "%s", c;
         } }
         END { printf "\"" }')
-    DESKTOP_ICON=$(printf '%s' "$ICON" | awk '
-        { for(i=1;i<=length($0);i++) {
-            c=substr($0,i,1); if(c=="\\") printf "\\\\"; else printf "%s", c;
-        } }')
+    DESKTOP_ICON=$(desktop_string "$ICON")
+    DESKTOP_TRY_EXEC=$(desktop_string "$TARGET")
     {
         printf '%s\n' '[Desktop Entry]' 'Type=Application' 'Version=1.0' 'Name=MicCamWatch'
         printf '%s\n' 'Comment=Microphone and camera privacy monitor'
-        printf 'Exec=%s tray open\nIcon=%s\n' "$DESKTOP_EXEC" "$DESKTOP_ICON"
+        printf 'TryExec=%s\nExec=/usr/bin/env -- %s tray open\nIcon=%s\n' "$DESKTOP_TRY_EXEC" "$DESKTOP_EXEC" "$DESKTOP_ICON"
         printf '%s\n' 'Terminal=false' 'Categories=Utility;Security;' 'StartupNotify=false' 'StartupWMClass=MicCamWatch'
     } > "$WORK/desktop"
     # Exact 96x96 site/assets/favicon.png, also embedded by the retained GTK GUI.

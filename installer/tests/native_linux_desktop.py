@@ -101,9 +101,30 @@ def qualify_installed_launcher(root, proof, archive, version):
     for key, value in sandbox.env.items():
         context.setenv(key, value)
 
-    def activate(path):
-        app = Gio.DesktopAppInfo.new_from_filename(str(path))
+    def load_entry(path):
+        label = 'installed-application' if path == desktop else 'session-autostart'
+        # Keep the actual producer bytes before invoking the real consumer:
+        # TemporaryDirectory cleanup must not discard a constructor failure.
+        (proof / (label + '.desktop')).write_bytes(path.read_bytes())
+        try:
+            app = Gio.DesktopAppInfo.new_from_filename(str(path))
+        except Exception as error:
+            (proof / (label + '-consumer-error.json')).write_text(json.dumps({
+                'consumer': 'Gio.DesktopAppInfo.new_from_filename',
+                'exception': type(error).__name__, 'message': str(error),
+                'desktop_snapshot': label + '.desktop',
+            }, indent=2) + '\n')
+            raise
+        if app is None:
+            (proof / (label + '-consumer-error.json')).write_text(json.dumps({
+                'consumer': 'Gio.DesktopAppInfo.new_from_filename',
+                'error': 'returned NULL', 'desktop_snapshot': label + '.desktop',
+            }, indent=2) + '\n')
         require(app is not None, 'Gio rejected the installed desktop entry')
+        return app
+
+    def activate(path):
+        app = load_entry(path)
         require(app.launch([], context), 'Gio failed to activate the installed desktop entry')
         return app
     binary_before = sandbox.binary.stat().st_ino, digest(sandbox.binary.read_bytes())
@@ -148,7 +169,7 @@ def qualify_installed_launcher(root, proof, archive, version):
             and (unmanaged.binary.stat().st_ino, digest(unmanaged.binary.read_bytes())) == unmanaged_before,
             'non-managed refresh adopted ownership, replaced executable or contacted transport')
 
-    entry = Gio.DesktopAppInfo.new_from_filename(str(desktop))
+    entry = load_entry(desktop)
     require(entry is not None and entry.get_display_name() == 'MicCamWatch'
             and entry.should_show() and entry.get_icon().to_string() == str(icon)
             and entry.get_startup_wm_class() == 'MicCamWatch',
@@ -156,6 +177,29 @@ def qualify_installed_launcher(root, proof, archive, version):
     try:
         command('autostart', 'enable')
         startup = Path(sandbox.env['XDG_CONFIG_HOME']) / 'autostart/com.roman-cuisset.miccamwatch.desktop'
+        load_entry(startup)
+        # The same real entries must not look launchable merely because env
+        # exists. Move only our private, stopped binary; restore its inode even
+        # if the consumer unexpectedly accepts a missing TryExec target.
+        missing_binary = sandbox.binary.with_name('mcw-missing-target-proof')
+        sandbox.binary.rename(missing_binary)
+        missing_target_results = {}
+        try:
+            for label, path in (('installed-application', desktop), ('session-autostart', startup)):
+                (proof / (label + '-missing-target.desktop')).write_bytes(path.read_bytes())
+                try:
+                    missing_entry = Gio.DesktopAppInfo.new_from_filename(str(path))
+                except TypeError as error:
+                    missing_target_results[label] = {
+                        'rejected': True, 'exception': type(error).__name__, 'message': str(error)}
+                else:
+                    missing_target_results[label] = {'rejected': missing_entry is None}
+            (proof / 'missing-target-consumer-results.json').write_text(
+                json.dumps(missing_target_results, indent=2) + '\n')
+        finally:
+            missing_binary.rename(sandbox.binary)
+        require(all(result['rejected'] for result in missing_target_results.values()),
+                'Gio accepted a real entry whose TryExec target was missing')
         # Both Gio launches are asynchronous; do not wait for owner readiness
         # between cold background startup and explicit application activation.
         activate(startup)
@@ -229,6 +273,7 @@ def qualify_installed_launcher(root, proof, archive, version):
         result['cold_background_plus_explicit_single_owner_window'] = True
         result['wm_class'] = [value.decode() for value in window_identity]
         result['foreign_namespace_refused'] = True
+        result['missing_target_entries_rejected'] = missing_target_results
         command('tray', 'stop')
         until(lambda: not owners(), 'owned Exit did not stop the installed native owner')
         command('autostart', 'disable')
