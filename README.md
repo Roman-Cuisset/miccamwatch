@@ -44,9 +44,9 @@ screenshots of the unreleased 0.21.0 windows. Their
 | **Development candidate: 0.21.0 — not published** | Redesigned native Windows/GTK/AppKit interfaces, unified activation and retained-window behavior, and Linux ARM64 candidate packages. |
 
 **The downloads below install 0.20.0, not 0.21.0.** The candidate is on
-[`work/linux-arm64-021`](https://github.com/Roman-Cuisset/miccamwatch/tree/work/linux-arm64-021);
-its native CI results do not constitute a public release or physical ARM certification.
-See [validation and release status](docs/VALIDATION.md) for exact evidence.
+[`release/0.21.0-candidate`](https://github.com/Roman-Cuisset/miccamwatch/tree/release/0.21.0-candidate).
+Earlier platform CI passed separately; exact integrated-candidate qualification is pending.
+See [validation and release status](docs/VALIDATION.md) for evidence and hardware limits.
 
 ## Features
 
@@ -99,7 +99,8 @@ mcw top
 
 The Windows package contains `mcw.exe` (CLI) and `mcw-tray.exe` (console-free
 tray host). The MSI is their installer, not a third resident application.
-The new full Windows consultation interface is a **0.21.0 candidate** feature.
+In **candidate 0.21.0 only**, Start Menu activation or `mcw tray open` opens the
+new retained consultation window; plain `mcw-tray.exe`/autostart stays background-only.
 
 ### macOS — native application
 

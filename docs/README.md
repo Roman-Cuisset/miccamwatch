@@ -31,14 +31,19 @@ package or proof of physical hardware compatibility.
 ## Release status and evidence
 
 - [Validation](VALIDATION.md) is the concise starting point for public 0.20.0,
-  unpublished 0.21.0, native CI, and the remaining hardware/manual limits.
+  unpublished 0.21.0, historical native CI, pending exact integrated-candidate
+  qualification, and the remaining hardware/manual limits.
+- [Draft 0.21.0 release checklist](RELEASE_0.21.0.md) lists the expected packages,
+  verification commands, open gates and separately authorized publication steps.
 - [Release history](RELEASE_HISTORY.md) preserves changes, immutable proof links,
   migration records, and dated publication/website observations moved out of the
   project overview. Historical “current/latest” statements are scoped to their
   release, not instructions to install an old version today.
 - [Roadmap](ROADMAP.md), in French, records priorities, decisions, and handoffs.
-  The candidate's detailed GUI/ARM history stays on its
-  [protected development branch](https://github.com/Roman-Cuisset/miccamwatch/tree/work/linux-arm64-021).
+  Current integration is on
+  [`release/0.21.0-candidate`](https://github.com/Roman-Cuisset/miccamwatch/tree/release/0.21.0-candidate);
+  the [immutable GUI/ARM handoff](https://github.com/Roman-Cuisset/miccamwatch/blob/cafd98daf7541f317b44aee98edb3b6efa3af561/docs/ROADMAP.md#L1698-L1718)
+  preserves the earlier platform-by-platform qualification.
 - [Earlier Linux/macOS handoff](NEXT_AI_LINUX_MACOS.md) is a historical engineering
   journal. Its superseded restrictions and release statuses are not the current
   command reference or the next development plan.

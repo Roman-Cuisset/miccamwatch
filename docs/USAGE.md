@@ -1,6 +1,6 @@
 # Usage and safety reference
 
-This guide describes **published stable v0.20.0**, not the unpublished 0.21.0 candidate. Commands are backed by the [stable CLI source](https://github.com/Roman-Cuisset/miccamwatch/blob/a26522028eafe02591f58c03ceb5c367f2d5d60b/src/frontends/cli.rs). Platform-specific commands are labelled; do not copy a macOS-only command onto Windows/Linux.
+Unless explicitly labelled candidate-only, this guide describes **published stable v0.20.0**, not the unpublished 0.21.0 candidate. Stable commands are backed by the [stable CLI source](https://github.com/Roman-Cuisset/miccamwatch/blob/a26522028eafe02591f58c03ceb5c367f2d5d60b/src/frontends/cli.rs). Platform-specific commands are labelled; do not copy a stable macOS-only command onto Windows/Linux.
 
 [Documentation index](README.md) · [Installation, update and removal](INSTALLATION.md) · [Architecture](ARCHITECTURE.md) · [Validation boundaries](VALIDATION.md)
 
@@ -125,7 +125,15 @@ Selection changes or process-identity changes must not turn a confirmation into 
 - **Linux:** native StatusNotifierItem on a desktop with a supporting host. Details use the native status notification; its visible height depends on the notification daemon. A missing tray host is a capability limit, not proof the observer failed or a reason to fabricate an icon.
 - **macOS:** AppKit menu bar and, in stable 0.20.0, a singleton native consultation window with observed microphone/camera state, access details and diagnostics. Close the window to leave the tray running; reopen the app or use **macOS-only** `mcw tray open` to reuse it. Protection, notification pause, four profiles and localized About remain in the menu.
 
-The Win32/GTK/AppKit redesign and unified activation in **candidate 0.21.0 are unpublished**, not instructions or promised stable features. See [Validation](VALIDATION.md#candidate-0210).
+### Unpublished 0.21.0 interfaces
+
+The Win32/GTK3/AppKit redesign and unified activation belong to [`release/0.21.0-candidate`](https://github.com/Roman-Cuisset/miccamwatch/tree/release/0.21.0-candidate), **not stable downloads**. Earlier platform runs are historical evidence; qualification of the exact integrated candidate is pending. See [Validation](VALIDATION.md#candidate-0210).
+
+- **Windows candidate:** the MSI Start Menu shortcut, `mcw-tray.exe --open`, `mcw tray open`, tray double-click or Status details opens/reopens the retained native consultation window. Left/right tray click still opens the menu. Plain `mcw-tray.exe` and opt-in autostart stay background-only.
+- **Linux candidate:** the managed installer's application-menu entry invokes `mcw tray open`; GTK3 is loaded when opening the native consultation, not for headless CLI use. A graphical session and GTK3 runtime are required for that window. Session autostart stays background-only; missing desktop prerequisites remain explicit errors.
+- **macOS candidate:** ordinary Finder activation/reopening and `mcw tray open` expose the redesigned AppKit consultation through the existing owned frontend. Login startup remains separate from explicit opening.
+
+Repeated explicit activation reuses the owned frontend/window. Closing the consultation hides it without stopping monitoring or releasing protection; use the owned lifecycle commands for stopping, and explicit control commands for restoration. Candidate preferences and native lifecycle evidence do not certify physical capture, device enforcement or every desktop/accessibility configuration.
 
 ### Opt-in autostart
 

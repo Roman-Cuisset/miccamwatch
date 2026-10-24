@@ -72,6 +72,8 @@ Extract the **whole** verified ZIP into a private user-owned directory. Keep `mc
 
 Portable extraction does not automatically add PATH. Use the exact executable path when more than one MCW installation exists. `mcw.exe tray` is also supported for interactive diagnostics.
 
+**Candidate 0.21.0 only — not a stable download:** its MSI Start Menu shortcut passes `--open` to `mcw-tray.exe`; `mcw-tray.exe --open` or `mcw tray open` explicitly opens/reopens the retained consultation window. Plain `mcw-tray.exe` and opt-in autostart remain background-only. These candidate launchers reuse the owned frontend rather than start another resident application. The commands above describe stable 0.20.0; see [candidate interfaces](USAGE.md#unpublished-0210-interfaces) and [pending integrated qualification](VALIDATION.md#candidate-0210) before interpreting candidate behavior as qualified.
+
 If Defender quarantines a file, a PATH edit will not recover it. Preserve detection name, affected path/version/hash where available and Protection History. Follow [safe incident handling](SIGNING.md#defender-incident-and-safe-handling); do not add exclusions, disable protection, restore quarantined bytes or automatically reinstall a detected executable. A detection is not established as a false positive.
 
 ## macOS

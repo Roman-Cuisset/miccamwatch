@@ -2,7 +2,7 @@
 
 [Documentation](README.md) · [Installation](INSTALLATION.md) · [Usage](USAGE.md) · [Release history](RELEASE_HISTORY.md) · [Architecture](ARCHITECTURE.md) · [Roadmap](ROADMAP.md)
 
-**Evidence is version-, source-, platform- and scenario-specific.** A build is not a release; a hosted native desktop is not physical hardware; a screenshot with simulated observations is not a microphone/camera capture test. This guide summarizes recorded qualification, not checks newly run during the documentation reorganization.
+**Evidence is version-, source-, platform- and scenario-specific.** A build is not a release; a hosted native desktop is not physical hardware; a screenshot with simulated observations is not a microphone/camera capture test. This guide separates recorded qualification from the pending qualification of the exact integrated candidate; no new checks were run by these documentation edits.
 
 ## Public release 0.20.0
 
@@ -26,17 +26,19 @@ Windows EXEs/MSI are **unsigned**; macOS bundles are **ad-hoc sealed, not Develo
 
 ## Candidate 0.21.0
 
-**Unpublished development only.** Reference snapshot: [`cafd98daf7541f317b44aee98edb3b6efa3af561`](https://github.com/Roman-Cuisset/miccamwatch/tree/cafd98daf7541f317b44aee98edb3b6efa3af561), branch `work/linux-arm64-021`. It is not a public tag, release asset set, stable installation instruction or deployment. Public 0.20.0 remains the consumer baseline.
+**Unpublished development only.** Current integration is on [`release/0.21.0-candidate`](https://github.com/Roman-Cuisset/miccamwatch/tree/release/0.21.0-candidate), combining the GUI/ARM work with the main baseline and reorganized guides. The preserved GUI/ARM source snapshot is [`cafd98daf7541f317b44aee98edb3b6efa3af561`](https://github.com/Roman-Cuisset/miccamwatch/tree/cafd98daf7541f317b44aee98edb3b6efa3af561); its earlier development-branch name and run results are historical, not pointers to the current integration. Neither branch is a public tag, release asset set, stable installation instruction or deployment. Public 0.20.0 remains the consumer baseline.
 
-The candidate adds native Linux ARM64, redesigned native consultation on Win32/GTK3/AppKit and unified owned activation. Its **last five-target qualification is an aggregate of platform-specific runs on unchanged platform sources**, not one all-green run of the final repository root:
+**Exact integrated-candidate qualification: pending.** No fresh complete five-target CI result for this integrated candidate is recorded here. Release qualification must identify the exact integrated commit and retain the complete Windows x64, Linux x64/ARM64 and macOS Intel/Apple Silicon results, artifacts and cleanup evidence. The earlier aggregate below does not qualify the new repository root or authorize publication.
 
-| Targets | Qualified functional source | Successful native run and actual scope |
+The candidate adds native Linux ARM64, redesigned native consultation on Win32/GTK3/AppKit and unified owned activation. Its **previous five-target qualification was an aggregate of platform-specific runs on unchanged platform sources**, not one all-green run of the final GUI/ARM snapshot or the new integrated candidate:
+
+| Historical targets | Previously qualified functional source | Successful native run and actual scope |
 | --- | --- | --- |
 | Windows x64 | [`3f52ee4`](https://github.com/Roman-Cuisset/miccamwatch/commit/3f52ee4) | [40062931635](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/40062931635): installed MSI/CLI/GUI/shortcut concurrent activation, retained HWND/owner, eight genuine Explorer popups, portable update and MSI double-ownership refusal |
 | macOS Intel / Apple Silicon | [`4931e00`](https://github.com/Roman-Cuisset/miccamwatch/commit/4931e00) | [40065426316](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/40065426316): securely published socket, AppKit, cold Finder opening, retained window/owner, bundle/LaunchAgent lifecycle and normal removal |
 | Linux x64 / ARM64 | [`519dc1c`](https://github.com/Roman-Cuisset/miccamwatch/commit/519dc1c) | [40078682137](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/40078682137): installed GTK/Gio launcher, exact WM_CLASS, retained XID/owner through activation and normal close/reopen, ELF and privilege boundaries, profiles/menu and owned removal |
 
-The Windows run above also contained then-failing Unix jobs; the macOS-qualified run still had Linux WM_CLASS failures. Later targeted Unix/Linux runs closed those failures without rerunning unchanged successful platform sources. Do not relabel every job in every linked run as successful. The [immutable final candidate qualification record](https://github.com/Roman-Cuisset/miccamwatch/blob/cafd98daf7541f317b44aee98edb3b6efa3af561/docs/ROADMAP.md#L1698-L1718) and [integrated roadmap](ROADMAP.md) preserve that sequence and its limits.
+The Windows run above also contained then-failing Unix jobs; the macOS-qualified run still had Linux WM_CLASS failures. Later targeted Unix/Linux runs closed those failures without rerunning unchanged successful platform sources. Do not relabel every job in every linked run as successful. The [immutable prior GUI/ARM qualification record](https://github.com/Roman-Cuisset/miccamwatch/blob/cafd98daf7541f317b44aee98edb3b6efa3af561/docs/ROADMAP.md#L1698-L1718) and [integrated roadmap](ROADMAP.md) preserve that historical sequence and its limits; fresh exact-candidate CI is a separate gate.
 
 Linux reports covered **21 GTK cases per architecture**, seven languages and Adwaita/light-dark/HighContrast. Installed receipts confirmed exact `MicCamWatch` WM_CLASS, repeated activation, focused Alt+F4 hiding and reopening the same owned window, hidden background startup and real refusal of foreign namespaces/modified assets. The x64 report covered the real 0.20 launcher migration; ARM's historical-migration field stayed `null` because no old public ARM package exists.
 
@@ -76,7 +78,7 @@ Use [Architecture](ARCHITECTURE.md) as the canonical detailed contract/fixture l
 
 ### Match the source before interpreting results
 
-1. Choose the public tag or **exact candidate platform commit** from the matrices above. Inspect that revision's workflow, runner architecture, dependencies, feature flags and artifact reports. A cross-target `check`, newer source tree or green job summary cannot replace that native evidence.
+1. Choose the public tag or the **exact recorded candidate source commit**, not a moving branch tip. The platform commits above reproduce historical evidence only; new integrated qualification must record its own exact commit. Inspect that revision's workflow, runner architecture, dependencies, feature flags and artifact reports. A cross-target `check`, newer source tree or green job summary cannot replace that native evidence.
 2. Public verification starts with release metadata, exact asset bytes and the named checksum entry. Follow [Installation: verify downloads](INSTALLATION.md#verify-downloads), then verify signed build provenance against the exact repository, release workflow, tag/ref, source digest and signer, refusing self-hosted runners where the original proof required hosted runners. `SHA256SUMS` and API digests share the release channel; they are not an independent publisher signature. The checksum manifest is not itself one of the eight attested payload/SBOM subjects.
 3. Inspect the actual retained `app-smoke.json`, `resources.json`, installation/removal receipts and screenshots appropriate to the run, not just workflow color. `comparison_qualified`, baseline/candidate functional success, cleanup, absent hardware and skipped cases have distinct meanings. Private local reports cited by the roadmap are not magically public/downloadable.
 
@@ -112,6 +114,6 @@ Canonical workflow entry points in this checkout:
 | Native scoped removal/delegation | [native-uninstall.yml](../.github/workflows/native-uninstall.yml) |
 | Native Homebrew and Arch recipe lifecycle | [homebrew-native.yml](../.github/workflows/homebrew-native.yml), [arch-package-native.yml](../.github/workflows/arch-package-native.yml) |
 
-For candidate-only drivers/options use the workflow at the qualified candidate commit, not the stable documentation checkout: [candidate CI at cafd98d](https://github.com/Roman-Cuisset/miccamwatch/blob/cafd98daf7541f317b44aee98edb3b6efa3af561/.github/workflows/ci.yml). Native platform selection and five-target ARM/GUI qualification must not be inferred from the older stable workflow matrix.
+For current candidate drivers/options inspect [the integrated candidate's CI workflow](https://github.com/Roman-Cuisset/miccamwatch/blob/release/0.21.0-candidate/.github/workflows/ci.yml), then pin the exact source commit before running or interpreting qualification. The [historical GUI/ARM workflow at cafd98d](https://github.com/Roman-Cuisset/miccamwatch/blob/cafd98daf7541f317b44aee98edb3b6efa3af561/.github/workflows/ci.yml) remains available to reproduce the earlier evidence. Native platform selection and fresh five-target ARM/GUI qualification must not be inferred from the older stable workflow matrix or the prior aggregate.
 
 **Safety gate:** native integration drivers can install/remove packages, alter a disposable account's autostart/clipboard/desktop or exercise controls. Use their documented disposable-host prerequisites and retained ownership/cleanup checks; never strip isolation guards, fix permissions broadly or use the installed user application as a fixture. Hosted prerequisites are not recommended production ACL changes. Publication/deployment workflows require separate explicit authorization; documenting a reproduction path does not authorize a release, tag, device action or website deployment.
