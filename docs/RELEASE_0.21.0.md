@@ -127,7 +127,7 @@ Use [Windows interactive standard-user qualification](WINDOWS_STANDARD_USER.md),
 
 The workflow must finish the existing real portable, MSI shortcut/tray/window lifecycle, MSI manager delegation/removal, genuine Cargo uninstall and retained-data/refusal cases. It requires both native `status=passed` and the **same installed MSI** application's `passed`, `cleanupSafe`, `requireStandardUser` and `standardUserQualified` proof. A timeout/failure retains state instead of force-removing it.
 
-No appropriate VM runner was registered when checked on 2026-10-24. The full scenario remains **not executed**. Parser/C# compilation and read-only context/refusal smoke checks do not close this gate, even if their manual `windows-context` job succeeds. Keep **NOT READY FOR RELEASE** until authentic interactive evidence is retained and reviewed. No personal-PC installation/device action is an authorized fallback.
+No appropriate VM runner was registered when checked on 2026-10-24. The full scenario remains **not executed**. The read-only local smoke and hosted [windows-context run 40127113302](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/40127113302) passed on tooling source `5cc515b`; retained context confirms a real interactive **administrator**, correctly refused as a standard account. Parsing/C# compilation and that safety refusal do not close the GUI/MSI/uninstall gate. Keep **NOT READY FOR RELEASE** until authentic interactive evidence is retained and reviewed. No personal-PC installation/device action is an authorized fallback.
 
 ## Ordered publication plan — future approval required
 

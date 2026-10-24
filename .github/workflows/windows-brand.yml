@@ -13,6 +13,7 @@ on:
       - 'installer/miccamwatch.wxs'
       - 'installer/tests/windows-brand-native.ps1'
       - 'installer/tests/windows-application-native.ps1'
+      - 'installer/tests/windows-fixture-context.ps1'
       - 'site/assets/mark.svg'
       - '.github/workflows/windows-brand.yml'
 
