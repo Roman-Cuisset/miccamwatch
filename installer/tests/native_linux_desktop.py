@@ -235,7 +235,12 @@ def qualify_installed_launcher(root, proof, archive, version):
         activate(desktop)
         time.sleep(.5)
         require(windows() == window and owners() == owner, 'repeat app-menu launch duplicated owner/window')
-        run(['xdotool', 'windowclose', window[0].decode()])
+        # Exercise the window manager's normal close request, not windowclose's
+        # XDestroyWindow, which bypasses GTK's retained-window delete handler.
+        run(['xdotool', 'windowactivate', '--sync', window[0].decode()])
+        require(run(['xdotool', 'getactivewindow']).stdout.strip() == window[0],
+                'refusing close input without the owned consultation focused')
+        run(['xdotool', 'key', '--clearmodifiers', 'Alt+F4'])
         until(lambda: not windows(), 'native close did not hide the retained main window')
         activate(desktop)
         until(lambda: windows() == window, 'app-menu reopen did not reuse the same native window')

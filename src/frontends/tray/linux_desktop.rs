@@ -1032,12 +1032,14 @@ fn run(api: Api, shared: Arc<Shared>, actions: SyncSender<Command>) -> Result<()
     unsafe {
         (api.g_set_prgname)(c"com.roman-cuisset.miccamwatch".as_ptr());
         (api.g_set_application_name)(c"MicCamWatch".as_ptr());
-        (api.gdk_set_program_class)(c"MicCamWatch".as_ptr());
     }
     ensure!(
         unsafe { (api.gtk_init_check)(ptr::null_mut(), ptr::null_mut()) } != 0,
         "Native window unavailable: GTK cannot connect to a display. Run mcw tray open as your desktop user inside the graphical Wayland/X11 session (DISPLAY or WAYLAND_DISPLAY required), not through a headless/root helper. Tray and CLI remain available."
     );
+    // GDK initializes its default X11 class from the program name during init.
+    // Set the launcher identity afterwards, before any toplevel is created.
+    unsafe { (api.gdk_set_program_class)(c"MicCamWatch".as_ptr()) };
     let initial = shared
         .view
         .lock()
