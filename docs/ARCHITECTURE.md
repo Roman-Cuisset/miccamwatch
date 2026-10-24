@@ -1483,3 +1483,36 @@ coordinated corrective release qualification without moving either release tag.
 The newly requested cross-platform direct profile menu is recorded separately
 in ROADMAP P1-TRAY-PROFILES: macOS is delivered, Windows/Linux implementation
 is not claimed by 0.18.1.
+
+## 0.21 development: one desktop application, scoped native ownership
+
+`mcw` remains the advanced CLI and Unix desktop host. Windows additionally ships
+the console-free `mcw-tray.exe`; the MSI is their Windows Installer package, not
+a third resident application. One MSI product owns one Start Menu shortcut,
+official icons and the shared `MicCamWatch.MicCamWatch` application identity.
+
+Explicit activation opens the retained native consultation; background startup
+does not reveal it. Repeated launches authenticate the installed image and
+operational namespace before reusing its owner. Closing the consultation hides
+it rather than ending monitoring. Different installations or namespaces are not
+silently adopted, merged or allowed to steal device-control ownership.
+
+Linux's managed 0.21+ installer owns one application-menu entry and its icon,
+separately from opt-in session startup. Both use Gio-compatible non-shell
+activation and check the real executable. Receipts pin asset paths and digests;
+refresh/removal refuse foreign or modified assets. The macOS Finder launcher is
+ephemeral: one Rust frontend and its retained AppKit accessory helper own the
+menu bar and consultation. Native-ready macOS opens use the serialized helper
+input independently of observation polling; requests before readiness remain
+queued and a closed transport cannot acknowledge a new open.
+
+Update/removal follows the installation owner. Registered Windows installations
+refuse portable binary self-update before network, staging or tray shutdown;
+upgrade them with their owning MSI/package manager. Portable/Cargo Windows pairs
+retain the verified transactional updater. Mac app bundles require whole-app
+replacement; managed Unix layouts retain receipt-based updates. Restore owned
+protections and quit normally before external package replacement: this is not
+an enforcement hook in Windows Installer or permission to abandon restoration.
+
+Current source commits, native integration receipts and outstanding physical,
+session, accessibility and taskbar/Dock checks are tracked in `ROADMAP.md`.
