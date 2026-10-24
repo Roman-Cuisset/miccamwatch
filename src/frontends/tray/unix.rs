@@ -20,7 +20,7 @@ use std::{
         io::AsRawFd,
         net::{UnixListener, UnixStream},
     },
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -652,9 +652,120 @@ impl DesktopInput {
     }
 }
 
+struct StagedSocket {
+    directory: PathBuf,
+    path: PathBuf,
+    directory_identity: (u64, u64),
+    socket_identity: Option<(u64, u64)>,
+}
+impl StagedSocket {
+    fn new(destination: &Path) -> Result<Self> {
+        use std::os::unix::ffi::{OsStrExt, OsStringExt};
+        let template = destination
+            .parent()
+            .context("tray socket parent unavailable")?
+            .join(".sXXXXXX");
+        let mut template =
+            std::ffi::CString::new(template.into_os_string().into_vec())?.into_bytes_with_nul();
+        ensure!(
+            !unsafe { libc::mkdtemp(template.as_mut_ptr().cast()) }.is_null(),
+            "cannot create private tray socket staging directory: {}",
+            std::io::Error::last_os_error()
+        );
+        template.pop();
+        let directory = PathBuf::from(std::ffi::OsString::from_vec(template));
+        let metadata = fs::symlink_metadata(&directory)?;
+        ensure!(
+            metadata.is_dir() && metadata.uid() == uid() && metadata.mode() & 0o077 == 0,
+            "tray socket staging directory ownership or permissions are unsafe"
+        );
+        let path = directory.join("s");
+        ensure!(
+            path.as_os_str().as_bytes().len() < 104,
+            "staged tray socket path exceeds native Unix socket limit"
+        );
+        Ok(Self {
+            directory,
+            path,
+            directory_identity: (metadata.dev(), metadata.ino()),
+            socket_identity: None,
+        })
+    }
+
+    fn bind(&mut self) -> Result<UnixListener> {
+        let listener = UnixListener::bind(&self.path)?;
+        let metadata = fs::symlink_metadata(&self.path)?;
+        ensure!(
+            metadata.file_type().is_socket() && metadata.uid() == uid(),
+            "staged tray socket ownership is unsafe"
+        );
+        self.socket_identity = Some((metadata.dev(), metadata.ino()));
+        fs::set_permissions(&self.path, fs::Permissions::from_mode(0o600))?;
+        listener.set_nonblocking(true)?;
+        Ok(listener)
+    }
+
+    fn publish(&self, destination: &Path) -> Result<()> {
+        use std::os::unix::ffi::OsStrExt;
+        let metadata = fs::symlink_metadata(&self.path)?;
+        ensure!(
+            self.socket_identity == Some((metadata.dev(), metadata.ino()))
+                && metadata.file_type().is_socket()
+                && metadata.uid() == uid()
+                && metadata.mode() & 0o777 == 0o600,
+            "staged tray socket changed before publication"
+        );
+        let source = std::ffi::CString::new(self.path.as_os_str().as_bytes())?;
+        let destination = std::ffi::CString::new(destination.as_os_str().as_bytes())?;
+        #[cfg(target_os = "linux")]
+        let result = unsafe {
+            libc::renameat2(
+                libc::AT_FDCWD,
+                source.as_ptr(),
+                libc::AT_FDCWD,
+                destination.as_ptr(),
+                libc::RENAME_NOREPLACE,
+            )
+        };
+        #[cfg(target_os = "macos")]
+        let result =
+            unsafe { libc::renamex_np(source.as_ptr(), destination.as_ptr(), libc::RENAME_EXCL) };
+        if result != 0 {
+            return Err(std::io::Error::last_os_error())
+                .context("cannot exclusively publish native tray socket");
+        }
+        Ok(())
+    }
+}
+fn remove_owned_socket(path: &Path, identity: (u64, u64)) {
+    if let Ok(metadata) = fs::symlink_metadata(path)
+        && metadata.file_type().is_socket()
+        && metadata.uid() == uid()
+        && (metadata.dev(), metadata.ino()) == identity
+    {
+        let _ = fs::remove_file(path);
+    }
+}
+impl Drop for StagedSocket {
+    fn drop(&mut self) {
+        if let Ok(metadata) = fs::symlink_metadata(&self.directory)
+            && metadata.is_dir()
+            && !metadata.file_type().is_symlink()
+            && metadata.uid() == uid()
+            && (metadata.dev(), metadata.ino()) == self.directory_identity
+        {
+            if let Some(identity) = self.socket_identity {
+                remove_owned_socket(&self.path, identity);
+            }
+            let _ = fs::remove_dir(&self.directory);
+        }
+    }
+}
+
 struct Lifecycle {
     _lock: File,
     path: PathBuf,
+    socket_identity: (u64, u64),
     ready: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
     finished: Arc<AtomicBool>,
@@ -703,9 +814,16 @@ impl Lifecycle {
             );
             fs::remove_file(&path)?;
         }
-        let listener = UnixListener::bind(&path)?;
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
-        listener.set_nonblocking(true)?;
+        // Bind only inside a private directory. Publish atomically after the
+        // socket is safe for consumers; never expose bind's umask-derived mode
+        // or replace an entry appearing while this owner prepares its socket.
+        let mut staged = StagedSocket::new(&path)?;
+        let listener = staged.bind()?;
+        let socket_identity = staged
+            .socket_identity
+            .context("staged tray socket identity unavailable")?;
+        staged.publish(&path)?;
+        drop(staged);
         let ready = Arc::new(AtomicBool::new(false));
         let stop = Arc::new(AtomicBool::new(false));
         let finished = Arc::new(AtomicBool::new(false));
@@ -824,6 +942,7 @@ impl Lifecycle {
         Ok(Self {
             _lock: lock,
             path,
+            socket_identity,
             ready,
             stop,
             finished,
@@ -882,7 +1001,7 @@ impl Drop for Lifecycle {
         if let Some(server) = self.server.take() {
             let _ = server.join();
         }
-        let _ = fs::remove_file(&self.path);
+        remove_owned_socket(&self.path, self.socket_identity);
     }
 }
 
@@ -2793,6 +2912,99 @@ mod menu_tests {
         assert!(owner.ready.load(Ordering::Acquire));
         assert!(open_running().is_err());
         assert!(!owner.open_requested.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn control_socket_is_private_until_prepared_publication() {
+        if run_isolated_menu_fixture(
+            "frontends::tray::menu_tests::control_socket_is_private_until_prepared_publication",
+        ) {
+            return;
+        }
+        let destination = socket_path().unwrap();
+        let mut staged = StagedSocket::new(&destination).unwrap();
+        let directory = staged.directory.clone();
+        assert_eq!(
+            fs::symlink_metadata(&directory).unwrap().mode() & 0o777,
+            0o700
+        );
+        let listener = staged.bind().unwrap();
+        assert_eq!(
+            fs::symlink_metadata(&staged.path).unwrap().mode() & 0o777,
+            0o600
+        );
+        let flags = unsafe { libc::fcntl(listener.as_raw_fd(), libc::F_GETFL) };
+        assert!(flags >= 0 && flags & libc::O_NONBLOCK != 0);
+        assert!(connect_control().unwrap().is_none());
+        staged.publish(&destination).unwrap();
+        let identity = staged.socket_identity.unwrap();
+        drop(staged);
+        assert!(!directory.exists());
+        let consumer = connect_control()
+            .unwrap()
+            .expect("published socket was unavailable to the real consumer");
+        let (peer, _) = listener.accept().unwrap();
+        verify_peer(&peer).unwrap();
+        drop(consumer);
+        drop(peer);
+        drop(listener);
+        remove_owned_socket(&destination, identity);
+        assert!(!destination.exists());
+    }
+
+    #[test]
+    fn socket_publication_refuses_foreign_destination_and_cleans_own_staging() {
+        if run_isolated_menu_fixture(
+            "frontends::tray::menu_tests::socket_publication_refuses_foreign_destination_and_cleans_own_staging",
+        ) {
+            return;
+        }
+        let destination = socket_path().unwrap();
+        let mut staged = StagedSocket::new(&destination).unwrap();
+        let directory = staged.directory.clone();
+        let listener = staged.bind().unwrap();
+        let mut foreign = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .mode(0o600)
+            .open(&destination)
+            .unwrap();
+        foreign.write_all(b"unrelated destination").unwrap();
+        let before = foreign.metadata().unwrap();
+        assert!(staged.publish(&destination).is_err());
+        assert!(connect_control().is_err());
+        let after = fs::symlink_metadata(&destination).unwrap();
+        assert_eq!((before.dev(), before.ino()), (after.dev(), after.ino()));
+        assert_eq!(fs::read(&destination).unwrap(), b"unrelated destination");
+        drop(staged);
+        drop(listener);
+        assert!(!directory.exists());
+        assert!(destination.is_file());
+    }
+
+    #[test]
+    fn lifecycle_cleanup_preserves_replacement_socket() {
+        if run_isolated_menu_fixture(
+            "frontends::tray::menu_tests::lifecycle_cleanup_preserves_replacement_socket",
+        ) {
+            return;
+        }
+        let owner = match Lifecycle::acquire().unwrap() {
+            LeaseAcquisition::Acquired(owner) => owner,
+            LeaseAcquisition::Contended => panic!("isolated owner lease was contended"),
+        };
+        let destination = owner.path.clone();
+        let retired = destination.with_extension("retired");
+        fs::rename(&destination, &retired).unwrap();
+        let foreign = UnixListener::bind(&destination).unwrap();
+        fs::set_permissions(&destination, fs::Permissions::from_mode(0o600)).unwrap();
+        let before = fs::symlink_metadata(&destination).unwrap();
+        drop(owner);
+        let after = fs::symlink_metadata(&destination).unwrap();
+        assert_eq!((before.dev(), before.ino()), (after.dev(), after.ino()));
+        drop(foreign);
+        fs::remove_file(destination).unwrap();
+        fs::remove_file(retired).unwrap();
     }
 
     fn observed() -> Snapshot {

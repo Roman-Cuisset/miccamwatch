@@ -330,7 +330,7 @@ def main():
                 registration = home / 'Library/LaunchAgents/com.roman-cuisset.miccamwatch.tray.plist'
                 receipt = home / 'config/MicCamWatch/autostart/autostart.json'
 
-                # Hold a genuine background owner after flock but before bind,
+                # Hold a genuine background owner after flock but before publication,
                 # then deliver the real LaunchServices activation in that gap.
                 # Only the owner is interposed; AppKit and Finder stay native.
                 cold_socket = next(path for path in preserved if path.name == 'history.jsonl').parent / 'tray-runtime/control.sock'
@@ -351,9 +351,9 @@ def main():
                     try:
                         require(select.select([ready_read], [], [], 30)[0] and
                                 os.read(ready_read, 1) == b'L',
-                                'background owner never reached the real lease-before-bind barrier')
+                                'background owner never reached the real lease-before-publication barrier')
                         require(not cold_socket.exists() and active.poll() is None,
-                                'cold barrier did not retain a live owner before socket creation')
+                                'cold barrier did not retain a live owner before socket publication')
                         with cold_socket.with_suffix('.lock').open('r+b') as lease:
                             try:
                                 fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -364,7 +364,7 @@ def main():
                         record('cold-finder-open', finder_command('cold-finder-open'), env=env)
                         time.sleep(.5)
                         require(active.poll() is None and not cold_socket.exists(),
-                                'background owner escaped its pre-bind barrier')
+                                'background owner escaped its pre-publication barrier')
                         require(len([pid for pid, _, path in processes() if path == str(cli)]) == 2,
                                 'explicit Finder open was lost instead of waiting for the cold owner')
                         os.write(release_write, b'R')

@@ -1516,3 +1516,11 @@ an enforcement hook in Windows Installer or permission to abandon restoration.
 
 Current source commits, native integration receipts and outstanding physical,
 session, accessibility and taskbar/Dock checks are tracked in `ROADMAP.md`.
+
+The Unix control endpoint remains `data_dir/tray-runtime/control.sock`, with a
+native byte length below 104; overlong configured data locations are explicitly
+refused, not silently redirected into another namespace. Publication prepares a
+0600 nonblocking socket inside private 0700 staging, then exclusively renames it
+to the discoverable endpoint. Consumers never accept bind's transient default
+permissions. No process-global umask change or unsafe-socket retry is involved;
+cleanup checks the owned inode instead of unlinking a replacement endpoint.

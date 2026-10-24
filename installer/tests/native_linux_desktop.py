@@ -40,6 +40,9 @@ def qualify_installed_launcher(root, proof, archive, version):
     shell = shutil.which('bash')
     require(shell, 'bash is required for isolated installer fixture')
     sandbox = Sandbox(root, 'installed-launcher 日本語', 'bash', shell)
+    # Keep the adversarial HOME/executable path, but give sockaddr_un a private
+    # XDG data location within its native byte limit. Include KeyFile metacharacters.
+    sandbox.env['XDG_DATA_HOME'] = str(root / 'd 日本語 %f\\ "q"')
     sandbox.prefix = sandbox.home / 'native 日本語 %f \\slash "quote" $literal'
     sandbox.binary = sandbox.prefix / 'bin/mcw'
     for key in ('DISPLAY', 'XAUTHORITY', 'DBUS_SESSION_BUS_ADDRESS', 'XDG_RUNTIME_DIR',
@@ -258,10 +261,12 @@ def qualify_installed_launcher(root, proof, archive, version):
         require(refused.returncode != 0 and windows() == window and owners() == owner,
                 'a foreign executable adopted or disrupted the existing owner')
         (proof / 'foreign-open.stderr').write_bytes(refused.stderr)
-        foreign_namespace = dict(sandbox.env, XDG_DATA_HOME=str(sandbox.home / 'foreign data namespace'))
+        # Keep the same socket endpoint: a different data root would only test
+        # an absent/overlong socket, not the owner's namespace authentication.
+        foreign_namespace = dict(sandbox.env, XDG_CONFIG_HOME=str(root / 'foreign-config'))
         refused = command('tray', 'open', env=foreign_namespace, check=False)
         require(refused.returncode != 0 and windows() == window and owners() == owner,
-                'a different data namespace adopted or disrupted the existing owner')
+                'a different configuration namespace adopted or disrupted the existing owner')
         (proof / 'foreign-namespace.stderr').write_bytes(refused.stderr)
         result = {'activation': 'real Gio desktop-file launch',
                   'background_owner_pid': owner[0], 'retained_window_id': window[0].decode(),
@@ -274,6 +279,7 @@ def qualify_installed_launcher(root, proof, archive, version):
         result['wm_class'] = [value.decode() for value in window_identity]
         result['foreign_namespace_refused'] = True
         result['missing_target_entries_rejected'] = missing_target_results
+        result['xdg_data_home'] = sandbox.env['XDG_DATA_HOME']
         command('tray', 'stop')
         until(lambda: not owners(), 'owned Exit did not stop the installed native owner')
         command('autostart', 'disable')
