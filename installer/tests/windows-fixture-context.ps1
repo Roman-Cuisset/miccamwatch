@@ -37,6 +37,7 @@ public static class McwAppContext {
     }
     [DllImport("advapi32.dll", SetLastError=true)] static extern bool OpenProcessToken(IntPtr process,uint access,out IntPtr token);
     [DllImport("advapi32.dll", SetLastError=true)] static extern bool GetTokenInformation(IntPtr token,int kind,IntPtr data,uint length,out uint needed);
+    [DllImport("advapi32.dll", EntryPoint="GetTokenInformation", SetLastError=true)] static extern bool GetTokenInteger(IntPtr token,int kind,ref int data,uint length,out uint needed);
     [DllImport("advapi32.dll")] static extern bool IsTokenRestricted(IntPtr token);
     [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
     [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
@@ -82,7 +83,13 @@ public static class McwAppContext {
         return data;
     }
     static int TokenInt(IntPtr token,int kind) {
-        var data=TokenData(token,kind); try { return Marshal.ReadInt32(data); } finally { Marshal.FreeHGlobal(data); }
+        // TokenHasRestrictions can return a one-byte BOOLEAN, not a DWORD.
+        // ref (not out) preserves zeroed upper bytes when Windows writes only one byte.
+        int value=0; uint needed;
+        if(!GetTokenInteger(token,kind,ref value,sizeof(int),out needed)) throw new Win32Exception();
+        if(needed!=sizeof(int) && !(kind==21 && needed==sizeof(byte)))
+            throw new InvalidOperationException("Unexpected token scalar width: "+needed);
+        return value;
     }
     static string ObjectName(IntPtr handle) {
         var text=new StringBuilder(1024); uint needed;

@@ -44,8 +44,38 @@ try {
         }
     }
     . (Join-Path $PSScriptRoot 'windows-fixture-context.ps1')
+    # Independent byte-buffer oracle: a one-byte native result must not become
+    # a random "filtered token" rejection through an out-of-bounds DWORD read.
+    Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+public static class McwTokenFlagReference {
+    [StructLayout(LayoutKind.Sequential, Pack=1)] struct FlagBytes { public byte A,B,C,D; }
+    [DllImport("advapi32.dll", SetLastError=true)] static extern bool OpenProcessToken(IntPtr process,uint access,out IntPtr token);
+    [DllImport("advapi32.dll", EntryPoint="GetTokenInformation", SetLastError=true)] static extern bool ReadFlag(IntPtr token,int kind,ref FlagBytes value,uint length,out uint needed);
+    [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
+    public static bool Read(out uint returnedBytes) {
+        IntPtr token;
+        if(!OpenProcessToken(new IntPtr(-1),8,out token)) throw new Win32Exception();
+        try {
+            var bytes=new FlagBytes();
+            if(!ReadFlag(token,21,ref bytes,4,out returnedBytes)) throw new Win32Exception();
+            if(returnedBytes!=1 && returnedBytes!=4) throw new InvalidOperationException("Unexpected native flag width: "+returnedBytes);
+            return (bytes.A|bytes.B|bytes.C|bytes.D)!=0;
+        } finally { CloseHandle(token); }
+    }
+}
+'@
+    $report.compiledTypes++
+    [uint32]$nativeRestrictionBytes=0
+    $nativeRestrictionFlag=[McwTokenFlagReference]::Read([ref]$nativeRestrictionBytes)
+    $report['nativeRestrictionReference']=[ordered]@{returnedBytes=$nativeRestrictionBytes;hasRestrictions=$nativeRestrictionFlag}
     $context=Get-McwStandardUserContext
     $context | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $output 'private-actual-context.json') -Encoding UTF8
+    if ([bool]$context.hasRestrictions -ne $nativeRestrictionFlag) {
+        throw 'Observed restriction history differs from the native byte-buffer query; standard-user admission is unreliable.'
+    }
     try { Assert-McwStandardUserContext -Context $context; $report.actualStandardContextAccepted=$true }
     catch { $report['standardContextRefusal']=$_.Exception.Message }
     # Ground expected rejection in actual native account/session observations.
