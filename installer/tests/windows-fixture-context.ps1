@@ -1,10 +1,14 @@
 param(
     [switch]$Observe,
     [switch]$ValidateHost,
-    [Alias('RequireStandardUser')][switch]$ValidateFixtureStandardUser
+    [Alias('RequireStandardUser')][switch]$ValidateFixtureStandardUser,
+    [Alias('LocalDisposableVm')][switch]$ValidateFixtureLocalVm,
+    [Alias('FixtureRoot')][string]$ValidateFixtureRoot
 )
 # Read-only context observation and explicit disposable-VM admission.
 # No account/token/ACL/service/device/desktop changes are performed here.
+# CLI parameter variables are distinct from caller switches because this file
+# is also dot-sourced by the real application and qualification consumers.
 function Initialize-McwFixtureContext {
     if ('McwAppContext' -as [type]) { return }
     Add-Type -TypeDefinition @'
@@ -198,21 +202,23 @@ function Assert-McwStandardUserContext {
         throw 'The same standard account/session must own the real unelevated Explorer notification-area window.'
     }
 }
-function Assert-McwDisposableFixtureHost {
-    param([switch]$RequireStandardUser)
-    if ($env:OS -cne 'Windows_NT' -or $env:GITHUB_ACTIONS -cne 'true') {
-        throw 'A genuine GitHub Actions Windows fixture host is required; never fake hosted markers on a personal PC.'
+function Assert-McwFixtureRoot {
+    param([string]$Path)
+    if (-not [IO.Path]::IsPathRooted($Path) -or -not (Test-Path -LiteralPath $Path -PathType Container)) {
+        throw 'The fixture directory must already exist at an absolute path.'
     }
-    if ($env:RUNNER_ENVIRONMENT -ceq 'github-hosted') {
-        $context=$null
-        if ($RequireStandardUser) { $context=Get-McwStandardUserContext; Assert-McwStandardUserContext -Context $context }
-        return @{kind='github-hosted';standardUserContext=$context}
+    $item=Get-Item -LiteralPath $Path -Force
+    $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    $owner=(Get-Acl -LiteralPath $item.FullName).GetOwner([Security.Principal.SecurityIdentifier]).Value
+    if ($owner -cne $sid) { throw 'The fixture root must actually be owned by the logged-in standard account.' }
+    for ($ancestor=$item; $null -ne $ancestor; $ancestor=$ancestor.Parent) {
+        if (($ancestor.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw 'Fixture paths must not traverse a junction or other reparse point.'
+        }
     }
-    if ($env:RUNNER_ENVIRONMENT -cne 'self-hosted' -or -not $RequireStandardUser -or
-        $env:MCW_DISPOSABLE_STANDARD_VM -cne 'true' -or
-        $env:RUNNER_NAME -cnotmatch '^mcw-standard-disposable-[A-Za-z0-9._-]+$') {
-        throw 'Self-hosted qualification requires an explicitly disposable standard-user VM, dedicated runner identity and fresh mcw_qa_* account.'
-    }
+    return $item.FullName
+}
+function Get-McwVirtualGuest {
     $machine=Get-CimInstance Win32_ComputerSystem -ErrorAction Stop
     $manufacturer=[string]$machine.Manufacturer; $model=[string]$machine.Model
     $recognized=($manufacturer -eq 'Microsoft Corporation' -and $model -eq 'Virtual Machine') -or
@@ -222,13 +228,49 @@ function Assert-McwDisposableFixtureHost {
     if (-not $machine.HypervisorPresent -or -not $recognized) {
         throw 'Recognized virtual-guest metadata is required; HypervisorPresent alone does not admit a physical VBS/Hyper-V host.'
     }
+    return @{manufacturer=$manufacturer;model=$model}
+}
+function Assert-McwDisposableFixtureHost {
+    param([switch]$RequireStandardUser,[switch]$LocalDisposableVm,[string]$FixtureRoot)
+    if ($env:OS -cne 'Windows_NT') { throw 'A Windows fixture host is required.' }
+    if ($LocalDisposableVm) {
+        if (-not $RequireStandardUser -or $env:GITHUB_ACTIONS -ceq 'true' -or $env:RUNNER_ENVIRONMENT) {
+            throw 'Local disposable-guest mode requires strict standard-user proof and must not impersonate or mix with GitHub runner modes.'
+        }
+        $guest=Get-McwVirtualGuest
+        $context=Get-McwStandardUserContext
+        Assert-McwStandardUserContext -Context $context
+        if (($context.name -split '\\')[-1] -cnotmatch '^mcw_qa_[A-Za-z0-9]{4,12}$') {
+            throw 'The actual local guest token must identify a fresh mcw_qa_* fixture account.'
+        }
+        $root=Assert-McwFixtureRoot -Path $FixtureRoot
+        return @{kind='local-disposable-vm';standardUserContext=$context;fixtureRoot=$root
+            manufacturer=$guest.manufacturer;model=$guest.model
+            disposalAuthority='Explicit operator-authorized local disposable guest; VM metadata is not cryptographic attestation.'}
+    }
+    if ($FixtureRoot) { throw 'An explicit fixture root is only accepted in local disposable-guest mode.' }
+    if ($env:GITHUB_ACTIONS -cne 'true') {
+        throw 'A genuine GitHub Actions Windows fixture host is required; never fake hosted markers on a personal PC.'
+    }
+    if ($env:RUNNER_ENVIRONMENT -ceq 'github-hosted') {
+        $context=$null
+        if ($RequireStandardUser) { $context=Get-McwStandardUserContext; Assert-McwStandardUserContext -Context $context }
+        return @{kind='github-hosted';standardUserContext=$context;fixtureRoot=$env:RUNNER_TEMP}
+    }
+    if ($env:RUNNER_ENVIRONMENT -cne 'self-hosted' -or -not $RequireStandardUser -or
+        $env:MCW_DISPOSABLE_STANDARD_VM -cne 'true' -or
+        $env:RUNNER_NAME -cnotmatch '^mcw-standard-disposable-[A-Za-z0-9._-]+$') {
+        throw 'Self-hosted qualification requires an explicitly disposable standard-user VM, dedicated runner identity and fresh mcw_qa_* account.'
+    }
+    $guest=Get-McwVirtualGuest
     $context=Get-McwStandardUserContext
     Assert-McwStandardUserContext -Context $context
     if (($context.name -split '\\')[-1] -cnotmatch '^mcw_qa_[A-Za-z0-9]{4,12}$') {
         throw 'The account name resolved from the actual token must be a fresh mcw_qa_* fixture identity; USERNAME is not authority.'
     }
-    return @{kind='dedicated-standard-vm';standardUserContext=$context;manufacturer=$manufacturer;model=$model
+    return @{kind='dedicated-standard-vm';standardUserContext=$context;fixtureRoot=$env:RUNNER_TEMP
+        manufacturer=$guest.manufacturer;model=$guest.model
         disposalAuthority='Explicit operator-provisioned ephemeral guest; metadata is not cryptographic attestation.'}
 }
 if ($Observe) { Get-McwStandardUserContext | ConvertTo-Json -Depth 12 -Compress }
-if ($ValidateHost) { Assert-McwDisposableFixtureHost -RequireStandardUser:$ValidateFixtureStandardUser | ConvertTo-Json -Depth 12 -Compress }
+if ($ValidateHost) { Assert-McwDisposableFixtureHost -RequireStandardUser:$ValidateFixtureStandardUser -LocalDisposableVm:$ValidateFixtureLocalVm -FixtureRoot $ValidateFixtureRoot | ConvertTo-Json -Depth 12 -Compress }

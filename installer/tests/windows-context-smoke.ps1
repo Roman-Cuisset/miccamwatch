@@ -14,7 +14,7 @@ while ($ancestor) {
     $ancestor=Split-Path -Parent $ancestor
 }
 [void](New-Item -ItemType Directory -Path $output)
-$report=[ordered]@{safetySmokeStatus='running';qualificationStatus='not_executed';productActionsInvoked=$false;parsedScripts=@();compiledTypes=0;actualStandardContextAccepted=$false;actualHostAdmissionAccepted=$false;error=$null}
+$report=[ordered]@{safetySmokeStatus='running';qualificationStatus='not_executed';productActionsInvoked=$false;parsedScripts=@();compiledTypes=0;actualStandardContextAccepted=$false;actualHostAdmissionAccepted=$false;actualLocalHostAdmissionAccepted=$false;error=$null}
 try {
     foreach ($name in @('windows-fixture-context.ps1','windows-application-native.ps1','windows-standard-user.ps1','windows-context-smoke.ps1')) {
         $path=Join-Path $PSScriptRoot $name
@@ -57,6 +57,13 @@ try {
     catch { $report['hostAdmissionRefusal']=$_.Exception.Message }
     if (($env:GITHUB_ACTIONS -cne 'true' -or $actuallyUnsuitable) -and $report.actualHostAdmissionAccepted) {
         throw 'An actual personal or unsuitable runner context was incorrectly admitted.'
+    }
+    try {
+        $null=Assert-McwDisposableFixtureHost -RequireStandardUser -LocalDisposableVm -FixtureRoot $output
+        $report.actualLocalHostAdmissionAccepted=$true
+    } catch { $report['localHostAdmissionRefusal']=$_.Exception.Message }
+    if (($env:GITHUB_ACTIONS -ceq 'true' -or $actuallyUnsuitable) -and $report.actualLocalHostAdmissionAccepted) {
+        throw 'An actually unsuitable or GitHub-mixed context was incorrectly admitted as a local standard guest.'
     }
     $report['observedStation']=$context.windowStation
     $report['observedSessionId']=$context.sessionId

@@ -1,5 +1,8 @@
 param(
-    [string]$AcknowledgeDisposableVm = 'false'
+    [string]$AcknowledgeDisposableVm = 'false',
+    [switch]$LocalDisposableVm,
+    [string]$FixtureRoot,
+    [string]$ExpectedSourceCommit
 )
 
 # This script never provisions accounts, changes services, elevates, or launches
@@ -12,22 +15,6 @@ function Write-FixtureJson {
     [IO.File]::WriteAllText($Path, (($Value | ConvertTo-Json -Depth 30) + "`n"), (New-Object Text.UTF8Encoding($false)))
 }
 
-function Assert-OwnedDirectory {
-    param([string]$Path)
-    if (-not [IO.Path]::IsPathRooted($Path) -or -not (Test-Path -LiteralPath $Path -PathType Container)) {
-        throw 'The real runner directory must already exist at an absolute path.'
-    }
-    $item = Get-Item -LiteralPath $Path -Force
-    $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-    $owner = (Get-Acl -LiteralPath $item.FullName).GetOwner([Security.Principal.SecurityIdentifier]).Value
-    if ($owner -cne $sid) { throw 'RUNNER_TEMP must actually be owned by the logged-in standard account.' }
-    for ($ancestor = $item; $null -ne $ancestor; $ancestor = $ancestor.Parent) {
-        if (($ancestor.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-            throw 'Runner directories must not traverse a junction or other reparse point.'
-        }
-    }
-    return $item.FullName
-}
 
 function Assert-NoExistingProductOrData {
     if (@(Get-Process -Name 'mcw', 'mcw-tray' -ErrorAction SilentlyContinue).Count -ne 0) {
@@ -138,15 +125,27 @@ function Invoke-FixtureCommand {
     return [pscustomobject]@{ stdout = $stdout; stderr = $stderr; exitCode = $code }
 }
 
-# Do not accept an arbitrary output path, fake profile, or alternate account.
-$runnerTemp = Assert-OwnedDirectory $env:RUNNER_TEMP
+# Admission is read-only and must precede even proof-directory creation.
+if ($AcknowledgeDisposableVm -cne 'true') { throw 'Explicit disposable-VM acknowledgement must be true; false is a failure, not a skip.' }
+if (-not $LocalDisposableVm -and ($FixtureRoot -or $ExpectedSourceCommit)) {
+    throw 'Local fixture/source arguments require explicit LocalDisposableVm mode.'
+}
+if ($LocalDisposableVm -and $ExpectedSourceCommit -cnotmatch '^[0-9a-f]{40}$') {
+    throw 'Local qualification requires the independently selected full candidate source SHA.'
+}
+. (Join-Path $PSScriptRoot 'windows-fixture-context.ps1')
+$initialHost=Assert-McwDisposableFixtureHost -RequireStandardUser -LocalDisposableVm:$LocalDisposableVm -FixtureRoot $FixtureRoot
+$expectedKind=if ($LocalDisposableVm) { 'local-disposable-vm' } else { 'dedicated-standard-vm' }
+if ($initialHost.kind -cne $expectedKind) { throw 'Qualification host does not match the explicitly selected disposable-guest mode.' }
+$runnerTemp=Assert-McwFixtureRoot -Path $initialHost.fixtureRoot
 $proof = Join-Path $runnerTemp 'mcw-standard-user-proof'
 $cargoRoot = Join-Path $runnerTemp 'mcw-cargo-uninstall'
 if (Test-Path -LiteralPath $proof) { throw 'A prior qualification directory exists; retain it and revert/reprovision the guest.' }
 [void](New-Item -ItemType Directory -Path $proof)
 $resultPath = Join-Path $proof 'orchestrator-result.json'
 $report = [ordered]@{ status = 'running'; platform = 'Windows'; standardUserQualified = $false;
-    startedUtc = [DateTime]::UtcNow.ToString('o'); nativeResult = 'result.json'; firstFailure = $null }
+    startedUtc = [DateTime]::UtcNow.ToString('o'); nativeResult = 'result.json'; firstFailure = $null
+    fixtureHostKind=$initialHost.kind; localDisposableVm=[bool]$LocalDisposableVm }
 Write-FixtureJson $resultPath $report
 $exitCode = 1
 $oldTemp = $env:TEMP
@@ -160,18 +159,10 @@ try {
         sessionId = (Get-Process -Id $PID).SessionId; userProfile = $env:USERPROFILE;
         appData = $env:APPDATA; localAppData = $env:LOCALAPPDATA; runnerTemp = $runnerTemp
     })
-    if ($AcknowledgeDisposableVm -cne 'true') { throw 'Explicit disposable-VM acknowledgement must be true; default/false is a failure, not a skip.' }
-    if ($env:GITHUB_ACTIONS -cne 'true' -or $env:RUNNER_ENVIRONMENT -cne 'self-hosted' -or
-        $env:MCW_DISPOSABLE_STANDARD_VM -cne 'true' -or $env:RUNNER_NAME -cnotlike 'mcw-standard-disposable-*') {
-        throw 'Only a genuine explicitly provisioned GitHub self-hosted disposable standard-user VM is admitted.'
-    }
-    . (Join-Path $PSScriptRoot 'windows-fixture-context.ps1')
-    $observedContext = Get-McwStandardUserContext
+    # Preserve the actual inherited account/profile observations from admission.
+    $observedContext=$initialHost.standardUserContext
     Write-FixtureJson (Join-Path $proof 'private-standard-user-context.json') $observedContext
-    $hostContext = Assert-McwDisposableFixtureHost -RequireStandardUser
-    Write-FixtureJson (Join-Path $proof 'private-host-context.json') $hostContext
-    Assert-McwStandardUserContext -Context $hostContext.standardUserContext
-    if ($hostContext.kind -cne 'dedicated-standard-vm') { throw 'This workflow requires dedicated-standard-vm admission, never the hosted batch path.' }
+    Write-FixtureJson (Join-Path $proof 'private-host-context.json') $initialHost
     if (Test-Path -LiteralPath $cargoRoot) { throw 'Dedicated Cargo uninstall root already exists; refuse reuse.' }
     Assert-NoExistingProductOrData
     foreach ($name in @('AudioEndpointBuilder', 'Audiosrv')) {
@@ -180,15 +171,26 @@ try {
         }
     }
     $repository = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).Path
-    if (-not [string]::Equals($repository, (Resolve-Path -LiteralPath $env:GITHUB_WORKSPACE).Path, [StringComparison]::OrdinalIgnoreCase)) {
+    if ($LocalDisposableVm) {
+        if (-not $repository.StartsWith($runnerTemp.TrimEnd('\')+'\',[StringComparison]::OrdinalIgnoreCase)) {
+            throw 'The local candidate checkout must be inside the actual owned guest fixture root.'
+        }
+    } elseif (-not [string]::Equals($repository, (Resolve-Path -LiteralPath $env:GITHUB_WORKSPACE).Path, [StringComparison]::OrdinalIgnoreCase)) {
         throw 'The actual checked-out GitHub workspace must contain this orchestrator.'
     }
     Set-Location -LiteralPath $repository
     $git = (Get-Command git -CommandType Application -ErrorAction Stop).Source
     $sourceCommand = Invoke-FixtureCommand 'source-revision' $git @('rev-parse', 'HEAD')
     $sourceCommit = (Get-Content -LiteralPath $sourceCommand.stdout -Raw).Trim()
-    if ($sourceCommit -cnotmatch '^[0-9a-f]{40}$' -or $sourceCommit -cne $env:GITHUB_SHA) {
-        throw 'Checked-out source must exactly match the selected GitHub Actions revision.'
+    $expectedRevision=if ($LocalDisposableVm) { $ExpectedSourceCommit } else { $env:GITHUB_SHA }
+    if ($sourceCommit -cnotmatch '^[0-9a-f]{40}$' -or $sourceCommit -cne $expectedRevision) {
+        throw 'Checked-out source must exactly match the independently selected qualification revision.'
+    }
+    if ($LocalDisposableVm) {
+        $sourceStatus=Invoke-FixtureCommand 'source-cleanliness' $git @('--no-optional-locks','status','--porcelain=v1','--untracked-files=no')
+        if (-not [string]::IsNullOrWhiteSpace((Get-Content -LiteralPath $sourceStatus.stdout -Raw))) {
+            throw 'Local qualification requires an unchanged tracked candidate checkout.'
+        }
     }
     $report['sourceCommit'] = $sourceCommit
     $cargo = (Get-Command cargo -CommandType Application -ErrorAction Stop).Source
@@ -237,10 +239,11 @@ try {
     $currentContext = Get-McwStandardUserContext
     Write-FixtureJson (Join-Path $proof 'private-context-before-native.json') $currentContext
     Assert-McwStandardUserContext -Context $currentContext
-    $null = Invoke-FixtureCommand 'native-uninstall' $python @('-u', '-B',
-        (Join-Path $repository 'installer/tests/native_uninstall.py'), '--binary', $binary,
-        '--repository', $repository, '--cargo-install', $cargoRoot, '--msi', $msi,
-        '--proof', (Join-Path $proof 'result.json'))
+    $nativeArguments=@('-u', '-B', (Join-Path $repository 'installer/tests/native_uninstall.py'),
+        '--binary', $binary, '--repository', $repository, '--cargo-install', $cargoRoot,
+        '--msi', $msi, '--proof', (Join-Path $proof 'result.json'))
+    if ($LocalDisposableVm) { $nativeArguments+=@('--local-disposable-vm','--fixture-root',$runnerTemp) }
+    $null=Invoke-FixtureCommand 'native-uninstall' $python $nativeArguments
     $native = Get-Content -LiteralPath (Join-Path $proof 'result.json') -Raw | ConvertFrom-Json
     $application = Get-Content -LiteralPath (Join-Path $proof 'private-msi-application/result.json') -Raw | ConvertFrom-Json
     if ($native.status -cne 'passed' -or $application.status -cne 'passed' -or

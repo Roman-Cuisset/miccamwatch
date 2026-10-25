@@ -1,8 +1,8 @@
 # Windows interactive standard-user qualification
 
-This is an **operator-provisioned disposable VM** qualification, not permission to run installation, uninstallation, microphone/camera controls, or account provisioning on a personal computer. It does not create a VM, register a runner, generate runner registration secrets, or dispatch itself. A suitable VM/runner must actually exist before dispatch. Do not set GitHub-hosted environment markers to make a workstation pass.
+This is an **operator-provisioned disposable VM** qualification, not permission to run installation, uninstallation, microphone/camera controls, or account provisioning on a personal computer. It does not create a VM, accept a Windows license, register a runner, generate registration secrets, or dispatch itself. A suitable authorized guest must actually exist. Choose either the explicit local-guest route below or the existing GitHub runner route; never fake GitHub markers to admit a workstation.
 
-The manual [native-uninstall workflow](../.github/workflows/native-uninstall.yml), subset `windows-standard`, calls the reusable [VM workflow](../.github/workflows/windows-standard-user.yml) and complete [PowerShell orchestrator](../installer/tests/windows-standard-user.ps1). It builds the real tray-enabled binaries and per-user MSI, genuinely installs the Cargo package as the logged-in standard account into a dedicated root, and calls the existing [native uninstall cases](../installer/tests/native_uninstall.py), including the installed MSI application consumer. It never calls the hosted `windows_ordinary.py` batch launcher.
+Both routes use the same [PowerShell orchestrator](../installer/tests/windows-standard-user.ps1), [native uninstall cases](../installer/tests/native_uninstall.py), and installed MSI application consumer. They build the real tray-enabled binaries and per-user MSI and genuinely install the Cargo package as the logged-in standard account into a dedicated root. The optional manual [native-uninstall workflow](../.github/workflows/native-uninstall.yml), subset `windows-standard`, calls the reusable [VM workflow](../.github/workflows/windows-standard-user.yml). Neither route uses the hosted `windows_ordinary.py` batch launcher as interactive proof.
 
 ## Why a separate fixture exists
 
@@ -42,7 +42,7 @@ Inside the disposable guest only, complete Windows updates and install:
 - Current stable Rust/Cargo for `x86_64-pc-windows-msvc`, with the account's ordinary usable toolchain/cache. The workflow uses the repository lockfile, not an elevated toolchain wrapper.
 - Visual Studio 2022 Build Tools with **Desktop development with C++**, MSVC x64 tools, and the Windows SDK. Make their supported command-line build environment available to the standard account's runner terminal.
 - The .NET SDK needed to execute the repository's local WiX tool. The workflow runs `dotnet tool restore`; the repository `.config/dotnet-tools.json` pins WiX 5.0.2, with roll-forward disabled. Do not install an unpinned global `wix` as a substitute.
-- A current official GitHub Actions x64 Windows runner archive, obtained using the repository's **Settings → Actions → Runners → New self-hosted runner** instructions and published checksum. Do not install it as a Windows service.
+- **GitHub route only:** a current official GitHub Actions x64 Windows runner archive, obtained using the repository's **Settings → Actions → Runners → New self-hosted runner** instructions and published checksum. Do not install it as a Windows service. The local route needs no runner registration.
 
 COM, Media Foundation, Windows Installer, Task Scheduler observation, and the Windows audio enumeration prerequisites must work normally. **Before taking the clean snapshot**, the guest provisioning administrator must ensure `AudioEndpointBuilder` and `Audiosrv` are running. For example, in an elevated PowerShell terminal **inside the guest**, not on its hypervisor host:
 
@@ -66,7 +66,43 @@ Add-LocalGroupMember -Group $users -Member 'mcw_qa_20261024'
 
 Do not add this user to Administrators, grant it an administrator token, or relax product/profile ACLs. Log out of the provisioning administrator and actually log in as the new account using the VM console or configured RDP connection. Complete first-login setup and let its own Explorer desktop load. Finish per-user Rust/Python setup under this account without elevation. Keep runner/toolchain directories outside Desktop, Documents, Downloads, Pictures, Music, and Videos; those folders must have no personal files (system `desktop.ini` files and empty default folders are not personal data). Do not install or run MCW in this preparation profile. There must be no existing MCW MSI/product registration, binaries on PATH, processes, settings/history, shortcut, autostart task/Run entry, or application identity.
 
-Take a powered-off **clean disposable snapshot before runner registration and before MCW qualification**, then resume and log in as the same standard account. Each qualification attempt needs a fresh guest/account state from that snapshot, with a newly registered ephemeral runner. A previous failed run's installed product or retained state must not be manually removed to make a retry appear clean.
+Take a powered-off **clean disposable snapshot before qualification** (and before runner registration for the GitHub route), then resume and log in as the same standard account. Each attempt needs fresh guest/account state from that snapshot. A previous failed run's installed product or retained state must not be manually removed to make a retry appear clean.
+
+## Local VM — no GitHub runner
+
+**Implementation prepared; a full local standard-user guest run remains unexecuted.** A parser/negative-host safety PASS is not MSI, GUI, Cargo or portable qualification. Do not execute the following commands on the physical host, through PowerShell Direct/remoting, or as the guest administrator.
+
+The local route requires explicit `-LocalDisposableVm`, `-AcknowledgeDisposableVm true`, an existing root actually owned by the standard account, and an independently reviewed full source SHA. It rejects GitHub-mode environment markers, physical/VBS hosts, administrative/restricted/batch tokens, wrong profile/desktop/Explorer, reparse ancestry and preexisting MCW products/data. Recognized guest metadata plus operator authorization is a safety check, **not cryptographic proof that a VM is disposable**. The operator must verify the new VM identity and absence of host shares/device forwarding before use.
+
+First complete Windows installation and all legally required registration/license/activation steps yourself, inside the new guest only. Obtain media only from Microsoft and compare its exact edition/language/version SHA-256 before booting. A publicly reachable ISO URL does not waive Microsoft's stated registration or license conditions; no script here accepts them for you. Normal Windows 11 Hyper-V requirements, including generation 2, Secure Boot and virtual TPM, remain enabled.
+
+Provision the prerequisites above with a separate guest administrator. Then actually sign in through Windows to the fresh local standard account and let that account's Explorer load on the unlocked console desktop. If later automated, a guest-local interactive-token task may run in that **already logged-in** session; a password/batch task, moved token, `runas` approximation or PowerShell Direct process is not a substitute. Do not switch or lock the host's current personal session to simulate this.
+
+Run this in the standard account's **normal guest desktop terminal**, supplying the full candidate SHA reviewed outside the checkout:
+
+```powershell
+$ErrorActionPreference = 'Stop'
+$revision = (Read-Host 'Independently reviewed full candidate SHA').Trim().ToLowerInvariant()
+if ($revision -cnotmatch '^[0-9a-f]{40}$') { throw 'A full reviewed SHA is required.' }
+$root = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) ('MCWQualification-' + [DateTime]::UtcNow.ToString('yyyyMMdd-HHmmssfff'))
+if (Test-Path -LiteralPath $root) { throw 'Fresh guest fixture root required.' }
+New-Item -ItemType Directory -Path $root | Out-Null
+$repository = Join-Path $root 'source'
+git clone --no-checkout https://github.com/Roman-Cuisset/miccamwatch.git $repository
+if ($LASTEXITCODE -ne 0) { throw 'Candidate clone failed.' }
+git -C $repository checkout --detach $revision
+if ($LASTEXITCODE -ne 0) { throw 'Reviewed candidate revision is unavailable.' }
+& powershell.exe -NoLogo -NoProfile -NonInteractive -STA -File (Join-Path $repository 'installer/tests/windows-standard-user.ps1') -AcknowledgeDisposableVm true -LocalDisposableVm -FixtureRoot $root -ExpectedSourceCommit $revision
+if ($LASTEXITCODE -ne 0) { throw 'Local qualification failed; preserve all existing state and evidence.' }
+Get-Content -LiteralPath (Join-Path $root 'mcw-standard-user-proof/orchestrator-result.json') -Raw
+```
+
+The orchestrator checks that its own tracked checkout is unchanged and matches the supplied SHA, and that it lies inside the admitted guest root. It does not set `GITHUB_ACTIONS`, `RUNNER_ENVIRONMENT`, `RUNNER_TEMP`, `GITHUB_WORKSPACE`, `GITHUB_SHA`, or disguise the account/profile. Temporary consumer state is confined below this owned root; the existing isolated application-data behavior happens only after genuine context validation.
+
+Artifacts remain **local**, under `$root/mcw-standard-user-proof`, with the genuine Cargo root at `$root/mcw-cargo-uninstall`. Completion still requires both the full native receipt and the **same installed MSI** application receipt, including `requireStandardUser`, `standardUserQualified` and `cleanupSafe`. Local receipt kind is `local-disposable-vm`; no GitHub run or runner provenance is invented. An early admission refusal may leave only terminal output and no proof directory, by design: save that output separately rather than relaxing admission.
+
+On failure, retain the guest and proof paths; do not uninstall an uncertain product, force-stop an unknown process, delete restoration state, or rerun over failed evidence. Once evidence is retained, shut down **only the new test VM** through its authorized hypervisor controls. Do not automatically delete it. A stopped/expired UAC controller means host VM-management work must wait for renewed user authorization; no task/service/token workaround is permitted.
+
 
 ## 2. Register and run the real interactive runner
 
@@ -107,7 +143,7 @@ For the separate **read-only** parser/C# compilation/context-admission smoke on 
 
 ## 4. Executed cases and evidence
 
-Before building, the script dot-sources [the shared admission helper](../installer/tests/windows-fixture-context.ps1), records the actual observed standard-user context, calls `Assert-McwDisposableFixtureHost -RequireStandardUser`, and requires `kind = dedicated-standard-vm`. It rejects preexisting MCW products/processes/autostart/data and personal-folder files, and checks already-running audio prerequisites. It then:
+Before building, the script dot-sources [the shared admission helper](../installer/tests/windows-fixture-context.ps1), observes the actual standard-user context, and calls `Assert-McwDisposableFixtureHost -RequireStandardUser` with the explicitly chosen route. It requires `dedicated-standard-vm` for GitHub or `local-disposable-vm` for local execution. It rejects preexisting MCW products/processes/autostart/data and personal-folder files, and checks already-running audio prerequisites. It then:
 
 1. Runs real `cargo build --release --locked --features windows-tray --bin mcw --bin mcw-tray` as the standard account.
 2. Runs that actual `mcw.exe doctor --lang en --json --no-color`. Admission requires exactly one `microphone_devices` check reporting `warning` / `0 capture device(s) detected` and one `camera_devices` check reporting `warning` / `0 camera device(s) detected`. Enumeration errors, unknown schema, or any devices fail before destructive cases. Zero active capture endpoints is the production doctor's scope; provisioning must also prevent inactive/forwarded hardware from appearing later.
@@ -136,4 +172,4 @@ There is no script-level failure cleanup: do not add an `always()` uninstall/pro
 
 ### Shared implementation dependencies
 
-The orchestrator depends on the shared helper exports `Get-McwStandardUserContext`, `Assert-McwStandardUserContext -Context`, and `Assert-McwDisposableFixtureHost -RequireStandardUser` returning `kind` and `standardUserContext`. It also requires `native_uninstall.py` and its installed application consumer to admit this explicit `dedicated-standard-vm` mode while retaining strict ordinary hosted admission and MSI `standardUserQualified` proof. This document/workflow is not evidence that a guest exists or that the Windows qualification has run successfully.
+The orchestrator depends on shared `Get-McwStandardUserContext`, `Assert-McwStandardUserContext`, `Assert-McwFixtureRoot`, and `Assert-McwDisposableFixtureHost`, returning `kind`, `standardUserContext` and `fixtureRoot`. The native and installed application consumers propagate explicit local flags/root without changing the runner route. Runner mode confines paths to real `RUNNER_TEMP`; local mode confines source/payload/Cargo/proof paths to the admitted guest root. Neither this implementation nor the read-only safety smoke proves that a guest exists or that full Windows standard-user qualification has passed.

@@ -727,12 +727,14 @@ try {
     # Use the same genuine temporary MSI/Start Menu link, not a second public
     # product. Preserve the actual account/profile environment for its strict
     # context observation; the consumer isolates only app data after that proof.
-    application = run([powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-File",
-                       args.repository / "installer/tests/windows-application-native.ps1",
-                       "-InstallDirectory", install, "-ShortcutPath", before_install["shortcut"],
-                       "-ProductCode", product_code, "-OutputDirectory", application_proof,
-                       "-IsolatedRunner", "-RequireStandardUser"], os.environ,
-                      allowed=None, timeout=600)
+    application_command = [powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-File",
+                           args.repository / "installer/tests/windows-application-native.ps1",
+                           "-InstallDirectory", install, "-ShortcutPath", before_install["shortcut"],
+                           "-ProductCode", product_code, "-OutputDirectory", application_proof,
+                           "-IsolatedRunner", "-RequireStandardUser"]
+    if args.local_disposable_vm:
+        application_command.extend(["-LocalDisposableVm", "-FixtureRoot", args.fixture_root])
+    application = run(application_command, os.environ, allowed=None, timeout=600)
     application_result = application_proof / "result.json"
     require(application_result.is_file(), "Installed application consumer left no cleanup/context authority; MSI retained")
     application_report = json.loads(application_result.read_text(encoding="utf-8-sig"))
@@ -793,14 +795,44 @@ def main():
     parser.add_argument("--cargo-install", type=Path, required=True)
     parser.add_argument("--msi", type=Path)
     parser.add_argument("--proof", type=Path, required=True)
+    parser.add_argument("--local-disposable-vm", action="store_true",
+                        help="explicitly authorized local disposable Windows guest, never the physical host")
+    parser.add_argument("--fixture-root", type=Path)
     args = parser.parse_args()
     hosted = (os.environ.get("GITHUB_ACTIONS") == "true"
               and os.environ.get("RUNNER_ENVIRONMENT") == "github-hosted")
     possible_standard_vm = (platform.system() == "Windows"
                             and os.environ.get("GITHUB_ACTIONS") == "true"
                             and os.environ.get("RUNNER_ENVIRONMENT") == "self-hosted")
-    require(hosted or possible_standard_vm,
-            "this destructive fixture requires a genuine disposable hosted runner or explicitly admitted standard-user VM")
+    possible_local_vm = platform.system() == "Windows" and args.local_disposable_vm
+    require(hosted or possible_standard_vm or possible_local_vm,
+            "this destructive fixture requires a genuine hosted runner or explicitly admitted disposable Windows guest")
+    require(args.local_disposable_vm == (args.fixture_root is not None),
+            "local disposable-guest mode and its explicit fixture root must be selected together")
+    args.repository = args.repository.resolve()
+    admission_command = None
+    if platform.system() == "Windows":
+        powershell = Path(os.environ["SystemRoot"]) / "System32/WindowsPowerShell/v1.0/powershell.exe"
+        admission_command = [powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-File",
+                             args.repository / "installer/tests/windows-fixture-context.ps1",
+                             "-ValidateHost", "-RequireStandardUser"]
+    if possible_local_vm:
+        admission_command.extend(["-LocalDisposableVm", "-FixtureRoot", args.fixture_root])
+        # This subprocess performs read-only admission only. It must finish
+        # before creating a proof directory or running any native consumer.
+        checked = subprocess.run([str(arg) for arg in admission_command], env=os.environ,
+                                 capture_output=True, text=True, timeout=45)
+        require(checked.returncode == 0,
+                "local guest admission failed before any native action: " + checked.stderr.strip())
+        admitted = json.loads(checked.stdout.lstrip("\ufeff"))
+        require(admitted["kind"] == "local-disposable-vm", "unexpected local guest admission kind")
+        args.fixture_root = Path(admitted["fixtureRoot"]).resolve(strict=True)
+        local_paths = [args.proof, args.binary, args.repository, args.cargo_install]
+        if args.msi is not None:
+            local_paths.append(args.msi)
+        require(all(path.resolve().is_relative_to(args.fixture_root) for path in local_paths),
+                "all local qualification source, payload, Cargo and proof paths must stay inside the admitted root")
+        require(not args.proof.exists(), "a new local native proof file is required; preserve prior failure evidence")
     args.proof = args.proof.resolve()
     args.proof.parent.mkdir(parents=True, exist_ok=True)
     _evidence_directory = args.proof.parent
@@ -817,15 +849,13 @@ def main():
             # redirection. A batch account with Explorer is not an interactive
             # standard-user desktop. The shared gate also rejects personal
             # self-hosted machines and filtered/restricted administrator tokens.
-            powershell = Path(os.environ["SystemRoot"]) / "System32/WindowsPowerShell/v1.0/powershell.exe"
-            admission = run([powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-File",
-                             args.repository / "installer/tests/windows-fixture-context.ps1",
-                             "-ValidateHost", "-RequireStandardUser"], os.environ)
+            admission = run(admission_command, os.environ)
             context = json.loads(admission.stdout.lstrip("\ufeff"))
-            require(context["kind"] in ("github-hosted", "dedicated-standard-vm")
+            require(context["kind"] in ("github-hosted", "dedicated-standard-vm", "local-disposable-vm")
                     and context["standardUserContext"] is not None,
                     "strict standard-user context was not established")
             proof["windows_genuine_interactive_standard_context"] = True
+            proof["windows_fixture_host_kind"] = context["kind"]
             # Portable refusal cases exercise ownership code. Admit no real
             # capture hardware even if this entry point is invoked directly.
             doctor = json.loads(run([args.binary, "--lang", "en", "doctor", "--json", "--no-color"],

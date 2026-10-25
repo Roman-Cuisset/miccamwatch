@@ -4,7 +4,9 @@ param(
     [Parameter(Mandatory = $true)][string]$ProductCode,
     [Parameter(Mandatory = $true)][string]$OutputDirectory,
     [switch]$IsolatedRunner,
-    [switch]$RequireStandardUser
+    [switch]$RequireStandardUser,
+    [switch]$LocalDisposableVm,
+    [string]$FixtureRoot
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -15,14 +17,14 @@ if (-not $IsolatedRunner -or -not [Environment]::UserInteractive) {
     throw 'Application integration requires an explicitly isolated interactive Windows fixture.'
 }
 . (Join-Path $PSScriptRoot 'windows-fixture-context.ps1')
-$fixtureHost=Assert-McwDisposableFixtureHost -RequireStandardUser:$RequireStandardUser
+$fixtureHost=Assert-McwDisposableFixtureHost -RequireStandardUser:$RequireStandardUser -LocalDisposableVm:$LocalDisposableVm -FixtureRoot $FixtureRoot
 $install = [IO.Path]::GetFullPath($InstallDirectory).TrimEnd('\')
 $shortcut = [IO.Path]::GetFullPath($ShortcutPath)
 $proof = [IO.Path]::GetFullPath($OutputDirectory)
-$temp = [IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd('\') + '\'
+$temp = [IO.Path]::GetFullPath($fixtureHost.fixtureRoot).TrimEnd('\') + '\'
 foreach ($path in @($install, $proof)) {
     if (-not $path.StartsWith($temp, [StringComparison]::OrdinalIgnoreCase) -or $path.Contains('"') -or $path.Contains("`n") -or $path.Contains("`r")) {
-        throw 'Application fixture paths must be private RUNNER_TEMP paths.'
+        throw 'Application fixture paths must be inside the admitted private fixture root.'
     }
     $ancestor = $path
     while ($ancestor) {
