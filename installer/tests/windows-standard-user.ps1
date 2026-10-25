@@ -179,7 +179,9 @@ try {
         throw 'The actual checked-out GitHub workspace must contain this orchestrator.'
     }
     Set-Location -LiteralPath $repository
-    $git = (Get-Command git -CommandType Application -ErrorAction Stop).Source
+    # Application discovery can return several PATH matches; execute the first,
+    # not an array whose conversion changes predicates or native arguments.
+    $git = (Get-Command git -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
     $sourceCommand = Invoke-FixtureCommand 'source-revision' $git @('rev-parse', 'HEAD')
     $sourceCommit = (Get-Content -LiteralPath $sourceCommand.stdout -Raw).Trim()
     $expectedRevision=if ($LocalDisposableVm) { $ExpectedSourceCommit } else { $env:GITHUB_SHA }
@@ -193,9 +195,9 @@ try {
         }
     }
     $report['sourceCommit'] = $sourceCommit
-    $cargo = (Get-Command cargo -CommandType Application -ErrorAction Stop).Source
-    $dotnet = (Get-Command dotnet -CommandType Application -ErrorAction Stop).Source
-    $python = (Get-Command python -CommandType Application -ErrorAction Stop).Source
+    $cargo = (Get-Command cargo -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+    $dotnet = (Get-Command dotnet -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+    $python = (Get-Command python -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
     $fixtureTemp = Join-Path $proof 'temporary-state'
     [void](New-Item -ItemType Directory -Path $fixtureTemp)
     $env:TEMP = $fixtureTemp

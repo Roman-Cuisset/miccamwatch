@@ -83,7 +83,7 @@ function Build-ProfileTest([string]$logDirectory) {
     # Windows PowerShell turns native stderr into errors under ErrorAction=Stop.
     # Capture both streams directly; only the native exit code decides success.
     $start = New-Object System.Diagnostics.ProcessStartInfo
-    $start.FileName = (Get-Command cargo -CommandType Application).Source
+    $start.FileName = (Get-Command cargo -CommandType Application | Select-Object -First 1).Source
     $start.Arguments = 'test --locked --features windows-tray --lib --no-run --message-format=json'
     $start.WorkingDirectory = (Get-Location).Path
     $start.UseShellExecute = $false

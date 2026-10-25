@@ -187,7 +187,7 @@ jobs:
           $proof = Join-Path $staging 'proof'
           New-Item -ItemType Directory $proof -Force | Out-Null
           "MCW_UNINSTALL_PROOF=$proof" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          $python = (Get-Command python).Source
+          $python = (Get-Command python | Select-Object -First 1).Source
           $repository = Join-Path $staging 'repository'
           $archive = Join-Path $staging 'source.zip'
           git archive --format=zip "--output=$archive" HEAD
