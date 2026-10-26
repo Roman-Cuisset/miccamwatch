@@ -22,6 +22,11 @@ not a visitor-side runtime. No application GUI framework is involved.
 - Privacy content and hosting/download processing are described in the
   [official policy](https://miccamwatch.pages.dev/privacy). Do not infer the
   Cloudflare account's live analytics settings from an old source comment.
+- The `privacyRelease` context in `site/build.mjs` deliberately retains the
+  audited policy's **0.20.0 / a265220…** version, source and historical footer.
+  Updating public downloads must not imply a new legal review. Change that
+  context only after an explicit policy audit; compare all eight privacy exports
+  byte-for-byte when making an unrelated release/site update.
 
 ## Build and check locally
 

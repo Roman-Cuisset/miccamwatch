@@ -1,28 +1,29 @@
 # Installation and maintenance
 
-This guide covers the **published stable v0.20.0** packages. Version 0.21.0 is an **unpublished candidate**: its Linux ARM64 packages and redesigned desktop interfaces are not stable downloads. See [validation and limits](VALIDATION.md) and [release history](RELEASE_HISTORY.md) for evidence rather than interpreting an older release's instructions as current.
+This guide covers the **published stable v0.21.0** packages, including Linux ARM64 and native Win32/GTK3/AppKit consultation windows. See [validation and limits](VALIDATION.md#public-release-0210) and [release history](RELEASE_HISTORY.md) for exact public-package evidence and source-specific qualification; publication does not certify physical capture hardware.
 
 [Documentation index](README.md) · [Usage and safety](USAGE.md) · [Signing and safe incident handling](SIGNING.md)
 
 ## Choose the right package
 
-Use the [official website](https://miccamwatch.pages.dev/#installer), [stable v0.20.0 release](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.20.0), or [latest stable release](https://github.com/Roman-Cuisset/miccamwatch/releases/latest). All links in this table pin the published 0.20.0 assets.
+Use the [official website](https://miccamwatch.pages.dev/#installer), [stable v0.21.0 release](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.21.0), or [latest stable release](https://github.com/Roman-Cuisset/miccamwatch/releases/latest). All links in this table pin the published 0.21.0 assets.
 
 | System | Package | Requirements and intended use |
 | --- | --- | --- |
-| Windows x64 | [MSI](https://github.com/Roman-Cuisset/miccamwatch/releases/download/v0.20.0/miccamwatch-windows-x86_64.msi) | Windows 10/11; per-user installation, PATH and Start Menu entry |
-| Windows x64 | [Portable ZIP](https://github.com/Roman-Cuisset/miccamwatch/releases/download/v0.20.0/miccamwatch-windows-x86_64.zip) | Matching CLI/tray pair in a user-owned directory |
-| Linux x64 | [tar.gz](https://github.com/Roman-Cuisset/miccamwatch/releases/download/v0.20.0/miccamwatch-linux-x86_64.tar.gz) | glibc 2.35+, user PipeWire service, PipeWire/SPA libraries and `pw-dump`; managed installer recommended |
-| macOS Apple Silicon | [DMG](https://github.com/Roman-Cuisset/miccamwatch/releases/download/v0.20.0/miccamwatch-macos-aarch64.dmg) or [tar.gz](https://github.com/Roman-Cuisset/miccamwatch/releases/download/v0.20.0/miccamwatch-macos-aarch64.tar.gz) | macOS 15+; DMG for the native app, archive for CLI/managed installation |
-| macOS Intel | [DMG](https://github.com/Roman-Cuisset/miccamwatch/releases/download/v0.20.0/miccamwatch-macos-x86_64.dmg) or [tar.gz](https://github.com/Roman-Cuisset/miccamwatch/releases/download/v0.20.0/miccamwatch-macos-x86_64.tar.gz) | macOS 15+; Aqua session for the menu bar |
+| Windows x64 | [MSI](https://github.com/Roman-Cuisset/miccamwatch/releases/download/v0.21.0/miccamwatch-windows-x86_64.msi) | Windows 10/11; per-user installation, PATH and Start Menu entry |
+| Windows x64 | [Portable ZIP](https://github.com/Roman-Cuisset/miccamwatch/releases/download/v0.21.0/miccamwatch-windows-x86_64.zip) | Matching CLI/tray pair in a user-owned directory |
+| Linux x64 | [tar.gz](https://github.com/Roman-Cuisset/miccamwatch/releases/download/v0.21.0/miccamwatch-linux-x86_64.tar.gz) | glibc 2.35+, user PipeWire service, PipeWire/SPA libraries and `pw-dump`; managed installer recommended |
+| Linux ARM64 (`aarch64`) | [tar.gz](https://github.com/Roman-Cuisset/miccamwatch/releases/download/v0.21.0/miccamwatch-linux-aarch64.tar.gz) | Same Linux prerequisites; native hosted-runner qualification only, no physical ARM board/peripheral validation |
+| macOS Apple Silicon | [DMG](https://github.com/Roman-Cuisset/miccamwatch/releases/download/v0.21.0/miccamwatch-macos-aarch64.dmg) or [tar.gz](https://github.com/Roman-Cuisset/miccamwatch/releases/download/v0.21.0/miccamwatch-macos-aarch64.tar.gz) | macOS 15+; DMG for the native app, archive for CLI/managed installation |
+| macOS Intel | [DMG](https://github.com/Roman-Cuisset/miccamwatch/releases/download/v0.21.0/miccamwatch-macos-x86_64.dmg) or [tar.gz](https://github.com/Roman-Cuisset/miccamwatch/releases/download/v0.21.0/miccamwatch-macos-x86_64.tar.gz) | macOS 15+; Aqua session for the menu bar |
 
-Stable Linux is **x86_64 only**, not ARM64/Raspberry Pi. Unsupported architectures are rejected, not silently substituted. WSL, headless hosts and virtual runners do not guarantee a graphical session or physical capture hardware. Installing software never proves that a device control works on your hardware.
+Linux consultation needs a graphical session and GTK3 runtime; headless CLI use does not load GTK3. Linux ARM64 publication is not Raspberry Pi/SBC or USB/CSI compatibility certification. Unsupported architectures are rejected, not silently substituted. WSL, headless hosts and virtual runners do not guarantee a graphical session or physical capture hardware. Installing software never proves that a device control works on your hardware.
 
 Repository recipes under [`distribution/`](../distribution/) are not evidence of publication to winget, Homebrew/core, a tap or the AUR. If a package manager owns your installation, retain that ownership: do not overwrite its files with the Unix installer or `mcw update`.
 
 ## Verify downloads
 
-Download [SHA256SUMS](https://github.com/Roman-Cuisset/miccamwatch/releases/download/v0.20.0/SHA256SUMS) from the **same release** as the selected package. Compare the exact filename's digest before opening or extracting it:
+Download [SHA256SUMS](https://github.com/Roman-Cuisset/miccamwatch/releases/download/v0.21.0/SHA256SUMS) from the **same release** as the selected package. Compare the exact filename's digest before opening or extracting it:
 
 ```powershell
 # Windows PowerShell: compare Hash with the matching SHA256SUMS entry.
@@ -37,17 +38,17 @@ sha256sum --check --ignore-missing SHA256SUMS
 shasum -a 256 miccamwatch-macos-aarch64.dmg
 ```
 
-Substitute your chosen ZIP, DMG or archive filename. Do not accept a checksum for another architecture or version. Release assets also include an [SPDX SBOM](https://github.com/Roman-Cuisset/miccamwatch/releases/download/v0.20.0/miccamwatch-sbom.spdx.json); build-provenance evidence and its qualification boundaries are in [Validation](VALIDATION.md).
+Substitute your chosen ZIP, DMG or archive filename. Do not accept a checksum for another architecture or version. Release assets also include an [SPDX SBOM](https://github.com/Roman-Cuisset/miccamwatch/releases/download/v0.21.0/miccamwatch-sbom.spdx.json); build-provenance evidence and its qualification boundaries are in [Validation](VALIDATION.md#public-release-0210).
 
 **The installer script is not a release-manifest payload.** `SHA256SUMS` checks release archives, installers, DMGs and the SBOM, not the downloaded `mcw-install.sh`. The Unix installer below checks the selected archive's exact named entry itself. Review the script separately, preferably from the immutable published source URL shown below. Checksums/API digests share a release channel; neither they nor build attestations are an independent publisher signature, antivirus verdict or permission grant.
 
-For 0.20.0, **Windows EXE/MSI files are unsigned**, and macOS apps are **ad-hoc sealed, not Developer ID signed or notarized**. Windows signature inspection is documented in [SIGNING.md](SIGNING.md#local-verification). Respect Gatekeeper, TCC, SIP, quarantine, Defender and organizational controls; do not disable or bypass them to install MCW.
+For 0.21.0, **Windows EXE/MSI files are unsigned**; macOS archive CLI binaries are also **unsigned**. DMG app packaging logs report **ad-hoc seals only, not Developer ID signing or notarization**. Windows signature inspection and exact public-byte evidence are documented in [SIGNING.md](SIGNING.md#published-stable-0210-signature-and-provenance-evidence). Respect Gatekeeper, TCC, SIP, quarantine, Defender and organizational controls; do not disable or bypass them to install MCW.
 
 ## Windows
 
 ### MSI
 
-Open the verified `miccamwatch-windows-x86_64.msi` as the intended ordinary user. It installs under `%LOCALAPPDATA%\Programs\MicCamWatch`, adds that directory to the **user** PATH, and creates a Start Menu shortcut to the windowless `mcw-tray.exe`. Open a new terminal to pick up PATH changes:
+Open the verified `miccamwatch-windows-x86_64.msi` as the intended ordinary user. It installs under `%LOCALAPPDATA%\Programs\MicCamWatch`, adds that directory to the **user** PATH, and creates a Start Menu shortcut to the windowless `mcw-tray.exe --open`. Open a new terminal to pick up PATH changes:
 
 ```powershell
 mcw --version
@@ -72,7 +73,7 @@ Extract the **whole** verified ZIP into a private user-owned directory. Keep `mc
 
 Portable extraction does not automatically add PATH. Use the exact executable path when more than one MCW installation exists. `mcw.exe tray` is also supported for interactive diagnostics.
 
-**Candidate 0.21.0 only — not a stable download:** its MSI Start Menu shortcut passes `--open` to `mcw-tray.exe`; `mcw-tray.exe --open` or `mcw tray open` explicitly opens/reopens the retained consultation window. Plain `mcw-tray.exe` and opt-in autostart remain background-only. These candidate launchers reuse the owned frontend rather than start another resident application. The commands above describe stable 0.20.0; see [candidate interfaces](USAGE.md#unpublished-0210-interfaces) and [pending integrated qualification](VALIDATION.md#candidate-0210) before interpreting candidate behavior as qualified.
+The MSI Start Menu shortcut passes `--open` to `mcw-tray.exe`; `mcw-tray.exe --open` or `mcw tray open` explicitly opens/reopens the retained consultation window. Plain `mcw-tray.exe` and opt-in autostart remain background-only. These launchers reuse the owned frontend rather than start another resident application. See [native consultation and activation](USAGE.md#native-consultation-and-activation) and [public package verification](VALIDATION.md#public-release-0210) for behavior and qualification boundaries.
 
 If Defender quarantines a file, a PATH edit will not recover it. Preserve detection name, affected path/version/hash where available and Protection History. Follow [safe incident handling](SIGNING.md#defender-incident-and-safe-handling); do not add exclusions, disable protection, restore quarantined bytes or automatically reinstall a detected executable. A detection is not established as a false positive.
 
@@ -86,7 +87,7 @@ If Defender quarantines a file, a PATH edit will not recover it. Preserve detect
 
 No Terminal, Rust, Swift compiler or development script is needed at runtime. Opening the app starts menu-bar monitoring; it does not implicitly enable autostart, protect devices or grant permissions. Gatekeeper approval is subject to the user's and organization's policy; an ad-hoc seal/checksum is not notarization.
 
-Stable 0.20.0's native consultation window is a **macOS** feature. Closing it leaves the tray running; reopening the app reuses the existing frontend. The bundled CLI remains available:
+The native AppKit consultation window closes without stopping the tray; reopening the app or using `mcw tray open` reuses the existing frontend. The bundled CLI remains available:
 
 ```sh
 "/Applications/MicCamWatch.app/Contents/MacOS/mcw" --version
@@ -96,21 +97,21 @@ Stable 0.20.0's native consultation window is a **macOS** feature. Closing it le
 
 ### Managed Unix installation (macOS and Linux)
 
-Download and inspect the installer pinned to the [published 0.20.0 source](https://github.com/Roman-Cuisset/miccamwatch/tree/a26522028eafe02591f58c03ceb5c367f2d5d60b):
+Download and inspect the installer pinned to the [published 0.21.0 source](https://github.com/Roman-Cuisset/miccamwatch/tree/3d74686ace7b04728794765f9eb57c0c0a8bc84c):
 
 ```sh
 curl --proto '=https' --tlsv1.2 -fsSL \
-  https://raw.githubusercontent.com/Roman-Cuisset/miccamwatch/a26522028eafe02591f58c03ceb5c367f2d5d60b/installer/install.sh \
+  https://raw.githubusercontent.com/Roman-Cuisset/miccamwatch/3d74686ace7b04728794765f9eb57c0c0a8bc84c/installer/install.sh \
   -o mcw-install.sh
 less mcw-install.sh
-sh mcw-install.sh --version v0.20.0 --add-path
+sh mcw-install.sh --version v0.21.0 --add-path
 ```
 
 Run as the ordinary user, **without sudo**. The default prefix is `$HOME/.local`, with executable `$HOME/.local/bin/mcw`. `--add-path` is a supported, explicit request for managed shell integration; use `--no-modify-path` instead to leave shell configuration untouched. They are mutually exclusive. Without either, an interactive terminal is asked (default **no**); noninteractive installation neither waits for input nor silently edits PATH. Bash, zsh (including `ZDOTDIR`) and fish are supported. Open a new terminal afterward: a child installer cannot change its parent's environment.
 
 ```sh
 # Custom absolute prefix; executable becomes PREFIX/bin/mcw:
-sh mcw-install.sh --version v0.20.0 \
+sh mcw-install.sh --version v0.21.0 \
   --prefix "$HOME/Applications/MicCamWatch" --no-modify-path
 "$HOME/Applications/MicCamWatch/bin/mcw" --version
 "$HOME/Applications/MicCamWatch/bin/mcw" doctor --json
@@ -212,7 +213,7 @@ Stop on upgrade/refresh failure; do not clean up early. Without existing autosta
 
 First use the [restoration procedure](#release-protection-before-changing-binaries). Uninstall is **not** a device-restoration command. It preserves policy, preferences, history and native restoration data. Do not delete ownership evidence, persistent locks or whole application-data directories as a recovery shortcut.
 
-Stable 0.20.0 adds `mcw uninstall`: run the exact installed executable as its ordinary owner. It determines installation provenance before removal:
+`mcw uninstall`, introduced in 0.20.0, must be run through the exact installed executable as its ordinary owner. It determines installation provenance before removal:
 
 - **Managed Unix:** validates receipts, ownership, inactive controls and owned autostart, stops this installation's tray and removes unchanged owned user payload/PATH entries.
 - **Verified Windows portable pair:** cooperatively reserves protection and stops the exact frontend, then delegates deletion to an authenticated worker. Acceptance/exit code 0 is **not proof of completed deletion**: inspect the printed staging directory's `result.json` (`removed` or `refused_or_incomplete`) and `worker.log`. Remove that private recovery directory only after completion/inspection.
@@ -238,13 +239,13 @@ Old executables retain their old updater code; downloading a newer package canno
 - **Windows v0.14.0 tray:** cannot acknowledge the safe shutdown protocol. Finish pending controls, explicitly restore through the matching version, exit normally and retry. Do not force-kill it.
 - **Windows pre-0.19.1 CLI-hosted tray:** an already-renamed old process running from a retained backup is not adopted or killed by the corrected matcher. After explicit release, perform one normal Exit and start the matching installed frontend. Never execute/restore the backup. See [historical evidence](RELEASE_HISTORY.md).
 - **Windows legacy camera ownership:** old unsigned ownership files are not imported as privileged receipts. `mcw camera allow --restore-legacy INSTANCE_ID` is an explicit single-target recovery with fresh UAC and camera-class validation; it may override an independent disable. Use only after reviewing the exact device identity. Preserve evidence; do not delete `blocked-camera-devices.json` or protected journals.
-- **Linux v0.15.1:** its old three-file updater refuses the newer six-file package safely. Download/review the current installer and rerun with the same prefix, pinned to `v0.20.0` or stable latest. This installs matching user camera payloads without root setup or changes to preferences/history; remove any root-helper installation in the required order first.
+- **Linux v0.15.1:** its old three-file updater refuses the newer six-file package safely. Download/review the current installer and rerun with the same prefix, pinned to `v0.21.0` or stable latest. This installs matching user camera payloads without root setup or changes to preferences/history; remove any root-helper installation in the required order first.
 - **macOS standalone v0.16.0 or older:** the old embedded updater cannot bootstrap the new standalone contract. After restoration and normal tray/watcher exit, download/review the current script and run once **from the directory containing the existing `mcw`**:
 
 ```sh
 target="$(pwd -P)/mcw"
 digest="$(/usr/bin/shasum -a 256 "$target")"
-sh mcw-install.sh --version v0.20.0 --no-modify-path \
+sh mcw-install.sh --version v0.21.0 --no-modify-path \
   --update-portable "$target" --current-sha256 "${digest%% *}"
 ./mcw --version
 ./mcw update
@@ -256,7 +257,7 @@ Old v0.14.0 Unix packages are monitoring-only. Their immutable assets do not acq
 
 ## Build from source
 
-For reproducible stable work, use the [immutable published 0.20.0 source](https://github.com/Roman-Cuisset/miccamwatch/tree/a26522028eafe02591f58c03ceb5c367f2d5d60b), not an unpublished branch. A build does not install a package, enable autostart, establish signing trust or qualify physical controls.
+For reproducible stable work, use the [immutable published 0.21.0 source](https://github.com/Roman-Cuisset/miccamwatch/tree/3d74686ace7b04728794765f9eb57c0c0a8bc84c), not an unpublished branch. A build does not install a package, enable autostart, establish signing trust or qualify physical controls.
 
 | Platform | Prerequisites | Build command |
 | --- | --- | --- |
@@ -266,4 +267,4 @@ For reproducible stable work, use the [immutable published 0.20.0 source](https:
 
 Windows produces `target/release/mcw.exe` and `mcw-tray.exe`; without `windows-tray` only the CLI is built. Linux's feature also builds the optional camera helper, but privileged setup remains a separate reviewed operation. Ubuntu 22.04's stock PipeWire 0.3.48 headers are supported. macOS embeds a private ad-hoc-sealed helper; no Swift compiler is needed at runtime and ad-hoc integrity is not Developer ID trust/notarization.
 
-The implementation contracts are in [Architecture](ARCHITECTURE.md), especially the [Unix installer boundary](ARCHITECTURE.md#unix-installer-boundary). Source-backed options: [stable CLI](https://github.com/Roman-Cuisset/miccamwatch/blob/a26522028eafe02591f58c03ceb5c367f2d5d60b/src/frontends/cli.rs) and [stable installer](https://github.com/Roman-Cuisset/miccamwatch/blob/a26522028eafe02591f58c03ceb5c367f2d5d60b/installer/install.sh).
+The implementation contracts are in [Architecture](ARCHITECTURE.md), especially the [Unix installer boundary](ARCHITECTURE.md#unix-installer-boundary). Source-backed options: [stable CLI](https://github.com/Roman-Cuisset/miccamwatch/blob/3d74686ace7b04728794765f9eb57c0c0a8bc84c/src/frontends/cli.rs) and [stable installer](https://github.com/Roman-Cuisset/miccamwatch/blob/3d74686ace7b04728794765f9eb57c0c0a8bc84c/installer/install.sh).

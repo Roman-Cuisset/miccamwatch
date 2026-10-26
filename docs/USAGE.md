@@ -1,6 +1,6 @@
 # Usage and safety reference
 
-Unless explicitly labelled candidate-only, this guide describes **published stable v0.20.0**, not the unpublished 0.21.0 candidate. Stable commands are backed by the [stable CLI source](https://github.com/Roman-Cuisset/miccamwatch/blob/a26522028eafe02591f58c03ceb5c367f2d5d60b/src/frontends/cli.rs). Platform-specific commands are labelled; do not copy a stable macOS-only command onto Windows/Linux.
+This guide describes **published stable v0.21.0**. Commands are backed by the [immutable stable CLI source](https://github.com/Roman-Cuisset/miccamwatch/blob/3d74686ace7b04728794765f9eb57c0c0a8bc84c/src/frontends/cli.rs). Platform-specific controls are labelled; native consultation opening is now cross-platform, but OS permissions and control scopes remain distinct.
 
 [Documentation index](README.md) · [Installation, update and removal](INSTALLATION.md) · [Architecture](ARCHITECTURE.md) · [Validation boundaries](VALIDATION.md)
 
@@ -92,8 +92,10 @@ mcw lock-policy status
 # Linux: microphone lock actions only, with a local graphical logind session:
 mcw lock-policy enable --microphone
 
-# macOS only: native consultation and read-only profile inspection:
+# Windows, Linux and macOS: open/reopen the native consultation:
 mcw tray open
+
+# macOS only: read-only profile inspection:
 mcw camera inspect --json
 mcw camera inspect --admin
 ```
@@ -121,19 +123,19 @@ Selection changes or process-identity changes must not turn a confirmation into 
 
 `mcw tray` is a single-instance per-user desktop frontend with `tray status` and `tray stop` lifecycle IPC. Running it interactively on Unix stays in the foreground. A compact status line/icon is a summary; open **Status details/Details** for complete collector, ownership and control errors. Known accesses remain visible during partial coverage with a warning badge; a partial/unavailable collector is not an all-clear.
 
-- **Windows:** native Notification Area icon and popup menu; left/right click opens the menu, double-click requests the current-summary toast. Packages include the windowless `mcw-tray.exe`, used by the Start Menu and autostart; `mcw.exe tray` remains useful for diagnostics. Stable 0.20.0 has status-details consultation, not the candidate's redesigned full application interface.
-- **Linux:** native StatusNotifierItem on a desktop with a supporting host. Details use the native status notification; its visible height depends on the notification daemon. A missing tray host is a capability limit, not proof the observer failed or a reason to fabricate an icon.
-- **macOS:** AppKit menu bar and, in stable 0.20.0, a singleton native consultation window with observed microphone/camera state, access details and diagnostics. Close the window to leave the tray running; reopen the app or use **macOS-only** `mcw tray open` to reuse it. Protection, notification pause, four profiles and localized About remain in the menu.
+- **Windows:** native Notification Area icon and popup menu; left/right click opens the menu, double-click opens the retained consultation window. Packages include the windowless `mcw-tray.exe`, used by the Start Menu and autostart; `mcw.exe tray` remains useful for diagnostics.
+- **Linux:** native StatusNotifierItem on a desktop with a supporting host, plus a GTK3 consultation window. A missing tray host is a capability limit, not proof the observer failed or a reason to fabricate an icon.
+- **macOS:** AppKit menu bar and native consultation window with observed microphone/camera state, access details and diagnostics. Protection, notification pause, four profiles and localized About remain in the menu.
 
-### Unpublished 0.21.0 interfaces
+### Native consultation and activation
 
-The Win32/GTK3/AppKit redesign and unified activation belong to [`release/0.21.0-candidate`](https://github.com/Roman-Cuisset/miccamwatch/tree/release/0.21.0-candidate), **not stable downloads**. Earlier platform runs are historical evidence; qualification of the exact integrated candidate is pending. See [Validation](VALIDATION.md#candidate-0210).
+Stable 0.21.0 provides native Win32/GTK3/AppKit consultation and unified activation. See [public package verification and source-specific qualification](VALIDATION.md#public-release-0210); earlier platform runs retain their original evidence scope.
 
-- **Windows candidate:** the MSI Start Menu shortcut, `mcw-tray.exe --open`, `mcw tray open`, tray double-click or Status details opens/reopens the retained native consultation window. Left/right tray click still opens the menu. Plain `mcw-tray.exe` and opt-in autostart stay background-only.
-- **Linux candidate:** the managed installer's application-menu entry invokes `mcw tray open`; GTK3 is loaded when opening the native consultation, not for headless CLI use. A graphical session and GTK3 runtime are required for that window. Session autostart stays background-only; missing desktop prerequisites remain explicit errors.
-- **macOS candidate:** ordinary Finder activation/reopening and `mcw tray open` expose the redesigned AppKit consultation through the existing owned frontend. Login startup remains separate from explicit opening.
+- **Windows:** the MSI Start Menu shortcut, `mcw-tray.exe --open`, `mcw tray open`, tray double-click or Status details opens/reopens the retained native consultation window. Left/right tray click still opens the menu. Plain `mcw-tray.exe` and opt-in autostart stay background-only.
+- **Linux:** the managed installer's application-menu entry invokes `mcw tray open`; GTK3 is loaded when opening the native consultation, not for headless CLI use. A graphical session and GTK3 runtime are required for that window. Session autostart stays background-only; missing desktop prerequisites remain explicit errors.
+- **macOS:** ordinary Finder activation/reopening and `mcw tray open` expose the redesigned AppKit consultation through the existing owned frontend. Login startup remains separate from explicit opening.
 
-Repeated explicit activation reuses the owned frontend/window. Closing the consultation hides it without stopping monitoring or releasing protection; use the owned lifecycle commands for stopping, and explicit control commands for restoration. Candidate preferences and native lifecycle evidence do not certify physical capture, device enforcement or every desktop/accessibility configuration.
+Repeated explicit activation reuses the owned frontend/window. Closing the consultation hides it without stopping monitoring or releasing protection; use the owned lifecycle commands for stopping, and explicit control commands for restoration. Preferences and native lifecycle evidence do not certify physical capture, device enforcement or every desktop/accessibility configuration.
 
 ### Opt-in autostart
 

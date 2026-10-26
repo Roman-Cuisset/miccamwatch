@@ -2,11 +2,29 @@
 
 [Documentation](README.md) · [Installation](INSTALLATION.md) · [Usage](USAGE.md) · [Release history](RELEASE_HISTORY.md) · [Architecture](ARCHITECTURE.md) · [Roadmap](ROADMAP.md)
 
-**Evidence is version-, source-, platform- and scenario-specific.** A build is not a release; a hosted native desktop is not physical hardware; a screenshot with simulated observations is not a microphone/camera capture test. This guide separates recorded qualification from the pending qualification of the exact integrated candidate; no new checks were run by these documentation edits.
+**Evidence is version-, source-, platform- and scenario-specific.** A build is not a release; a hosted native desktop is not physical hardware; a screenshot with simulated observations is not a microphone/camera capture test. This guide separates verified public packages from earlier native/source-specific qualification. These documentation edits did not execute new installation, device-control or physical-hardware tests.
+
+## Public release 0.21.0
+
+[v0.21.0](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.21.0) is the public stable/latest release, ID **`424498504`**, published **2026-10-26 at 16:38:28Z**, pinned to immutable source [`3d74686ace7b04728794765f9eb57c0c0a8bc84c`](https://github.com/Roman-Cuisset/miccamwatch/tree/3d74686ace7b04728794765f9eb57c0c0a8bc84c). It publishes Windows x64 ZIP/MSI, Linux x64/ARM64 archives, macOS Apple Silicon/Intel archives and DMGs, the SPDX SBOM and `SHA256SUMS`.
+
+**Actual public-package gate passed:** all **ten public HTTPS downloads** matched the original [tag-run 40331094727](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/40331094727) bytes and API digests; **nine named manifest entries** and **nine cryptographically verified provenance subjects** passed. Verification constrained the certificate identity to `https://github.com/Roman-Cuisset/miccamwatch/.github/workflows/release.yml@refs/tags/v0.21.0`, source and signer to `3d74686ace7b04728794765f9eb57c0c0a8bc84c`, and hosted runners only. Generated GitHub source archives are separate from these ten uploaded assets.
+
+The original workflow **remains failed** after three HTTP 500 responses in its generate-notes-or-create wrapper; the raw failing endpoint is unknown. Separately authorized official REST recovery reused the existing packages without rebuilding, moving/recreating the tag or replacing assets. The release's tag association was corrected to the existing `v0.21.0` with the same ten asset IDs/hashes. See [the release record](RELEASE_0.21.0.md) for the full recovery sequence; this is not a rerun labelled successful.
+
+| Public target | Release capability and evidence | Qualification boundary |
+| --- | --- | --- |
+| Windows x64 | Redesigned native consultation, retained owner/window and explicit/background activation; public ZIP/MSI package/provenance verification | Earlier integrated native and real standard-user guest proofs below retain their exact sources; no new public installation on the personal host, universal device enforcement or Windows 10/DPI/accessibility certification |
+| Linux x64 / ARM64, glibc 2.35+ | Native GTK3 consultation, owned launcher and PipeWire/SPA CLI/helper packages; public archive verification | ARM64 is native hosted-runner software qualification, **not physical ARM/Raspberry Pi/SBC or peripheral validation**; GTK3/graphical session required for consultation, not headless CLI |
+| macOS 15+, Apple Silicon / Intel | Redesigned AppKit consultation and owned activation; public archives/DMGs verified | Earlier native Finder/window/helper/login proofs retain their sources; no new physical capture, human TCC/profile approval, Gatekeeper approval or cross-version app-upgrade claim |
+
+**Actual signing status:** the byte-identical public Windows ZIP's two EXEs and public MSI correspond to three Authenticode **`NotSigned`** results, with no signer or timestamp. Both public macOS archive CLI binaries have **no `LC_CODE_SIGNATURE`** and are unsigned. Matching DMG native packaging logs report **ad-hoc app seals only**, not Developer ID signing/notarization or new Gatekeeper validation. Checksums and GitHub provenance do not replace platform signing, antivirus clearance or OS/user authorization; see [Signing](SIGNING.md#published-stable-0210-signature-and-provenance-evidence).
+
+The retained public-package receipt is `%LOCALAPPDATA%\MicCamWatchQualification\0.21.0-publication-recovery-20261026\public-package-gate.json`; it records downloaded-public-byte verification, not a public installation test. The qualification history below remains source-specific and is not relabelled as testing these public bytes.
 
 ## Public release 0.20.0
 
-The public baseline is [v0.20.0](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.20.0), source [`a26522028eafe02591f58c03ceb5c367f2d5d60b`](https://github.com/Roman-Cuisset/miccamwatch/tree/a26522028eafe02591f58c03ceb5c367f2d5d60b), annotated tag object `547f6185a0579876041d1ae7ebcdd6feccdcb5cf`. It was published on 2026-10-22, release ID `420936561`. [Native release run 39807585260](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/39807585260) passed and the public files were subsequently downloaded/verified: **nine uploaded assets**, eight named SHA-256 entries and eight signed SLSA v1 provenance subjects. GitHub's automatically generated source archives are separate from those uploaded assets.
+The previous public baseline was [v0.20.0](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.20.0), source [`a26522028eafe02591f58c03ceb5c367f2d5d60b`](https://github.com/Roman-Cuisset/miccamwatch/tree/a26522028eafe02591f58c03ceb5c367f2d5d60b), annotated tag object `547f6185a0579876041d1ae7ebcdd6feccdcb5cf`. It was published on 2026-10-22, release ID `420936561`. [Native release run 39807585260](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/39807585260) passed and the public files were subsequently downloaded/verified: **nine uploaded assets**, eight named SHA-256 entries and eight signed SLSA v1 provenance subjects. GitHub's automatically generated source archives are separate from those uploaded assets.
 
 | Public target | Recorded native/software evidence | Not established by that evidence |
 | --- | --- | --- |
@@ -26,7 +44,7 @@ Windows EXEs/MSI are **unsigned**; macOS bundles are **ad-hoc sealed, not Develo
 
 ## Candidate 0.21.0
 
-**Unpublished development only.** Current integration is on [`release/0.21.0-candidate`](https://github.com/Roman-Cuisset/miccamwatch/tree/release/0.21.0-candidate), combining the GUI/ARM work with the main baseline and reorganized guides. The preserved GUI/ARM source snapshot is [`cafd98daf7541f317b44aee98edb3b6efa3af561`](https://github.com/Roman-Cuisset/miccamwatch/tree/cafd98daf7541f317b44aee98edb3b6efa3af561); its earlier development-branch name and run results are historical, not pointers to the current integration. Neither branch is a public tag, release asset set, stable installation instruction or deployment. Public 0.20.0 remains the consumer baseline.
+**Historical pre-publication qualification, not today's release status.** This section preserves the candidate checkpoints, including their then-open gates, failed attempts and source-specific successes. Public stable 0.21.0 and its actual package verification are recorded [above](#public-release-0210). The former integration branch was [`release/0.21.0-candidate`](https://github.com/Roman-Cuisset/miccamwatch/tree/release/0.21.0-candidate); the preserved earlier GUI/ARM snapshot is [`cafd98daf7541f317b44aee98edb3b6efa3af561`](https://github.com/Roman-Cuisset/miccamwatch/tree/cafd98daf7541f317b44aee98edb3b6efa3af561). Neither the earlier snapshot nor a local guest binary is the final tag-run package.
 
 ### Windows standard-user qualification — 2026-10-26
 
@@ -48,6 +66,8 @@ The final local receipt is **`explicitly-approved-staged-native-aggregate`**, no
 Durable private evidence is at **`%LOCALAPPDATA%\MicCamWatchQualification\0.21.0-20261026-c1c5de53`**: readable final native/application receipts, byte/SHA-verified failed and successful archives, two final window captures, exact reproduction inputs and the real tested binary/MSI evidence ZIP. This is **local evidence, not a public release or GitHub artifact claim**. Representative actual standard-user window rendering was examined in English/light mode; the earlier five-target seven-language/theme evidence keeps its own scope.
 
 Post-qualification observation confirmed no test product/shortcut/Cargo pair or active MCW process left; local EXE/MSI Authenticode status was actually **NotSigned**. The sole guest was shut down with **Off read back**, then its finite controller exited. On 2026-10-26, after the interruption was inspected and all 24 manifest entries were SHA-verified again, the separately authorized one-shot cleanup removed only the exact stopped test VM, its owned VHD/checkpoint chain and mission-only temporary files. The durable proofs were SHA-verified again after removal; the original official ISO, other VM registrations, worktrees, personal installations and shared caches were preserved. See [Roadmap](ROADMAP.md) for the measured space recovery and completed cleanup record.
+
+**Historical readiness/authorization checkpoint before tag publication:** the following two paragraphs record the earlier unpublished-package stage; they do not describe today's public release or current authorization.
 
 **READY FOR RELEASE within the recorded software-qualification scope; publication is still unauthorized.** On 2026-10-26 the owner separately authorized unpublished final-package preparation and verification under [the release plan](RELEASE_0.21.0.md#ordered-publication-plan--future-approval-required); that permission does not authorize `main` integration, tags, GitHub publication or website deployment. Package/signature/provenance results must identify their actual frozen source and ref, not future rebuilt tag bytes. This does not certify physical capture controls, physical ARM boards, Windows 10 or every real desktop/DPI/accessibility combination.
 
@@ -103,11 +123,11 @@ Linux reports covered **21 GTK cases per architecture**, seven languages and Adw
 
 Earlier native ARM qualification [39832624207](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/39832624207), source `2998946`, passed five platforms; [39828453493](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/39828453493) exercised managed/Cargo removal across four Unix targets. The ARM runner established native Ubuntu 22.04/glibc 2.35/PipeWire-SPA 0.3.48, ELF64 little-endian machine 183 on **both** executables, native ABI roundtrip, virtual capture, bounded PipeWire faults and recovery without false STOP, installation/root rollback/refusals and a VM panel. These earlier runs are not substitutes for the later GUI/launcher qualification above.
 
-**Candidate boundaries:**
+**Qualification boundaries retained after publication:**
 
-- No published Linux ARM64 asset, no historical pre-0.21 ARM migration/resource baseline, and no Raspberry Pi/SBC physical certification. A native hosted ARM VM is not a physical board; ARMv7/32-bit/musl and CSI camera control are not promised.
-- The Windows integration runner was an administrator. It did not qualify MSI installation with a standard-user token, every Windows 10/DPI configuration, real taskbar grouping or all accessibility readers.
-- Linux GUI checks used a hosted graphical environment/Xvfb; they did not qualify every real Wayland desktop, login/reboot path or ARM peripheral. GTK3 is a candidate consultation prerequisite, not a new dependency claim for stable headless CLI use.
+- Linux ARM64 now has a public asset, but no historical pre-0.21 ARM migration/resource baseline or Raspberry Pi/SBC physical certification. A native hosted ARM VM is not a physical board; ARMv7/32-bit/musl and CSI camera control are not promised.
+- The Windows integration runner was an administrator. That run did not qualify MSI installation with a standard-user token; the later real standard-user guest proof above is separate. Neither qualifies every Windows 10/DPI configuration, real taskbar grouping or all accessibility readers.
+- Linux GUI checks used a hosted graphical environment/Xvfb; they did not qualify every real Wayland desktop, login/reboot path or ARM peripheral. GTK3 is required for the public consultation window, not for headless CLI use.
 - GUI observation fixtures explicitly marked simulated data validate native presentation and real preferences/geometry, not physical capture. AppKit mounted/composited PNGs are not automatically WindowServer screenshots. Actual installed-window/activation proofs and simulated-observation views are distinct evidence classes.
 - No physical microphone/camera enforcement certification, new OS authorization, antivirus clearance, signing/notarization or global 15 MB resource-budget success follows from these runs. Earlier failed fixtures/results remain recorded rather than rewritten.
 

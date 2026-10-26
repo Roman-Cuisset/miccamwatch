@@ -17,6 +17,18 @@ If the gate is held again, Unix-only releases remain **prereleases**, never stab
 
 Signing is a separate choice. If Windows publication is explicitly approved and the certificate secret is absent, the artifacts are unsigned; the workflow does not create a test certificate or claim publisher identity. SHA-256 checksums, GitHub artifact attestations, and the SPDX SBOM remain available, but they are not substitutes for Authenticode publisher verification or an antivirus verdict.
 
+## Published stable 0.21.0 signature and provenance evidence
+
+[Public v0.21.0](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.21.0), release ID `424498504`, source `3d74686ace7b04728794765f9eb57c0c0a8bc84c`, was published on 2026-10-26. All ten downloaded public assets matched original [tag-run 40331094727](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/40331094727) bytes and API digests. The workflow remains failed at publication; authorized REST recovery reused its packages without rebuilding or replacing assets.
+
+- **Windows:** Authenticode inspection of the exact original bundle's `mcw.exe`, `mcw-tray.exe` and MSI returned three **`NotSigned`** results, with no signer or timestamp. The public ZIP/MSI are byte-identical to that inspected bundle. This is final public-byte identity evidence, not a relabelled earlier branch/local signature check.
+- **macOS archives:** both actual public tar CLI binaries have no `LC_CODE_SIGNATURE`; they are **unsigned**, not ad-hoc-signed CLI executables.
+- **macOS DMGs:** matching native packaging logs report **ad-hoc app seals only**. No Developer ID signing, notarization or new Gatekeeper validation is claimed. An app seal is not an independent publisher identity.
+- **Provenance:** nine named manifest entries and nine cryptographic GitHub attestations were verified on downloaded public files. Verification required certificate identity `https://github.com/Roman-Cuisset/miccamwatch/.github/workflows/release.yml@refs/tags/v0.21.0`, exact source and signer `3d74686ace7b04728794765f9eb57c0c0a8bc84c`, and hosted runners only. `SHA256SUMS` itself is the tenth uploaded asset; generated source archives are separate.
+
+The retained receipt is `%LOCALAPPDATA%\MicCamWatchQualification\0.21.0-publication-recovery-20261026\public-package-gate.json`. No new public installation on the personal host, Defender scan, Microsoft clearance, Apple authorization or physical ARM/device-control validation follows from this verification. Keep all OS and organizational protections enabled; see [Validation](VALIDATION.md#public-release-0210) and [the release record](RELEASE_0.21.0.md).
+
+
 ## Local verification
 
 ```powershell

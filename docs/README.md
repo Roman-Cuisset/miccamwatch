@@ -3,9 +3,9 @@
 [Project overview](../README.md) · [Official website](https://miccamwatch.pages.dev/) ·
 [Public releases](https://github.com/Roman-Cuisset/miccamwatch/releases)
 
-**Public stable: 0.20.0. Development candidate: 0.21.0, not published.**
-Use the version-specific guidance below; a candidate CI result is not a released
-package or proof of physical hardware compatibility.
+**Public stable: [0.21.0](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.21.0).**
+Use the version-specific guidance below; public package verification and earlier
+source-specific qualification are not proof of physical hardware compatibility.
 
 ## Start here
 
@@ -30,18 +30,18 @@ package or proof of physical hardware compatibility.
 
 ## Release status and evidence
 
-- [Validation](VALIDATION.md) is the concise starting point for public 0.20.0,
-  unpublished 0.21.0, recorded integrated-candidate qualification,
-  the open Windows uninstall gate, and the remaining hardware/manual limits.
-- [Draft 0.21.0 release checklist](RELEASE_0.21.0.md) lists the expected packages,
-  verification commands, open gates and separately authorized publication steps.
+- [Validation](VALIDATION.md#public-release-0210) is the concise starting point for
+  public 0.21.0, verified packages/provenance, recorded native qualification,
+  the completed Windows standard-user gate and remaining hardware/manual limits.
+- [0.21.0 release record](RELEASE_0.21.0.md) preserves package verification,
+  publication recovery and separately authorized deployment boundaries.
 - [Release history](RELEASE_HISTORY.md) preserves changes, immutable proof links,
   migration records, and dated publication/website observations moved out of the
   project overview. Historical “current/latest” statements are scoped to their
   release, not instructions to install an old version today.
 - [Roadmap](ROADMAP.md), in French, records priorities, decisions, and handoffs.
-  Current integration is on
-  [`release/0.21.0-candidate`](https://github.com/Roman-Cuisset/miccamwatch/tree/release/0.21.0-candidate);
+  Public 0.21.0 is pinned to
+  [`3d74686ace7b04728794765f9eb57c0c0a8bc84c`](https://github.com/Roman-Cuisset/miccamwatch/tree/3d74686ace7b04728794765f9eb57c0c0a8bc84c);
   the [immutable GUI/ARM handoff](https://github.com/Roman-Cuisset/miccamwatch/blob/cafd98daf7541f317b44aee98edb3b6efa3af561/docs/ROADMAP.md#L1698-L1718)
   preserves the earlier platform-by-platform qualification.
 - [Earlier Linux/macOS handoff](NEXT_AI_LINUX_MACOS.md) is a historical engineering

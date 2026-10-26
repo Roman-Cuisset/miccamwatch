@@ -2,6 +2,8 @@
 
 MicCamWatch has a shared Rust library, CLI, TUI and desktop lifecycle. Windows uses native capture/privacy APIs; Linux uses PipeWire and read-only V4L2 evidence; macOS 15+ uses CoreAudio, AVFoundation discovery and CoreMediaIO running-state with narrower attribution. Native implementation does not imply equal device-control coverage.
 
+Public [0.21.0](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.21.0), source `3d74686ace7b04728794765f9eb57c0c0a8bc84c`, adds native Win32/GTK3/AppKit consultation and Linux ARM64 distribution. See [current interfaces](USAGE.md#native-consultation-and-activation) and [public-package versus source-specific qualification](VALIDATION.md#public-release-0210). Historical contracts and qualification records below retain their original versions; hosted ARM coverage is not physical-board validation.
+
 ## Layers
 
 - `model`: versioned observations, evidence, risk, enforcement decisions, and diagnostics.
@@ -137,6 +139,8 @@ Linux device inventory does not imply access permission. Direct V4L2 capture can
 ## Frontend invariants
 
 CLI, TUI, and tray may format, filter, and initiate explicit user controls. They do not collect evidence or reinterpret enforcement. New frontends consume the public library contract instead of importing Windows internals.
+
+In 0.21.0, explicit `mcw tray open` and platform application launchers open/reopen the owned native consultation window. Repeated activation retains the existing owner/window; closing the consultation hides it without stopping monitoring or releasing protection. Windows plain `mcw-tray.exe` and session autostart remain background-only. Linux loads GTK3 for consultation, not headless CLI; a graphical session and GTK3 runtime are required for that window. These presentation/lifecycle changes do not widen collector, authorization or restoration contracts.
 
 ## Functional parity baseline and native targets
 

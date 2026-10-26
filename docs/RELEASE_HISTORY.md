@@ -2,9 +2,9 @@
 
 [Documentation](README.md) · [Installation](INSTALLATION.md) · [Usage](USAGE.md) · [Current validation](VALIDATION.md) · [Technical roadmap](ROADMAP.md)
 
-This archive is chronological, oldest first. **Public stable is [v0.20.0](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.20.0).** “Stable/latest”, publication holds, candidate status and local installation observations quoted below describe their historical release, not today's installation or download target. Tags and previously published assets remain immutable.
+This archive is chronological, oldest first. **Public stable is [v0.21.0](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.21.0).** “Stable/latest”, publication holds, candidate status and local installation observations quoted below describe their historical release, not today's installation or download target. Tags and previously published assets remain immutable.
 
-**0.21.0 is not published.** Its Linux ARM64 packages, redesigned Win32/GTK/AppKit consultation and unified activation belong to [candidate validation](VALIDATION.md#candidate-0210), not the published release history. A successful candidate CI run is not a release or physical-device certification.
+The [0.21.0 record](#0210--native-consultation-linux-arm64-and-recovered-publication) separates actual public-byte verification from earlier source-specific qualification. A successful CI run or a published package is not physical-device certification.
 
 ## Contents
 
@@ -20,6 +20,7 @@ This archive is chronological, oldest first. **Public stable is [v0.20.0](https:
 - [0.19.0](#0190--direct-profiles-and-windows-lifecycle-fixes)
 - [0.19.1](#0191--windows-cli-hosted-tray-update-correction)
 - [0.20.0](#0200--native-consultation-and-scoped-uninstall)
+- [0.21.0](#0210--native-consultation-linux-arm64-and-recovered-publication)
 - [Website evidence](#historical-website-evidence)
 - [Original README mapping](#original-readme-mapping)
 
@@ -167,12 +168,24 @@ An old frontend already renamed into a backup was not automatically adopted or k
 
 [Public v0.20.0](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.20.0), source `a26522028eafe02591f58c03ceb5c367f2d5d60b`, annotated tag object `547f6185a0579876041d1ae7ebcdd6feccdcb5cf`, was published **2026-10-22 at 16:13:39Z**, release ID `420936561`. [Native release 39807585260](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/39807585260) passed; nine public assets matched size/API digests, eight named checksum entries and eight signed SLSA v1 provenance subjects were verified.
 
-- **macOS consultation:** singleton native window for observations, access details and diagnostics; close kept the tray alive and reopening reused it. Simplified menu, localized About and larger undistorted menu-bar mark retained distinct badges. This is the 0.20 consultation, not the unpublished 0.21 redesign on three operating systems.
+- **macOS consultation:** singleton native window for observations, access details and diagnostics; close kept the tray alive and reopening reused it. Simplified menu, localized About and larger undistorted menu-bar mark retained distinct badges. This is the 0.20 consultation, not the later 0.21 redesign on three operating systems.
 - **Scoped uninstall:** installation provenance selected managed Unix/verified portable removal, package-manager delegation or explicit manual instructions for unowned app/standalone bundles. Settings/history/restoration data stayed retained. Windows deferred command acceptance was not final deletion. Foreign ownership, corrupt records, requested protection and incomplete/unknown owned restoration remained refusals. No macOS owned camera receipt meant no recorded restoration obligation, **not proof of globally allowed cameras**.
 - **Lifecycle/branding:** macOS refresh preserved disabled intent across native/legacy launchctl forms; Unix accepted sockets explicitly entered blocking mode, correcting BSD listener-flag inheritance rather than increasing deadlines. Windows executables/MSI/shortcuts used the official icon.
 - **TLS maintenance:** `rustls-webpki 0.103.16`, `webpki-roots 1.0.10` and `webpki-root-certs 1.0.10` addressed [RUSTSEC-2026-0382](https://rustsec.org/advisories/RUSTSEC-2026-0382), [0381](https://rustsec.org/advisories/RUSTSEC-2026-0381) and [0383](https://rustsec.org/advisories/RUSTSEC-2026-0383). Three Linux D-Bus-stack maintenance warnings remained visible; no advisory was ignored/suppressed.
 
-[Current validation](VALIDATION.md#public-release-0200) separates native release qualification, authorized isolated workstation tests and missing hardware/manual evidence. Windows EXEs/MSI remain unsigned, and macOS bundles ad-hoc sealed without notarization. Checksums and signed build provenance do not replace platform signing, SmartScreen/Gatekeeper decisions, antivirus clearance or user authorization.
+[0.20 validation](VALIDATION.md#public-release-0200) separates that release's native qualification, authorized isolated workstation tests and missing hardware/manual evidence. Its Windows EXEs/MSI were unsigned, and macOS bundles ad-hoc sealed without notarization. Checksums and signed build provenance do not replace platform signing, SmartScreen/Gatekeeper decisions, antivirus clearance or user authorization.
+
+## 0.21.0 — Native consultation, Linux ARM64 and recovered publication
+
+[Public v0.21.0](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.21.0), immutable source `3d74686ace7b04728794765f9eb57c0c0a8bc84c`, was published **2026-10-26 at 16:38:28Z**, release ID **`424498504`**, confirmed stable/latest.
+
+- **Native consultation and activation:** redesigned Win32/GTK3/AppKit windows reuse the owned frontend and retained window. Explicit Start Menu/application-menu/Finder opening differs from background-only startup. Closing the window does not stop monitoring or release protection.
+- **Linux ARM64:** a native `aarch64` archive joins Linux x64, Windows x64 and both macOS architectures. GTK3/graphical-session requirements apply to consultation, not headless CLI. Hosted native ARM qualification is **not physical ARM/Raspberry Pi/SBC or peripheral validation**.
+- **Source-specific qualification:** integrated five-target run `40106706806` and the later real Windows standard-user guest proof retain their exact earlier sources, scenario limits and failed predecessors in [Validation](VALIDATION.md#candidate-0210). They are not new public-package installation tests.
+- **Recovered publication:** [tag-run 40331094727](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/40331094727) built the packages but **remains failed** after HTTP 500 responses in its generate-notes-or-create wrapper; the raw failing endpoint is unknown. Authorized official REST recovery reused those exact bytes without rebuild, tag mutation or asset replacement. Correcting the release association to existing `v0.21.0` retained all ten asset IDs/hashes.
+- **Public verification:** ten actual public HTTPS assets matched original-run bytes and API digests; nine named `SHA256SUMS` entries and nine cryptographic provenance subjects passed exact `release.yml@refs/tags/v0.21.0`, source/signer and hosted-only constraints. Generated source archives are separate from uploaded release assets.
+
+The byte-identical public Windows EXEs/MSI correspond to three **`NotSigned`** Authenticode results without signer/timestamp. Both public macOS tar CLI binaries are **unsigned** (`LC_CODE_SIGNATURE` absent); matching DMG native packaging logs report **ad-hoc app seals only**, not Developer ID signing/notarization or new Gatekeeper validation. No new public installation on the personal host, antivirus clearance, human OS approval or physical capture/control certification is claimed. See [current validation](VALIDATION.md#public-release-0210), [signing evidence](SIGNING.md#published-stable-0210-signature-and-provenance-evidence) and [the full release record](RELEASE_0.21.0.md).
 
 ## Historical website evidence
 
@@ -196,7 +209,7 @@ The immutable [pre-reorganization README at dc40e95](https://github.com/Roman-Cu
 | v0.17.0 published protection baseline; local/native/resources; publication/migrations | [0.17.0](#0170--windows-first-protection-baseline); [full protection contract](ARCHITECTURE.md#candidate-0170-windows-first-protection-contract), [resource tables](ARCHITECTURE.md#pre-publication-qualification-at-32f87cd), [publication](ARCHITECTURE.md#post-publication-v0170-evidence), [Windows hashes/signing](SIGNING.md#published-stable-windows-v0170-verification) |
 | v0.17.1 corrective release; recipes/installer/Arch; authorized handoff | [0.17.1](#0171--corrective-tray-and-distribution-release); [qualification](ARCHITECTURE.md#corrective-0171-candidate-qualification), [publication](ARCHITECTURE.md#post-publication-v0171), [deployment](ARCHITECTURE.md#authorized-workstation-deployment); current manager procedure in [Installation](INSTALLATION.md#updates) |
 | v0.17.2 attribution/partial tray; publication and residual observations | [0.17.2](#0172--camera-attribution-and-partial-coverage); [canonical native/handoff evidence](ARCHITECTURE.md#coordinated-public-0172-and-authorized-workstation-handoff-2026-10-13) |
-| 0.20.0 consultation/uninstall/TLS/publication | [0.20.0](#0200--native-consultation-and-scoped-uninstall); [current validation](VALIDATION.md#public-release-0200), [ROADMAP](ROADMAP.md) |
+| 0.20.0 consultation/uninstall/TLS/publication | [0.20.0](#0200--native-consultation-and-scoped-uninstall); [0.20 validation](VALIDATION.md#public-release-0200), [ROADMAP](ROADMAP.md) |
 | 0.19.1 CLI-hosted tray correction/publication/Intel limitation | [0.19.1](#0191--windows-cli-hosted-tray-update-correction); [ROADMAP](ROADMAP.md) transaction and release journal |
 | v0.19.0 profiles/lifecycle; native candidate/package proof and user feedback | [0.19.0](#0190--direct-profiles-and-windows-lifecycle-fixes); [ROADMAP](ROADMAP.md) records failed popup and old-invoker EOF separately |
 | v0.18.1 ZIP security maintenance | [0.18.1](#0181--zip-dependency-security-maintenance); [canonical dependency/publication records](ARCHITECTURE.md#0181-zip-dependency-security-maintenance) |
@@ -205,6 +218,6 @@ The immutable [pre-reorganization README at dc40e95](https://github.com/Roman-Cu
 | Install: public 0.16.1, 0.16.0 and prerelease 0.15.1 evidence paragraphs | Corresponding chronological sections above, retaining all distinct release/CI/migration URLs; Windows exact hashes and local Defender history remain in [Signing](SIGNING.md) |
 | Static product website: historical runtime/deployment/bundle/EPERM/beacon observations | [Historical website evidence](#historical-website-evidence); [canonical incident record](ARCHITECTURE.md#static-multilingual-site-and-production-repair-2026-10-14); current development/deployment in [Website](WEBSITE.md) |
 | Platform scope: 0.15.1 dry run/Windows CI and real-host virtual-flow paragraphs | [0.15.1](#0151-prerelease); [canonical native boundaries](ARCHITECTURE.md#native-0151-verification-boundaries); current [hardware/manual limits](VALIDATION.md#hardware-and-manual-limits) |
-| Later GUI-branch-only 0.21.0 ARM64/privacy-center development paragraphs (not in dc40e95 README) | [Candidate validation](VALIDATION.md#candidate-0210), not a published release; [immutable development README](https://github.com/Roman-Cuisset/miccamwatch/blob/cafd98daf7541f317b44aee98edb3b6efa3af561/README.md#L355-L374) |
+| Later GUI-branch-only 0.21.0 ARM64/privacy-center development paragraphs (not in dc40e95 README) | [Historical candidate validation](VALIDATION.md#candidate-0210), distinct from [final public 0.21.0](#0210--native-consultation-linux-arm64-and-recovered-publication); [immutable development README](https://github.com/Roman-Cuisset/miccamwatch/blob/cafd98daf7541f317b44aee98edb3b6efa3af561/README.md#L355-L374) |
 
 Durable safety rules from these historical sections are also retained as current guidance in [Installation](INSTALLATION.md) and [Usage](USAGE.md): release/restore before replacement, preserve package-manager ownership, unknown/partial is not safe, SDK mute is not capture permission, and operating-system authorization/signing boundaries remain intact.

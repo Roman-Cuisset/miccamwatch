@@ -14,6 +14,14 @@ const originMarker = '<!-- MCW_ORIGIN_META -->';
 const textExtensions = new Set(['.html', '.css', '.js', '.json', '.svg', '.txt', '.xml']);
 const entryFiles = ['main.css', 'main.js', '_headers', '_redirects', 'robots.txt', 'googlee33354524297c2d0.html'];
 
+
+// The privacy notice remains the audited 0.20.0 policy, not a new release review.
+// Keep its version, source links and footer in that immutable audit context.
+const privacyRelease = Object.freeze({
+  version: '0.20.0',
+  source: 'a26522028eafe02591f58c03ceb5c367f2d5d60b',
+  installerSha256: 'b7348c9a6f37a3d4f89faa2b767fd4880162d90c8f5d7c151185e0823384d1bb',
+});
 async function statIfPresent(filename) {
   try {
     return await fs.lstat(filename);
@@ -276,7 +284,7 @@ async function build() {
     for (const catalog of catalogs) {
       for (const [filename, template] of templates) {
         const localized = localizedPage(template, catalog, filename);
-        const rendered = renderText(localized, filename, release, origin, catalog, privacy);
+        const rendered = renderText(localized, filename, filename === 'privacy.html' ? privacyRelease : release, origin, catalog, privacy);
         await writeGenerated(stage, `${catalog.language}/${filename}`, rendered, generated);
         if (catalog.language === 'en') await writeGenerated(stage, filename, rendered, generated);
       }
