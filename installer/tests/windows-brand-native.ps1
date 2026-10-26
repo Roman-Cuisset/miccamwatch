@@ -27,7 +27,7 @@ foreach ($path in @($msi, $proof)) {
     if ($path.Contains('"') -or $path.Contains("`r") -or $path.Contains("`n")) { throw 'Unsafe fixture path.' }
     $ancestor = Split-Path -Parent $path
     while ($ancestor) {
-        if ((Get-Item -LiteralPath $ancestor).Attributes -band [IO.FileAttributes]::ReparsePoint) {
+        if ((Get-Item -LiteralPath $ancestor -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) {
             throw "Reparse-point fixture ancestry: $ancestor"
         }
         $ancestor = Split-Path -Parent $ancestor

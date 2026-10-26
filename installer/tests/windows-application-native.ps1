@@ -28,7 +28,7 @@ foreach ($path in @($install, $proof)) {
     }
     $ancestor = $path
     while ($ancestor) {
-        if ((Test-Path -LiteralPath $ancestor) -and ((Get-Item -LiteralPath $ancestor).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+        if ((Test-Path -LiteralPath $ancestor) -and ((Get-Item -LiteralPath $ancestor -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
             throw "Reparse-point fixture ancestry: $ancestor"
         }
         $ancestor = Split-Path -Parent $ancestor
