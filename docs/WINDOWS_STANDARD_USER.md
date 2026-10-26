@@ -160,7 +160,7 @@ The workflow always attempts artifact upload, including hidden files, with seven
 - `private-admission-context.json`, `private-standard-user-context.json`, `private-host-context.json`, and `private-context-before-native.json`: actual admission/context observations, when reached.
 - `private-*-command.json`, `private-*-stdout.log`, `private-*-stderr.log`, `private-orchestrator-error.log`: exact executable/argument arrays, working directories, timestamps, exit codes, private output, and precise orchestration failure.
 - `result.json`, native command evidence/private logs, `private-msi-application/`, and MSI logs: existing native fixture reports and installed application evidence.
-- `temporary-state/`: the real fixture `TEMP`/`TMP`, including retained sandboxes if native cases fail.
+- `<RUNNER_TEMP>/mcw-tmp/` (or `<local fixture root>/mcw-tmp/`): the real fixture `TEMP`/`TMP`, including retained sandboxes if native cases fail. Kept directly under the admitted owned root rather than nested below the proof directory, to leave room for native Windows paths without changing long-path policy. The workflow retains this directory separately.
 - `mcw-standard-user-fixture.msi`: the actual package used for qualification.
 - `<RUNNER_TEMP>/mcw-cargo-uninstall`: the dedicated genuine Cargo install/root and any retained failure state.
 

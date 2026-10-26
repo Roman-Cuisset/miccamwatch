@@ -51,6 +51,7 @@ jobs:
           path: |
             ${{ runner.temp }}/mcw-standard-user-proof
             ${{ runner.temp }}/mcw-cargo-uninstall
+            ${{ runner.temp }}/mcw-tmp
           if-no-files-found: error
           include-hidden-files: true
           retention-days: 7

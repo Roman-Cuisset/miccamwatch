@@ -198,7 +198,9 @@ try {
     $cargo = (Get-Command cargo -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
     $dotnet = (Get-Command dotnet -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
     $python = (Get-Command python -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
-    $fixtureTemp = Join-Path $proof 'temporary-state'
+    # Keep native case paths below Win32 limits without changing system policy.
+    # Proof-directory nesting is unnecessary; this still belongs to the owned root.
+    $fixtureTemp = Join-Path $runnerTemp 'mcw-tmp'
     [void](New-Item -ItemType Directory -Path $fixtureTemp)
     $env:TEMP = $fixtureTemp
     $env:TMP = $fixtureTemp
