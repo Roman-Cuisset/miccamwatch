@@ -212,7 +212,9 @@ try {
     # This is an observation-only production command, before any destructive
     # fixture case. A missing/failed enumeration is not proof of zero devices.
     $doctor = Invoke-FixtureCommand 'doctor' $binary @('doctor', '--lang', 'en', '--json', '--no-color')
-    $checks = @(Get-Content -LiteralPath $doctor.stdout -Raw | ConvertFrom-Json)
+    # Windows PowerShell emits a decoded JSON array as one pipeline object.
+    # @(... | ConvertFrom-Json) would wrap it again and compare whole arrays.
+    $checks = Get-Content -LiteralPath $doctor.stdout -Raw | ConvertFrom-Json
     foreach ($expected in @(
         @{ name = 'microphone_devices'; detail = '0 capture device(s) detected' },
         @{ name = 'camera_devices'; detail = '0 camera device(s) detected' }
