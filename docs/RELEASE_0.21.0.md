@@ -17,6 +17,13 @@
 - **Diagnosis boundary:** original token logs show Contents/Attestations write, and recovery admission confirmed push permission and available API quota. Official GitHub Status was operational with no matching incident in the returned history. In the exact pinned action, `prepareReleaseMutation` invokes `generateReleaseNotes` before `createRelease`; its common catch labels either error as release creation. The old raw failing endpoint/headers were not logged, so neither a transient outage nor a reproducible workflow defect is proven. No new HTTP 500 occurred in the controlled recovery; the original failed run was not rerun or relabeled.
 - **Durable evidence:** `%LOCALAPPDATA%\MicCamWatchQualification\0.21.0-publication-recovery-20261026` contains admission/status/history/diagnosis, explicit requests/responses, draft and upload receipts, actual public downloads, nine public-byte verification results, package gate, signature reads, native logs and title invariants. Earlier branch/main/guest proofs below retain their historical source and byte scope.
 
+### Verified production website
+
+- The existing Cloudflare Git integration deployed **`97a754d2c2a6f18cf79ad5c76d2262310fb516bd`** successfully; its site tree is identical to **`1ac2f237703f8fa0406a247b6bbda8b487803afc`**, qualified by [Static website 40364732189](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/40364732189). Application, native, installer and workflow source were not changed by this cutover.
+- **21 actual HTTPS routes passed:** eight homes now describe 0.21.0 with correct downloads/source pins and unchanged canonical/hreflang/WebSite metadata; all eight privacy responses remain **byte-identical to before deployment**, including the pre-existing hosting-injected Cloudflare Analytics block. SVG/96px PNG favicons, robots/sitemap and installer were checked; public CSS/JS also match the qualified export.
+- Public `install.sh` SHA-256 is **`ef5dc62e71659261de0ad79b6b558e7d2446106d3adaed6019c27e651ce454bd`**. Actual production Chrome at 390px exercised the French Linux panel/keyboard activation, both current archive links, HTTPS local-installer command and displayed checksum. Seven-language mobile JS-on/off checks passed locally; screenshots were actually reviewed for English desktop and French mobile, not every native/hardware configuration.
+- Privacy retains its explicit audited **0.20.0** context rather than silently asserting a new legal review. No personal installation/protection was changed. Final report commits may advance main documentation without another deployment; the actual deployed website commit remains the one stated above.
+
 
 ## Authorized tag publication — stopped on 2026-10-26
 
