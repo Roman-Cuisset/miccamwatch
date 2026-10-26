@@ -2454,3 +2454,31 @@ Lots futurs **à approuver, aucun correctif appliqué** :
 - **Règle d'architecture pour la future refonte** : logique de surveillance, modèle, permissions, IPC et propriété de protection restent en Rust ; assistance native Swift/C ciblée assumée ; Python cantonné à l'outillage adapté et au bootstrap administratif explicitement documenté. Pas de réécriture massive, minification, seuil artificiel « >50 % » ou baisse de couverture pour un graphique GitHub.
 
 **Point de reprise : attendre l'accord du propriétaire sur les lots de consolidation/nettoyage et les éventuels correctifs d'outillage.** Seule cette ROADMAP est sauvegardée ; aucune autre source, `.gitignore`, `.gitattributes`, tâche, compte, PATH, base, installation ou protection n'a été modifié. Aucun push/main/tag/release/déploiement prévu par cet audit.
+
+## 2026-10-26 — Maintenance Windows et hygiène Git effectuées
+
+**Périmètre autorisé et respecté :** consolidation MSI/Cargo et exclusions Git ciblées. Aucun travail de design, aucune désinstallation MSI, aucun nettoyage de `target/`, des bases Wrangler, des worktrees ou du stash. Aucun tag, release, déploiement site ou push main.
+
+### Consolidation Windows
+
+- **État initial revérifié :** MSI **0.21.0** avec les deux exécutables aux SHA publics ; un seul tray actif, MSI, PID 29540, parent Explorer ; commandes résolues d'abord vers Cargo **0.20.0** ; Run `MicCamWatch` vers le tray Cargo et StartupApproved activé.
+- **Protections contrôlées avant retrait :** intention microphone `requested:false`, `release_pending:false`, aucune restauration automatique ; caméra `blocked:[]`, `desired_blocked:false`, aucune garde active ; aucun fichier dans `ProgramData\MicCamWatch\CameraGuard` au snapshot. Aucune protection n'a été libérée ou modifiée.
+- **Autostart :** la valeur Run existante a été repointée vers **`%LOCALAPPDATA%\Programs\MicCamWatch\mcw-tray.exe`**, en conservant son nom et StartupApproved. `mcw autostart status` retourne désormais **enabled**; une seule entrée Run, aucune tâche planifiée `MicCamWatch Tray`. Le prochain login n'a pas été simulé par déconnexion.
+- **Retrait Cargo :** `cargo uninstall --root C:\Users\stcui\.cargo miccamwatch` a supprimé uniquement `mcw.exe` et `mcw-tray.exe` de `.cargo\bin` et l'entrée de registre Cargo. Aucun autre outil Rust n'a été touché. `cargo 1.98.1`, `rustc 1.98.1`, `rustup 1.29.1` restent opérationnels ; `cargo install --list` ne contient plus MicCamWatch.
+- **Vérifications finales :** `Get-Command mcw,mcw-tray -All` ne retourne que le MSI ; `mcw --version` = **0.21.0** ; autostart **enabled** ; tray **running** ; raccourci `--open` testé, il réutilise le processus MSI unique. L'enregistrement MSI 0.21.0 reste intact.
+- **Restes volontairement conservés :** anciens `mcw.old*.exe`, `mcw-tray.exe.v0.13.2.bak`, neuf `.mcw-update-*` (77,3 Mo) et `target/`. Ce ne sont pas des installations actives ; leur suppression reste une opération séparée.
+
+### Hygiène Git
+
+- Branche de maintenance **`maintenance/windows-git-cleanup-20261026`** créée depuis le commit d'audit **`b7550b0`**, qui était encore uniquement local sur `release/0.21.0-candidate`. Le diagnostic de Sol est donc conservé.
+- `.gitignore` reçoit **`/.wrangler/`**, **`__pycache__/`** et **`*.pyc`**, sans doublon. Les mêmes motifs sont ajoutés au **`.git/info/exclude`** local partagé, afin que les worktrees existants cessent immédiatement d'afficher ces artefacts sans modifier leurs branches.
+- Aucun fichier ou base n'est supprimé : 19 fichiers Wrangler (**3 807 818 octets**) et 3 `.pyc` (**97 483 octets**) restent sur disque. Aucun fichier suivi n'est ignoré et aucun artefact généré n'est suivi.
+- État des worktrees : candidat propre hors `.gitignore`; original limité aux trois groupes historiques **WATCHDOG.yml**, **debug_macos/** et **docs/next_projects.md** ; confidentialité, GitHub, README et SEO propres ; stash et six worktrees préservés.
+- `b7550b0` n'est pas poussé sur `release/0.21.0-candidate`; la branche de maintenance fournit la sauvegarde distante. `main` n'est pas modifiée et devra être mise à jour par une fusion explicitement autorisée.
+
+### Risques et suites
+
+- L'autostart est vérifié par registre et CLI, **pas par un redémarrage**. Le tray MSI déjà actif n'a pas été redémarré.
+- Une future installation globale `cargo install --path .` pourrait recréer un doublon dans `.cargo\bin`; préférer les builds/worktrees de développement et les chemins explicites.
+- Les anciennes sauvegardes Cargo, `target/`, les exports et les données Wrangler restent à nettoyer seulement après accord séparé. Ne pas supprimer les journaux de restauration ni les locks.
+- La refonte graphique 0.21.1 n'est pas commencée ; les simplifications Python/Swift/CI documentées ci-dessus restent des travaux futurs.
