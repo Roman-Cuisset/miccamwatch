@@ -329,7 +329,11 @@ public sealed class McwAppStagingObserver : IDisposable {
                 finally { $process.Dispose() }
             }
         }
-        if ($residents.Count -ne 1 -or $residents[0].pid -ne $owner.Pid) { throw "Expected exactly one resident tray process during $Phase" }
+        if ($residents.Count -ne 1 -or $residents[0].pid -ne $owner.Pid) {
+            $report['failedOwnerSnapshot']=@{ phase=$Phase; at=[DateTime]::UtcNow.ToString('o'); ownerPid=$owner.Pid; windows=$windows; residentProcesses=$residents }
+            Save-ApplicationReport
+            throw "Expected exactly one resident tray process during $Phase"
+        }
         $id=[McwAppNative]::AppId($owner.Handle)
         $report.observations+=@{ phase=$Phase; ownerPid=$owner.Pid; processHandle=$owner.Handle.ToInt64(); trayHwnd=$owner.Tray; desktopHwnd=$owner.Desktop; visible=$shown; windows=$windows; residentProcesses=$residents; packageIdentityApi=@{ status=$id[0]; value=$id[1]; explicitDesktopAppIdGetter=$false } }
         Save-ApplicationReport
@@ -372,10 +376,12 @@ public sealed class McwAppStagingObserver : IDisposable {
     Start-Sleep -Milliseconds 500
     Assert-Owner 'initial-background-hidden' 0
     # Launch the original installed .lnk, not a copied or synthetic shortcut.
-    # Shell resolution is real; its returned process is not ownership authority.
-    Start-Process -FilePath $shortcut
+    # Retain Shell launch completion, not just visibility; its process is still
+    # not ownership authority. All entrypoints must exit before counting residents.
+    $null=Start-App $shortcut '' $true
     $report.launches+=@{ image=$shortcut; arguments=$null; shellExecute=$true; actualInstalledShortcut=$true; at=[DateTime]::UtcNow.ToString('o') }
     Wait-Visible $true
+    Wait-Launchers
     Assert-Owner 'actual-StartMenu-link-opens' 1
     [McwAppNative]::Capture([IntPtr]$owner.Desktop,(Join-Path $proof 'installed-start-menu-window.png'))
     Hide-Desktop
@@ -389,7 +395,7 @@ public sealed class McwAppStagingObserver : IDisposable {
             foreach ($iteration in 1..4) {
                 $null=Start-App $gui '--open' $true
                 $null=Start-App $cli 'tray open' $false
-                Start-Process -FilePath $shortcut
+                $null=Start-App $shortcut '' $true
                 $report.launches+=@{ image=$shortcut; shellExecute=$true; actualInstalledShortcut=$true; phase='concurrent'; iteration=$iteration }
             }
             Wait-Visible $true; Wait-Launchers; Assert-Owner 'concurrent-GUI-CLI-shortcut-one-owner-one-HWND' 1
