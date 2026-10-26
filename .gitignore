@@ -3,3 +3,8 @@
 /site-dist/
 /.mcw-site-export-*/
 /.mcw-site-export-lock
+
+# Local Cloudflare/Wrangler state and Python bytecode
+/.wrangler/
+__pycache__/
+*.pyc
