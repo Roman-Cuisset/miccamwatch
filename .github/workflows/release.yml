@@ -195,6 +195,14 @@ jobs:
           body: |
             ## 0.21.0 — Native desktop interfaces, unified activation and Linux ARM64
 
+            ### Signing and hardware validation — important
+
+            - **Windows:** the verified preparation's `mcw.exe`, `mcw-tray.exe` and MSI are **unsigned (`NotSigned`)**, without a verified publisher or timestamp. The tag workflow signs only when a production certificate is configured; check the actual tag files separately. Checksums and provenance do not establish SmartScreen/Defender clearance.
+            - **macOS:** applications are **ad-hoc sealed, not Developer ID signed and not notarized**. Successful seal verification does not guarantee Gatekeeper acceptance; do not disable OS protections to install.
+            - **Linux ARM64:** native hosted build/tests passed, but **physical Raspberry Pi/SBC, peripheral and capture-control compatibility has not been validated**. These GNU packages retain glibc 2.35+/PipeWire prerequisites; ARMv7, musl and non-USB/CSI camera enforcement are not claimed.
+
+            ### Changes
+
             - Adds redesigned native Win32, GTK3 and AppKit consultation interfaces with Overview, Settings, Diagnostics and localized About information. Current observations, collector health and requested versus effective protection remain distinct; partial/unknown coverage is never an all-clear.
             - Unifies `mcw tray open`, desktop/Finder/Start Menu activation and retained-window behavior: explicit launch reuses the authenticated owner/window for the same installation and data namespace; closing hides the consultation without stopping monitoring, while background/autostart launches stay hidden. Windows retains its CLI and console-free companion as two executables for one application, not two independent desktop applications.
             - Adds persistent native profile, notification, sound and local-history preferences, notification pause and explicit autostart controls without granting permissions or enabling protection merely by opening a window. Explicit `--config` remains authoritative. Refresh preserves native reading/navigation state; full selectable/copyable diagnostics remain separate from compact headlines.
