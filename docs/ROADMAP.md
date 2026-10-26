@@ -2320,3 +2320,137 @@ Les échecs de ce lot sont clôturés par les preuves natives ci-dessous, sans r
 - Release **[v0.21.0](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.21.0)** stable/latest et titre exact confirmés ; dix IDs/digests publics inchangés après correction du nom et cutover site. Tag **06d800ba… → 3d74686…** intact, neuf provenances contraintes au tag/commit vérifiées. Windows **NotSigned**, tar CLI macOS non signés / app DMG ad-hoc sans Developer ID/notarisation ; ARM64 matériel physique et autres configurations manuelles demeurent hors validation. Aucun succès inventé pour le run historique échoué.
 - Preuves durables **`%LOCALAPPDATA%\MicCamWatchQualification\0.21.0-publication-recovery-20261026`** : `production-main-push.json`, `production-deployment-verified.json`, `production-url-checks.json`, `public-browser-smoke.json`, `site-mobile-browser*.json`, `qualified-site-export-verification.json`, reçus API/provenance/signatures et vrais téléchargements. Les captures/hashes conservent leur scope local/CI/public ; pas de secret d'authentification enregistré.
 - Prochain point : version **0.21.0 publiée et disponible**, plus de blocage de publication actif. Conserver les limites documentées et les cinq exclusions historiques ; ne pas retoucher tag/packages ni prétendre à une validation ARM physique. Les comptes rendus finaux site/docs seuls peuvent être poussés avec **[CF-Pages-Skip]** et skip CI, sans redéployer des fichiers identiques ni reconstruire les plateformes.
+
+## 2026-10-26 — Audit avant refonte : installations Windows, Wrangler et langages
+
+**Périmètre : diagnostic non destructif.** Aucun exécutable MCW lancé, aucune installation/désinstallation, modification de PATH/autostart/préférence/protection, suppression, compilation, test produit, refonte ou publication. Seule cette documentation est modifiée sur autorisation explicite. Mesures de sources sur **main/candidat 9d626544…**, pas sur l'ancien worktree **work/linux-arm64-021/cafd98d** ; version publique **v0.21.0/3d74686…** conservée.
+
+### Installations réellement présentes et points d'entrée
+
+| Élément | État constaté sans lancer MCW |
+| --- | --- |
+| MSI utilisateur | **0.21.0**, enregistré sous `{86CDFED5-BA07-4C91-8BC7-8A856198DC33}`, éditeur Roman Cuisset, installation du 26/10 ; `%LOCALAPPDATA%\Programs\MicCamWatch` |
+| Fichiers MSI | `mcw.exe` SHA **55753140f5f73743fe49399c3fa7a126234ea860029b7f71d673ce80a3af8fe8** ; `mcw-tray.exe` SHA **5a0253ea90a77bf7478f6a9f1826290f6a6055723cb12bdf4975b89bdfb1b6fe** ; égaux aux deux exécutables du ZIP public 0.21.0 déjà vérifié |
+| Menu Démarrer | Un raccourci utilisateur `MicCamWatch.lnk`, cible MSI `mcw-tray.exe --open`, répertoire de travail MSI ; ressource d'icône Microsoft Installer présente |
+| Tray actif | Un seul `mcw-tray.exe` observé, **PID 29540**, session 1, chemin MSI, parent **Explorer** ; donc **0.21.0**. Aucun autre processus MCW ni service MCW visible au snapshot |
+| Ancienne installation Cargo | `%USERPROFILE%\.cargo\bin\mcw.exe` et `mcw-tray.exe` = **0.20.0**, prouvé par égalité SHA des deux membres avec le ZIP officiel 0.20.0 lu en mémoire |
+| Provenance Cargo | `.crates.toml` et `.crates2.json` enregistrent encore l'installation d'origine **0.15.1** depuis un ancien répertoire source temporaire. Cette version de manifeste n'est **pas** la version actuelle des fichiers, remplacés depuis |
+| Terminal/PATH | Dans le PATH utilisateur et celui du processus d'audit, `.cargo\bin` précède le répertoire MSI : `Get-Command mcw,mcw-tray -All` résout **0.20.0 avant 0.21.0**. Une fonction/alias d'un terminal déjà ouvert n'a pas été introspectée |
+| Autostart | Valeur **HKCU Run / MicCamWatch** vers `"%USERPROFILE%\.cargo\bin\mcw-tray.exe"` ; StartupApproved premier octet **2**, donc entrée approuvée/activée. Le prochain login est encore configuré pour l'ancienne copie Cargo, pas le MSI |
+
+Une seule entrée MicCamWatch de désinstallation MSI est visible dans les clés utilisateur/machine 32/64 bits inspectées. Aucun autre raccourci MCW découvert dans les menus/bureaux/startup inspectés, aucune tâche MCW visible. Audit sans élévation : il ne constitue pas un inventaire exhaustif des autres comptes ou de tout emplacement portable arbitraire. Les nombreux `target/**/mcw*.exe` sont des builds/tests, **pas des installations utilisateur**. Aucun MCW trouvé dans les emplacements Downloads/Desktop inspectés.
+
+Les données à conserver sont `%APPDATA%\MicCamWatch` (réglages/verrous), `%LOCALAPPDATA%\MicCamWatch` (historique **1 309 676 octets** au snapshot, état caméra et dossier `microphone-protection` avec intention/verrous), ainsi que les éventuels journaux privilégiés de restauration. Aucun contenu d'historique ni secret n'a été exporté. Présence/absence d'un processus ne prouve pas que les contrôles physiques sont libérés.
+
+### Consolidation proposée — attend l'autorisation
+
+1. **Conserver le MSI officiel comme application quotidienne.** Conserver Cargo/Rustup et tous les autres outils Rust ; ne jamais supprimer `.cargo\bin` en bloc.
+2. Après sauvegarde et contrôle des obligations de restauration, migrer l'autostart depuis l'exécutable Cargo propriétaire vers l'exécutable MSI exact. Ne pas écraser aveuglément une entrée étrangère ; ne pas effectuer de libération micro/caméra sans accord distinct.
+3. Option recommandée : désinstaller **uniquement le paquet Cargo MicCamWatch** par son gestionnaire, puis vérifier la résolution dans un nouveau terminal. Cela élimine le doublon de commande tout en gardant Cargo utilisable. Alternative si ce paquet doit rester global : placer le MSI avant Cargo dans le PATH utilisateur, après autorisation, et réserver les chemins explicites aux essais.
+4. Développement futur : nouveau worktree issu du main publié, builds `target` ou préfixe de développement dédié, jamais `cargo install --path .` dans le préfixe quotidien par défaut. Aucun worktree n'est créé ou réinitialisé pendant cet audit.
+5. Pour des consultations CLI de développement approuvées, des racines **APPDATA/LOCALAPPDATA limitées à un processus enfant** peuvent séparer préférences/historique/intentions. **`--config` seul ne les isole pas.** Aucun `MCW_HOME`, `--data-dir` ou `--no-controller` n'existe dans le contrat inspecté.
+6. **L'isolation de fichiers n'isole pas le matériel.** Les verrous matériels sont globaux ; le singleton tray Windows est fixe. Un second tray de développement parallèle au stable n'est pas une instance indépendante prise en charge. GUI/contrôles : VM jetable approuvée ou transfert explicite de propriétaire, sans périphériques personnels pour les tests destructifs.
+
+Pièges constatés par inspection : `watch --no-kill` interdit la terminaison de processus mais peut reprendre une protection demandée ; ce n'est pas un lancement sans contrôleur. `mcw-tray.exe --version`/`--help` ne sont pas des requêtes de version dans le launcher actuel et peuvent démarrer le frontend ; aucun de ces appels n'a été exécuté. `mcw.exe --version` possède bien un chemin précoce de parsing. Références : `src/main.rs:46-200`, `src/bin/mcw-tray.rs:26-41`, `src/windows_control.rs:272-322,500-714`, `src/frontends/tray.rs:487-523`, `src/settings.rs:153-208`, `src/autostart.rs:272-309`, `docs/INSTALLATION.md:49-76,174-223`.
+
+### Git, Warp et artefacts locaux
+
+Les **six worktrees** ont zéro modification suivie avant cette mise à jour documentaire. Le worktree original **cafd98d** conserve les cinq groupes non suivis historiques : `.wrangler/`, `WATCHDOG.yml`, `debug_macos/`, `docs/next_projects.md`, `installer/tests/__pycache__/`. Le worktree confidentialité **35f15f9** possède aussi son propre `.wrangler/` non suivi ; ne pas le nettoyer par ricochet. Le stash historique `mcw-local-handoff-preserved-before-0.17.2-sync-20261013` conserve **180 ajouts/25 suppressions** dans `docs/NEXT_AI_LINUX_MACOS.md` ; ne pas appliquer/supprimer sans décision. `secrets.env` est ignoré/non suivi et n'a pas été lu.
+
+Le compteur **+1689 de Warp n'est pas assimilé à une preuve de modifications de code** : Git montre zéro diff suivi dans le worktree concerné et 19 fichiers Wrangler non suivis. La sémantique exacte de cette vue Warp n'a pas été établie.
+
+| Emplacement du worktree original | Fichiers | Octets logiques constatés | Décision proposée, non exécutée |
+| --- | ---: | ---: | --- |
+| `.wrangler/` | 19 | **3 807 818** | Exclure de Git ; sauvegarder/évaluer l'état local avant toute purge |
+| `installer/tests/__pycache__/` | 3 | **97 483** | Bytecode généré, candidat à suppression approuvée et exclusion |
+| `site-dist/` | 36 | **870 531** | Export généré déjà ignoré ; régénérable depuis sa branche/source |
+| `target/` | 50 131 | **33 895 206 558** | Principal volume généré ; nettoyage ciblé approuvé possible, recompilation ensuite. Taille logique, pas une promesse d'espace physique récupéré |
+| `debug_macos/` | 4 | **60 184** | Sources/notes de diagnostic historiques à conserver, pas un cache |
+
+Également hors dépôt : neuf anciens `.cargo\bin\.mcw-update-*`, **77 323 313 octets**, et trois anciens fichiers MCW `.old`/`.bak`. Ce sont des sauvegardes de mises à jour, pas d'autres installations actives. Ne jamais les exécuter/restaurer comme contournement antivirus ; suppression éventuelle distincte après accord et contrôle du propriétaire. Ne pas supprimer des fichiers de verrou persistants parce qu'ils font zéro octet. `CARGO_TARGET_DIR` est absent des trois scopes et aucun override Cargo `config/config.toml` n'a été trouvé aux emplacements inspectés ; les autres worktrees restent néanmoins hors nettoyage.
+
+**Wrangler/SQLite :** un cache JSON **2 042 octets**, six bases **24 576 octets**, six WAL **3 584 592 octets**, six SHM **196 608 octets**. Origine cohérente avec les qualifications Pages/Wrangler 4.149.0 documentées les 17–18 octobre (`ROADMAP` historique, `NEXT_AI_LINUX_MACOS`) ; la commande créatrice exacte n'est pas prouvée. `cache/cf.json` est une fixture de métadonnées de requête Cloudflare ; `state/v3/cache` est du Cache API persistant, distinct de ce cache de configuration.
+
+Les six en-têtes SQLite et WAL ont été vérifiés. Lecture des seuls schémas de bases via URI **`mode=ro&immutable=1`**, sans rejouer les WAL ni créer de sidecar ; les snapshots de base n'exposent pas de table. **Cela ne prouve pas un état vide** : des données/diagnostics locaux D1/KV/R2/observabilité peuvent être dans les WAL. Aucun processus Wrangler/Miniflare/workerd visible au snapshot, mais aucun état n'est déclaré jetable sans sauvegarde. Après inspection, les 19 fichiers et leur volume restent identiques.
+
+`.gitignore` actuel ignore `/target`, `/secrets.env`, `/site-dist/` et les exports temporaires, mais **pas Wrangler ni le bytecode Python**. Ajouts proposés, non appliqués : **`/.wrangler/`**, **`__pycache__/`**, **`*.pyc`**. Ne pas ignorer globalement `*.sqlite*`, `debug_macos`, notes ou WATCHDOG : cela masquerait potentiellement de vraies sources/données.
+
+### Langages : mesure exacte, architecture et évolution
+
+API GitHub `/languages` et blobs suivis de **main 9d62654** : **3 124 348 octets** éligibles au total. Les pourcentages mesurent des **octets de sources**, pas l'exécution, la taille des exécutables, la RAM ou le nombre de fonctionnalités.
+
+| Langage | Octets comptés | Part calculée |
+| --- | ---: | ---: |
+| Rust | **1 916 784** | **61,35 %** |
+| Python | **630 685** | **20,19 %** |
+| PowerShell | **224 349** | **7,18 %** |
+| Swift | **150 571** | **4,82 %** |
+| Shell | **94 802** | **3,03 %** |
+| HTML | **33 468** | **1,07 %** |
+| JavaScript | **32 322** | **1,03 %** |
+| CSS | **25 199** | **0,81 %** |
+| C | **12 445** | **0,40 %** |
+| Ruby | **3 723** | **0,12 %** |
+
+Répartition par périmètre : `src/` **1 909 149 octets Rust** et `build.rs` **7 635** ; `native/` **137 374 Swift** ; `installer/tests/` **578 215 Python + 221 987 PowerShell + 10 009 C** ; `installer/macos/` **5 355 Python + 13 197 Swift + 2 436 C** ; `distribution/aur/` **20 232 Python + 2 732 Shell** ; `distribution/homebrew/` **26 883 Python + 3 723 Ruby** ; `distribution/winget/` **2 362 PowerShell** ; installateurs shell directs **92 070** ; site **33 468 HTML + 32 322 JavaScript + 25 199 CSS**.
+
+**19 fichiers Python suivis = exactement les 630 685 octets de GitHub.** Seize tests/qualification **578 215 octets (91,68 % du Python)**, deux qualifications de distributions **47 115 (7,47 %)**, un packaging macOS **5 355 (0,85 %)**. Aucun des 19 n'est un processus/fichier du fonctionnement courant installé ; dix-huit sont appelés par workflows et le dernier est un helper importé.
+
+| Fichier Python | Octets Git | Rôle / consommateur réel |
+| --- | ---: | --- |
+| `installer/tests/native_camera.py` | 22 541 | Qualification caméra Linux / CI ; réutilise fixtures d'installation |
+| `installer/tests/native_install.py` | 74 118 | Installation/upgrade/rollback, fixtures partagées / Unix install et autres suites |
+| `installer/tests/native_linux_desktop.py` | 26 268 | GTK/launcher installé, langues/thèmes / CI |
+| `installer/tests/native_linux_tray_width.py` | 27 260 | Tray Linux, profils, géométrie et helpers réutilisés / CI |
+| `installer/tests/native_mac_portable_update.py` | 29 721 | Bootstrap/mise à jour native macOS / CI et Unix install |
+| `installer/tests/native_macos_app.py` | 44 837 | Vraie app DMG/Finder, lifecycle et données conservées / CI |
+| `installer/tests/native_macos_menu.py` | 79 023 | AppKit/menu/interface, importantes sources Swift de test embarquées / CI et macos-stop |
+| `installer/tests/native_macos_profiles.py` | 12 594 | Inspection/permissions/propriétaire et Cancel pré-UAC macOS / CI |
+| `installer/tests/native_macos_stop.py` | 36 333 | Diagnostic historique et régression stop natif / workflow manuel macos-stop |
+| `installer/tests/native_pipewire_limits.py` | 26 516 | Pannes/limites du collecteur et captures Linux / CI |
+| `installer/tests/native_resources.py` | 63 941 | Mesure réelle CPU/RSS/latence et baselines partagées / CI et autres suites |
+| `installer/tests/native_tui_controls.py` | 15 888 | PTY/ConPTY et contrôles TUI / CI et helpers importés |
+| `installer/tests/native_uninstall.py` | 53 678 | Désinstallation/provenance/restauration sous admission jetable / workflows dédiés |
+| `installer/tests/native_windows_protection.py` | 29 979 | Lifecycle propriétaires/IPC/protection Windows / CI |
+| `installer/tests/windows_ordinary.py` | 22 734 | Ancienne route de qualification compte batch / encore référencée par native-uninstall |
+| `installer/tests/windows_uninstall_lock.py` | 12 784 | Helper importé : contention réelle du worker de désinstallation |
+| `installer/macos/package.py` | 5 355 | Packaging d'un Rust déjà compilé, app/icône/DMG ; non copié dans l'app |
+| `distribution/aur/qualify-native.py` | 20 232 | Qualification makepkg/pacman / arch-package-native |
+| `distribution/homebrew/native_qualification.py` | 26 883 | Qualification brew/LaunchAgent / workflow manuel homebrew-native |
+
+Les cinq plus gros représentent **315 597 octets (50,04 % du Python)** : menu macOS, installation, ressources, désinstallation et app macOS. Pas de script complet démontré sans consommateur. Une suite manuelle ou une ancienne baseline n'est pas du code mort par définition.
+
+| Tag inspecté | Rust propre, octets | Fichiers Python | Python, octets |
+| --- | ---: | ---: | ---: |
+| v0.2.0 | 22 473 | 0 | 0 |
+| v0.10.0 | 178 326 | 0 | 0 |
+| v0.15.1 | 869 621 | 1 | 41 700 |
+| v0.16.0 | 961 797 | 2 | 80 634 |
+| v0.17.2 | 1 371 461 | 11 | 304 829 |
+| v0.19.1 | 1 530 364 | 14 | 391 524 |
+| v0.20.0 | 1 635 669 | 18 | 534 421 |
+| v0.21.0 / main actuel | 1 916 784 | 19 | 630 685 |
+
+Il s'agit de reconstruction des **blobs Git**, pas de snapshots des anciens pourcentages Linguist. L'arbre v0.2.0 ne contient comme sources de programmation que Rust (hors workflows YAML). Introduction identifiée de la suite Python : **ef744eb**, 1er octobre, qualification de l'installateur Unix après v0.14.0. Le volume Rust n'a pas été remplacé : il a presque doublé depuis v0.16.0 ; la qualification multiplateforme a grandi plus vite.
+
+**Frontière architecturale vérifiée :** exécutables `mcw`, `mcw-tray` et helper caméra en Rust ; Win32/GTK pilotés par Rust ; AppKit/helper macOS en Swift compilé et embarqué ; petit launcher Finder C. Les dépendances Python GI/PTY des tests ne sont pas des dépendances du frontend livré. Références : `Cargo.toml:11-24`, `src/lib.rs`, `src/frontends/tray/{windows,linux}_desktop.rs`, `build.rs:77-178`, `src/platform/macos.rs:32-43`, `installer/macos/package.py:23-110`, `installer/macos/launcher.c`.
+
+**Exception importante, ne pas affirmer « aucun Python requis nulle part » :** `installer/install-camera-helper.sh:1-6` lance **`/usr/bin/python3 -I`**, avec du Python embarqué pour l'installation administrative Linux optionnelle (ELF, permissions, transactions/restauration). Cette dépendance est documentée dans INSTALLATION/AUR, distincte de l'exécution normale du helper Rust. Le cycle de vie Unix utilise aussi du shell ; Swift est du vrai runtime natif. L'audit ne démontre pas une fonctionnalité de surveillance migrée inutilement en Python. Une réécriture du bootstrap sensible exigerait une justification et une requalification de sécurité, pas un objectif cosmétique.
+
+### Linguist, fichiers générés et améliorations proposées
+
+Le Rust brut suivi fait **2 192 314 octets**, dont **275 530** de `vendor/libspa` correctement exclus ; Rust propre = chiffre API **1 916 784**. `.gitattributes` contient seulement **`installer/*.sh text eol=lf`**, aucun override Linguist. Les 19 `.py` sont des sources maintenues, pas leurs résultats générés. Le suivi Git courant ne contient ni `.wrangler`, target, node_modules, bytecode, SQLite, journaux de qualification, EXE/MSI/DMG/archives de release ou objets compilés. `Cargo.lock`, vendor patché, icônes, captures authentiques et leurs métadonnées, recettes et fixtures historiques sont intentionnels, pas des artefacts à jeter.
+
+**Aucun ajustement Linguist justifié actuellement.** Ne pas classer les tests Python « generated », « vendored » ou les masquer en bloc pour remonter Rust ; `linguist-generated` les exclurait aussi des diffs. Ne pas réintégrer le vendor pour gonfler Rust. Les gros littéraux Swift sont comptés dans leur fichier Python ; le Python embarqué du bootstrap est compté comme Shell : les pourcentages ne sont pas une décomposition parfaite de l'architecture. Sources officielles : [GitHub languages](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-repository-languages), [Linguist overrides](https://github.com/github-linguist/linguist/blob/main/docs/overrides.md).
+
+Lots futurs **à approuver, aucun correctif appliqué** :
+
+- **P1 — Consolidation locale MSI/Cargo/autostart** suivant le plan ci-dessus, sauvegarde des données et conservation de la chaîne Rust. Aucun nettoyage ne doit toucher les enregistrements natifs de restauration.
+- **P2 — Hygiène locale/Git** : exclusions ciblées Wrangler/bytecode, sauvegarde de tout l'état SQLite avec WAL/SHM avant décision ; suppression autorisée séparément de builds/exports/caches et anciennes sauvegardes de mises à jour. Préserver sources de diagnostic, notes, stash, autres worktrees et caches globaux.
+- **P2 — Qualification Windows historique** : la route `windows_ordinary.py` encore appelée par `native-uninstall.yml` prépare une session batch/session 0, alors que l'admission actuelle exige WinSta0 interactif standard (`windows-fixture-context.ps1:188-193`, `native_uninstall.py:818-864`). **Incompatibilité déduite par inspection, pas réexécutée pendant cet audit.** Séparer proprement qualification headless et véritable route interactive plutôt que supprimer des contrôles ou répéter le scénario inadapté.
+- **P2 — Provenance Homebrew** : `native_qualification.py` conserve une constante de défaut **0.17.2/a58c8b9…** alors que la formule consommée est **0.20.0/a265220…**. Faire dériver les métadonnées de la recette réellement consommée ; ne pas falsifier les preuves ni remplacer les baselines historiques par « latest ». Recettes Homebrew/AUR 0.20 restent distinctes des packages GitHub 0.21.
+- **P3 — Simplification ciblée des harnesses** : partager davantage la préparation de session Linux déjà partiellement factorisée entre `native_linux_desktop` et `native_linux_tray_width`, sans fusionner leurs assertions spécifiques. Extraire si utile les sources Swift manuscrites de `native_macos_menu`/`native_macos_profiles` dans de vrais fichiers Swift de test pour lisibilité/outillage ; conserver assemblage, accès aux membres privés, entrée `main.swift`, fixtures et preuves. Cela redistribue Python/Swift, pas le volume architectural Rust.
+- **P3 — Ergonomie d'audit du launcher** : envisager une vraie gestion précoce de `--version`/`--help` dans `mcw-tray`, sans ouvrir la fenêtre ni démarrer de surveillance ; comportement actuel documenté comme piège, non corrigé ici.
+- **Règle d'architecture pour la future refonte** : logique de surveillance, modèle, permissions, IPC et propriété de protection restent en Rust ; assistance native Swift/C ciblée assumée ; Python cantonné à l'outillage adapté et au bootstrap administratif explicitement documenté. Pas de réécriture massive, minification, seuil artificiel « >50 % » ou baisse de couverture pour un graphique GitHub.
+
+**Point de reprise : attendre l'accord du propriétaire sur les lots de consolidation/nettoyage et les éventuels correctifs d'outillage.** Seule cette ROADMAP est sauvegardée ; aucune autre source, `.gitignore`, `.gitattributes`, tâche, compte, PATH, base, installation ou protection n'a été modifié. Aucun push/main/tag/release/déploiement prévu par cet audit.
