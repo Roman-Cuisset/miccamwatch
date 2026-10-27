@@ -79,12 +79,19 @@ pub struct ProtectionStatus {
 }
 impl Default for ProtectionStatus {
     fn default() -> Self {
-        Self { state: "unknown", requested: None, service_active: None, detail: None }
+        Self {
+            state: "unknown",
+            requested: None,
+            service_active: None,
+            detail: None,
+        }
     }
 }
 fn clip(value: &str, truncated: &mut bool) -> String {
     let mut end = value.len().min(MAX_STRING_BYTES);
-    while !value.is_char_boundary(end) { end -= 1; }
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
     *truncated |= end != value.len();
     value[..end].to_owned()
 }
@@ -98,8 +105,17 @@ fn relevant(name: &str, resource: Resource) -> bool {
     }
 }
 fn summary(resource: Resource, snapshot: Option<&Snapshot>) -> ResourceSummary {
-    let mut result = ResourceSummary { resource, activity: "unknown", coverage: "unavailable", confidence: None, active_count: 0, ready_count: 0 };
-    let Some(snapshot) = snapshot else { return result; };
+    let mut result = ResourceSummary {
+        resource,
+        activity: "unknown",
+        coverage: "unavailable",
+        confidence: None,
+        active_count: 0,
+        ready_count: 0,
+    };
+    let Some(snapshot) = snapshot else {
+        return result;
+    };
     let mut seen = false;
     let mut healthy = false;
     let mut complete = true;
@@ -116,16 +132,32 @@ fn summary(resource: Resource, snapshot: Option<&Snapshot>) -> ResourceSummary {
         }
     }
     complete &= seen && !snapshot.observation_gaps.contains(&resource);
-    result.coverage = if complete { "complete" } else if healthy || snapshot.accesses.iter().any(|a| a.resource == resource) { "incomplete" } else { "unavailable" };
+    result.coverage = if complete {
+        "complete"
+    } else if healthy || snapshot.accesses.iter().any(|a| a.resource == resource) {
+        "incomplete"
+    } else {
+        "unavailable"
+    };
     for access in snapshot.accesses.iter().filter(|a| a.resource == resource) {
         match access.activity {
             Activity::Active => result.active_count += 1,
             Activity::Ready => result.ready_count += 1,
         }
     }
-    result.activity = if result.active_count > 0 { "active" } else if result.ready_count > 0 { "ready" } else if complete { "none_observed" } else { "unknown" };
+    result.activity = if result.active_count > 0 {
+        "active"
+    } else if result.ready_count > 0 {
+        "ready"
+    } else if complete {
+        "none_observed"
+    } else {
+        "unknown"
+    };
     // Confidence describes the strongest evidence of the displayed activity, not coverage.
-    for access in snapshot.accesses.iter().filter(|a| a.resource == resource && (result.active_count == 0 || a.activity == Activity::Active)) {
+    for access in snapshot.accesses.iter().filter(|a| {
+        a.resource == resource && (result.active_count == 0 || a.activity == Activity::Active)
+    }) {
         result.confidence = match (result.confidence, access.confidence) {
             (Some(Confidence::High), _) | (_, Confidence::High) => Some(Confidence::High),
             (Some(Confidence::Medium), _) | (_, Confidence::Medium) => Some(Confidence::Medium),
@@ -135,38 +167,87 @@ fn summary(resource: Resource, snapshot: Option<&Snapshot>) -> ResourceSummary {
     result
 }
 impl DesktopSnapshot {
-    pub fn from_snapshot(sequence: u64, observed_at: DateTime<Utc>, locale: &str, snapshot: std::result::Result<&Snapshot, &str>, mode: &str) -> Self {
+    pub fn from_snapshot(
+        sequence: u64,
+        observed_at: DateTime<Utc>,
+        locale: &str,
+        snapshot: std::result::Result<&Snapshot, &str>,
+        mode: &str,
+    ) -> Self {
         let mut truncated = false;
         let source = snapshot.as_ref().ok().copied();
         let state = match source {
             None => "unavailable",
-            Some(s) if s.collectors.is_empty() || !s.observation_gaps.is_empty() || s.collectors.iter().any(|c| c.state != CollectorState::Healthy) => "degraded",
+            Some(s)
+                if s.collectors.is_empty()
+                    || !s.observation_gaps.is_empty()
+                    || s.collectors
+                        .iter()
+                        .any(|c| c.state != CollectorState::Healthy) =>
+            {
+                "degraded"
+            }
             Some(_) => "healthy",
         };
         let detail = snapshot.err().map(|s| clip(s, &mut truncated));
         let mut dto = Self {
-            kind: "snapshot", protocol_version: PROTOCOL_VERSION, sequence, observed_at,
-            engine: Engine { version: env!("CARGO_PKG_VERSION"), platform: std::env::consts::OS, mode: clip(mode, &mut truncated), state, detail },
+            kind: "snapshot",
+            protocol_version: PROTOCOL_VERSION,
+            sequence,
+            observed_at,
+            engine: Engine {
+                version: env!("CARGO_PKG_VERSION"),
+                platform: std::env::consts::OS,
+                mode: clip(mode, &mut truncated),
+                state,
+                detail,
+            },
             locale: clip(locale, &mut truncated),
-            resources: [summary(Resource::Microphone, source), summary(Resource::Camera, source)],
-            accesses: Vec::new(), collectors: Vec::new(), observation_gaps: Vec::new(),
-            protection: Protection { microphone: ProtectionStatus::default(), camera: ProtectionStatus::default() },
-            diagnostics: Vec::new(), truncated,
+            resources: [
+                summary(Resource::Microphone, source),
+                summary(Resource::Camera, source),
+            ],
+            accesses: Vec::new(),
+            collectors: Vec::new(),
+            observation_gaps: Vec::new(),
+            protection: Protection {
+                microphone: ProtectionStatus::default(),
+                camera: ProtectionStatus::default(),
+            },
+            diagnostics: Vec::new(),
+            truncated,
         };
         if let Some(s) = source {
             dto.truncated |= s.accesses.len() > MAX_ACCESSES || s.collectors.len() > MAX_ITEMS;
-            dto.accesses = s.accesses.iter().take(MAX_ACCESSES).map(|a| DesktopAccess {
-                resource: a.resource, activity: a.activity, confidence: a.confidence,
-                application: clip(&a.application, &mut dto.truncated), pid: a.pid,
-                device: a.device.as_deref().map(|s| clip(s, &mut dto.truncated)), started_at: a.started_at,
-            }).collect();
-            dto.collectors = s.collectors.iter().take(MAX_ITEMS).map(|c| DesktopCollector {
-                collector: clip(c.collector, &mut dto.truncated), state: c.state,
-                detail: c.detail.as_deref().map(|s| clip(s, &mut dto.truncated)),
-            }).collect();
+            dto.accesses = s
+                .accesses
+                .iter()
+                .take(MAX_ACCESSES)
+                .map(|a| DesktopAccess {
+                    resource: a.resource,
+                    activity: a.activity,
+                    confidence: a.confidence,
+                    application: clip(&a.application, &mut dto.truncated),
+                    pid: a.pid,
+                    device: a.device.as_deref().map(|s| clip(s, &mut dto.truncated)),
+                    started_at: a.started_at,
+                })
+                .collect();
+            dto.collectors = s
+                .collectors
+                .iter()
+                .take(MAX_ITEMS)
+                .map(|c| DesktopCollector {
+                    collector: clip(c.collector, &mut dto.truncated),
+                    state: c.state,
+                    detail: c.detail.as_deref().map(|s| clip(s, &mut dto.truncated)),
+                })
+                .collect();
             // Resource is a two-value enum: preserve semantics without duplicate amplification.
             for resource in [Resource::Microphone, Resource::Camera] {
-                if s.observation_gaps.contains(&resource) { dto.observation_gaps.push(resource); }
+                if s.observation_gaps.contains(&resource) {
+                    dto.observation_gaps.push(resource);
+                }
             }
             dto.truncated |= dto.observation_gaps.len() != s.observation_gaps.len();
         }
@@ -174,28 +255,54 @@ impl DesktopSnapshot {
     }
 
     #[cfg(windows)]
-    pub fn set_protection(&mut self, microphone: std::result::Result<&crate::platform::MicrophoneProtectionStatus, &str>, camera: std::result::Result<&crate::privacy::CameraControlObservation, &str>) {
+    pub fn set_protection(
+        &mut self,
+        microphone: std::result::Result<&crate::platform::MicrophoneProtectionStatus, &str>,
+        camera: std::result::Result<&crate::privacy::CameraControlObservation, &str>,
+    ) {
         use crate::{model::MicrophoneMuteState, privacy::CameraPrivacyState};
         self.protection.microphone = match microphone {
             Ok(s) => ProtectionStatus {
-                state: if s.endpoint_count == 0 { "unknown" } else { match s.mute_state {
-                    MicrophoneMuteState::Muted => "muted", MicrophoneMuteState::Unmuted => "unmuted",
-                    MicrophoneMuteState::Mixed => "mixed", MicrophoneMuteState::Unavailable => "unknown",
-                } },
-                requested: Some(s.requested), service_active: Some(s.service_active),
+                state: if s.endpoint_count == 0 {
+                    "unknown"
+                } else {
+                    match s.mute_state {
+                        MicrophoneMuteState::Muted => "muted",
+                        MicrophoneMuteState::Unmuted => "unmuted",
+                        MicrophoneMuteState::Mixed => "mixed",
+                        MicrophoneMuteState::Unavailable => "unknown",
+                    }
+                },
+                requested: Some(s.requested),
+                service_active: Some(s.service_active),
                 detail: s.detail.as_deref().map(|s| clip(s, &mut self.truncated)),
             },
-            Err(error) => ProtectionStatus { detail: Some(clip(error, &mut self.truncated)), ..ProtectionStatus::default() },
+            Err(error) => ProtectionStatus {
+                detail: Some(clip(error, &mut self.truncated)),
+                ..ProtectionStatus::default()
+            },
         };
         self.protection.camera = match camera {
             Ok(s) => ProtectionStatus {
-                state: if s.present_total == 0 || s.unknown_devices != 0 { "unknown" } else if s.pending_restore != 0 { "system_managed" } else { match s.state {
-                    CameraPrivacyState::Allowed => "allowed", CameraPrivacyState::Blocked => "blocked", CameraPrivacyState::SystemManaged => "system_managed",
-                } },
-                requested: Some(s.desired_blocked), service_active: Some(s.helper_active),
+                state: if s.present_total == 0 || s.unknown_devices != 0 {
+                    "unknown"
+                } else if s.pending_restore != 0 {
+                    "system_managed"
+                } else {
+                    match s.state {
+                        CameraPrivacyState::Allowed => "allowed",
+                        CameraPrivacyState::Blocked => "blocked",
+                        CameraPrivacyState::SystemManaged => "system_managed",
+                    }
+                },
+                requested: Some(s.desired_blocked),
+                service_active: Some(s.helper_active),
                 detail: s.detail.as_deref().map(|s| clip(s, &mut self.truncated)),
             },
-            Err(error) => ProtectionStatus { detail: Some(clip(error, &mut self.truncated)), ..ProtectionStatus::default() },
+            Err(error) => ProtectionStatus {
+                detail: Some(clip(error, &mut self.truncated)),
+                ..ProtectionStatus::default()
+            },
         };
     }
 
@@ -206,28 +313,41 @@ impl DesktopSnapshot {
             output.write_all(b"\n")?;
             Ok(output.0)
         }
-        if let Ok(bytes) = attempt(self) { return Ok(bytes); }
+        if let Ok(bytes) = attempt(self) {
+            return Ok(bytes);
+        }
         // Escaped control characters can expand sixfold. Reduce only exported detail,
         // never the aggregate known activity/coverage or desired/actual protection.
         let mut reduced = self.clone();
         reduced.truncated = true;
         loop {
-            if !reduced.accesses.is_empty() { reduced.accesses.truncate(reduced.accesses.len() / 2); }
-            else if !reduced.collectors.is_empty() { reduced.collectors.truncate(reduced.collectors.len() / 2); }
-            else if !reduced.diagnostics.is_empty() { reduced.diagnostics.truncate(reduced.diagnostics.len() / 2); }
-            else { return attempt(&reduced); }
-            if let Ok(bytes) = attempt(&reduced) { return Ok(bytes); }
+            if !reduced.accesses.is_empty() {
+                reduced.accesses.truncate(reduced.accesses.len() / 2);
+            } else if !reduced.collectors.is_empty() {
+                reduced.collectors.truncate(reduced.collectors.len() / 2);
+            } else if !reduced.diagnostics.is_empty() {
+                reduced.diagnostics.truncate(reduced.diagnostics.len() / 2);
+            } else {
+                return attempt(&reduced);
+            }
+            if let Ok(bytes) = attempt(&reduced) {
+                return Ok(bytes);
+            }
         }
     }
 }
 struct BoundedFrame(Vec<u8>);
 impl Write for BoundedFrame {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        if self.0.len() + bytes.len() > MAX_FRAME_BYTES { return Err(io::Error::other("desktop frame exceeds limit")); }
+        if self.0.len() + bytes.len() > MAX_FRAME_BYTES {
+            return Err(io::Error::other("desktop frame exceeds limit"));
+        }
         self.0.extend_from_slice(bytes);
         Ok(bytes.len())
     }
-    fn flush(&mut self) -> io::Result<()> { Ok(()) }
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
 }
 
 #[derive(Debug, Deserialize, PartialEq)]
@@ -236,41 +356,75 @@ pub(crate) enum UiEvent {
     #[serde(rename = "ready")]
     Ready { protocol_version: u8, sequence: u64 },
     #[serde(rename = "timing")]
-    Timing { protocol_version: u8, stage: TimingStage, elapsed_ms: u64 },
+    Timing {
+        protocol_version: u8,
+        stage: TimingStage,
+        elapsed_ms: u64,
+    },
 }
 #[derive(Debug, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum TimingStage { RunnerStarted, EngineCreated, DartStarted, FirstFrame, SnapshotReceived }
+pub(crate) enum TimingStage {
+    RunnerStarted,
+    EngineCreated,
+    DartStarted,
+    FirstFrame,
+    SnapshotReceived,
+}
 impl TimingStage {
     #[cfg(windows)]
     pub(crate) fn as_str(&self) -> &'static str {
         match self {
-            Self::RunnerStarted => "runner_started", Self::EngineCreated => "engine_created",
-            Self::DartStarted => "dart_started", Self::FirstFrame => "first_frame", Self::SnapshotReceived => "snapshot_received",
+            Self::RunnerStarted => "runner_started",
+            Self::EngineCreated => "engine_created",
+            Self::DartStarted => "dart_started",
+            Self::FirstFrame => "first_frame",
+            Self::SnapshotReceived => "snapshot_received",
         }
     }
 }
 pub(crate) fn parse_event(line: &[u8]) -> Result<UiEvent> {
-    ensure!(!line.is_empty() && line.len() <= MAX_EVENT_BYTES, "invalid UI event size");
+    ensure!(
+        !line.is_empty() && line.len() <= MAX_EVENT_BYTES,
+        "invalid UI event size"
+    );
     let event: UiEvent = serde_json::from_slice(line)?;
-    let version = match &event { UiEvent::Ready { protocol_version, .. } | UiEvent::Timing { protocol_version, .. } => *protocol_version };
+    let version = match &event {
+        UiEvent::Ready {
+            protocol_version, ..
+        }
+        | UiEvent::Timing {
+            protocol_version, ..
+        } => *protocol_version,
+    };
     ensure!(version == PROTOCOL_VERSION, "unsupported UI protocol");
     Ok(event)
 }
 
 /// Oversized/native-log lines are discarded through newline, not split into commands.
 #[derive(Default)]
-pub(crate) struct EventLines { bytes: Vec<u8>, discarding: bool }
+pub(crate) struct EventLines {
+    bytes: Vec<u8>,
+    discarding: bool,
+}
 impl EventLines {
     pub(crate) fn feed(&mut self, bytes: &[u8], mut emit: impl FnMut(Result<UiEvent>)) {
         for &byte in bytes {
             if byte == b'\n' {
-                if self.discarding { emit(Err(anyhow::anyhow!("oversized UI event"))); }
-                else { emit(parse_event(&self.bytes)); }
-                self.bytes.clear(); self.discarding = false;
+                if self.discarding {
+                    emit(Err(anyhow::anyhow!("oversized UI event")));
+                } else {
+                    emit(parse_event(&self.bytes));
+                }
+                self.bytes.clear();
+                self.discarding = false;
             } else if !self.discarding {
-                if self.bytes.len() == MAX_EVENT_BYTES { self.bytes.clear(); self.discarding = true; }
-                else { self.bytes.push(byte); }
+                if self.bytes.len() == MAX_EVENT_BYTES {
+                    self.bytes.clear();
+                    self.discarding = true;
+                } else {
+                    self.bytes.push(byte);
+                }
             }
         }
     }
@@ -280,39 +434,100 @@ impl EventLines {
 mod tests {
     use super::*;
     use crate::model::{Access, CollectorHealth, EnforcementDecision, Risk};
-    fn source() -> Snapshot { Snapshot { accesses: vec![], collectors: vec![], observation_gaps: vec![] } }
-    fn dto(source: &Snapshot) -> DesktopSnapshot { DesktopSnapshot::from_snapshot(4, Utc::now(), "en", Ok(source), "read_only_development") }
+    fn source() -> Snapshot {
+        Snapshot {
+            accesses: vec![],
+            collectors: vec![],
+            observation_gaps: vec![],
+        }
+    }
+    fn dto(source: &Snapshot) -> DesktopSnapshot {
+        DesktopSnapshot::from_snapshot(4, Utc::now(), "en", Ok(source), "read_only_development")
+    }
     fn access() -> Access {
-        Access { key: "secret-key".into(), resource: Resource::Microphone, activity: Activity::Active, risk: Risk::Suspicious,
-            confidence: Confidence::High, enforcement: EnforcementDecision::Unknown, application: "Observed app".into(), pid: Some(123),
-            parent_pid: Some(12), parent_name: Some("secret-parent".into()), executable: Some("secret-path".into()), signature: None,
-            device: None, started_at: None, modules: vec!["secret-module".into()], evidence: vec![], process: None }
+        Access {
+            key: "secret-key".into(),
+            resource: Resource::Microphone,
+            activity: Activity::Active,
+            risk: Risk::Suspicious,
+            confidence: Confidence::High,
+            enforcement: EnforcementDecision::Unknown,
+            application: "Observed app".into(),
+            pid: Some(123),
+            parent_pid: Some(12),
+            parent_name: Some("secret-parent".into()),
+            executable: Some("secret-path".into()),
+            signature: None,
+            device: None,
+            started_at: None,
+            modules: vec!["secret-module".into()],
+            evidence: vec![],
+            process: None,
+        }
     }
     #[test]
     fn empty_and_failed_are_not_idle() {
-        let s = source(); let d = dto(&s);
-        assert_eq!(d.resources[0].activity, "unknown"); assert_eq!(d.resources[1].coverage, "unavailable");
+        let s = source();
+        let d = dto(&s);
+        assert_eq!(d.resources[0].activity, "unknown");
+        assert_eq!(d.resources[1].coverage, "unavailable");
         assert_eq!(d.protection.microphone.state, "unknown");
-        let error = DesktopSnapshot::from_snapshot(1, Utc::now(), "en", Err("collector failed"), "read_only_development");
-        assert_eq!(error.engine.state, "unavailable"); assert_eq!(error.resources[0].activity, "unknown");
+        let error = DesktopSnapshot::from_snapshot(
+            1,
+            Utc::now(),
+            "en",
+            Err("collector failed"),
+            "read_only_development",
+        );
+        assert_eq!(error.engine.state, "unavailable");
+        assert_eq!(error.resources[0].activity, "unknown");
     }
     #[test]
     fn mixed_health_and_gaps_retain_active_without_safe_claim() {
-        let mut s = source(); s.accesses.push(access());
-        s.collectors = vec![CollectorHealth { collector: "wasapi", state: CollectorState::Healthy, detail: None },
-            CollectorHealth { collector: "privacy_store", state: CollectorState::Degraded, detail: Some("partial".into()) }];
+        let mut s = source();
+        s.accesses.push(access());
+        s.collectors = vec![
+            CollectorHealth {
+                collector: "wasapi",
+                state: CollectorState::Healthy,
+                detail: None,
+            },
+            CollectorHealth {
+                collector: "privacy_store",
+                state: CollectorState::Degraded,
+                detail: Some("partial".into()),
+            },
+        ];
         s.observation_gaps.push(Resource::Microphone);
-        let d = dto(&s); assert_eq!(d.resources[0].activity, "active"); assert_eq!(d.resources[0].coverage, "incomplete");
-        assert_eq!(d.resources[0].confidence, Some(Confidence::High)); assert_eq!(d.resources[1].activity, "unknown");
-        s.collectors.push(CollectorHealth { collector: "future_collector", state: CollectorState::Unavailable, detail: None });
-        s.accesses.clear(); s.observation_gaps.clear(); assert_eq!(dto(&s).resources[0].activity, "unknown");
+        let d = dto(&s);
+        assert_eq!(d.resources[0].activity, "active");
+        assert_eq!(d.resources[0].coverage, "incomplete");
+        assert_eq!(d.resources[0].confidence, Some(Confidence::High));
+        assert_eq!(d.resources[1].activity, "unknown");
+        s.collectors.push(CollectorHealth {
+            collector: "future_collector",
+            state: CollectorState::Unavailable,
+            detail: None,
+        });
+        s.accesses.clear();
+        s.observation_gaps.clear();
+        assert_eq!(dto(&s).resources[0].activity, "unknown");
     }
     #[test]
     fn healthy_empty_requires_relevant_evidence() {
-        let mut s = source(); s.collectors.push(CollectorHealth { collector: "wasapi", state: CollectorState::Healthy, detail: None });
-        let d = dto(&s); assert_eq!(d.resources[0].activity, "none_observed"); assert_eq!(d.resources[1].activity, "unknown");
+        let mut s = source();
+        s.collectors.push(CollectorHealth {
+            collector: "wasapi",
+            state: CollectorState::Healthy,
+            detail: None,
+        });
+        let d = dto(&s);
+        assert_eq!(d.resources[0].activity, "none_observed");
+        assert_eq!(d.resources[1].activity, "unknown");
         s.collectors[0].collector = "future_healthy_collector";
-        let d = dto(&s); assert_eq!(d.resources[0].activity, "unknown"); assert_eq!(d.resources[1].activity, "unknown");
+        let d = dto(&s);
+        assert_eq!(d.resources[0].activity, "unknown");
+        assert_eq!(d.resources[1].activity, "unknown");
     }
     #[test]
     fn portable_collector_groups_keep_resource_health_separate() {
@@ -323,8 +538,16 @@ mod tests {
             let s = Snapshot {
                 accesses: vec![],
                 collectors: vec![
-                    CollectorHealth { collector: microphone, state: CollectorState::Healthy, detail: None },
-                    CollectorHealth { collector: camera, state: CollectorState::Unavailable, detail: Some("not readable".into()) },
+                    CollectorHealth {
+                        collector: microphone,
+                        state: CollectorState::Healthy,
+                        detail: None,
+                    },
+                    CollectorHealth {
+                        collector: camera,
+                        state: CollectorState::Unavailable,
+                        detail: Some("not readable".into()),
+                    },
                 ],
                 observation_gaps: vec![Resource::Camera],
             };
@@ -336,65 +559,141 @@ mod tests {
     }
     #[test]
     fn whitelist_clips_utf8_and_escape_expansion_but_retains_counts() {
-        let mut s = source(); let mut a = access(); a.application = "é".repeat(1000); a.device = Some("\u{0}".repeat(2000));
+        let mut s = source();
+        let mut a = access();
+        a.application = "é".repeat(1000);
+        a.device = Some("\u{0}".repeat(2000));
         s.accesses = vec![a; 200];
-        s.collectors = (0..80).map(|_| CollectorHealth { collector: "wasapi", state: CollectorState::Degraded, detail: Some("\u{0}".repeat(2000)) }).collect();
-        let d = dto(&s); assert!(d.truncated); assert_eq!(d.accesses.len(), 128); assert_eq!(d.accesses[0].application.len(), 1024);
-        let bytes = d.encode().unwrap(); assert!(bytes.len() <= MAX_FRAME_BYTES); assert_eq!(bytes.last(), Some(&b'\n'));
-        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap(); assert_eq!(json["resources"][0]["active_count"], 200);
-        let text = String::from_utf8(bytes).unwrap(); for secret in ["secret-key", "secret-path", "secret-parent", "secret-module", "enforcement", "evidence"] { assert!(!text.contains(secret)); }
+        s.collectors = (0..80)
+            .map(|_| CollectorHealth {
+                collector: "wasapi",
+                state: CollectorState::Degraded,
+                detail: Some("\u{0}".repeat(2000)),
+            })
+            .collect();
+        let d = dto(&s);
+        assert!(d.truncated);
+        assert_eq!(d.accesses.len(), 128);
+        assert_eq!(d.accesses[0].application.len(), 1024);
+        let bytes = d.encode().unwrap();
+        assert!(bytes.len() <= MAX_FRAME_BYTES);
+        assert_eq!(bytes.last(), Some(&b'\n'));
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["resources"][0]["active_count"], 200);
+        let text = String::from_utf8(bytes).unwrap();
+        for secret in [
+            "secret-key",
+            "secret-path",
+            "secret-parent",
+            "secret-module",
+            "enforcement",
+            "evidence",
+        ] {
+            assert!(!text.contains(secret));
+        }
     }
     #[test]
     fn parser_rejects_mutations_versions_extra_fields_and_bad_types() {
-        for line in [r#"{"type":"mute","protocol_version":1}"#, r#"{"type":"ready","protocol_version":2,"sequence":1}"#,
+        for line in [
+            r#"{"type":"mute","protocol_version":1}"#,
+            r#"{"type":"ready","protocol_version":2,"sequence":1}"#,
             r#"{"type":"ready","protocol_version":1,"sequence":1,"command":"unmute"}"#,
             r#"{"type":"ready","protocol_version":1,"sequence":"1"}"#,
-            r#"{"type":"timing","protocol_version":1,"stage":"shell","elapsed_ms":0}"#] { assert!(parse_event(line.as_bytes()).is_err()); }
+            r#"{"type":"timing","protocol_version":1,"stage":"shell","elapsed_ms":0}"#,
+        ] {
+            assert!(parse_event(line.as_bytes()).is_err());
+        }
         assert!(parse_event(br#"{"type":"ready","protocol_version":1,"sequence":1}"#).is_ok());
     }
     #[test]
     fn oversized_line_cannot_smuggle_suffix_and_next_line_recovers() {
-        let mut lines = EventLines::default(); let mut accepted = 0; let mut rejected = 0;
-        let mut feed = |result: Result<UiEvent>| if result.is_ok() { accepted += 1 } else { rejected += 1 };
+        let mut lines = EventLines::default();
+        let mut accepted = 0;
+        let mut rejected = 0;
+        let mut feed = |result: Result<UiEvent>| {
+            if result.is_ok() {
+                accepted += 1
+            } else {
+                rejected += 1
+            }
+        };
         lines.feed(&vec![b'x'; MAX_EVENT_BYTES + 1], &mut feed);
-        lines.feed(b"{\"type\":\"ready\",\"protocol_version\":1,\"sequence\":1}\n", &mut feed);
-        lines.feed(b"{\"type\":\"ready\",\"protocol_version\":1,\"sequence\":2}\n", &mut feed);
-        assert_eq!((accepted, rejected), (1, 1)); assert!(lines.bytes.is_empty());
+        lines.feed(
+            b"{\"type\":\"ready\",\"protocol_version\":1,\"sequence\":1}\n",
+            &mut feed,
+        );
+        lines.feed(
+            b"{\"type\":\"ready\",\"protocol_version\":1,\"sequence\":2}\n",
+            &mut feed,
+        );
+        assert_eq!((accepted, rejected), (1, 1));
+        assert!(lines.bytes.is_empty());
     }
     #[test]
     fn bounded_writer_rejects_overflow_and_split_events_are_complete() {
         let mut output = BoundedFrame(vec![0; MAX_FRAME_BYTES - 1]);
         assert_eq!(output.write(b"x").unwrap(), 1);
-        assert!(output.write(b"y").is_err()); assert_eq!(output.0.len(), MAX_FRAME_BYTES);
-        let mut lines = EventLines::default(); let mut results = Vec::new();
-        lines.feed(b"{\"type\":\"timing\",\"protocol_version\":1,", |e| results.push(e));
+        assert!(output.write(b"y").is_err());
+        assert_eq!(output.0.len(), MAX_FRAME_BYTES);
+        let mut lines = EventLines::default();
+        let mut results = Vec::new();
+        lines.feed(b"{\"type\":\"timing\",\"protocol_version\":1,", |e| {
+            results.push(e)
+        });
         assert!(results.is_empty());
-        lines.feed(b"\"stage\":\"first_frame\",\"elapsed_ms\":5}\n", |e| results.push(e));
-        assert!(matches!(results.pop().unwrap().unwrap(), UiEvent::Timing { stage: TimingStage::FirstFrame, elapsed_ms: 5, .. }));
+        lines.feed(b"\"stage\":\"first_frame\",\"elapsed_ms\":5}\n", |e| {
+            results.push(e)
+        });
+        assert!(matches!(
+            results.pop().unwrap().unwrap(),
+            UiEvent::Timing {
+                stage: TimingStage::FirstFrame,
+                elapsed_ms: 5,
+                ..
+            }
+        ));
     }
     #[cfg(windows)]
     #[test]
     fn protection_preserves_request_actual_and_service_independently() {
-        use crate::{model::MicrophoneMuteState, privacy::{CameraControlObservation, CameraPrivacyState}};
+        use crate::{
+            model::MicrophoneMuteState,
+            privacy::{CameraControlObservation, CameraPrivacyState},
+        };
         let mut d = dto(&source());
         let microphone = crate::platform::MicrophoneProtectionStatus {
-            requested: true, service_active: false, mute_state: MicrophoneMuteState::Unmuted,
-            endpoint_count: 1, hardware_mute_count: 0, corrections: 0, detail: None,
+            requested: true,
+            service_active: false,
+            mute_state: MicrophoneMuteState::Unmuted,
+            endpoint_count: 1,
+            hardware_mute_count: 0,
+            corrections: 0,
+            detail: None,
         };
         let mut camera = CameraControlObservation {
-            desired_blocked: true, state: CameraPrivacyState::Blocked, present_total: 0,
-            owned_blocked_present: 0, pending_restore: 0, absent_owned: 1, unknown_devices: 0,
-            helper_active: false, detail: None,
+            desired_blocked: true,
+            state: CameraPrivacyState::Blocked,
+            present_total: 0,
+            owned_blocked_present: 0,
+            pending_restore: 0,
+            absent_owned: 1,
+            unknown_devices: 0,
+            helper_active: false,
+            detail: None,
         };
         d.set_protection(Ok(&microphone), Ok(&camera));
         assert_eq!(d.protection.microphone.state, "unmuted");
         assert_eq!(d.protection.microphone.requested, Some(true));
         assert_eq!(d.protection.microphone.service_active, Some(false));
         assert_eq!(d.protection.camera.state, "unknown");
-        camera.present_total = 2; camera.unknown_devices = 1;
-        d.set_protection(Ok(&microphone), Ok(&camera)); assert_eq!(d.protection.camera.state, "unknown");
-        camera.unknown_devices = 0; camera.pending_restore = 1;
-        d.set_protection(Ok(&microphone), Ok(&camera)); assert_eq!(d.protection.camera.state, "system_managed");
+        camera.present_total = 2;
+        camera.unknown_devices = 1;
+        d.set_protection(Ok(&microphone), Ok(&camera));
+        assert_eq!(d.protection.camera.state, "unknown");
+        camera.unknown_devices = 0;
+        camera.pending_restore = 1;
+        d.set_protection(Ok(&microphone), Ok(&camera));
+        assert_eq!(d.protection.camera.state, "system_managed");
         d.set_protection(Err("passive query failed"), Err("passive query failed"));
         assert_eq!(d.protection.microphone.requested, None);
         assert_eq!(d.protection.camera.state, "unknown");

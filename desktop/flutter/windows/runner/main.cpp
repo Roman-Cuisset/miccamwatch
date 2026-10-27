@@ -78,6 +78,10 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 
   flutter::DartProject project(L"data");
+  // The Windows default Impeller startup dominated measured opening time on
+  // the qualification GPU. Use the supported Skia path; no resident engine.
+  // Other platforms keep their own renderer defaults and qualification gates.
+  project.set_impeller_switch(flutter::ImpellerSwitch::Disabled);
 
   std::vector<std::string> command_line_arguments =
       GetCommandLineArguments();

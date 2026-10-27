@@ -24,6 +24,13 @@ fn main() -> ExitCode {
 }
 
 fn run() -> Result<()> {
+    // A default/native build must refuse this flag before any operational
+    // singleton, settings or protection path. Old stable binaries lack this gate.
+    #[cfg(not(feature = "flutter-desktop"))]
+    anyhow::ensure!(
+        !std::env::args_os().any(|argument| argument == "--read-only-development"),
+        "Read-only development requires a build with flutter-desktop; no tray started"
+    );
     let initial_window = std::env::args_os()
         .skip(1)
         .any(|argument| argument == "--open");

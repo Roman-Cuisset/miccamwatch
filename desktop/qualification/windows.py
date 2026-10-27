@@ -25,6 +25,7 @@ U.EnumWindows.argtypes = [CALLBACK, W.LPARAM]
 U.GetWindowThreadProcessId.argtypes = [W.HWND, C.POINTER(W.DWORD)]
 U.GetWindowTextLengthW.argtypes = [W.HWND]
 U.GetWindowTextW.argtypes = [W.HWND, W.LPWSTR, C.c_int]
+U.GetClassNameW.argtypes = [W.HWND, W.LPWSTR, C.c_int]
 U.IsWindowVisible.argtypes = [W.HWND]
 U.PostMessageW.argtypes = [W.HWND, W.UINT, W.WPARAM, W.LPARAM]
 U.GetClientRect.argtypes = [W.HWND, C.POINTER(W.RECT)]
@@ -56,14 +57,15 @@ def until(fn, timeout=25):
         time.sleep(.01)
     raise TimeoutError('Owned development state did not arrive')
 
-def windows(pids,title,visible=False):
+def windows(pids,title,visible=False,by_class=False):
     found=[]
     @CALLBACK
     def visit(hwnd,_):
         pid=W.DWORD();U.GetWindowThreadProcessId(hwnd,C.byref(pid))
         if pid.value in pids and (not visible or U.IsWindowVisible(hwnd)):
-            text=C.create_unicode_buffer(U.GetWindowTextLengthW(hwnd)+1)
-            U.GetWindowTextW(hwnd,text,len(text))
+            text=C.create_unicode_buffer(256 if by_class else U.GetWindowTextLengthW(hwnd)+1)
+            if by_class: U.GetClassNameW(hwnd,text,len(text))
+            else: U.GetWindowTextW(hwnd,text,len(text))
             if text.value==title: found.append((hwnd,pid.value))
         return True
     U.EnumWindows(visit,0)
@@ -110,8 +112,20 @@ class Host:
             creationflags=subprocess.CREATE_NO_WINDOW,cwd=self.prefix)
         self.parent=psutil.Process(self.proc.pid);self.known={self.proc.pid}
         self.reader=threading.Thread(target=self._read,daemon=True);self.reader.start()
-        self.hwnd=until(lambda:windows({self.proc.pid},'MicCamWatchReadOnlyDevelopmentTray'))[0][0]
-        until(lambda:self.ticks())
+        self.hwnd=None
+        try:
+            self.hwnd=until(lambda:windows({self.proc.pid},'MicCamWatchReadOnlyDevelopmentTray',by_class=True))[0][0]
+            until(lambda:self.ticks())
+        except BaseException:
+            # Constructor failures still own this exact manifest-pinned process.
+            if self.proc.poll() is None:
+                if self.hwnd: U.PostMessageW(self.hwnd,0x10,0,0)
+                try:self.proc.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    self.proc.kill();self.proc.wait(timeout=10)
+            self.reader.join(timeout=3)
+            print('Observer startup evidence:',json.dumps(self.lines),flush=True)
+            raise
 
     def _read(self):
         for line in self.proc.stdout:
@@ -204,6 +218,7 @@ def main():
     ap.add_argument('--idle-seconds',type=float,default=5)
     ap.add_argument('--theme',choices=['light','dark'],default='light')
     ap.add_argument('--captures',action='store_true')
+    ap.add_argument('--lifecycle',action='store_true',help='Owned-child crash, visible activation and parent-exit checks')
     args=ap.parse_args();args.out.mkdir(parents=True,exist_ok=True)
     result={'platform':'Windows11 x64 local; no hardware mutations',
             'measurement':'Private commit != resident. RSS includes shareable pages; sums may double-count. No GPU/DWM accounting. CPU100%=one logical core.',
@@ -227,6 +242,26 @@ def main():
                 opened=host.open();time.sleep(.2)
                 closed=host.close()
                 row['cycles'].append({'cycle':cycle+1,'open':opened,'close':closed,'closed_process_count':len(host.members())})
+            if args.lifecycle:
+                tick=max(host.ticks())
+                first=host.open();child_pid=first['window_pid']
+                for _ in range(10):assert U.PostMessageW(host.hwnd,0x8000+42,host.proc.pid,0)
+                until(lambda:max(host.ticks())>tick)
+                assert len(host.members())==2 and host.view()[0][1]==child_pid
+                row['visible_activation']={'requests':10,'same_child_pid':child_pid,'process_count':2}
+                # Simulate failure of this exact owned UI, never a process-name kill.
+                child=next(p for p in host.members() if p.pid==child_pid)
+                assert Path(child.exe()).resolve()==host.ui.resolve()
+                tick=max(host.ticks());child.kill();child.wait(timeout=10)
+                until(lambda:len(host.members())==1)
+                until(lambda:max(host.ticks())>tick)
+                row['ui_crash']={'terminated_ui_pid':child_pid,'engine_alive':host.proc.poll() is None,
+                                 'before_sequence':tick,'after_sequence':max(host.ticks())}
+                row['after_crash_open']=host.open()
+                row['shutdown_with_ui_open']=True
+        except BaseException as error:
+            row['error']=f'{type(error).__name__}: {error}'
+            raise
         finally:
             row['shutdown']=host.stop();result['trials'].append(row)
             (args.out/'qualification.json').write_text(json.dumps(result,indent=2),encoding='utf-8')
