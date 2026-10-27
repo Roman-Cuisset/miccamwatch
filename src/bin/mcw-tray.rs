@@ -27,6 +27,18 @@ fn run() -> Result<()> {
     let initial_window = std::env::args_os()
         .skip(1)
         .any(|argument| argument == "--open");
+    #[cfg(feature = "flutter-desktop")]
+    if std::env::args_os().any(|argument| argument == "--read-only-development") {
+        // Deliberately bypass the *operational* singleton only into a separate,
+        // incapable-of-control observer. Never resume or adopt stable protection.
+        let arguments = std::env::args().collect::<Vec<_>>();
+        let theme = arguments
+            .windows(2)
+            .find(|pair| pair[0] == "--desktop-theme")
+            .map_or("light", |pair| pair[1].as_str());
+        anyhow::ensure!(matches!(theme, "light" | "dark"), "Invalid desktop theme");
+        return tray::run_read_only_development(Language::detect(), initial_window, theme);
+    }
     if tray::reuse_running(initial_window)? {
         return Ok(());
     }

@@ -70,6 +70,25 @@ mod microphone_worker;
 #[path = "tray/windows_desktop.rs"]
 mod windows_desktop;
 
+#[cfg(feature = "flutter-desktop")]
+#[path = "tray/windows_observer.rs"]
+mod windows_observer;
+
+#[cfg(feature = "flutter-desktop")]
+pub fn run_read_only_development(
+    lang: Language,
+    initial_window: bool,
+    theme: &str,
+) -> Result<()> {
+    windows_observer::run(lang, initial_window, theme)
+}
+
+#[cfg(feature = "flutter-desktop")]
+struct DesktopObservation {
+    snapshot: Result<Snapshot, String>,
+    observed_at: chrono::DateTime<chrono::Utc>,
+}
+
 #[link(name = "user32")]
 unsafe extern "system" {
     fn SetProcessDpiAwarenessContext(context: isize) -> i32;
@@ -117,6 +136,8 @@ const CMD_PROFILE_MEETING: usize = 111;
 const CMD_PROFILE_DEVELOPMENT: usize = 112;
 const CMD_DETAILS: usize = 107;
 const CMD_RESUME_CAMERA: usize = 108;
+#[cfg(feature = "flutter-desktop")]
+const CMD_NATIVE_DESKTOP: usize = 114;
 const WM_DESKTOP_SETTING: u32 = WM_APP + 5;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -237,6 +258,12 @@ struct TrayAppState {
     visual: TrayVisual,
     summary: String,
     desktop: Option<windows_desktop::DesktopWindow>,
+    #[cfg(feature = "flutter-desktop")]
+    flutter: Option<crate::frontends::desktop::windows::Supervisor>,
+    #[cfg(feature = "flutter-desktop")]
+    desktop_observation: Option<DesktopObservation>,
+    #[cfg(feature = "flutter-desktop")]
+    desktop_sequence: u64,
     overview: windows_desktop::Overview,
     settings_error: Option<String>,
     mute_state: MicrophoneMuteState,
@@ -564,6 +591,12 @@ pub fn run_tray(
         visual: TrayVisual::Error,
         summary: "miccamwatch".to_owned(),
         desktop: None,
+        #[cfg(feature = "flutter-desktop")]
+        flutter: None,
+        #[cfg(feature = "flutter-desktop")]
+        desktop_observation: None,
+        #[cfg(feature = "flutter-desktop")]
+        desktop_sequence: 0,
         overview: windows_desktop::Overview::default(),
         settings_error: None,
         settings,
@@ -783,6 +816,15 @@ unsafe extern "system" fn tray_wnd_proc(
                 CMD_PROFILE_DEVELOPMENT => select_profile(hwnd, PrivacyProfile::Development),
                 CMD_DETAILS => {
                     open_desktop(hwnd);
+                }
+                #[cfg(feature = "flutter-desktop")]
+                CMD_NATIVE_DESKTOP => {
+                    if let Some(supervisor) = state(hwnd).and_then(|s| s.flutter.as_mut())
+                        && let Err(error) = supervisor.close()
+                    {
+                        eprintln!("mcw: cannot close desktop before native controls: {error:#}");
+                    }
+                    open_native_desktop(hwnd);
                 }
                 CMD_EXIT if request_safe_close(hwnd) == UPDATE_BUSY => {
                     if let Some(state) = state(hwnd) {
@@ -1157,6 +1199,24 @@ fn apply_refresh(hwnd: HWND, state: &mut TrayAppState, refresh: TrayRefresh) {
             notifications: &state.notifications.health,
         },
     );
+    #[cfg(feature = "flutter-desktop")]
+    {
+        // Retain the owned observation, not a second serialized/rendered copy.
+        // A closed Flutter process causes no presentation serialization.
+        state.desktop_sequence = state.desktop_sequence.saturating_add(1);
+        state.desktop_observation = Some(DesktopObservation {
+            snapshot: refresh.snapshot,
+            observed_at: refresh.observed_at,
+        });
+        if state.flutter.as_ref().is_some_and(|ui| ui.is_running()) {
+            let frame = flutter_snapshot(state);
+            if let Some(ui) = state.flutter.as_mut()
+                && let Err(error) = ui.publish(&frame)
+            {
+                state.settings_error = Some(format!("Desktop observation delivery: {error:#}"));
+            }
+        }
+    }
     let mute_state = state.mute_state;
     if visual == state.visual
         && summary == state.summary
@@ -1992,6 +2052,69 @@ fn diagnostic_document(summary: &str) -> String {
 }
 
 fn open_desktop(hwnd: HWND) -> bool {
+    #[cfg(feature = "flutter-desktop")]
+    {
+        open_flutter_desktop(hwnd)
+    }
+    #[cfg(not(feature = "flutter-desktop"))]
+    {
+        open_native_desktop(hwnd)
+    }
+}
+
+#[cfg(feature = "flutter-desktop")]
+fn flutter_snapshot(state: &TrayAppState) -> crate::frontends::desktop::DesktopSnapshot {
+    use crate::frontends::desktop::DesktopSnapshot;
+    let (snapshot, observed_at) = state.desktop_observation.as_ref().map_or_else(
+        || (Err("Initial observation pending"), chrono::Utc::now()),
+        |observation| (
+            observation.snapshot.as_ref().map_err(String::as_str),
+            observation.observed_at,
+        ),
+    );
+    let mut frame = DesktopSnapshot::from_snapshot(
+        state.desktop_sequence, observed_at, state.lang.code(), snapshot, "operational",
+    );
+    frame.set_protection(
+        state.microphone_status_error.as_deref().map_or_else(
+            || state.microphone_protection.as_ref().ok_or("Microphone protection unknown"),
+            Err,
+        ),
+        state.camera_status_error.as_deref().map_or_else(
+            || state.camera_observation.as_ref().ok_or("Camera protection unknown"),
+            Err,
+        ),
+    );
+    frame
+}
+
+#[cfg(feature = "flutter-desktop")]
+fn open_flutter_desktop(hwnd: HWND) -> bool {
+    let Some(state) = state(hwnd) else { return false };
+    let frame = flutter_snapshot(state);
+    let mut supervisor = match state.flutter.take() {
+        Some(supervisor) => supervisor,
+        None => match crate::frontends::desktop::windows::Supervisor::new() {
+            Ok(supervisor) => supervisor,
+            Err(error) => {
+                state.settings_error = Some(format!("Flutter desktop: {error:#}"));
+                return false;
+            }
+        },
+    };
+    // Window activation may synchronously send messages; no tray state reference
+    // is used across the native call.
+    let opened = supervisor.open(&frame, "light");
+    if let Some(state) = self::state(hwnd) {
+        if let Err(error) = &opened {
+            state.settings_error = Some(format!("Flutter desktop: {error:#}"));
+        }
+        state.flutter = Some(supervisor);
+    }
+    opened.is_ok()
+}
+
+fn open_native_desktop(hwnd: HWND) -> bool {
     let Some((existing, view)) =
         state(hwnd).map(|s| (s.desktop.take(), windows_desktop::View::from_state(s)))
     else {
@@ -2028,6 +2151,10 @@ fn open_desktop(hwnd: HWND) -> bool {
 }
 
 fn refresh_desktop(hwnd: HWND) {
+    #[cfg(feature = "flutter-desktop")]
+    if let Some(supervisor) = state(hwnd).and_then(|s| s.flutter.as_mut()) {
+        supervisor.poll();
+    }
     let Some((desktop, view)) = state(hwnd).and_then(|s| {
         if !s
             .desktop
@@ -2201,6 +2328,19 @@ fn build_context_menu(
         let menu = CreatePopupMenu()?;
         let open = format_wide(windows_desktop::open_label(lang));
         let _ = AppendMenuW(menu, MF_STRING, CMD_DETAILS, PCWSTR(open.as_ptr()));
+        #[cfg(feature = "flutter-desktop")]
+        {
+            let native = format_wide(match lang {
+                Language::Fr => "Réglages et contrôles natifs…",
+                Language::De => "Native Einstellungen und Steuerung…",
+                Language::Es => "Ajustes y controles nativos…",
+                Language::Ja => "ネイティブ設定と操作…",
+                Language::Zh => "原生设置和控制…",
+                Language::Ru => "Системные настройки и управление…",
+                Language::En => "Native settings and controls…",
+            });
+            let _ = AppendMenuW(menu, MF_STRING, CMD_NATIVE_DESKTOP, PCWSTR(native.as_ptr()));
+        }
         append_disabled(menu, &format!("miccamwatch v{}", env!("CARGO_PKG_VERSION")));
         append_disabled(menu, &compact_menu_summary(hwnd, summary));
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
