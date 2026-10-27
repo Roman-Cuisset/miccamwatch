@@ -108,13 +108,13 @@ class MicrophoneCommandClient extends ChangeNotifier {
       _detail = null;
       _error = null;
     }
+    _valid = true;
     // Re-delivery for a connection change must not replay an old result or
     // replace capabilities with another payload bearing the same sequence.
     if (observedSequence == _observedSequence) {
       notifyListeners();
       return;
     }
-    _valid = true;
     _observedSequence = observedSequence;
     _canEnable = microphone['can_enable'] as bool;
     _canRelease = microphone['can_release'] as bool;
