@@ -67,3 +67,47 @@ Bridge agent: only src/frontends/desktop.rs and src/frontends/desktop/**. Flutte
 ## Stop after this slice
 
 Deliver actual Windows readings/cycles, stage timings and memory, authentic owned-window light/dark captures, safety/preservation evidence, local commits and ROADMAP. Do not migrate full settings/control/history, remove native targets, push, install, tag or publish. Distinguish read-only local qualification from operational protection/installer/other-OS validation. User reviews before next slice.
+
+## Reproduce the Windows slice without touching the stable installation
+
+Use a clean integration checkout, Rust/MSVC, the Windows desktop C++ workload and the pinned study SDK Flutter3.47.8/Dart3.13.7. This is a development prefix, **not an MSI/update package**. Do not copy files into the installed application or Cargo bin directory. Do not run an older/default tray with development arguments: older released versions do not understand the mode; the new default build explicitly refuses it.
+
+From the integration repository in PowerShell:
+
+```powershell
+cargo clippy --features windows-tray,flutter-desktop --all-targets -- -D warnings
+cargo test --features windows-tray,flutter-desktop --lib frontends::desktop
+cargo build --release --features windows-tray,flutter-desktop --bin mcw --bin mcw-tray
+$repo = (Get-Location).Path
+$source = (git rev-parse HEAD).Trim()
+Push-Location desktop/flutter
+flutter pub get
+flutter analyze
+flutter test
+flutter build windows --release --no-pub
+Pop-Location
+
+$prefix = Join-Path $env:LOCALAPPDATA ("MicCamWatchQualification\first-slice-" + [guid]::NewGuid())
+New-Item -ItemType Directory -Path $prefix, "$prefix\desktop" | Out-Null
+Copy-Item "$repo\target\release\mcw.exe", "$repo\target\release\mcw-tray.exe" $prefix
+Copy-Item "$repo\desktop\flutter\build\windows\x64\runner\Release\*" "$prefix\desktop" -Recurse
+@{
+  mode = "read_only_development"
+  feature = "flutter-desktop"
+  source = $source
+  renderer = "Windows Skia; Impeller disabled"
+  engine_sha256 = (Get-FileHash "$prefix\mcw-tray.exe" -Algorithm SHA256).Hash.ToLowerInvariant()
+  ui_sha256 = (Get-FileHash "$prefix\desktop\miccamwatch_desktop.exe" -Algorithm SHA256).Hash.ToLowerInvariant()
+} | ConvertTo-Json | Set-Content "$prefix\qualification-manifest.json" -Encoding utf8
+
+# Python3 + psutil + Pillow, only for qualification; no Python app dependency.
+python desktop/qualification/windows.py --prefix $prefix --out "$prefix\evidence" `
+  --trials 3 --cycles 3 --idle-seconds 4 --captures --lifecycle
+
+# Inspect manually afterwards; close this development tray when finished.
+& "$prefix\mcw-tray.exe" --read-only-development --desktop-theme dark --open
+```
+
+Do not interact with the development tray during timed phases; the runner rejects changed process membership, rather than counting an unexpected opening as idle. It uses only owned PID/HWND messages/captures, never desktop-wide mouse input or process-name termination. `--lifecycle` deliberately terminates its exact owned Flutter child, confirms Rust collection continues, reopens, then shuts the test parent with UI still open to check job containment. It never stops the stable MSI tray.
+
+For offline runtime inspection keep the complete `desktop` directory; the executable alone is insufficient. No Flutter SDK, Python, development console, network service or resident UI engine is needed by that runtime. The test manifest is a local build identity check, **not a publisher signature or cryptographic attestation**. Same-user process injection and arbitrary modification of the user's own executable bundle are not solved by this bridge.

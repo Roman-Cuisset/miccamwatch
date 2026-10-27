@@ -99,7 +99,7 @@ class Host:
         allowed=Path(os.environ['LOCALAPPDATA'])/'MicCamWatchQualification'
         if not self.prefix.is_relative_to(allowed.resolve()):
             raise RuntimeError('Qualification prefix must be under the dedicated local evidence root')
-        manifest=json.loads((self.prefix/'qualification-manifest.json').read_text(encoding='utf-8'))
+        manifest=json.loads((self.prefix/'qualification-manifest.json').read_text(encoding='utf-8-sig'))
         if manifest.get('mode')!='read_only_development' or manifest.get('feature')!='flutter-desktop':
             raise RuntimeError('Read-only development manifest missing')
         if sha(self.exe)!=manifest['engine_sha256'] or sha(self.ui)!=manifest['ui_sha256']:
