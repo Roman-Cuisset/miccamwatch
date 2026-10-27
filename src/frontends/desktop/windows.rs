@@ -1,5 +1,5 @@
-//! Disposable, owned, read-only UI process. Collection never performs pipe I/O.
-use super::{DesktopSnapshot, EventLines, UiEvent};
+//! Disposable owned UI, bounded typed commands, and nonblocking presentation I/O.
+use super::{DesktopSnapshot, EventLines, UiEvent, commands::{CommandSession, CommandState, MicrophoneCapability}};
 use anyhow::{Context, Result, ensure};
 use std::{
     fs::{File, OpenOptions},
@@ -24,7 +24,7 @@ use windows::{
             HANDLE, HANDLE_FLAG_INHERIT, HANDLE_FLAGS, HWND, LPARAM, SetHandleInformation,
             WAIT_OBJECT_0, WPARAM,
         },
-        Security::SECURITY_ATTRIBUTES,
+        Security::{SECURITY_ATTRIBUTES, Cryptography::{BCryptGenRandom, BCRYPT_USE_SYSTEM_PREFERRED_RNG}},
         Storage::FileSystem::{BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle},
         System::{
             JobObjects::{
@@ -137,10 +137,24 @@ struct Child {
     closing: Option<Instant>,
     started: Instant,
     ready: bool,
+    commands: CommandSession,
+    capability: MicrophoneCapability,
+    queued_command: Option<AuthorizedCommand>,
+    pending_ticket: Option<(u64, u64)>,
+    controls_changed: bool,
+    last_frame_at: Instant,
     // Pin all path components and the single-link executable for the child's lifetime.
     _bundle: Bundle,
 }
 impl Child {
+    fn frame(&mut self, snapshot: &mut DesktopSnapshot) -> Result<Frame> {
+        self.capability = std::mem::take(&mut snapshot.controls.microphone);
+        snapshot.controls = self.commands.controls(self.capability.clone());
+        let frame = Frame { sequence: snapshot.sequence, bytes: snapshot.encode()? };
+        self.last_frame_at = Instant::now();
+        self.controls_changed = false;
+        Ok(frame)
+    }
     fn exited(&self) -> bool {
         unsafe { WaitForSingleObject(handle(&self.process), 0) == WAIT_OBJECT_0 }
     }
@@ -156,11 +170,29 @@ impl Drop for Child {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct AuthorizedCommand {
+    pub ticket: u64,
+    pub requested: bool,
+    pub expected_requested: bool,
+    pub expected_generation: u64,
+}
+
+fn new_command_session() -> Result<CommandSession> {
+    let mut random = [0u8; 16];
+    unsafe { BCryptGenRandom(None, &mut random, BCRYPT_USE_SYSTEM_PREFERRED_RNG) }.ok()?;
+    let mut token = String::with_capacity(32);
+    use std::fmt::Write as _;
+    for byte in random { write!(&mut token, "{byte:02x}")?; }
+    CommandSession::new(token)
+}
+
 /// No pipes, threads, job, file reservations or child exist until `open`.
 pub struct Supervisor {
     executable: PathBuf,
     child: Option<Child>,
-    reopen: Option<(Frame, &'static str)>,
+    reopen: Option<(DesktopSnapshot, &'static str)>,
+    next_ticket: u64,
 }
 impl Supervisor {
     pub fn new() -> Result<Self> {
@@ -173,95 +205,64 @@ impl Supervisor {
                 .join("miccamwatch_desktop.exe"),
             child: None,
             reopen: None,
+            next_ticket: 0,
         })
     }
     pub fn is_running(&self) -> bool {
         self.child.as_ref().is_some_and(|child| !child.exited())
     }
-    pub fn open(&mut self, initial: &DesktopSnapshot, theme: &str) -> Result<()> {
+    pub fn open(&mut self, mut initial: DesktopSnapshot, theme: &str) -> Result<()> {
         let theme = theme_value(theme)?;
         self.poll();
         if let Some(child) = self.child.as_mut() {
             let window = owned_window(child.pid);
-            if needs_reopen(
-                child.closing.is_some(),
-                child.signals.disconnected.load(Ordering::Acquire),
-                child.exited(),
-                child.ready,
-                window.is_some(),
-            ) {
+            if needs_reopen(child.closing.is_some(), child.signals.disconnected.load(Ordering::Acquire),
+                child.exited(), child.ready, window.is_some()) {
                 child.closing.get_or_insert_with(Instant::now);
-                self.reopen = Some((
-                    Frame {
-                        sequence: initial.sequence,
-                        bytes: initial.encode()?,
-                    },
-                    theme,
-                ));
+                self.reopen = Some((initial, theme));
             } else {
                 if child.mailbox.accepts(initial.sequence) {
-                    child.mailbox.replace(Frame {
-                        sequence: initial.sequence,
-                        bytes: initial.encode()?,
-                    });
+                    let frame = child.frame(&mut initial)?;
+                    child.mailbox.replace(frame);
                 }
-                // Activation is best effort and only ever targets this live owned PID/title.
                 if let Some(window) = window {
-                    unsafe {
-                        let _ = ShowWindowAsync(window, SW_RESTORE);
-                        let _ = SetForegroundWindow(window);
-                    }
+                    unsafe { let _ = ShowWindowAsync(window, SW_RESTORE); let _ = SetForegroundWindow(window); }
                 }
-                // Observe a close racing the activation instead of losing the open request.
                 if child.exited() || child.signals.disconnected.load(Ordering::Acquire) {
                     child.closing.get_or_insert_with(Instant::now);
-                    self.reopen = Some((
-                        Frame {
-                            sequence: initial.sequence,
-                            bytes: initial.encode()?,
-                        },
-                        theme,
-                    ));
+                    self.reopen = Some((initial, theme));
                 }
             }
             return Ok(());
         }
-        let frame = Frame {
-            sequence: initial.sequence,
-            bytes: initial.encode()?,
-        };
-        self.child = Some(spawn(&self.executable, frame, theme)?);
+        self.child = Some(spawn(&self.executable, initial, theme)?);
         Ok(())
     }
-    pub fn publish(&mut self, snapshot: &DesktopSnapshot) -> Result<()> {
-        let Some(child) = self.child.as_ref() else {
-            return Ok(());
-        };
-        if self.reopen.is_none()
-            && (child.closing.is_some()
-                || child.exited()
-                || child.signals.disconnected.load(Ordering::Acquire))
-        {
-            return Ok(());
-        }
-        // A closed supervisor returns before serialization or allocation.
-        if let Some((pending, _)) = self.reopen.as_ref() {
-            if snapshot.sequence <= pending.sequence {
-                return Ok(());
-            }
-        } else if !child.mailbox.accepts(snapshot.sequence) {
-            return Ok(());
-        }
-        let frame = Frame {
-            sequence: snapshot.sequence,
-            bytes: snapshot.encode()?,
-        };
+    pub fn publish(&mut self, mut snapshot: DesktopSnapshot) -> Result<()> {
+        let Some(child) = self.child.as_mut() else { return Ok(()); };
+        if self.reopen.is_none() && (child.closing.is_some() || child.exited()
+            || child.signals.disconnected.load(Ordering::Acquire)) { return Ok(()); }
         if let Some((pending, _)) = self.reopen.as_mut() {
-            *pending = frame;
-        } else if child.closing.is_none() {
+            if snapshot.sequence > pending.sequence { *pending = snapshot; }
+        } else if child.mailbox.accepts(snapshot.sequence) && child.closing.is_none() {
+            let frame = child.frame(&mut snapshot)?;
             child.mailbox.replace(frame);
         }
         Ok(())
+    }
+    pub fn take_command(&mut self) -> Option<AuthorizedCommand> {
+        self.child.as_mut()?.queued_command.take()
+    }
+    pub fn take_controls_changed(&mut self) -> bool {
+        self.child.as_mut().is_some_and(|child| std::mem::take(&mut child.controls_changed))
+    }
+    pub fn complete(&mut self, ticket: u64, outcome: CommandState, code: Option<&str>, detail: Option<String>) {
+        let Some(child) = self.child.as_mut() else { return; };
+        let Some((expected, id)) = child.pending_ticket else { return; };
+        if ticket == expected && child.commands.finish(id, outcome, code, detail) {
+            child.pending_ticket = None;
+            child.controls_changed = true;
+        }
     }
     pub fn poll(&mut self) {
         if let Some(child) = self.child.as_mut() {
@@ -295,6 +296,25 @@ impl Supervisor {
                             child.pid,
                             stage.as_str()
                         );
+                    }
+                    UiEvent::Command { request, .. } => {
+                        let ready = child.ready && child.closing.is_none() && !child.exited()
+                            && !child.signals.disconnected.load(Ordering::Acquire)
+                            && child.last_frame_at.elapsed() <= Duration::from_secs(5);
+                        if let Some(request) = child.commands.admit(request,
+                            child.signals.written_sequence.load(Ordering::Acquire), ready, &child.capability) {
+                            if let Some(ticket) = self.next_ticket.checked_add(1) {
+                                self.next_ticket = ticket;
+                                child.pending_ticket = Some((ticket, request.id));
+                                child.queued_command = Some(AuthorizedCommand { ticket,
+                                    requested: request.requested, expected_requested: request.expected_requested,
+                                    expected_generation: request.expected_generation });
+                            } else {
+                                child.commands.finish(request.id, CommandState::Rejected, Some("unavailable"),
+                                    Some("Command ticket space exhausted; restart the frontend".into()));
+                            }
+                        }
+                        child.controls_changed = true;
                     }
                 }
             }
@@ -568,10 +588,11 @@ fn pipe() -> Result<(OwnedHandle, OwnedHandle)> {
     unsafe { CreatePipe(&mut read, &mut write, Some(&security), 0) }?;
     Ok(unsafe { (own(read), own(write)) })
 }
-fn spawn(path: &Path, initial: Frame, theme: &'static str) -> Result<Child> {
+fn spawn(path: &Path, mut initial: DesktopSnapshot, theme: &'static str) -> Result<Child> {
     let started = Instant::now();
     eprintln!("desktop event=open_requested endpoint=parent elapsed_ms=0");
     let bundle = Bundle::open(path)?;
+    let commands = new_command_session()?;
     let job = unsafe { own(CreateJobObjectW(None, PCWSTR::null())?) };
     let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
     limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
@@ -649,7 +670,7 @@ fn spawn(path: &Path, initial: Frame, theme: &'static str) -> Result<Child> {
     let mailbox = Arc::new(Mailbox::default());
     let signals = Arc::new(Signals::default());
     let (events_tx, events) = mpsc::sync_channel(EVENT_CAPACITY);
-    let child = Child {
+    let mut child = Child {
         process: process_handle,
         job: Some(job),
         pid: process.dwProcessId,
@@ -659,9 +680,16 @@ fn spawn(path: &Path, initial: Frame, theme: &'static str) -> Result<Child> {
         closing: None,
         started,
         ready: false,
+        commands,
+        capability: MicrophoneCapability::default(),
+        queued_command: None,
+        pending_ticket: None,
+        controls_changed: false,
+        last_frame_at: started,
         _bundle: bundle,
     };
-    child.mailbox.replace(initial);
+    let initial_frame = child.frame(&mut initial)?;
+    child.mailbox.replace(initial_frame);
     start_writer(
         File::from(parent_stdin),
         child.mailbox.clone(),

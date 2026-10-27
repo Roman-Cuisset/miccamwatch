@@ -1,14 +1,15 @@
-//! Read-only presentation boundary. Never serialize the engine's complete model.
+//! Bounded presentation and typed-command boundary. Never export the complete model.
 use crate::model::{Activity, CollectorState, Confidence, Resource, Snapshot};
 use anyhow::{Result, ensure};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::io::{self, Write};
 
+pub mod commands;
 #[cfg(windows)]
 pub mod windows;
 
-pub const PROTOCOL_VERSION: u8 = 1;
+pub const PROTOCOL_VERSION: u8 = 2;
 pub const MAX_FRAME_BYTES: usize = 262_144;
 pub const MAX_EVENT_BYTES: usize = 4096;
 const MAX_STRING_BYTES: usize = 1024;
@@ -31,6 +32,7 @@ pub struct DesktopSnapshot {
     pub protection: Protection,
     pub diagnostics: Vec<String>,
     pub truncated: bool,
+    pub controls: commands::Controls,
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct Engine {
@@ -215,6 +217,7 @@ impl DesktopSnapshot {
                 camera: ProtectionStatus::default(),
             },
             diagnostics: Vec::new(),
+            controls: commands::Controls::default(),
             truncated,
         };
         if let Some(s) = source {
@@ -361,6 +364,11 @@ pub(crate) enum UiEvent {
         stage: TimingStage,
         elapsed_ms: u64,
     },
+    #[serde(rename = "command")]
+    Command {
+        protocol_version: u8,
+        request: commands::UiCommand,
+    },
 }
 #[derive(Debug, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -395,6 +403,9 @@ pub(crate) fn parse_event(line: &[u8]) -> Result<UiEvent> {
         }
         | UiEvent::Timing {
             protocol_version, ..
+        }
+        | UiEvent::Command {
+            protocol_version, ..
         } => *protocol_version,
     };
     ensure!(version == PROTOCOL_VERSION, "unsupported UI protocol");
@@ -425,6 +436,70 @@ impl EventLines {
                 } else {
                     self.bytes.push(byte);
                 }
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
+pub fn microphone_capability(
+    status: Result<&crate::platform::MicrophoneProtectionStatus, &str>,
+    generation: u64,
+    busy: bool,
+    enabled: bool,
+) -> commands::MicrophoneCapability {
+    let mut capability = commands::MicrophoneCapability { generation, ..Default::default() };
+    let status = match status {
+        Ok(status) => {
+            capability.current_requested = Some(status.requested);
+            status
+        }
+        Err(_) => {
+            capability.reason = Some("Microphone control state is unavailable; no command can be confirmed".into());
+            return capability;
+        }
+    };
+    if !enabled {
+        capability.reason = Some("Read-only development connection; microphone commands are disabled".into());
+    } else if busy {
+        capability.reason = Some("A native microphone operation is pending".into());
+    } else if !status.service_active
+        && crate::windows_control::resource_conflict("microphone").unwrap_or(true)
+    {
+        capability.reason = Some("Another or unavailable native owner holds the microphone; no takeover is permitted".into());
+    } else {
+        let observed = status.endpoint_count > 0 && status.mute_state != crate::model::MicrophoneMuteState::Unavailable;
+        capability.can_enable = observed;
+        capability.can_release = status.requested || observed;
+        if !observed {
+            capability.reason = Some("Endpoint mute cannot be observed; only an existing protection request can be released".into());
+        }
+    }
+    capability
+}
+
+#[cfg(windows)]
+pub fn complete_microphone(
+    supervisor: &mut windows::Supervisor,
+    ticket: u64,
+    requested: bool,
+    result: Result<&crate::platform::MicrophoneProtectionStatus, &str>,
+) {
+    use crate::model::MicrophoneMuteState;
+    use commands::CommandState;
+    match result {
+        Err(error) => supervisor.complete(ticket, CommandState::Failed, Some("native_error"),
+            Some(format!("Native operation failed or may be partial; inspect fresh state: {error}"))),
+        Ok(status) => {
+            let expected = if requested { MicrophoneMuteState::Muted } else { MicrophoneMuteState::Unmuted };
+            let confirmed = status.requested == requested && status.endpoint_count > 0
+                && status.mute_state == expected && (!requested || status.service_active);
+            if confirmed {
+                supervisor.complete(ticket, CommandState::Succeeded, None,
+                    Some("Native SDK mute readback confirmed; this is not capture-permission denial".into()));
+            } else {
+                supervisor.complete(ticket, CommandState::Uncertain, Some("readback_unconfirmed"),
+                    Some("The native request completed, but effective endpoint mute/guard could not be confirmed; do not assume protection or restoration".into()));
             }
         }
     }
@@ -596,14 +671,14 @@ mod tests {
     fn parser_rejects_mutations_versions_extra_fields_and_bad_types() {
         for line in [
             r#"{"type":"mute","protocol_version":1}"#,
-            r#"{"type":"ready","protocol_version":2,"sequence":1}"#,
+            r#"{"type":"ready","protocol_version":3,"sequence":1}"#,
             r#"{"type":"ready","protocol_version":1,"sequence":1,"command":"unmute"}"#,
             r#"{"type":"ready","protocol_version":1,"sequence":"1"}"#,
             r#"{"type":"timing","protocol_version":1,"stage":"shell","elapsed_ms":0}"#,
         ] {
             assert!(parse_event(line.as_bytes()).is_err());
         }
-        assert!(parse_event(br#"{"type":"ready","protocol_version":1,"sequence":1}"#).is_ok());
+        assert!(parse_event(br#"{"type":"ready","protocol_version":2,"sequence":1}"#).is_ok());
     }
     #[test]
     fn oversized_line_cannot_smuggle_suffix_and_next_line_recovers() {
@@ -619,11 +694,11 @@ mod tests {
         };
         lines.feed(&vec![b'x'; MAX_EVENT_BYTES + 1], &mut feed);
         lines.feed(
-            b"{\"type\":\"ready\",\"protocol_version\":1,\"sequence\":1}\n",
+            b"{\"type\":\"ready\",\"protocol_version\":2,\"sequence\":1}\n",
             &mut feed,
         );
         lines.feed(
-            b"{\"type\":\"ready\",\"protocol_version\":1,\"sequence\":2}\n",
+            b"{\"type\":\"ready\",\"protocol_version\":2,\"sequence\":2}\n",
             &mut feed,
         );
         assert_eq!((accepted, rejected), (1, 1));
@@ -637,7 +712,7 @@ mod tests {
         assert_eq!(output.0.len(), MAX_FRAME_BYTES);
         let mut lines = EventLines::default();
         let mut results = Vec::new();
-        lines.feed(b"{\"type\":\"timing\",\"protocol_version\":1,", |e| {
+        lines.feed(b"{\"type\":\"timing\",\"protocol_version\":2,", |e| {
             results.push(e)
         });
         assert!(results.is_empty());

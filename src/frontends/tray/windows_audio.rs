@@ -18,8 +18,25 @@ use windows::Win32::{
 #[derive(Clone, Copy, Debug)]
 pub(super) enum Request {
     Manual,
+    #[cfg(feature = "flutter-desktop")]
+    Set {
+        ticket: u64,
+        requested: bool,
+        expected_requested: bool,
+        expected_generation: u64,
+    },
     Lock,
     Unlock,
+}
+impl Request {
+    pub(super) fn is_manual(self) -> bool {
+        match self {
+            Self::Manual => true,
+            Self::Lock | Self::Unlock => false,
+            #[cfg(feature = "flutter-desktop")]
+            Self::Set { .. } => true,
+        }
+    }
 }
 pub(super) struct Worker {
     pub requests: SyncSender<Request>,
@@ -43,6 +60,18 @@ impl Worker {
                         match request {
                             Request::Manual => {
                                 monitor.toggle_microphone_mute()?;
+                                journal.invalidate_manual();
+                            }
+                            #[cfg(feature = "flutter-desktop")]
+                            Request::Set { requested, expected_requested, expected_generation, .. } => {
+                                // This is the native worker's sequence, not an SDK mute
+                                // boolean guessed in Dart. Recheck just before mutation.
+                                anyhow::ensure!(generation.load(Ordering::Acquire) == expected_generation,
+                                    "Microphone worker generation changed; no command applied");
+                                let before = monitor.microphone_protection_status()?;
+                                anyhow::ensure!(before.requested == expected_requested,
+                                    "Microphone request changed; no command applied");
+                                monitor.set_microphone_mute(requested)?;
                                 journal.invalidate_manual();
                             }
                             Request::Lock => {
