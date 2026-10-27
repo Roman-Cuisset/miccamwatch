@@ -28,22 +28,28 @@ fn run() -> Result<()> {
     // singleton, settings or protection path. Old stable binaries lack this gate.
     #[cfg(not(feature = "flutter-desktop"))]
     anyhow::ensure!(
-        !std::env::args_os().any(|argument| argument == "--read-only-development"),
-        "Read-only development requires a build with flutter-desktop; no tray started"
+        !std::env::args_os().any(|argument| argument == "--read-only-development" || argument == "--controlled-development"),
+        "Development modes require a build with flutter-desktop; no tray started"
     );
     let initial_window = std::env::args_os()
         .skip(1)
         .any(|argument| argument == "--open");
     #[cfg(feature = "flutter-desktop")]
-    if std::env::args_os().any(|argument| argument == "--read-only-development") {
-        // Deliberately bypass the *operational* singleton only into a separate,
-        // incapable-of-control observer. Never resume or adopt stable protection.
+    if std::env::args_os().any(|argument| argument == "--read-only-development" || argument == "--controlled-development") {
+        // No operational singleton/resume. Controlled mode additionally requires
+        // isolated data paths and a released native resource at startup.
         let arguments = std::env::args().collect::<Vec<_>>();
+        let controlled = arguments.iter().any(|argument| argument == "--controlled-development");
+        anyhow::ensure!(!(controlled && arguments.iter().any(|argument| argument == "--read-only-development")),
+            "Read-only and controlled development modes cannot be combined");
         let theme = arguments
             .windows(2)
             .find(|pair| pair[0] == "--desktop-theme")
             .map_or("light", |pair| pair[1].as_str());
         anyhow::ensure!(matches!(theme, "light" | "dark"), "Invalid desktop theme");
+        if controlled {
+            return tray::run_controlled_development(Language::detect(), initial_window, theme);
+        }
         return tray::run_read_only_development(Language::detect(), initial_window, theme);
     }
     if tray::reuse_running(initial_window)? {

@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'labels.dart';
+import 'commands.dart';
 import 'snapshot.dart' as wire;
 
 final _started = Stopwatch()..start();
@@ -16,6 +17,15 @@ void emit(Map<String, Object> event) {
     stdout.writeln(jsonEncode({'protocol_version': wire.protocolVersion, ...event}));
     await stdout.flush();
   }).catchError((Object _) {});
+}
+
+Future<void> sendCommand(Map<String, dynamic> event) {
+  final sent = _output.then((_) async {
+    stdout.writeln(jsonEncode(event));
+    await stdout.flush();
+  });
+  _output = sent.catchError((Object _) {});
+  return sent;
 }
 void timing(String stage) => emit({'type': 'timing', 'stage': stage, 'elapsed_ms': _started.elapsedMilliseconds});
 
@@ -62,6 +72,7 @@ class MicCamWatchApp extends StatefulWidget {
 class _MicCamWatchAppState extends State<MicCamWatchApp> {
   final session = wire.SnapshotSession();
   late final wire.SnapshotInput input;
+  late final MicrophoneCommandClient microphoneCommands;
   late final Timer clock;
   late bool dark = widget.dark;
   int page = 0;
@@ -73,6 +84,7 @@ class _MicCamWatchAppState extends State<MicCamWatchApp> {
   @override
   void initState() {
     super.initState();
+    microphoneCommands = MicrophoneCommandClient(send: sendCommand);
     session.addListener(_changed);
     clock = Timer.periodic(const Duration(seconds: 1), (_) => session.tick());
     input = wire.SnapshotInput(stdin, session, onSnapshot: () {
@@ -84,7 +96,12 @@ class _MicCamWatchAppState extends State<MicCamWatchApp> {
     WidgetsBinding.instance.addPostFrameCallback((_) => _frameTheme());
   }
 
-  void _changed() { if (mounted && !closing) setState(() {}); }
+  void _changed() {
+    if (!mounted || closing) return;
+    microphoneCommands.update(session.snapshot?.controls ?? const <String, dynamic>{},
+        session.sequence ?? 0, session.transportLive);
+    setState(() {});
+  }
   Future<void> _close() async {
     if (closing) return;
     closing = true;
@@ -101,6 +118,7 @@ class _MicCamWatchAppState extends State<MicCamWatchApp> {
     input.close();
     session.removeListener(_changed);
     session.dispose();
+    microphoneCommands.dispose();
     super.dispose();
   }
 
@@ -149,7 +167,7 @@ class _MicCamWatchAppState extends State<MicCamWatchApp> {
           decoration: BoxDecoration(color: c.card, border: Border(right: BorderSide(color: c.border))),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Padding(padding: const EdgeInsets.only(left: 8), child: Row(children: [
-              Icon(Icons.visibility_outlined, color: c.accent, size: 22),
+              Image.asset('assets/miccamwatch.png', width: 28, height: 28, excludeFromSemantics: true),
               const SizedBox(width: 7),
               Text('MicCamWatch', style: c.type(15, bold: true)),
             ])),
@@ -168,7 +186,7 @@ class _MicCamWatchAppState extends State<MicCamWatchApp> {
                   const SizedBox(width: 10), Expanded(child: Text(titles[i])),
                 ]))),
             const Spacer(),
-            Text('Protocol 1 · read-only', style: c.type(11, muted: true)),
+            Text('Protocol ${wire.protocolVersion}', style: c.type(11, muted: true)),
           ])),
         Expanded(child: SingleChildScrollView(padding: const EdgeInsets.all(22),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -179,7 +197,8 @@ class _MicCamWatchAppState extends State<MicCamWatchApp> {
             ]),
             const SizedBox(height: 10),
             _panel(c, Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(l[snapshot?.engine['mode'] == 'read_only_development' ? 'readOnly' : 'readOnlyNormal'],
+              Text(l[snapshot?.engine['mode'] == 'read_only_development' ? 'readOnly'
+                  : snapshot?.engine['mode'] == 'controlled_development' ? 'controlled' : 'hybrid'],
                 style: c.type(14, bold: true)),
               const SizedBox(height: 4),
               Text(l[sequence == 0 ? 'connecting' : session.state.name],
@@ -222,6 +241,8 @@ class _MicCamWatchAppState extends State<MicCamWatchApp> {
         Expanded(child: cards[0]), const SizedBox(width: 12), Expanded(child: cards[1]),
       ]);
     }),
+    const SizedBox(height: 12),
+    MicrophoneCommandPanel(client: microphoneCommands, locale: snapshot?.locale ?? 'en'),
     const SizedBox(height: 18),
     Text(l['applications'], style: c.type(17, bold: true)),
     const SizedBox(height: 9),
@@ -313,13 +334,14 @@ class _MicCamWatchAppState extends State<MicCamWatchApp> {
     _panel(c, Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Text('MicCamWatch · 0.21.1 development', style: c.type(18, bold: true)),
       const SizedBox(height: 12),
-      Text(l['readOnlyNormal'], style: c.type(14, bold: true)),
+      Text(l['hybrid'], style: c.type(14, bold: true)),
       const SizedBox(height: 8),
       Text('Rust owns collection, protection, permissions, preferences, history and the tray. '
-        'This disposable Flutter window only displays engine snapshots over private inherited pipes. '
-        'Closing it does not disable protection. Controls and settings remain in the native interfaces.', style: c.type(14, muted: true)),
+        'This disposable Flutter window displays snapshots and submits typed requests over private inherited pipes. '
+        'Only Rust applies microphone commands. Closing the window does not release protection. '
+        'Other controls and settings remain available in the native interfaces.', style: c.type(14, muted: true)),
       const SizedBox(height: 12),
-      Text('Protocol 1 · SDK-only presentation · No hardware, preference, file or network controls', style: c.type(12, muted: true)),
+      Text('Protocol ${wire.protocolVersion} · Typed Rust commands · No direct hardware access', style: c.type(12, muted: true)),
       if (snapshot != null) Text('Engine ${snapshot.engine['version']} · mode: ${snapshot.engine['mode']}', style: c.type(12, muted: true)),
     ])),
   ];

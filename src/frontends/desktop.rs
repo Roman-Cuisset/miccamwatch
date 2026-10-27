@@ -479,21 +479,32 @@ pub fn microphone_capability(
 }
 
 #[cfg(windows)]
+fn microphone_readback_confirmed(requested: bool, status: &crate::platform::MicrophoneProtectionStatus) -> bool {
+    let expected = if requested { crate::model::MicrophoneMuteState::Muted }
+        else { crate::model::MicrophoneMuteState::Unmuted };
+    status.requested == requested && status.endpoint_count > 0
+        && status.mute_state == expected && (!requested || status.service_active)
+}
+
+#[cfg(windows)]
 pub fn complete_microphone(
     supervisor: &mut windows::Supervisor,
     ticket: u64,
     requested: bool,
     result: Result<&crate::platform::MicrophoneProtectionStatus, &str>,
 ) {
-    use crate::model::MicrophoneMuteState;
     use commands::CommandState;
     match result {
-        Err(error) => supervisor.complete(ticket, CommandState::Failed, Some("native_error"),
-            Some(format!("Native operation failed or may be partial; inspect fresh state: {error}"))),
+        Err(error) => {
+            supervisor.complete(ticket, CommandState::Failed, Some("native_error"),
+                Some(format!("Native operation failed or may be partial; inspect fresh state: {error}")));
+            eprintln!("{{\"event\":\"microphone_result\",\"ticket\":{ticket},\"requested\":{requested},\"outcome\":\"failed\",\"actual\":\"unknown\"}}");
+        }
         Ok(status) => {
-            let expected = if requested { MicrophoneMuteState::Muted } else { MicrophoneMuteState::Unmuted };
-            let confirmed = status.requested == requested && status.endpoint_count > 0
-                && status.mute_state == expected && (!requested || status.service_active);
+            let confirmed = microphone_readback_confirmed(requested, status);
+            let outcome = if confirmed { "succeeded" } else { "uncertain" };
+            eprintln!("{{\"event\":\"microphone_result\",\"ticket\":{ticket},\"requested\":{requested},\"outcome\":\"{outcome}\",\"actual\":\"{:?}\",\"actual_requested\":{},\"guard_active\":{},\"endpoints\":{}}}",
+                status.mute_state, status.requested, status.service_active, status.endpoint_count);
             if confirmed {
                 supervisor.complete(ticket, CommandState::Succeeded, None,
                     Some("Native SDK mute readback confirmed; this is not capture-permission denial".into()));
@@ -509,6 +520,37 @@ pub fn complete_microphone(
 mod tests {
     use super::*;
     use crate::model::{Access, CollectorHealth, EnforcementDecision, Risk};
+    #[cfg(windows)]
+    #[test]
+    fn sdk_mute_needs_readback_endpoints_and_a_live_requested_guard() {
+        let mut status = crate::platform::MicrophoneProtectionStatus {
+            requested: true, service_active: true, mute_state: crate::model::MicrophoneMuteState::Muted,
+            endpoint_count: 2, hardware_mute_count: 1, corrections: 0, detail: None,
+        };
+        assert!(microphone_readback_confirmed(true, &status));
+        status.service_active = false;
+        assert!(!microphone_readback_confirmed(true, &status));
+        status.service_active = true;
+        status.mute_state = crate::model::MicrophoneMuteState::Mixed;
+        assert!(!microphone_readback_confirmed(true, &status));
+        status.mute_state = crate::model::MicrophoneMuteState::Muted;
+        status.endpoint_count = 0;
+        assert!(!microphone_readback_confirmed(true, &status));
+    }
+    #[cfg(windows)]
+    #[test]
+    fn release_needs_native_unmute_not_merely_cleared_intent_or_owner_exit() {
+        let mut status = crate::platform::MicrophoneProtectionStatus {
+            requested: false, service_active: false, mute_state: crate::model::MicrophoneMuteState::Muted,
+            endpoint_count: 1, hardware_mute_count: 0, corrections: 0, detail: None,
+        };
+        assert!(!microphone_readback_confirmed(false, &status));
+        status.mute_state = crate::model::MicrophoneMuteState::Unmuted;
+        status.service_active = true;
+        assert!(microphone_readback_confirmed(false, &status));
+        status.requested = true;
+        assert!(!microphone_readback_confirmed(false, &status));
+    }
     fn source() -> Snapshot {
         Snapshot {
             accesses: vec![],

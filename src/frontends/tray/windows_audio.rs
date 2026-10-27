@@ -45,6 +45,15 @@ pub(super) struct Worker {
 }
 impl Worker {
     pub fn start(policy: Policy, hwnd: Arc<AtomicIsize>) -> Self {
+        Self::start_mode(policy, hwnd, false)
+    }
+    #[cfg(feature = "flutter-desktop")]
+    pub(super) fn start_controlled(policy: Policy, hwnd: Arc<AtomicIsize>) -> Self {
+        Self::start_mode(policy, hwnd, true)
+    }
+    fn start_mode(policy: Policy, hwnd: Arc<AtomicIsize>, controlled: bool) -> Self {
+        #[cfg(not(feature = "flutter-desktop"))]
+        let _ = controlled;
         let (requests, pending) = mpsc::sync_channel::<Request>(8);
         let (completed, results) = mpsc::sync_channel(8);
         let sequence = Arc::new(AtomicU64::new(0));
@@ -53,6 +62,8 @@ impl Worker {
             // COM interfaces and their journal registrations never cross apartments.
             let monitor = PlatformMonitor::new(policy).map_err(|error| format!("{error:#}"));
             let mut journal = MicrophoneLockJournal::default();
+            #[cfg(feature = "flutter-desktop")]
+            let mut controlled_baseline = false;
             while let Ok(request) = pending.recv() {
                 let result = match &monitor {
                     Err(error) => Err(error.clone()),
@@ -71,6 +82,14 @@ impl Worker {
                                 let before = monitor.microphone_protection_status()?;
                                 anyhow::ensure!(before.requested == expected_requested,
                                     "Microphone request changed; no command applied");
+                                if controlled && !controlled_baseline {
+                                    anyhow::ensure!(!before.requested && !before.service_active
+                                        && before.endpoint_count > 0
+                                        && before.mute_state == crate::model::MicrophoneMuteState::Unmuted,
+                                        "Controlled test baseline is not completely unmuted/released; no command applied");
+                                    // Keep recovery available if the native operation is partial.
+                                    controlled_baseline = true;
+                                }
                                 monitor.set_microphone_mute(requested)?;
                                 journal.invalidate_manual();
                             }

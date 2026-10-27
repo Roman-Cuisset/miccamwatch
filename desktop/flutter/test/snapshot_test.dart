@@ -5,7 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:miccamwatch_desktop/snapshot.dart';
 
 Map<String, dynamic> frame({int sequence = 1}) => {
-  'type': 'snapshot', 'protocol_version': 1, 'sequence': sequence,
+  'type': 'snapshot', 'protocol_version': 2, 'sequence': sequence,
   'observed_at': '2026-10-27T08:00:00Z', 'locale': 'en',
   'engine': {'version': '0.21.1', 'platform': 'windows',
     'mode': 'read_only_development', 'state': 'healthy', 'detail': null},
@@ -26,6 +26,9 @@ Map<String, dynamic> frame({int sequence = 1}) => {
       {'state': 'unknown', 'requested': null, 'service_active': null, 'detail': null},
   },
   'diagnostics': <String>[], 'truncated': false,
+  'controls': {'session': '', 'microphone': {
+    'can_enable': false, 'can_release': false, 'current_requested': null,
+    'generation': 0, 'reason': 'Read-only connection'}, 'command': null},
 };
 List<int> encode(Map<String, dynamic> value) => utf8.encode(jsonEncode(value));
 
@@ -81,8 +84,8 @@ void main() {
   test('schema, types, enum, version and monotonic sequence are required', () {
     final changes = <void Function(Map<String, dynamic>)>[
       (v) => v.remove('protection'),
-      (v) => v['protocol_version'] = 2,
-      (v) => v['protocol_version'] = 1.0,
+      (v) => v['protocol_version'] = 3,
+      (v) => v['protocol_version'] = 2.0,
       (v) => v['type'] = 'command',
       (v) => v['sequence'] = '1',
       (v) => v['resources'][0]['activity'] = 'safe',
@@ -94,6 +97,11 @@ void main() {
       (v) => v['protection']['camera']['requested'] = 'true',
       (v) => v['locale'] = 'unsupported',
       (v) => v['unexpected'] = true,
+      (v) => v['controls']['microphone']['can_enable'] = true,
+      (v) => v['controls']['microphone']['generation'] = -1,
+      (v) => v['controls']['session'] = 'foreign',
+      (v) => v['controls']['command'] = {'id': 0, 'requested': true,
+        'state': 'succeeded', 'code': null, 'detail': null},
     ];
     for (final change in changes) {
       final value = frame();
@@ -111,7 +119,8 @@ void main() {
 
   test('stale uses elapsed receipt time, errors retain only last snapshot', () {
     var elapsed = Duration.zero;
-    final session = SnapshotSession(elapsed: () => elapsed);
+    final session = SnapshotSession(elapsed: () => elapsed,
+      now: () => DateTime.parse('2026-10-27T08:00:00Z'));
     session.accept(encode(frame()));
     expect(session.state, ConnectionState.live);
     elapsed = const Duration(seconds: 5);
@@ -127,6 +136,26 @@ void main() {
     expect(session.state, ConnectionState.live);
     session.disconnect();
     expect(session.state, ConnectionState.disconnected);
+    session.dispose();
+  });
+
+  test('command publications cannot refresh stale capture evidence', () {
+    final base = DateTime.parse('2026-10-27T08:00:00Z');
+    var elapsed = Duration.zero;
+    final session = SnapshotSession(elapsed: () => elapsed, now: () => base.add(elapsed));
+    session.accept(encode(frame()));
+    expect(session.isLive, isTrue);
+    elapsed = const Duration(seconds: 6);
+    session.accept(encode(frame(sequence: 2)));
+    expect(session.transportLive, isTrue);
+    expect(session.isLive, isFalse);
+    expect(session.state, ConnectionState.stale);
+    final fresh = frame(sequence: 3)..['observed_at'] = base.add(elapsed).toIso8601String();
+    session.accept(encode(fresh));
+    expect(session.isLive, isTrue);
+    final future = frame(sequence: 4)..['observed_at'] = base.add(const Duration(minutes: 1)).toIso8601String();
+    session.accept(encode(future));
+    expect(session.isLive, isFalse);
     session.dispose();
   });
 

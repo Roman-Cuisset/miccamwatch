@@ -3,13 +3,13 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 
-const protocolVersion = 1;
+const protocolVersion = 2;
 const maxFrameBytes = 262144;
 const resourceNames = ['microphone', 'camera'];
 const activityNames = ['active', 'ready', 'none_observed', 'unknown'];
 const healthNames = ['healthy', 'degraded', 'unavailable'];
 
-// Protocol 1 is intentionally closed: this consumer has no command channel.
+// Rust owns the versioned observation and narrowly typed command boundary.
 class Snapshot {
   Snapshot._(this.data);
   final Map<String, dynamic> data;
@@ -25,6 +25,7 @@ class Snapshot {
   Map<String, dynamic> protection(String resource) =>
       (data['protection'] as Map<String, dynamic>)[resource] as Map<String, dynamic>;
   bool get truncated => data['truncated'] as bool;
+  Map<String, dynamic> get controls => data['controls'] as Map<String, dynamic>;
 
   static List<Map<String, dynamic>> _maps(dynamic value) =>
       (value as List).cast<Map<String, dynamic>>();
@@ -34,7 +35,7 @@ class Snapshot {
     final value = jsonDecode(utf8.decode(bytes));
     final root = _object(value, const ['type', 'protocol_version', 'sequence',
       'observed_at', 'engine', 'locale', 'resources', 'accesses', 'collectors',
-      'observation_gaps', 'protection', 'diagnostics', 'truncated']);
+      'observation_gaps', 'protection', 'diagnostics', 'truncated', 'controls']);
     if (root['type'] != 'snapshot' || root['protocol_version'] is! int ||
         root['protocol_version'] != protocolVersion) {
       _invalid('Unsupported snapshot protocol');
@@ -47,7 +48,7 @@ class Snapshot {
     final engine = _object(root['engine'], const ['version', 'platform', 'mode', 'state', 'detail']);
     _text(engine['version']);
     _enum(engine['platform'], const ['windows', 'linux', 'macos']);
-    _enum(engine['mode'], const ['read_only_development', 'operational']);
+    _enum(engine['mode'], const ['read_only_development', 'controlled_development', 'operational']);
     _enum(engine['state'], healthNames);
     _nullableText(engine['detail']);
     _enum(root['locale'], const ['en', 'fr', 'de', 'es', 'ja', 'zh', 'ru']);
@@ -97,6 +98,32 @@ class Snapshot {
       _text(diagnostic);
     }
     if (root['truncated'] is! bool) _invalid('Invalid truncated flag');
+    final controls = _object(root['controls'], const ['session', 'microphone', 'command']);
+    final token = controls['session'];
+    if (token is! String || (token.isNotEmpty && !RegExp(r'^[0-9a-f]{32}$').hasMatch(token))) {
+      _invalid('Invalid command session');
+    }
+    final capability = _object(controls['microphone'], const [
+      'can_enable', 'can_release', 'current_requested', 'generation', 'reason']);
+    if (capability['can_enable'] is! bool || capability['can_release'] is! bool) {
+      _invalid('Invalid command capability');
+    }
+    _nullableBool(capability['current_requested']);
+    _integer(capability['generation']);
+    _nullableText(capability['reason']);
+    if ((capability['can_enable'] == true || capability['can_release'] == true) &&
+        (token.isEmpty || capability['current_requested'] == null)) {
+      _invalid('Capability lacks authenticated current state');
+    }
+    if (controls['command'] != null) {
+      final result = _object(controls['command'], const ['id', 'requested', 'state', 'code', 'detail']);
+      _integer(result['id'], maximum: 0xffffffff);
+      if (result['id'] == 0 || result['requested'] is! bool || token.isEmpty) _invalid('Invalid command result');
+      _enum(result['state'], const ['accepted', 'succeeded', 'failed', 'rejected', 'uncertain']);
+      _nullableText(result['code']);
+      if (result['code'] != null && utf8.encode(result['code'] as String).length > 64) _invalid('Invalid result code');
+      _nullableText(result['detail']);
+    }
     return Snapshot._(root);
   }
 
@@ -161,9 +188,11 @@ void _timestamp(dynamic value) {
 enum ConnectionState { connecting, live, stale, error, disconnected }
 
 class SnapshotSession extends ChangeNotifier {
-  SnapshotSession({Duration Function()? elapsed})
-      : _elapsed = elapsed ?? (Stopwatch()..start()).elapsedDuration;
+  SnapshotSession({Duration Function()? elapsed, DateTime Function()? now})
+      : _elapsed = elapsed ?? (Stopwatch()..start()).elapsedDuration,
+        _now = now ?? DateTime.now;
 
+  final DateTime Function() _now;
   final Duration Function() _elapsed;
   Snapshot? snapshot;
   Duration? _received;
@@ -172,15 +201,24 @@ class SnapshotSession extends ChangeNotifier {
   ConnectionState state = ConnectionState.connecting;
   int? get sequence => snapshot?.sequence;
   bool get isLive => state == ConnectionState.live;
+  bool get transportLive => state != ConnectionState.error &&
+      state != ConnectionState.disconnected && _received != null &&
+      _elapsed() - _received! <= const Duration(seconds: 5);
+  bool get _observationFresh {
+    final observed = snapshot?.observedAt;
+    if (observed == null) return false;
+    final age = _now().toUtc().difference(observed);
+    return age >= const Duration(seconds: -2) && age <= const Duration(seconds: 5);
+  }
 
   void accept(List<int> bytes) {
     try {
       final accepted = Snapshot.decode(bytes, afterSequence: sequence);
       snapshot = accepted;
       _received = _elapsed();
-      receivedAt = DateTime.now();
+      receivedAt = _now();
       error = null;
-      state = ConnectionState.live;
+      state = _observationFresh ? ConnectionState.live : ConnectionState.stale;
     } on Object {
       fail('Invalid snapshot / incompatible protocol');
       return;
@@ -189,8 +227,8 @@ class SnapshotSession extends ChangeNotifier {
   }
 
   void tick() {
-    if (state == ConnectionState.live && _received != null &&
-        _elapsed() - _received! > const Duration(seconds: 5)) {
+    if (state == ConnectionState.live &&
+        (!transportLive || !_observationFresh)) {
       state = ConnectionState.stale;
     }
     notifyListeners();

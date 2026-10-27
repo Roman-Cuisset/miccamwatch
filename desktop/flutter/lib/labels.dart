@@ -17,6 +17,8 @@ const _labels = <String, List<String>>{
   'applications': ['Observed applications', 'Applications observées', 'Beobachtete Anwendungen', 'Aplicaciones observadas', '観測されたアプリ', '观测到的应用', 'Наблюдаемые приложения'],
   'readOnly': ['Read-only development session', 'Session de développement en lecture seule', 'Schreibgeschützte Entwicklungssitzung', 'Sesión de desarrollo de solo lectura', '読み取り専用の開発セッション', '只读开发会话', 'Сеанс разработки: только чтение'],
   'readOnlyNormal': ['Read-only presentation', 'Affichage en lecture seule', 'Schreibgeschützte Anzeige', 'Presentación de solo lectura', '読み取り専用表示', '只读显示', 'Представление: только чтение'],
+  'controlled': ['Isolated development — real microphone commands', 'Développement isolé — commandes micro réelles', 'Isolierte Entwicklung — echte Mikrofonbefehle', 'Desarrollo aislado — comandos reales del micrófono', '分離された開発環境 — 実際のマイク操作', '隔离开发环境 — 真实麦克风操作', 'Изолированная разработка — реальные команды микрофона'],
+  'hybrid': ['Hybrid interface — Rust commands', 'Interface hybride — commandes Rust', 'Hybride Oberfläche — Rust-Befehle', 'Interfaz híbrida — comandos Rust', 'ハイブリッド UI — Rust による操作', '混合界面 — Rust 命令', 'Гибридный интерфейс — команды Rust'],
   'connecting': ['Waiting for engine snapshot', 'En attente du moteur', 'Warten auf Engine-Daten', 'Esperando datos del motor', 'エンジンのデータを待機中', '等待引擎快照', 'Ожидание данных движка'],
   'live': ['Live observation', 'Observation en direct', 'Live-Beobachtung', 'Observación en vivo', '最新の観測', '实时观测', 'Текущее наблюдение'],
   'stale': ['Stale — connection not current', 'Périmé — connexion non actualisée', 'Veraltet — keine aktuellen Daten', 'Obsoleto — conexión no actualizada', '古いデータ — 接続を確認できません', '数据已过期 — 连接未更新', 'Данные устарели — нет обновлений'],

@@ -93,23 +93,28 @@ def capture(hwnd,path,dark):
         G.SelectObject(target,old);G.DeleteObject(bitmap);G.DeleteDC(target);U.ReleaseDC(hwnd,dc)
 
 class Host:
-    def __init__(self,prefix,theme):
+    def __init__(self,prefix,theme,controlled=False,environment=None):
         self.prefix=prefix.resolve();self.exe=self.prefix/'mcw-tray.exe'
         self.ui=self.prefix/'desktop/miccamwatch_desktop.exe'
+        self.controlled=controlled;self.cli=self.prefix/'mcw.exe'
         allowed=Path(os.environ['LOCALAPPDATA'])/'MicCamWatchQualification'
         if not self.prefix.is_relative_to(allowed.resolve()):
             raise RuntimeError('Qualification prefix must be under the dedicated local evidence root')
         manifest=json.loads((self.prefix/'qualification-manifest.json').read_text(encoding='utf-8-sig'))
-        if manifest.get('mode')!='read_only_development' or manifest.get('feature')!='flutter-desktop':
-            raise RuntimeError('Read-only development manifest missing')
+        if manifest.get('mode') not in ['read_only_development','controlled_development'] or manifest.get('feature')!='flutter-desktop':
+            raise RuntimeError('Development manifest missing')
+        if controlled and (manifest.get('mode')!='controlled_development' or not environment
+                           or sha(self.cli)!=manifest.get('cli_sha256')):
+            raise RuntimeError('Controlled mode requires explicit isolated environment and paired CLI identity')
         if sha(self.exe)!=manifest['engine_sha256'] or sha(self.ui)!=manifest['ui_sha256']:
             raise RuntimeError('Qualified build hashes do not match; no process launched')
         if sha(self.exe)=='5a0253ea90a77bf7478f6a9f1826290f6a6055723cb12bdf4975b89bdfb1b6fe':
             raise RuntimeError('Refusing the stable binary: its parser lacks the development mode')
         self.lines=[];self.theme=theme;self.started=time.perf_counter()
-        self.proc=subprocess.Popen([str(self.exe),'--read-only-development','--desktop-theme',theme],
+        mode='--controlled-development' if controlled else '--read-only-development'
+        self.proc=subprocess.Popen([str(self.exe),mode,'--desktop-theme',theme],
             stdout=subprocess.PIPE,stderr=subprocess.STDOUT,encoding='utf-8',errors='replace',
-            creationflags=subprocess.CREATE_NO_WINDOW,cwd=self.prefix)
+            creationflags=subprocess.CREATE_NO_WINDOW,cwd=self.prefix,env=environment)
         self.parent=psutil.Process(self.proc.pid);self.known={self.proc.pid}
         self.reader=threading.Thread(target=self._read,daemon=True);self.reader.start()
         self.hwnd=None
@@ -143,7 +148,8 @@ class Host:
             try:
                 if p.status()==psutil.STATUS_ZOMBIE:continue
                 path=Path(p.exe()).resolve()
-                if path not in [self.exe.resolve(),self.ui.resolve()]:
+                owner=self.controlled and path==self.cli.resolve() and p.cmdline()[1:]==['__microphone-guard']
+                if path not in [self.exe.resolve(),self.ui.resolve()] and not owner:
                     raise RuntimeError(f'Unexpected observer descendant: {path}; no name-based cleanup permitted')
                 self.known.add(p.pid);result.append(p)
             except psutil.NoSuchProcess:pass
@@ -183,7 +189,7 @@ class Host:
         ready=until(lambda:[r for r in self.lines if r['at']>=start and 'desktop event=ready ' in r['line']])[-1]
         payload={k:v for k,v in re.findall(r'(\w+)=([^ ]+)',ready['line'])}
         time.sleep(.2)
-        members=self.members();assert len(members)==2,'Duplicate graphical child'
+        members=self.members();assert sum(Path(p.exe()).resolve()==self.ui.resolve() for p in members)==1,'Duplicate graphical child'
         stages=[]
         for r in self.lines:
             if r['at']>=start and 'desktop event=' in r['line']:
@@ -197,7 +203,7 @@ class Host:
         assert U.PostMessageW(window[0],0x10,0,0)
         until(lambda:not self.view())
         hidden=(time.perf_counter()-start)*1000
-        until(lambda:len(self.members())==1)
+        until(lambda:not any(Path(p.exe()).resolve()==self.ui.resolve() for p in self.members()))
         return {'hidden_ms':hidden,'process_exit_ms':(time.perf_counter()-start)*1000}
 
     def stop(self):
