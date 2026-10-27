@@ -244,6 +244,8 @@ class _MicrophoneCommandPanelState extends State<MicrophoneCommandPanel> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
+        constraints: const BoxConstraints(maxWidth: 560),
+        scrollable: true,
         title: Text(labels[requested ? 'confirmMuteTitle' : 'confirmReleaseTitle']),
         content: Text(labels[requested ? 'confirmMuteBody' : 'confirmReleaseBody']),
         actions: [

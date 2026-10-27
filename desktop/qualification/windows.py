@@ -1,5 +1,7 @@
-"""Exercise only the manifest-pinned read-only development tray, never installed MCW.
-Requires Python3.12+, psutil and Pillow. No administrator rights or device actions.
+"""Exercise only a manifest-pinned development tray, never installed MCW.
+Default runner is read-only. Controlled Host requires explicit isolated environment
+and paired CLI identity; its UI can invoke native microphone actions after consent.
+Requires Python3.12+, psutil and Pillow. No administrator rights.
 """
 import argparse
 import ctypes as C
@@ -29,6 +31,8 @@ U.GetClassNameW.argtypes = [W.HWND, W.LPWSTR, C.c_int]
 U.IsWindowVisible.argtypes = [W.HWND]
 U.PostMessageW.argtypes = [W.HWND, W.UINT, W.WPARAM, W.LPARAM]
 U.GetClientRect.argtypes = [W.HWND, C.POINTER(W.RECT)]
+U.ShowWindow.argtypes = [W.HWND, C.c_int]
+U.UpdateWindow.argtypes = [W.HWND]
 U.GetDpiForWindow.argtypes, U.GetDpiForWindow.restype = [W.HWND], W.UINT
 U.GetDC.argtypes, U.GetDC.restype = [W.HWND], W.HDC
 U.ReleaseDC.argtypes = [W.HWND, W.HDC]
@@ -197,6 +201,15 @@ class Host:
         return {'window_pid':win[0][1],'visible_wall_ms':visible_ms,
                 'usable_parent_ms':int(payload['parent_elapsed_ms']),
                 'ready_sequence':int(payload['sequence']),'stages':stages}
+
+    def expose(self):
+        # An occluded GPU surface can PrintWindow as white despite a rendered frame.
+        # Restore only the owned child; never capture unrelated desktop pixels.
+        hwnd=self.view()[0][0]
+        U.ShowWindow(hwnd,9)
+        U.UpdateWindow(hwnd)
+        time.sleep(.2)
+        return hwnd
 
     def close(self):
         window=self.view()[0];start=time.perf_counter()
