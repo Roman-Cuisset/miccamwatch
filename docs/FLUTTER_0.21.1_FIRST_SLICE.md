@@ -2,6 +2,8 @@
 
 État du 27 octobre 2026. **Tranche de développement fonctionnelle, pas une version publiée ni une migration complète.** Branche locale `work/flutter-hybrid-0211`, base `73369abda09bdadce8c779a9559b3e2334a32ecb`. Sources runtime qualifiées : **743f5115dfa923404b3fbdd0427e86c1f28b0f27** ; le commit documentaire suivant conserve ce bilan. Aucun push, tag, installateur, mise à jour du MSI stable ou déploiement.
 
+Ce rapport conserve les preuves historiques de la tranche **en lecture seule/protocole1**, sur la révision indiquée. La branche courante est passée au [protocole2 et aux commandes micro de l'étape A](FLUTTER_COMMANDS_STAGE_A.md) ; consulter la ROADMAP pour leur qualification distincte. Les anciennes mesures ne constituent pas une preuve des nouvelles commandes.
+
 ## Ce qui fonctionne
 
 - Vrai tray Rust de développement et vrais collecteurs `PlatformMonitor`, pas le moteur inerte de l'étude comparative.

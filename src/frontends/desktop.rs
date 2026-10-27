@@ -533,14 +533,16 @@ pub fn complete_microphone(
                 status.mute_state, status.requested, status.service_active, status.endpoint_count
             );
             if confirmed {
+                let detail = if requested {
+                    "Native SDK mute readback confirmed; this is not capture-permission denial"
+                } else {
+                    "Native SDK unmute readback confirmed; active inputs released, not restored to original states"
+                };
                 supervisor.complete(
                     ticket,
                     CommandState::Succeeded,
                     None,
-                    Some(
-                        "Native SDK mute readback confirmed; this is not capture-permission denial"
-                            .into(),
-                    ),
+                    Some(detail.into()),
                 );
             } else {
                 supervisor.complete(ticket, CommandState::Uncertain, Some("readback_unconfirmed"),
