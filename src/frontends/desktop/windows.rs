@@ -1,5 +1,8 @@
 //! Disposable owned UI, bounded typed commands, and nonblocking presentation I/O.
-use super::{DesktopSnapshot, EventLines, UiEvent, commands::{CommandSession, CommandState, MicrophoneCapability}};
+use super::{
+    DesktopSnapshot, EventLines, UiEvent,
+    commands::{CommandSession, CommandState, MicrophoneCapability},
+};
 use anyhow::{Context, Result, ensure};
 use std::{
     fs::{File, OpenOptions},
@@ -24,7 +27,10 @@ use windows::{
             HANDLE, HANDLE_FLAG_INHERIT, HANDLE_FLAGS, HWND, LPARAM, SetHandleInformation,
             WAIT_OBJECT_0, WPARAM,
         },
-        Security::{SECURITY_ATTRIBUTES, Cryptography::{BCryptGenRandom, BCRYPT_USE_SYSTEM_PREFERRED_RNG}},
+        Security::{
+            Cryptography::{BCRYPT_USE_SYSTEM_PREFERRED_RNG, BCryptGenRandom},
+            SECURITY_ATTRIBUTES,
+        },
         Storage::FileSystem::{BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle},
         System::{
             JobObjects::{
@@ -150,7 +156,10 @@ impl Child {
     fn frame(&mut self, snapshot: &mut DesktopSnapshot) -> Result<Frame> {
         self.capability = std::mem::take(&mut snapshot.controls.microphone);
         snapshot.controls = self.commands.controls(self.capability.clone());
-        let frame = Frame { sequence: snapshot.sequence, bytes: snapshot.encode()? };
+        let frame = Frame {
+            sequence: snapshot.sequence,
+            bytes: snapshot.encode()?,
+        };
         self.last_frame_at = Instant::now();
         self.controls_changed = false;
         Ok(frame)
@@ -183,7 +192,9 @@ fn new_command_session() -> Result<CommandSession> {
     unsafe { BCryptGenRandom(None, &mut random, BCRYPT_USE_SYSTEM_PREFERRED_RNG) }.ok()?;
     let mut token = String::with_capacity(32);
     use std::fmt::Write as _;
-    for byte in random { write!(&mut token, "{byte:02x}")?; }
+    for byte in random {
+        write!(&mut token, "{byte:02x}")?;
+    }
     CommandSession::new(token)
 }
 
@@ -216,8 +227,13 @@ impl Supervisor {
         self.poll();
         if let Some(child) = self.child.as_mut() {
             let window = owned_window(child.pid);
-            if needs_reopen(child.closing.is_some(), child.signals.disconnected.load(Ordering::Acquire),
-                child.exited(), child.ready, window.is_some()) {
+            if needs_reopen(
+                child.closing.is_some(),
+                child.signals.disconnected.load(Ordering::Acquire),
+                child.exited(),
+                child.ready,
+                window.is_some(),
+            ) {
                 child.closing.get_or_insert_with(Instant::now);
                 self.reopen = Some((initial, theme));
             } else {
@@ -226,7 +242,10 @@ impl Supervisor {
                     child.mailbox.replace(frame);
                 }
                 if let Some(window) = window {
-                    unsafe { let _ = ShowWindowAsync(window, SW_RESTORE); let _ = SetForegroundWindow(window); }
+                    unsafe {
+                        let _ = ShowWindowAsync(window, SW_RESTORE);
+                        let _ = SetForegroundWindow(window);
+                    }
                 }
                 if child.exited() || child.signals.disconnected.load(Ordering::Acquire) {
                     child.closing.get_or_insert_with(Instant::now);
@@ -239,11 +258,20 @@ impl Supervisor {
         Ok(())
     }
     pub fn publish(&mut self, mut snapshot: DesktopSnapshot) -> Result<()> {
-        let Some(child) = self.child.as_mut() else { return Ok(()); };
-        if self.reopen.is_none() && (child.closing.is_some() || child.exited()
-            || child.signals.disconnected.load(Ordering::Acquire)) { return Ok(()); }
+        let Some(child) = self.child.as_mut() else {
+            return Ok(());
+        };
+        if self.reopen.is_none()
+            && (child.closing.is_some()
+                || child.exited()
+                || child.signals.disconnected.load(Ordering::Acquire))
+        {
+            return Ok(());
+        }
         if let Some((pending, _)) = self.reopen.as_mut() {
-            if snapshot.sequence > pending.sequence { *pending = snapshot; }
+            if snapshot.sequence > pending.sequence {
+                *pending = snapshot;
+            }
         } else if child.mailbox.accepts(snapshot.sequence) && child.closing.is_none() {
             let frame = child.frame(&mut snapshot)?;
             child.mailbox.replace(frame);
@@ -254,11 +282,23 @@ impl Supervisor {
         self.child.as_mut()?.queued_command.take()
     }
     pub fn take_controls_changed(&mut self) -> bool {
-        self.child.as_mut().is_some_and(|child| std::mem::take(&mut child.controls_changed))
+        self.child
+            .as_mut()
+            .is_some_and(|child| std::mem::take(&mut child.controls_changed))
     }
-    pub fn complete(&mut self, ticket: u64, outcome: CommandState, code: Option<&str>, detail: Option<String>) {
-        let Some(child) = self.child.as_mut() else { return; };
-        let Some((expected, id)) = child.pending_ticket else { return; };
+    pub fn complete(
+        &mut self,
+        ticket: u64,
+        outcome: CommandState,
+        code: Option<&str>,
+        detail: Option<String>,
+    ) {
+        let Some(child) = self.child.as_mut() else {
+            return;
+        };
+        let Some((expected, id)) = child.pending_ticket else {
+            return;
+        };
         if ticket == expected && child.commands.finish(id, outcome, code, detail) {
             child.pending_ticket = None;
             child.controls_changed = true;
@@ -298,20 +338,36 @@ impl Supervisor {
                         );
                     }
                     UiEvent::Command { request, .. } => {
-                        let ready = child.ready && child.closing.is_none() && !child.exited()
+                        let ready = child.ready
+                            && child.closing.is_none()
+                            && !child.exited()
                             && !child.signals.disconnected.load(Ordering::Acquire)
                             && child.last_frame_at.elapsed() <= Duration::from_secs(5);
-                        if let Some(request) = child.commands.admit(request,
-                            child.signals.written_sequence.load(Ordering::Acquire), ready, &child.capability) {
+                        if let Some(request) = child.commands.admit(
+                            request,
+                            child.signals.written_sequence.load(Ordering::Acquire),
+                            ready,
+                            &child.capability,
+                        ) {
                             if let Some(ticket) = self.next_ticket.checked_add(1) {
                                 self.next_ticket = ticket;
                                 child.pending_ticket = Some((ticket, request.id));
-                                child.queued_command = Some(AuthorizedCommand { ticket,
-                                    requested: request.requested, expected_requested: request.expected_requested,
-                                    expected_generation: request.expected_generation });
+                                child.queued_command = Some(AuthorizedCommand {
+                                    ticket,
+                                    requested: request.requested,
+                                    expected_requested: request.expected_requested,
+                                    expected_generation: request.expected_generation,
+                                });
                             } else {
-                                child.commands.finish(request.id, CommandState::Rejected, Some("unavailable"),
-                                    Some("Command ticket space exhausted; restart the frontend".into()));
+                                child.commands.finish(
+                                    request.id,
+                                    CommandState::Rejected,
+                                    Some("unavailable"),
+                                    Some(
+                                        "Command ticket space exhausted; restart the frontend"
+                                            .into(),
+                                    ),
+                                );
                             }
                         }
                         child.controls_changed = true;

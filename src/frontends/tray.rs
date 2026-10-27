@@ -75,11 +75,7 @@ mod windows_desktop;
 mod windows_observer;
 
 #[cfg(feature = "flutter-desktop")]
-pub fn run_read_only_development(
-    lang: Language,
-    initial_window: bool,
-    theme: &str,
-) -> Result<()> {
+pub fn run_read_only_development(lang: Language, initial_window: bool, theme: &str) -> Result<()> {
     windows_observer::run(lang, initial_window, theme, false)
 }
 
@@ -1630,18 +1626,23 @@ fn handle_worker_results(state: &mut TrayAppState) {
         state.microphone_generation = generation;
         state.pending_microphone = state.pending_microphone.saturating_sub(1);
         #[cfg(feature = "flutter-desktop")]
-        if let microphone_worker::Request::Set { ticket, requested, .. } = request
+        if let microphone_worker::Request::Set {
+            ticket, requested, ..
+        } = request
             && let Some(ui) = state.flutter.as_mut()
         {
-            crate::frontends::desktop::complete_microphone(ui, ticket, requested,
-                result.as_ref().map_err(String::as_str));
+            crate::frontends::desktop::complete_microphone(
+                ui,
+                ticket,
+                requested,
+                result.as_ref().map_err(String::as_str),
+            );
         }
         match result {
             Ok(actual) => {
-                state.operation_errors.completed(
-                    Resource::Microphone,
-                    request.is_manual(),
-                );
+                state
+                    .operation_errors
+                    .completed(Resource::Microphone, request.is_manual());
                 state.mute_state = actual.mute_state;
                 let message = crate::output::microphone_protection_summary(state.lang, &actual);
                 state.microphone_protection = Some(actual);
@@ -1653,10 +1654,17 @@ fn handle_worker_results(state: &mut TrayAppState) {
             Err(error) => {
                 #[cfg(feature = "flutter-desktop")]
                 if matches!(request, microphone_worker::Request::Set { .. }) {
-                    state.microphone_status_error = Some("Native command failed or partial; awaiting fresh microphone readback".into());
+                    state.microphone_status_error = Some(
+                        "Native command failed or partial; awaiting fresh microphone readback"
+                            .into(),
+                    );
                 }
-                operation_error(state, Resource::Microphone, request.is_manual(),
-                    format!("microphone {request:?} failed/partial: {error}"));
+                operation_error(
+                    state,
+                    Resource::Microphone,
+                    request.is_manual(),
+                    format!("microphone {request:?} failed/partial: {error}"),
+                );
             }
         }
     }
@@ -2081,26 +2089,48 @@ fn flutter_snapshot(state: &TrayAppState) -> crate::frontends::desktop::DesktopS
     use crate::frontends::desktop::DesktopSnapshot;
     let (snapshot, observed_at) = state.desktop_observation.as_ref().map_or_else(
         || (Err("Initial observation pending"), chrono::Utc::now()),
-        |observation| (
-            observation.snapshot.as_ref().map_err(String::as_str),
-            observation.observed_at,
-        ),
+        |observation| {
+            (
+                observation.snapshot.as_ref().map_err(String::as_str),
+                observation.observed_at,
+            )
+        },
     );
     let mut frame = DesktopSnapshot::from_snapshot(
-        state.desktop_sequence, observed_at, state.lang.code(), snapshot, "operational",
+        state.desktop_sequence,
+        observed_at,
+        state.lang.code(),
+        snapshot,
+        "operational",
     );
     let microphone = if state.pending_microphone != 0 {
         Err("Native microphone operation pending; effective state not yet confirmed")
     } else {
         state.microphone_status_error.as_deref().map_or_else(
-            || state.microphone_protection.as_ref().ok_or("Microphone protection unknown"), Err)
+            || {
+                state
+                    .microphone_protection
+                    .as_ref()
+                    .ok_or("Microphone protection unknown")
+            },
+            Err,
+        )
     };
     frame.controls.microphone = crate::frontends::desktop::microphone_capability(
-        microphone, state.microphone_generation, state.pending_microphone != 0, true);
+        microphone,
+        state.microphone_generation,
+        state.pending_microphone != 0,
+        true,
+    );
     frame.set_protection(
         microphone,
         state.camera_status_error.as_deref().map_or_else(
-            || state.camera_observation.as_ref().ok_or("Camera protection unknown"),
+            || {
+                state
+                    .camera_observation
+                    .as_ref()
+                    .ok_or("Camera protection unknown")
+            },
             Err,
         ),
     );
@@ -2109,7 +2139,9 @@ fn flutter_snapshot(state: &TrayAppState) -> crate::frontends::desktop::DesktopS
 
 #[cfg(feature = "flutter-desktop")]
 fn open_flutter_desktop(hwnd: HWND) -> bool {
-    let Some(state) = state(hwnd) else { return false };
+    let Some(state) = state(hwnd) else {
+        return false;
+    };
     let frame = flutter_snapshot(state);
     let mut supervisor = match state.flutter.take() {
         Some(supervisor) => supervisor,
@@ -2177,14 +2209,21 @@ fn refresh_desktop(hwnd: HWND) {
             (ui.take_command(), ui.take_controls_changed())
         });
         if let Some(command) = command {
-            let request = microphone_worker::Request::Set { ticket: command.ticket,
-                requested: command.requested, expected_requested: command.expected_requested,
-                expected_generation: command.expected_generation };
+            let request = microphone_worker::Request::Set {
+                ticket: command.ticket,
+                requested: command.requested,
+                expected_requested: command.expected_requested,
+                expected_generation: command.expected_generation,
+            };
             if s.pending_microphone < 6 && s.microphone_worker.requests.try_send(request).is_ok() {
                 s.pending_microphone += 1;
             } else if let Some(ui) = s.flutter.as_mut() {
-                ui.complete(command.ticket, crate::frontends::desktop::commands::CommandState::Rejected,
-                    Some("busy"), Some("Native microphone queue unavailable; command not applied".into()));
+                ui.complete(
+                    command.ticket,
+                    crate::frontends::desktop::commands::CommandState::Rejected,
+                    Some("busy"),
+                    Some("Native microphone queue unavailable; command not applied".into()),
+                );
             }
         }
         if changed || command.is_some() {

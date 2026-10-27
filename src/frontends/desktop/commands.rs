@@ -80,7 +80,9 @@ impl CommandSession {
     pub fn new(session: String) -> Result<Self> {
         ensure!(
             session.len() == 32
-                && session.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
+                && session
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
             "invalid desktop command session"
         );
         Ok(Self {
@@ -108,7 +110,9 @@ impl CommandSession {
             capability.can_release = false;
             capability.reason = Some("A microphone command is pending".into());
         }
-        capability.reason = capability.reason.map(|value| clipped(value, MAX_TEXT_BYTES));
+        capability.reason = capability
+            .reason
+            .map(|value| clipped(value, MAX_TEXT_BYTES));
         Controls {
             session: self.session.clone(),
             microphone: capability,
@@ -155,7 +159,11 @@ impl CommandSession {
             return self.reject(&request, "busy", "A microphone command is already pending");
         }
         let Some(current_requested) = capability.current_requested else {
-            return self.reject(&request, "unavailable", "Current microphone request is unknown");
+            return self.reject(
+                &request,
+                "unavailable",
+                "Current microphone request is unknown",
+            );
         };
         if capability.generation > MAX_WIRE_COUNTER
             || request.expected_generation != capability.generation
@@ -168,11 +176,23 @@ impl CommandSession {
             CommandAction::SetMicrophoneProtection => capability.can_release,
         };
         if !enabled {
-            return self.reject(&request, "read_only", "Requested microphone action is not enabled");
+            return self.reject(
+                &request,
+                "read_only",
+                "Requested microphone action is not enabled",
+            );
         }
-        let confirmation = if request.requested { CONFIRMATION } else { RELEASE_CONFIRMATION };
+        let confirmation = if request.requested {
+            CONFIRMATION
+        } else {
+            RELEASE_CONFIRMATION
+        };
         if request.confirmation != confirmation {
-            return self.reject(&request, "confirmation_required", "Explicit SDK microphone confirmation is required");
+            return self.reject(
+                &request,
+                "confirmation_required",
+                "Explicit SDK microphone confirmation is required",
+            );
         }
         self.pending = Some((request.id, request.requested));
         self.outcome = Some(CommandResult {
@@ -230,7 +250,9 @@ impl CommandSession {
     }
 }
 
-fn deserialize_request_id<'de, D: serde::Deserializer<'de>>(decoder: D) -> std::result::Result<u64, D::Error> {
+fn deserialize_request_id<'de, D: serde::Deserializer<'de>>(
+    decoder: D,
+) -> std::result::Result<u64, D::Error> {
     let value = u32::deserialize(decoder)?;
     if value == 0 {
         return Err(serde::de::Error::custom("command ID must be positive"));
@@ -238,18 +260,26 @@ fn deserialize_request_id<'de, D: serde::Deserializer<'de>>(decoder: D) -> std::
     Ok(u64::from(value))
 }
 
-fn deserialize_generation<'de, D: serde::Deserializer<'de>>(decoder: D) -> std::result::Result<u64, D::Error> {
+fn deserialize_generation<'de, D: serde::Deserializer<'de>>(
+    decoder: D,
+) -> std::result::Result<u64, D::Error> {
     let value = u64::deserialize(decoder)?;
     if value > MAX_WIRE_COUNTER {
-        return Err(serde::de::Error::custom("command counter exceeds signed 64-bit range"));
+        return Err(serde::de::Error::custom(
+            "command counter exceeds signed 64-bit range",
+        ));
     }
     Ok(value)
 }
 
-fn deserialize_sequence<'de, D: serde::Deserializer<'de>>(decoder: D) -> std::result::Result<u64, D::Error> {
+fn deserialize_sequence<'de, D: serde::Deserializer<'de>>(
+    decoder: D,
+) -> std::result::Result<u64, D::Error> {
     let value = deserialize_generation(decoder)?;
     if value == 0 {
-        return Err(serde::de::Error::custom("observed sequence must be positive"));
+        return Err(serde::de::Error::custom(
+            "observed sequence must be positive",
+        ));
     }
     Ok(value)
 }
@@ -301,23 +331,45 @@ mod tests {
             expected_requested: false,
             expected_generation: 7,
             observed_sequence: 9,
-            confirmation: if requested { CONFIRMATION } else { RELEASE_CONFIRMATION }.into(),
+            confirmation: if requested {
+                CONFIRMATION
+            } else {
+                RELEASE_CONFIRMATION
+            }
+            .into(),
         }
     }
 
     fn code(session: &CommandSession) -> String {
-        session.controls(capability()).command.unwrap().code.unwrap()
+        session
+            .controls(capability())
+            .command
+            .unwrap()
+            .code
+            .unwrap()
     }
 
     #[test]
     fn strict_decoding_cannot_smuggle_device_or_privilege_parameters() {
         let valid = serde_json::to_value(request(1, true)).unwrap();
-        for extra in ["device_id", "path", "shell", "user_id", "privilege", "endpoint"] {
+        for extra in [
+            "device_id",
+            "path",
+            "shell",
+            "user_id",
+            "privilege",
+            "endpoint",
+        ] {
             let mut payload = valid.clone();
             payload[extra] = json!("injected");
             assert!(serde_json::from_value::<UiCommand>(payload).is_err());
         }
-        for action in ["toggle", "set_camera_protection", "SetMicrophoneProtection", "shell"] {
+        for action in [
+            "toggle",
+            "set_camera_protection",
+            "SetMicrophoneProtection",
+            "shell",
+        ] {
             let mut payload = valid.clone();
             payload["action"] = json!(action);
             assert!(serde_json::from_value::<UiCommand>(payload).is_err());
@@ -344,8 +396,16 @@ mod tests {
 
     #[test]
     fn session_challenge_is_canonical_and_not_logged_in_errors() {
-        for invalid in ["", "0123456789abcdef", "0123456789ABCDEF0123456789ABCDEF", "g123456789abcdef0123456789abcdef"] {
-            let error = CommandSession::new(invalid.into()).err().unwrap().to_string();
+        for invalid in [
+            "",
+            "0123456789abcdef",
+            "0123456789ABCDEF0123456789ABCDEF",
+            "g123456789abcdef0123456789abcdef",
+        ] {
+            let error = CommandSession::new(invalid.into())
+                .err()
+                .unwrap()
+                .to_string();
             assert_eq!(error, "invalid desktop command session");
         }
         assert!(CommandSession::new(SESSION.into()).is_ok());
@@ -354,7 +414,11 @@ mod tests {
     #[test]
     fn read_only_and_target_specific_permissions_never_dispatch() {
         let mut state = session();
-        assert!(state.admit(request(1, true), 9, true, &MicrophoneCapability::default()).is_none());
+        assert!(
+            state
+                .admit(request(1, true), 9, true, &MicrophoneCapability::default())
+                .is_none()
+        );
         assert!(!state.pending());
         let mut cap = capability();
         cap.can_enable = false;
@@ -383,17 +447,29 @@ mod tests {
             let mut command = request(1, true);
             command.observed_sequence = observed;
             command.confirmation = confirmation.into();
-            assert!(state.admit(command, written, ready, &capability()).is_none());
+            assert!(
+                state
+                    .admit(command, written, ready, &capability())
+                    .is_none()
+            );
             assert!(!state.pending());
-            assert_eq!(state.controls(capability()).command.unwrap().state, CommandState::Rejected);
+            assert_eq!(
+                state.controls(capability()).command.unwrap().state,
+                CommandState::Rejected
+            );
         }
-        for (requested, wrong_confirmation) in [(true, RELEASE_CONFIRMATION), (false, CONFIRMATION)] {
+        for (requested, wrong_confirmation) in [(true, RELEASE_CONFIRMATION), (false, CONFIRMATION)]
+        {
             let mut state = session();
             let mut command = request(1, requested);
             command.confirmation = wrong_confirmation.into();
             assert!(state.admit(command, 9, true, &capability()).is_none());
             assert_eq!(code(&state), "confirmation_required");
-            assert!(state.admit(request(2, requested), 9, true, &capability()).is_some());
+            assert!(
+                state
+                    .admit(request(2, requested), 9, true, &capability())
+                    .is_some()
+            );
         }
     }
 
@@ -406,9 +482,17 @@ mod tests {
             command.expected_requested = expected;
             assert!(state.admit(command, 9, true, &capability()).is_none());
             assert_eq!(code(&state), "stale");
-            assert!(state.admit(request(1, true), 9, true, &capability()).is_none());
+            assert!(
+                state
+                    .admit(request(1, true), 9, true, &capability())
+                    .is_none()
+            );
             assert_eq!(code(&state), "replay");
-            assert!(state.admit(request(2, true), 10, true, &capability()).is_some());
+            assert!(
+                state
+                    .admit(request(2, true), 10, true, &capability())
+                    .is_some()
+            );
         }
     }
 
@@ -419,7 +503,11 @@ mod tests {
         alien.session = "fedcba9876543210fedcba9876543210".into();
         assert!(state.admit(alien, 9, true, &capability()).is_none());
         assert_eq!(code(&state), "unauthorized");
-        assert!(state.admit(request(1, true), 9, true, &capability()).is_some());
+        assert!(
+            state
+                .admit(request(1, true), 9, true, &capability())
+                .is_some()
+        );
         assert!(!state.finish(u32::MAX as u64, CommandState::Succeeded, None, None));
         assert!(state.pending());
         assert!(state.finish(1, CommandState::Failed, Some("worker_stale"), None));
@@ -428,14 +516,26 @@ mod tests {
     #[test]
     fn competing_malformed_and_replay_requests_never_displace_pending_ticket() {
         let mut state = session();
-        assert!(state.admit(request(1, true), 9, true, &capability()).is_some());
-        assert!(state.admit(request(2, false), 9, true, &capability()).is_none());
+        assert!(
+            state
+                .admit(request(1, true), 9, true, &capability())
+                .is_some()
+        );
+        assert!(
+            state
+                .admit(request(2, false), 9, true, &capability())
+                .is_none()
+        );
         assert_eq!(code(&state), "busy");
         let mut malformed = request(3, false);
         malformed.observed_sequence = u64::MAX;
         assert!(state.admit(malformed, 9, true, &capability()).is_none());
         assert_eq!(code(&state), "busy");
-        assert!(state.admit(request(1, true), 9, true, &capability()).is_none());
+        assert!(
+            state
+                .admit(request(1, true), 9, true, &capability())
+                .is_none()
+        );
         assert_eq!(code(&state), "replay");
         let controls = state.controls(capability());
         assert!(!controls.microphone.can_enable && !controls.microphone.can_release);
@@ -446,26 +546,39 @@ mod tests {
         assert!(state.finish(1, CommandState::Succeeded, None, None));
         assert!(!state.pending());
         assert!(!state.finish(1, CommandState::Failed, None, None));
-        assert!(state.admit(request(2, false), 9, true, &capability()).is_none());
-        assert!(state.admit(request(4, false), 9, true, &capability()).is_some());
+        assert!(
+            state
+                .admit(request(2, false), 9, true, &capability())
+                .is_none()
+        );
+        assert!(
+            state
+                .admit(request(4, false), 9, true, &capability())
+                .is_some()
+        );
     }
 
     #[test]
     fn strict_numeric_bounds_cannot_wrap_or_poison_valid_ids() {
         let mut state = session();
         for id in [0, u32::MAX as u64 + 1, u64::MAX] {
-            assert!(state.admit(request(id, true), 9, true, &capability()).is_none());
+            assert!(
+                state
+                    .admit(request(id, true), 9, true, &capability())
+                    .is_none()
+            );
             assert!(!state.pending());
             assert!(state.controls(capability()).command.is_none());
         }
-        assert!(state.admit(request(1, true), 9, true, &capability()).is_some());
+        assert!(
+            state
+                .admit(request(1, true), 9, true, &capability())
+                .is_some()
+        );
         assert!(state.finish(1, CommandState::Rejected, Some("queue_full"), None));
         let retained = state.controls(capability()).command;
-        for (generation, observed) in [
-            (MAX_WIRE_COUNTER + 1, 9),
-            (7, MAX_WIRE_COUNTER + 1),
-            (7, 0),
-        ] {
+        for (generation, observed) in [(MAX_WIRE_COUNTER + 1, 9), (7, MAX_WIRE_COUNTER + 1), (7, 0)]
+        {
             let mut command = request(u32::MAX as u64, true);
             command.expected_generation = generation;
             command.observed_sequence = observed;
@@ -480,7 +593,11 @@ mod tests {
         command.observed_sequence = MAX_WIRE_COUNTER;
         assert!(state.admit(command, MAX_WIRE_COUNTER, true, &cap).is_some());
         assert!(state.finish(u32::MAX as u64, CommandState::Succeeded, None, None));
-        assert!(state.admit(request(1, false), 9, true, &capability()).is_none());
+        assert!(
+            state
+                .admit(request(1, false), 9, true, &capability())
+                .is_none()
+        );
         assert_eq!(code(&state), "replay");
     }
 
@@ -492,20 +609,32 @@ mod tests {
         let mut release = request(1, false);
         release.expected_requested = true;
         assert!(state.admit(release, 9, true, &cap).is_some());
-        assert!(state.finish(1, CommandState::Uncertain, Some("partial_readback"), Some("One input could not be read back".into())));
+        assert!(state.finish(
+            1,
+            CommandState::Uncertain,
+            Some("partial_readback"),
+            Some("One input could not be read back".into())
+        ));
         let controls = state.controls(cap.clone());
         assert_eq!(controls.microphone.current_requested, Some(true));
         assert_eq!(controls.command.unwrap().state, CommandState::Uncertain);
         // Coalescing/publication does not consume the result; an old completion
         // cannot turn uncertainty into success after the ticket was retired.
         assert!(!state.finish(1, CommandState::Succeeded, None, None));
-        assert_eq!(state.controls(cap).command.unwrap().state, CommandState::Uncertain);
+        assert_eq!(
+            state.controls(cap).command.unwrap().state,
+            CommandState::Uncertain
+        );
     }
 
     #[test]
     fn outcome_and_disabled_reason_are_bounded_at_unicode_boundaries() {
         let mut state = session();
-        assert!(state.admit(request(1, true), 9, true, &capability()).is_some());
+        assert!(
+            state
+                .admit(request(1, true), 9, true, &capability())
+                .is_some()
+        );
         let text = format!("{}🦀{}", "x".repeat(1023), "tail".repeat(1000));
         let code = format!("{}é", "c".repeat(63));
         assert!(state.finish(1, CommandState::Failed, Some(&code), Some(text.clone())));

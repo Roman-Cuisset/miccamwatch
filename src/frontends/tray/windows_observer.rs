@@ -94,12 +94,16 @@ impl Observer {
         {
             return reading.microphone.as_ref().map_err(String::as_str);
         }
-        self.microphone_result.as_ref().map_or(Err("Microphone observation pending"),
-            |result| result.as_ref().map_err(String::as_str))
+        self.microphone_result
+            .as_ref()
+            .map_or(Err("Microphone observation pending"), |result| {
+                result.as_ref().map_err(String::as_str)
+            })
     }
     fn can_exit(&self) -> bool {
-        !self.controlled || (self.pending_microphone == 0
-            && (!self.control_used || self.microphone().is_ok_and(|status| !status.requested)))
+        !self.controlled
+            || (self.pending_microphone == 0
+                && (!self.control_used || self.microphone().is_ok_and(|status| !status.requested)))
     }
     fn frame(&mut self) -> DesktopSnapshot {
         if self.current.is_some() {
@@ -107,15 +111,37 @@ impl Observer {
         }
         let (observed_at, snapshot) = self.current.as_ref().map_or(
             (chrono::Utc::now(), Err("Initial observation pending")),
-            |reading| (reading.observed_at, reading.snapshot.as_ref().map_err(String::as_str)));
-        let mode = if self.controlled { "controlled_development" } else { "read_only_development" };
-        let mut frame = DesktopSnapshot::from_snapshot(self.presentation_sequence,
-            observed_at, self.lang.code(), snapshot, mode);
+            |reading| {
+                (
+                    reading.observed_at,
+                    reading.snapshot.as_ref().map_err(String::as_str),
+                )
+            },
+        );
+        let mode = if self.controlled {
+            "controlled_development"
+        } else {
+            "read_only_development"
+        };
+        let mut frame = DesktopSnapshot::from_snapshot(
+            self.presentation_sequence,
+            observed_at,
+            self.lang.code(),
+            snapshot,
+            mode,
+        );
         if let Some(reading) = &self.current {
-            frame.set_protection(self.microphone(), reading.camera.as_ref().map_err(String::as_str));
+            frame.set_protection(
+                self.microphone(),
+                reading.camera.as_ref().map_err(String::as_str),
+            );
         }
         frame.controls.microphone = crate::frontends::desktop::microphone_capability(
-            self.microphone(), self.microphone_generation, self.pending_microphone != 0, self.controlled);
+            self.microphone(),
+            self.microphone_generation,
+            self.pending_microphone != 0,
+            self.controlled,
+        );
         frame
     }
     fn open(&mut self) -> Result<()> {
@@ -135,35 +161,59 @@ impl Observer {
         }
         let mut changed = false;
         if let Some(command) = self.ui.as_mut().and_then(Supervisor::take_command) {
-            let request = super::microphone_worker::Request::Set { ticket: command.ticket,
-                requested: command.requested, expected_requested: command.expected_requested,
-                expected_generation: command.expected_generation };
-            if self.pending_microphone == 0 && self.microphone_worker.as_ref()
-                .is_some_and(|worker| worker.requests.try_send(request).is_ok())
+            let request = super::microphone_worker::Request::Set {
+                ticket: command.ticket,
+                requested: command.requested,
+                expected_requested: command.expected_requested,
+                expected_generation: command.expected_generation,
+            };
+            if self.pending_microphone == 0
+                && self
+                    .microphone_worker
+                    .as_ref()
+                    .is_some_and(|worker| worker.requests.try_send(request).is_ok())
             {
                 self.pending_microphone += 1;
                 self.control_used = true;
             } else if let Some(ui) = self.ui.as_mut() {
-                ui.complete(command.ticket, crate::frontends::desktop::commands::CommandState::Rejected,
-                    Some("busy"), Some("Native worker unavailable or busy; request was not applied".into()));
+                ui.complete(
+                    command.ticket,
+                    crate::frontends::desktop::commands::CommandState::Rejected,
+                    Some("busy"),
+                    Some("Native worker unavailable or busy; request was not applied".into()),
+                );
             }
             changed = true;
         }
         loop {
-            let result = self.microphone_worker.as_ref().and_then(|worker| worker.results.try_recv().ok());
-            let Some((request, generation, result)) = result else { break; };
+            let result = self
+                .microphone_worker
+                .as_ref()
+                .and_then(|worker| worker.results.try_recv().ok());
+            let Some((request, generation, result)) = result else {
+                break;
+            };
             self.microphone_generation = generation;
             self.pending_microphone = self.pending_microphone.saturating_sub(1);
-            if let super::microphone_worker::Request::Set { ticket, requested, .. } = request
+            if let super::microphone_worker::Request::Set {
+                ticket, requested, ..
+            } = request
                 && let Some(ui) = self.ui.as_mut()
             {
-                crate::frontends::desktop::complete_microphone(ui, ticket, requested,
-                    result.as_ref().map_err(String::as_str));
+                crate::frontends::desktop::complete_microphone(
+                    ui,
+                    ticket,
+                    requested,
+                    result.as_ref().map_err(String::as_str),
+                );
             }
             self.microphone_result = Some(result);
             changed = true;
         }
-        changed |= self.ui.as_mut().is_some_and(Supervisor::take_controls_changed);
+        changed |= self
+            .ui
+            .as_mut()
+            .is_some_and(Supervisor::take_controls_changed);
         let next = self.pending.lock().take();
         if let Some(reading) = next {
             changed = true;
@@ -182,7 +232,11 @@ impl Observer {
             });
             self.summary = format!(
                 "MicCamWatch — {} DEV; {active} active; {}",
-                if self.controlled { "CONTROLLED" } else { "READ ONLY" },
+                if self.controlled {
+                    "CONTROLLED"
+                } else {
+                    "READ ONLY"
+                },
                 if partial {
                     "observation incomplete"
                 } else {
@@ -200,7 +254,7 @@ impl Observer {
                 .as_mut()
                 .expect("running supervisor")
                 .publish(frame)?;
-            }
+        }
         Ok(())
     }
     fn menu(&mut self) -> Result<()> {
@@ -210,7 +264,14 @@ impl Observer {
                 menu,
                 MF_STRING,
                 OPEN,
-                PCWSTR(format_wide(if self.controlled { "Open MicCamWatch — controlled test" } else { "Open MicCamWatch — read only" }).as_ptr()),
+                PCWSTR(
+                    format_wide(if self.controlled {
+                        "Open MicCamWatch — controlled test"
+                    } else {
+                        "Open MicCamWatch — read only"
+                    })
+                    .as_ptr(),
+                ),
             )?;
             AppendMenuW(
                 menu,
@@ -221,7 +282,11 @@ impl Observer {
             AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null())?;
             AppendMenuW(
                 menu,
-                if self.can_exit() { MF_STRING } else { MF_STRING | MF_GRAYED },
+                if self.can_exit() {
+                    MF_STRING
+                } else {
+                    MF_STRING | MF_GRAYED
+                },
                 EXIT,
                 PCWSTR(format_wide("Exit development tray").as_ptr()),
             )?;
@@ -285,11 +350,15 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, message: u32, w: WPARAM, l: LPARA
                 observer.open()
             }
             EXIT if observer.can_exit() => unsafe { DestroyWindow(hwnd) }.map_err(Into::into),
-            EXIT => Err(anyhow::anyhow!("Release the controlled microphone request before exiting the test tray")),
+            EXIT => Err(anyhow::anyhow!(
+                "Release the controlled microphone request before exiting the test tray"
+            )),
             _ => Ok(()), // No mutation command dispatcher exists in this mode.
         },
         WM_CLOSE if observer.can_exit() => unsafe { DestroyWindow(hwnd) }.map_err(Into::into),
-        WM_CLOSE => Err(anyhow::anyhow!("Controlled microphone request pending/active/unknown; release and confirm before exit")),
+        WM_CLOSE => Err(anyhow::anyhow!(
+            "Controlled microphone request pending/active/unknown; release and confirm before exit"
+        )),
         WM_DESTROY => {
             observer.alive.store(false, Ordering::Release);
             observer.window.store(0, Ordering::Release);
@@ -309,8 +378,10 @@ fn start_collector(observer: &Observer) -> thread::JoinHandle<()> {
     let pending = Arc::clone(&observer.pending);
     let alive = Arc::clone(&observer.alive);
     let window = Arc::clone(&observer.window);
-    let microphone_generation = observer.microphone_worker.as_ref()
-        .map_or_else(|| Arc::new(AtomicU64::new(0)), |worker| Arc::clone(&worker.sequence));
+    let microphone_generation = observer.microphone_worker.as_ref().map_or_else(
+        || Arc::new(AtomicU64::new(0)),
+        |worker| Arc::clone(&worker.sequence),
+    );
     thread::spawn(move || {
         let monitor = PlatformMonitor::new(Policy::default()).map_err(|e| format!("{e:#}"));
         let scope = Filter {
@@ -404,9 +475,16 @@ fn reuse_read_only(initial_window: bool) -> Result<bool> {
     Ok(true)
 }
 
-pub(super) fn run(lang: Language, initial_window: bool, theme: &str, controlled: bool) -> Result<()> {
+pub(super) fn run(
+    lang: Language,
+    initial_window: bool,
+    theme: &str,
+    controlled: bool,
+) -> Result<()> {
     ensure!(matches!(theme, "light" | "dark"), "invalid desktop theme");
-    if controlled { verify_controlled_scope()?; }
+    if controlled {
+        verify_controlled_scope()?;
+    }
     enable_dpi_awareness();
     let mutex = format_wide("Local\\MicCamWatch.Tray.ReadOnlyDevelopment");
     let _lease = MutexGuard(unsafe { CreateMutexW(None, true, PCWSTR(mutex.as_ptr()))? });
@@ -486,7 +564,9 @@ pub(super) fn run(lang: Language, initial_window: bool, theme: &str, controlled:
     }
     if controlled {
         observer.microphone_worker = Some(super::microphone_worker::Worker::start_controlled(
-            Policy::default(), Arc::clone(&observer.window)));
+            Policy::default(),
+            Arc::clone(&observer.window),
+        ));
     }
     let worker = start_collector(&observer);
     let timer = unsafe { SetTimer(Some(hwnd), TIMER, 250, None) };
@@ -506,7 +586,11 @@ pub(super) fn run(lang: Language, initial_window: bool, theme: &str, controlled:
         eprintln!(
             "{{\"event\":\"observer_started\",\"pid\":{},\"mode\":\"{}\"}}",
             unsafe { GetCurrentProcessId() },
-            if controlled { "controlled_development" } else { "read_only_development" }
+            if controlled {
+                "controlled_development"
+            } else {
+                "read_only_development"
+            }
         );
         let mut message = MSG::default();
         loop {
@@ -543,17 +627,30 @@ pub(super) fn run(lang: Language, initial_window: bool, theme: &str, controlled:
 }
 
 fn verify_controlled_scope() -> Result<()> {
-    use windows::Win32::{System::Com::CoTaskMemFree,
-        UI::Shell::{SHGetKnownFolderPath, FOLDERID_LocalAppData, KF_FLAG_DEFAULT}};
+    use windows::Win32::{
+        System::Com::CoTaskMemFree,
+        UI::Shell::{FOLDERID_LocalAppData, KF_FLAG_DEFAULT, SHGetKnownFolderPath},
+    };
     let folder = unsafe { SHGetKnownFolderPath(&FOLDERID_LocalAppData, KF_FLAG_DEFAULT, None) }?;
     let known = unsafe { folder.to_string() };
-    unsafe { CoTaskMemFree(Some(folder.0.cast())); }
-    let allowed = std::path::PathBuf::from(known?).join("MicCamWatchQualification").canonicalize()?;
-    for path in [crate::settings::config_dir()?, crate::settings::data_dir()?] {
-        let path = path.canonicalize().context("controlled development data/config directories must exist")?;
-        ensure!(path.starts_with(&allowed), "controlled development must use isolated APPDATA and LOCALAPPDATA under MicCamWatchQualification");
+    unsafe {
+        CoTaskMemFree(Some(folder.0.cast()));
     }
-    ensure!(!crate::windows_control::resource_conflict("microphone")?,
-        "another native microphone owner is active; controlled development refused without mutation");
+    let allowed = std::path::PathBuf::from(known?)
+        .join("MicCamWatchQualification")
+        .canonicalize()?;
+    for path in [crate::settings::config_dir()?, crate::settings::data_dir()?] {
+        let path = path
+            .canonicalize()
+            .context("controlled development data/config directories must exist")?;
+        ensure!(
+            path.starts_with(&allowed),
+            "controlled development must use isolated APPDATA and LOCALAPPDATA under MicCamWatchQualification"
+        );
+    }
+    ensure!(
+        !crate::windows_control::resource_conflict("microphone")?,
+        "another native microphone owner is active; controlled development refused without mutation"
+    );
     Ok(())
 }

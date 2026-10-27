@@ -448,27 +448,36 @@ pub fn microphone_capability(
     busy: bool,
     enabled: bool,
 ) -> commands::MicrophoneCapability {
-    let mut capability = commands::MicrophoneCapability { generation, ..Default::default() };
+    let mut capability = commands::MicrophoneCapability {
+        generation,
+        ..Default::default()
+    };
     let status = match status {
         Ok(status) => {
             capability.current_requested = Some(status.requested);
             status
         }
         Err(_) => {
-            capability.reason = Some("Microphone control state is unavailable; no command can be confirmed".into());
+            capability.reason =
+                Some("Microphone control state is unavailable; no command can be confirmed".into());
             return capability;
         }
     };
     if !enabled {
-        capability.reason = Some("Read-only development connection; microphone commands are disabled".into());
+        capability.reason =
+            Some("Read-only development connection; microphone commands are disabled".into());
     } else if busy {
         capability.reason = Some("A native microphone operation is pending".into());
     } else if !status.service_active
         && crate::windows_control::resource_conflict("microphone").unwrap_or(true)
     {
-        capability.reason = Some("Another or unavailable native owner holds the microphone; no takeover is permitted".into());
+        capability.reason = Some(
+            "Another or unavailable native owner holds the microphone; no takeover is permitted"
+                .into(),
+        );
     } else {
-        let observed = status.endpoint_count > 0 && status.mute_state != crate::model::MicrophoneMuteState::Unavailable;
+        let observed = status.endpoint_count > 0
+            && status.mute_state != crate::model::MicrophoneMuteState::Unavailable;
         capability.can_enable = observed;
         capability.can_release = status.requested || observed;
         if !observed {
@@ -479,11 +488,19 @@ pub fn microphone_capability(
 }
 
 #[cfg(windows)]
-fn microphone_readback_confirmed(requested: bool, status: &crate::platform::MicrophoneProtectionStatus) -> bool {
-    let expected = if requested { crate::model::MicrophoneMuteState::Muted }
-        else { crate::model::MicrophoneMuteState::Unmuted };
-    status.requested == requested && status.endpoint_count > 0
-        && status.mute_state == expected && (!requested || status.service_active)
+fn microphone_readback_confirmed(
+    requested: bool,
+    status: &crate::platform::MicrophoneProtectionStatus,
+) -> bool {
+    let expected = if requested {
+        crate::model::MicrophoneMuteState::Muted
+    } else {
+        crate::model::MicrophoneMuteState::Unmuted
+    };
+    status.requested == requested
+        && status.endpoint_count > 0
+        && status.mute_state == expected
+        && (!requested || status.service_active)
 }
 
 #[cfg(windows)]
@@ -496,18 +513,35 @@ pub fn complete_microphone(
     use commands::CommandState;
     match result {
         Err(error) => {
-            supervisor.complete(ticket, CommandState::Failed, Some("native_error"),
-                Some(format!("Native operation failed or may be partial; inspect fresh state: {error}")));
-            eprintln!("{{\"event\":\"microphone_result\",\"ticket\":{ticket},\"requested\":{requested},\"outcome\":\"failed\",\"actual\":\"unknown\"}}");
+            supervisor.complete(
+                ticket,
+                CommandState::Failed,
+                Some("native_error"),
+                Some(format!(
+                    "Native operation failed or may be partial; inspect fresh state: {error}"
+                )),
+            );
+            eprintln!(
+                "{{\"event\":\"microphone_result\",\"ticket\":{ticket},\"requested\":{requested},\"outcome\":\"failed\",\"actual\":\"unknown\"}}"
+            );
         }
         Ok(status) => {
             let confirmed = microphone_readback_confirmed(requested, status);
             let outcome = if confirmed { "succeeded" } else { "uncertain" };
-            eprintln!("{{\"event\":\"microphone_result\",\"ticket\":{ticket},\"requested\":{requested},\"outcome\":\"{outcome}\",\"actual\":\"{:?}\",\"actual_requested\":{},\"guard_active\":{},\"endpoints\":{}}}",
-                status.mute_state, status.requested, status.service_active, status.endpoint_count);
+            eprintln!(
+                "{{\"event\":\"microphone_result\",\"ticket\":{ticket},\"requested\":{requested},\"outcome\":\"{outcome}\",\"actual\":\"{:?}\",\"actual_requested\":{},\"guard_active\":{},\"endpoints\":{}}}",
+                status.mute_state, status.requested, status.service_active, status.endpoint_count
+            );
             if confirmed {
-                supervisor.complete(ticket, CommandState::Succeeded, None,
-                    Some("Native SDK mute readback confirmed; this is not capture-permission denial".into()));
+                supervisor.complete(
+                    ticket,
+                    CommandState::Succeeded,
+                    None,
+                    Some(
+                        "Native SDK mute readback confirmed; this is not capture-permission denial"
+                            .into(),
+                    ),
+                );
             } else {
                 supervisor.complete(ticket, CommandState::Uncertain, Some("readback_unconfirmed"),
                     Some("The native request completed, but effective endpoint mute/guard could not be confirmed; do not assume protection or restoration".into()));
@@ -524,8 +558,13 @@ mod tests {
     #[test]
     fn sdk_mute_needs_readback_endpoints_and_a_live_requested_guard() {
         let mut status = crate::platform::MicrophoneProtectionStatus {
-            requested: true, service_active: true, mute_state: crate::model::MicrophoneMuteState::Muted,
-            endpoint_count: 2, hardware_mute_count: 1, corrections: 0, detail: None,
+            requested: true,
+            service_active: true,
+            mute_state: crate::model::MicrophoneMuteState::Muted,
+            endpoint_count: 2,
+            hardware_mute_count: 1,
+            corrections: 0,
+            detail: None,
         };
         assert!(microphone_readback_confirmed(true, &status));
         status.service_active = false;
@@ -541,8 +580,13 @@ mod tests {
     #[test]
     fn release_needs_native_unmute_not_merely_cleared_intent_or_owner_exit() {
         let mut status = crate::platform::MicrophoneProtectionStatus {
-            requested: false, service_active: false, mute_state: crate::model::MicrophoneMuteState::Muted,
-            endpoint_count: 1, hardware_mute_count: 0, corrections: 0, detail: None,
+            requested: false,
+            service_active: false,
+            mute_state: crate::model::MicrophoneMuteState::Muted,
+            endpoint_count: 1,
+            hardware_mute_count: 0,
+            corrections: 0,
+            detail: None,
         };
         assert!(!microphone_readback_confirmed(false, &status));
         status.mute_state = crate::model::MicrophoneMuteState::Unmuted;
