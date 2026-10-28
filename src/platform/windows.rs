@@ -930,6 +930,12 @@ impl PlatformMonitor {
     fn sensor_camera_accesses(&self) -> Result<(Vec<Access>, std::collections::HashSet<String>)> {
         let cameras = camera_devices()?;
         let reports = camera_activity::collect(&cameras)?;
+        // No sensor records can consume process identities in this snapshot.
+        // Keep collection and signature validation unchanged; avoid an unused
+        // system-wide process inventory, not a cached observation/verdict.
+        if reports.values().all(Vec::is_empty) {
+            return Ok((Vec::new(), std::collections::HashSet::new()));
+        }
         let processes = ProcessTable::load();
         let mut accesses = Vec::new();
         let mut reported_instances = std::collections::HashSet::new();
