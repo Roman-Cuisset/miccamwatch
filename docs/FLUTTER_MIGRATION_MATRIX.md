@@ -1,8 +1,8 @@
-# Native feature migration inventory — stage A baseline
+# Native feature migration inventory — stages A and B1
 
 Source baseline: `b5cf391c1905cbc391c47220f1347c55ba8e24cc`, 27 October 2026. Inspection only; runtime qualification is recorded separately. This inventory preserves every native/public CLI capability and its actual limitations.
 
-The priority letters in the inventory mean **A = current microphone slice**, **B = subsequent presentation/preferences**, **C = subsequent sensitive operations**. They are not a replacement for the owner’s delivery stages: architecture/first command A, complete functional parity B, cross-platform integration C, visual finalization D. Every inventory priority C operation still requires its later command-specific gate within functional parity; nothing here enables it now. Current command protocol: [FLUTTER_COMMANDS_STAGE_A.md](FLUTTER_COMMANDS_STAGE_A.md).
+The inventory priorities mean **A = microphone**, **B = presentation/preferences**, **C = sensitive operations**; the owner's cross-platform and visual-finalization gates remain separate. Camera/lock/maintenance actions still require their command-specific gates. Current protocol3 and B1 evidence: [FLUTTER_PREFERENCES_B1.md](FLUTTER_PREFERENCES_B1.md). [Protocol2 stage-A history](FLUTTER_COMMANDS_STAGE_A.md) is retained, not a compatibility contract for the current runtime.
 
 Stage A implementation update: Windows now has explicit desired-state microphone commands through the existing Rust worker, private protocol2 admission and native readback. Real mute/release, UI process exit, retained native guard and reopening without duplicate UI have been exercised. Other controls/platforms remain gated; this inventory's source references and “inspection only” evidence describe the pinned baseline, not the later runtime qualification. Sidebar/Windows branding now uses official assets; macOS/Linux Flutter packaging identity remains unqualified. See the current stage A results in the ROADMAP.
 
@@ -10,14 +10,14 @@ Stage A implementation update: Windows now has explicit desired-state microphone
 
 | Priority | Remaining function | Scope and gate |
 |---|---|---|
-| P0, this tranche | Notification/sound/history preferences and assessment profile | Reuse native settings/merge semantics. Strict typed CAS, confirmed storage, separately observed applied profile. Windows capture-alert delivery gaps must remain visible. |
+| Delivered B1, Windows development | Notification/sound/history preferences and assessment profile | Four real Flutter commands: native locked CAS/merge, readback, separate applied policy; UI closure/timeout/permission failure exercised. Windows capture alerts remain explicitly unsupported. |
 | P1, parallel | Collector CPU | Compare identical workloads, retain signatures and cadence; no stale verdict cache or invented Active capture. |
 | P1, next control tranche | Camera and lock/protection options | Platform-specific authority, UAC/helper/profile ownership and restoration; no device-changing test without specific permission. Windows microphone release remains all-supported-input unmute, not Unix owned-original restore. |
 | P2 | Notification pause, autostart, complete diagnostics and history presentation | Reuse bounded native operations; host autostart writes need safe qualification. Native history browser/export APIs do not yet exist. |
 | P2 | Language/theme/version/update presentation | Local theme and version display already exist. Do not invent persisted language/theme settings or a generic installer-independent updater. |
 | Cross-platform preparation | Linux x64/ARM64 and macOS Intel/Apple Silicon Flutter integration | Common app/protocol, authenticated owned process transport, native fallback retained until actual qualification; architecture/build preparation is not runtime or ARM hardware proof. |
 
-B1 implementations are in progress and unqualified until the next recorded smoke/build results. Baseline line references below remain pinned, not current line numbers.
+B1 runtime `a0411ea` is compiled and exercised on Windows with isolated preferences; [results and limits](FLUTTER_PREFERENCES_B1.md). This is not full parity, installed-MSI qualification or a Unix Flutter port. Baseline line references below remain pinned, not current line numbers.
 
 ## Summary
 
@@ -219,3 +219,17 @@ Evidence: **SET:20-74,88-147**; **WT:2177-2227**; **U:2118-2140,2239-2260**. Rep
 | Version identity | Flutter manifest/About advertise **0.21.1 development**, while engine version is separately reported (`desktop/flutter/pubspec.yaml:4`; `lib/main.dart:314-327`). Keep development shell and actual engine version distinct, rather than implying an installed 0.21.1 release. |
 
 **Unsupported claims to avoid:** universal physical microphone/camera cutoff; per-app privacy permission editing; camera TCC grant via administrator inspection; macOS automatic lock protection; Linux hotplug camera blocking; existing full history/export UI; existing tray/native kill/update/uninstall actions; or treating saved Windows tray sound/notification toggles as proof those capture alerts are implemented.
+
+## B1 parity and next gates — 28 October 2026
+
+| Function | Current Flutter state | Next gate |
+|---|---|---|
+| Native snapshot/collector diagnostics, About, local light/dark theme | Existing shared presentation retained | Full doctor/device detail, keyboard/screen-reader audit and seven-language desktop visual checks |
+| Windows explicit SDK microphone request/release | Stage A retained unchanged | Manual release is all-supported-input unmute, not per-input original restoration; no new hardware test in B1 |
+| Notifications, sound, future-history preference | B1 native persistence/readback works | Saved flags are not proof of alert delivery; history effect remains separate from preference; no deletion/viewer API invented |
+| Assessment profile | B1 saved selection and collector-applied policy work | Managed native configuration disables only profile editing; no permission, allowlist or blocking side effect |
+| Pause/resume notifications, autostart | Native only | Typed existing bounds/ownership; isolated registration tests before any host startup write |
+| Camera controls, requested guard resume, automatic lock policies | Native only | Explicit platform authorization, effective-state/arrival health and owned restoration; no blind toggles or new guarantees |
+| History path/clear, application details, complete diagnostics | Native CLI/interfaces retained | Read APIs before destructive clear; browser/export is new API work, not missing migration wiring |
+| Language/theme persistence, update/uninstall | Existing limited/native behavior retained | No imaginary settings fields or generic installation-independent updater |
+| Linux x64/ARM64, macOS Intel/Apple Silicon | Native fallback retained; no B1 Flutter runtime qualification | Owned Unix transport/lifecycle, platform restore semantics, full payload/identity/signing gates; ARM physical validation remains absent |
