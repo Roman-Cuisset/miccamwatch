@@ -1,5 +1,5 @@
-//! Isolated development tray using real collectors; controls are opt-in and
-//! require a dedicated data scope. No automatic policy, history or settings writes.
+//! Isolated development tray using real collectors. Device controls and
+//! preference writes use separate opt-in modes and dedicated data paths.
 use super::{
     IconGlyph, MutexGuard, WM_OPEN_DESKTOP, create_status_icon, enable_dpi_awareness, format_wide,
     notify_icon_data,
@@ -58,12 +58,39 @@ const OPEN: usize = 1;
 const EXIT: usize = 2;
 const TIMER: usize = 61;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum DevelopmentMode {
+    ReadOnly,
+    Controlled,
+    Settings,
+}
+impl DevelopmentMode {
+    fn preferences_enabled(self) -> bool {
+        self != Self::ReadOnly
+    }
+    fn wire_name(self) -> &'static str {
+        match self {
+            Self::ReadOnly => "read_only_development",
+            Self::Controlled => "controlled_development",
+            Self::Settings => "settings_development",
+        }
+    }
+    fn label(self) -> &'static str {
+        match self {
+            Self::ReadOnly => "READ ONLY",
+            Self::Controlled => "CONTROLLED",
+            Self::Settings => "PREFERENCES ONLY",
+        }
+    }
+}
+
 struct Reading {
     snapshot: Result<Snapshot, String>,
     microphone: Result<MicrophoneProtectionStatus, String>,
     camera: Result<CameraControlObservation, String>,
     observed_at: chrono::DateTime<chrono::Utc>,
     microphone_generation: u64,
+    applied_profile: Option<crate::settings::PrivacyProfile>,
 }
 struct Observer {
     hwnd: HWND,
@@ -77,6 +104,8 @@ struct Observer {
     icon: HICON,
     summary: String,
     controlled: bool,
+    mode: DevelopmentMode,
+    preference_worker: Option<crate::frontends::desktop::preferences::PreferenceWorker>,
     microphone_worker: Option<super::microphone_worker::Worker>,
     pending_microphone: usize,
     microphone_generation: u64,
@@ -101,9 +130,14 @@ impl Observer {
             })
     }
     fn can_exit(&self) -> bool {
-        !self.controlled
-            || (self.pending_microphone == 0
-                && (!self.control_used || self.microphone().is_ok_and(|status| !status.requested)))
+        !self
+            .preference_worker
+            .as_ref()
+            .is_some_and(crate::frontends::desktop::preferences::PreferenceWorker::is_pending)
+            && (!self.controlled
+                || (self.pending_microphone == 0
+                    && (!self.control_used
+                        || self.microphone().is_ok_and(|status| !status.requested))))
     }
     fn frame(&mut self) -> DesktopSnapshot {
         if self.current.is_some() {
@@ -118,11 +152,7 @@ impl Observer {
                 )
             },
         );
-        let mode = if self.controlled {
-            "controlled_development"
-        } else {
-            "read_only_development"
-        };
+        let mode = self.mode.wire_name();
         let mut frame = DesktopSnapshot::from_snapshot(
             self.presentation_sequence,
             observed_at,
@@ -142,6 +172,15 @@ impl Observer {
             self.pending_microphone != 0,
             self.controlled,
         );
+        frame.preferences = crate::frontends::desktop::observe_preferences(
+            self.mode.preferences_enabled(),
+            self.mode.preferences_enabled(),
+            self.current
+                .as_ref()
+                .and_then(|reading| reading.applied_profile),
+            Default::default(),
+            self.preference_worker.as_ref(),
+        );
         frame
     }
     fn open(&mut self) -> Result<()> {
@@ -160,6 +199,34 @@ impl Observer {
             ui.poll();
         }
         let mut changed = false;
+        if let Some(completion) = self
+            .preference_worker
+            .as_mut()
+            .and_then(crate::frontends::desktop::preferences::PreferenceWorker::try_complete)
+        {
+            crate::frontends::desktop::complete_preference(self.ui.as_mut(), &completion);
+            changed = true;
+        }
+        if let Some(command) = self.ui.as_mut().and_then(Supervisor::take_preference) {
+            let work = crate::frontends::desktop::preferences::PreferenceWork {
+                ticket: command.ticket,
+                request: command.request,
+                profile_writable: self.mode.preferences_enabled(),
+            };
+            if let Err(error) = crate::frontends::desktop::preferences::PreferenceWorker::enqueue(
+                &mut self.preference_worker,
+                work,
+            ) && let Some(ui) = self.ui.as_mut()
+            {
+                ui.complete_preference(
+                    command.ticket,
+                    crate::frontends::desktop::commands::CommandState::Rejected,
+                    Some("preferences_worker"),
+                    Some(format!("Preference request not queued: {error:#}")),
+                );
+            }
+            changed = true;
+        }
         if let Some(command) = self.ui.as_mut().and_then(Supervisor::take_command) {
             let request = super::microphone_worker::Request::Set {
                 ticket: command.ticket,
@@ -232,11 +299,7 @@ impl Observer {
             });
             self.summary = format!(
                 "MicCamWatch — {} DEV; {active} active; {}",
-                if self.controlled {
-                    "CONTROLLED"
-                } else {
-                    "READ ONLY"
-                },
+                self.mode.label(),
                 if partial {
                     "observation incomplete"
                 } else {
@@ -265,10 +328,10 @@ impl Observer {
                 MF_STRING,
                 OPEN,
                 PCWSTR(
-                    format_wide(if self.controlled {
-                        "Open MicCamWatch — controlled test"
-                    } else {
-                        "Open MicCamWatch — read only"
+                    format_wide(match self.mode {
+                        DevelopmentMode::Controlled => "Open MicCamWatch — controlled test",
+                        DevelopmentMode::Settings => "Open MicCamWatch — isolated preferences",
+                        DevelopmentMode::ReadOnly => "Open MicCamWatch — read only",
                     })
                     .as_ptr(),
                 ),
@@ -351,13 +414,13 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, message: u32, w: WPARAM, l: LPARA
             }
             EXIT if observer.can_exit() => unsafe { DestroyWindow(hwnd) }.map_err(Into::into),
             EXIT => Err(anyhow::anyhow!(
-                "Release the controlled microphone request before exiting the test tray"
+                "Wait for pending preference writes and release controlled microphone requests before exiting"
             )),
             _ => Ok(()), // No mutation command dispatcher exists in this mode.
         },
         WM_CLOSE if observer.can_exit() => unsafe { DestroyWindow(hwnd) }.map_err(Into::into),
         WM_CLOSE => Err(anyhow::anyhow!(
-            "Controlled microphone request pending/active/unknown; release and confirm before exit"
+            "Preference write pending or controlled microphone request active/unknown; wait for confirmation before exit"
         )),
         WM_DESTROY => {
             observer.alive.store(false, Ordering::Release);
@@ -378,12 +441,15 @@ fn start_collector(observer: &Observer) -> thread::JoinHandle<()> {
     let pending = Arc::clone(&observer.pending);
     let alive = Arc::clone(&observer.alive);
     let window = Arc::clone(&observer.window);
+    let preferences_enabled = observer.mode.preferences_enabled();
     let microphone_generation = observer.microphone_worker.as_ref().map_or_else(
         || Arc::new(AtomicU64::new(0)),
         |worker| Arc::clone(&worker.sequence),
     );
     thread::spawn(move || {
-        let monitor = PlatformMonitor::new(Policy::default()).map_err(|e| format!("{e:#}"));
+        let mut policy = Policy::default();
+        let mut applied_profile = crate::settings::PrivacyProfile::Balanced;
+        let mut monitor = PlatformMonitor::new(policy.clone()).map_err(|e| format!("{e:#}"));
         let scope = Filter {
             include_ready: true,
             ..Filter::default()
@@ -392,6 +458,15 @@ fn start_collector(observer: &Observer) -> thread::JoinHandle<()> {
         let mut camera = Err("Initial camera observation pending".to_owned());
         let mut camera_at = None;
         while alive.load(Ordering::Acquire) {
+            if preferences_enabled
+                && let Ok(settings) = crate::settings::Settings::load()
+                && settings.profile != applied_profile
+                && let Ok(monitor) = monitor.as_mut()
+            {
+                policy.profile = settings.profile.assessment_profile();
+                monitor.set_policy(policy.clone());
+                applied_profile = settings.profile;
+            }
             let observed_at = chrono::Utc::now();
             let microphone_generation = microphone_generation.load(Ordering::Acquire);
             let (snapshot, microphone) = match &monitor {
@@ -416,6 +491,7 @@ fn start_collector(observer: &Observer) -> thread::JoinHandle<()> {
                 camera: camera.clone(),
                 observed_at,
                 microphone_generation,
+                applied_profile: monitor.is_ok().then_some(applied_profile),
             });
             let hwnd = window.load(Ordering::Acquire);
             if hwnd != 0 {
@@ -479,11 +555,14 @@ pub(super) fn run(
     lang: Language,
     initial_window: bool,
     theme: &str,
-    controlled: bool,
+    mode: DevelopmentMode,
 ) -> Result<()> {
     ensure!(matches!(theme, "light" | "dark"), "invalid desktop theme");
+    let controlled = mode == DevelopmentMode::Controlled;
     if controlled {
         verify_controlled_scope()?;
+    } else if mode == DevelopmentMode::Settings {
+        verify_isolated_scope()?;
     }
     enable_dpi_awareness();
     let mutex = format_wide("Local\\MicCamWatch.Tray.ReadOnlyDevelopment");
@@ -525,6 +604,8 @@ pub(super) fn run(
         icon,
         summary: "MicCamWatch — READ ONLY DEVELOPMENT; observation pending".to_owned(),
         controlled,
+        mode,
+        preference_worker: None,
         microphone_worker: None,
         pending_microphone: 0,
         microphone_generation: 0,
@@ -586,11 +667,7 @@ pub(super) fn run(
         eprintln!(
             "{{\"event\":\"observer_started\",\"pid\":{},\"mode\":\"{}\"}}",
             unsafe { GetCurrentProcessId() },
-            if controlled {
-                "controlled_development"
-            } else {
-                "read_only_development"
-            }
+            mode.wire_name()
         );
         let mut message = MSG::default();
         loop {
@@ -626,7 +703,7 @@ pub(super) fn run(
     result
 }
 
-fn verify_controlled_scope() -> Result<()> {
+fn verify_isolated_scope() -> Result<()> {
     use windows::Win32::{
         System::Com::CoTaskMemFree,
         UI::Shell::{FOLDERID_LocalAppData, KF_FLAG_DEFAULT, SHGetKnownFolderPath},
@@ -642,12 +719,17 @@ fn verify_controlled_scope() -> Result<()> {
     for path in [crate::settings::config_dir()?, crate::settings::data_dir()?] {
         let path = path
             .canonicalize()
-            .context("controlled development data/config directories must exist")?;
+            .context("isolated development data/config directories must exist")?;
         ensure!(
             path.starts_with(&allowed),
-            "controlled development must use isolated APPDATA and LOCALAPPDATA under MicCamWatchQualification"
+            "development writes require isolated APPDATA and LOCALAPPDATA under MicCamWatchQualification"
         );
     }
+    Ok(())
+}
+
+fn verify_controlled_scope() -> Result<()> {
+    verify_isolated_scope()?;
     ensure!(
         !crate::windows_control::resource_conflict("microphone")?,
         "another native microphone owner is active; controlled development refused without mutation"

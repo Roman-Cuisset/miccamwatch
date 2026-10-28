@@ -453,7 +453,8 @@ void main() {
     await tester.pumpAndSettle();
     final privateItem = find.byWidgetPredicate((widget) =>
       widget is DropdownMenuItem<String> && widget.value == 'private');
-    await tester.tap(privateItem.last);
+    await tester.tap(find.descendant(of: privateItem,
+      matching: find.byType(Text)).hitTestable().last);
     await tester.pumpAndSettle();
     expect(tester.widget<DropdownButton<String>>(picker).value, 'balanced');
     expect(tester.widget<DropdownButton<String>>(picker).onChanged, isNull);

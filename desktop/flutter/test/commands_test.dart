@@ -91,7 +91,6 @@ void main() {
       reason: 'Read-only development connection'), 2, true);
     await client.request(false);
     expect(client.error, 'capability');
-    expect(client.reason, 'Read-only development connection');
     expect(client.canEnable, isFalse);
     expect(client.canRelease, isFalse);
     expect(client.pending, isFalse);

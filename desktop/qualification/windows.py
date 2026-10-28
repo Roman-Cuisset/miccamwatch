@@ -1,6 +1,8 @@
 """Exercise only a manifest-pinned development tray, never installed MCW.
 Default runner is read-only. Controlled Host requires explicit isolated environment
 and paired CLI identity; its UI can invoke native microphone actions after consent.
+Settings-only Host requires a settings_development manifest and explicit isolated
+APPDATA/LOCALAPPDATA beneath the qualification root. It never permits CLI children.
 Requires Python3.12+, psutil and Pillow. No administrator rights.
 """
 import argparse
@@ -97,25 +99,80 @@ def capture(hwnd,path,dark):
         G.SelectObject(target,old);G.DeleteObject(bitmap);G.DeleteDC(target);U.ReleaseDC(hwnd,dc)
 
 class Host:
-    def __init__(self,prefix,theme,controlled=False,environment=None):
+    """Own a manifest-pinned engine and its graphical child.
+
+    Existing positional arguments keep their read-only/controlled meaning.
+    Settings smoke call (only the integration owner runs it):
+
+        root = Path(os.environ['LOCALAPPDATA']) / 'MicCamWatchQualification'
+        roaming, local = root / 'b1-smoke' / 'roaming', root / 'b1-smoke' / 'local'
+        roaming.mkdir(parents=True, exist_ok=False)
+        local.mkdir(parents=True, exist_ok=False)
+        environment = os.environ.copy()
+        environment.update(APPDATA=str(roaming.resolve()), LOCALAPPDATA=str(local.resolve()))
+        host = Host(prefix, 'light', environment=environment, settings_development=True)
+        try:
+            host.open()
+            # Exercise only Preferences in this owned window, then host.close/open.
+        finally:
+            evidence = host.stop()
+
+    The prefix must have matching engine/UI hashes and manifest mode
+    settings_development. No CLI identity is needed or allowed as a descendant.
+    The settings backend must disable microphone worker/resume/automatic controls;
+    this runner does not change hardware or substitute a fake preference transport.
+
+    Real B1 scenario: save a boolean in Preferences, observe authoritative success,
+    close/reopen the UI and confirm persistence; repeat for the assessment profile,
+    checking saved selection separately from the actual applied profile. Closing
+    while accepted must not cancel the process-owned write. Unsupported effects
+    must remain explicit. Use only these safe preference controls, never microphone,
+    permissions, autostart or operational-host actions. Host records lifecycle logs
+    and owns HWND capture, but cannot inspect outbound snapshots or send UI commands;
+    automated preference assertions need the real UI/pipe consumer, not log guesses.
+    """
+    settings_development=False
+
+
+    def __init__(self,prefix,theme,controlled=False,environment=None,*,settings_development=False):
         self.prefix=prefix.resolve();self.exe=self.prefix/'mcw-tray.exe'
         self.ui=self.prefix/'desktop/miccamwatch_desktop.exe'
-        self.controlled=controlled;self.cli=self.prefix/'mcw.exe'
+        if controlled and settings_development:
+            raise RuntimeError('Controlled and settings-only development modes are mutually exclusive')
+        self.controlled=controlled;self.settings_development=settings_development
+        self.cli=self.prefix/'mcw.exe'
         allowed=Path(os.environ['LOCALAPPDATA'])/'MicCamWatchQualification'
         if not self.prefix.is_relative_to(allowed.resolve()):
             raise RuntimeError('Qualification prefix must be under the dedicated local evidence root')
         manifest=json.loads((self.prefix/'qualification-manifest.json').read_text(encoding='utf-8-sig'))
-        if manifest.get('mode') not in ['read_only_development','controlled_development'] or manifest.get('feature')!='flutter-desktop':
+        if manifest.get('mode') not in ['read_only_development','controlled_development','settings_development'] or manifest.get('feature')!='flutter-desktop':
             raise RuntimeError('Development manifest missing')
         if controlled and (manifest.get('mode')!='controlled_development' or not environment
                            or sha(self.cli)!=manifest.get('cli_sha256')):
             raise RuntimeError('Controlled mode requires explicit isolated environment and paired CLI identity')
+        if settings_development:
+            if manifest.get('mode')!='settings_development' or not environment:
+                raise RuntimeError('Settings mode requires its matching manifest and explicit isolated environment')
+            isolated=[]
+            for key in ('APPDATA','LOCALAPPDATA'):
+                value=environment.get(key)
+                if not isinstance(value,str) or not value or not Path(value).is_absolute():
+                    raise RuntimeError(f'Settings mode requires explicit absolute {key}')
+                path=Path(value).resolve()
+                if path==allowed.resolve() or not path.is_relative_to(allowed.resolve()):
+                    raise RuntimeError(f'Settings {key} must be strictly beneath the qualification root')
+                if not path.is_dir():
+                    raise RuntimeError(f'Settings {key} must be an existing isolated directory')
+                isolated.append(path)
+            if isolated[0].is_relative_to(isolated[1]) or isolated[1].is_relative_to(isolated[0]):
+                raise RuntimeError('Settings APPDATA and LOCALAPPDATA must be separate isolated directories')
         if sha(self.exe)!=manifest['engine_sha256'] or sha(self.ui)!=manifest['ui_sha256']:
             raise RuntimeError('Qualified build hashes do not match; no process launched')
         if sha(self.exe)=='5a0253ea90a77bf7478f6a9f1826290f6a6055723cb12bdf4975b89bdfb1b6fe':
             raise RuntimeError('Refusing the stable binary: its parser lacks the development mode')
         self.lines=[];self.theme=theme;self.started=time.perf_counter()
-        mode='--controlled-development' if controlled else '--read-only-development'
+        mode=('--settings-development' if settings_development else
+              '--controlled-development' if controlled else '--read-only-development')
         self.proc=subprocess.Popen([str(self.exe),mode,'--desktop-theme',theme],
             stdout=subprocess.PIPE,stderr=subprocess.STDOUT,encoding='utf-8',errors='replace',
             creationflags=subprocess.CREATE_NO_WINDOW,cwd=self.prefix,env=environment)
@@ -125,6 +182,7 @@ class Host:
         try:
             self.hwnd=until(lambda:windows({self.proc.pid},'MicCamWatchReadOnlyDevelopmentTray',by_class=True))[0][0]
             until(lambda:self.ticks())
+            if self.settings_development:self.members()
         except BaseException:
             # Constructor failures still own this exact manifest-pinned process.
             if self.proc.poll() is None:
@@ -155,6 +213,9 @@ class Host:
                 owner=self.controlled and path==self.cli.resolve() and p.cmdline()[1:]==['__microphone-guard']
                 if path not in [self.exe.resolve(),self.ui.resolve()] and not owner:
                     raise RuntimeError(f'Unexpected observer descendant: {path}; no name-based cleanup permitted')
+                if self.settings_development and p.pid!=self.proc.pid and (
+                        path!=self.ui.resolve() or p.ppid()!=self.proc.pid):
+                    raise RuntimeError(f'Unexpected settings descendant: {path}; only the directly owned UI is permitted')
                 self.known.add(p.pid);result.append(p)
             except psutil.NoSuchProcess:pass
         return result

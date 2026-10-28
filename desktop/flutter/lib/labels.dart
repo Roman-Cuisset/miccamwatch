@@ -15,6 +15,8 @@ const _labels = <String, List<String>>{
   'microphone': ['Microphone', 'Microphone', 'Mikrofon', 'Micrófono', 'マイク', '麦克风', 'Микрофон'],
   'camera': ['Camera', 'Caméra', 'Kamera', 'Cámara', 'カメラ', '摄像头', 'Камера'],
   'applications': ['Observed applications', 'Applications observées', 'Beobachtete Anwendungen', 'Aplicaciones observadas', '観測されたアプリ', '观测到的应用', 'Наблюдаемые приложения'],
+  'settings': ['Settings', 'Réglages', 'Einstellungen', 'Ajustes', '設定', '设置', 'Настройки'],
+  'settingsDevelopment': ['Isolated development — preferences only; no device commands', 'Développement isolé — réglages uniquement ; aucune commande de périphérique', 'Isolierte Entwicklung — nur Einstellungen, keine Gerätebefehle', 'Desarrollo aislado — solo ajustes, sin comandos de dispositivos', '分離された開発環境 — 設定のみ、デバイス操作なし', '隔离开发环境 — 仅设置，不执行设备命令', 'Изолированная разработка — только настройки, без команд устройствам'],
   'readOnly': ['Read-only development session', 'Session de développement en lecture seule', 'Schreibgeschützte Entwicklungssitzung', 'Sesión de desarrollo de solo lectura', '読み取り専用の開発セッション', '只读开发会话', 'Сеанс разработки: только чтение'],
   'readOnlyNormal': ['Read-only presentation', 'Affichage en lecture seule', 'Schreibgeschützte Anzeige', 'Presentación de solo lectura', '読み取り専用表示', '只读显示', 'Представление: только чтение'],
   'controlled': ['Isolated development — real microphone commands', 'Développement isolé — commandes micro réelles', 'Isolierte Entwicklung — echte Mikrofonbefehle', 'Desarrollo aislado — comandos reales del micrófono', '分離された開発環境 — 実際のマイク操作', '隔离开发环境 — 真实麦克风操作', 'Изолированная разработка — реальные команды микрофона'],

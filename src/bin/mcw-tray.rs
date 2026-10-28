@@ -29,7 +29,8 @@ fn run() -> Result<()> {
     #[cfg(not(feature = "flutter-desktop"))]
     anyhow::ensure!(
         !std::env::args_os().any(|argument| argument == "--read-only-development"
-            || argument == "--controlled-development"),
+            || argument == "--controlled-development"
+            || argument == "--settings-development"),
         "Development modes require a build with flutter-desktop; no tray started"
     );
     let initial_window = std::env::args_os()
@@ -37,7 +38,9 @@ fn run() -> Result<()> {
         .any(|argument| argument == "--open");
     #[cfg(feature = "flutter-desktop")]
     if std::env::args_os().any(|argument| {
-        argument == "--read-only-development" || argument == "--controlled-development"
+        argument == "--read-only-development"
+            || argument == "--controlled-development"
+            || argument == "--settings-development"
     }) {
         // No operational singleton/resume. Controlled mode additionally requires
         // isolated data paths and a released native resource at startup.
@@ -45,18 +48,30 @@ fn run() -> Result<()> {
         let controlled = arguments
             .iter()
             .any(|argument| argument == "--controlled-development");
+        let settings = arguments
+            .iter()
+            .any(|argument| argument == "--settings-development");
         anyhow::ensure!(
-            !(controlled
-                && arguments
-                    .iter()
-                    .any(|argument| argument == "--read-only-development")),
-            "Read-only and controlled development modes cannot be combined"
+            arguments
+                .iter()
+                .filter(|argument| matches!(
+                    argument.as_str(),
+                    "--read-only-development"
+                        | "--controlled-development"
+                        | "--settings-development"
+                ))
+                .count()
+                == 1,
+            "Exactly one development mode is required"
         );
         let theme = arguments
             .windows(2)
             .find(|pair| pair[0] == "--desktop-theme")
             .map_or("light", |pair| pair[1].as_str());
         anyhow::ensure!(matches!(theme, "light" | "dark"), "Invalid desktop theme");
+        if settings {
+            return tray::run_settings_development(Language::detect(), initial_window, theme);
+        }
         if controlled {
             return tray::run_controlled_development(Language::detect(), initial_window, theme);
         }

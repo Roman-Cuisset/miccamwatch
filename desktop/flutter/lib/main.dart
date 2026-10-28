@@ -8,6 +8,8 @@ import 'package:flutter/services.dart';
 import 'labels.dart';
 import 'commands.dart';
 import 'snapshot.dart' as wire;
+import 'preferences.dart';
+import 'preferences_model.dart';
 
 final _started = Stopwatch()..start();
 Future<void> _output = Future<void>.value();
@@ -73,6 +75,7 @@ class _MicCamWatchAppState extends State<MicCamWatchApp> {
   final session = wire.SnapshotSession();
   late final wire.SnapshotInput input;
   late final MicrophoneCommandClient microphoneCommands;
+  late final PreferenceCommandClient preferenceCommands;
   late final Timer clock;
   late bool dark = widget.dark;
   int page = 0;
@@ -85,6 +88,7 @@ class _MicCamWatchAppState extends State<MicCamWatchApp> {
   void initState() {
     super.initState();
     microphoneCommands = MicrophoneCommandClient(send: sendCommand);
+    preferenceCommands = PreferenceCommandClient(send: sendCommand);
     session.addListener(_changed);
     clock = Timer.periodic(const Duration(seconds: 1), (_) => session.tick());
     input = wire.SnapshotInput(stdin, session, onSnapshot: () {
@@ -99,6 +103,10 @@ class _MicCamWatchAppState extends State<MicCamWatchApp> {
   void _changed() {
     if (!mounted || closing) return;
     microphoneCommands.update(session.snapshot?.controls ?? const <String, dynamic>{},
+        session.sequence ?? 0, session.transportLive);
+    preferenceCommands.update(
+        session.snapshot?.preferences ?? const PreferenceView.unavailable(),
+        session.snapshot?.controls['session'] as String? ?? '',
         session.sequence ?? 0, session.transportLive);
     setState(() {});
   }
@@ -119,6 +127,7 @@ class _MicCamWatchAppState extends State<MicCamWatchApp> {
     session.removeListener(_changed);
     session.dispose();
     microphoneCommands.dispose();
+    preferenceCommands.dispose();
     super.dispose();
   }
 
@@ -149,7 +158,7 @@ class _MicCamWatchAppState extends State<MicCamWatchApp> {
         }
       });
     }
-    final titles = [l['overview'], l['diagnostics'], l['about']];
+    final titles = [l['overview'], l['settings'], l['diagnostics'], l['about']];
     return MaterialApp(
       title: 'MicCamWatch', debugShowCheckedModeBanner: false,
       themeAnimationDuration: Duration.zero,
@@ -182,7 +191,7 @@ class _MicCamWatchAppState extends State<MicCamWatchApp> {
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
                 onPressed: () => setState(() => page = i),
                 child: Row(children: [
-                  Icon([Icons.dashboard_outlined, Icons.monitor_heart_outlined, Icons.info_outline][i], size: 18),
+                  Icon([Icons.dashboard_outlined, Icons.tune_outlined, Icons.monitor_heart_outlined, Icons.info_outline][i], size: 18),
                   const SizedBox(width: 10), Expanded(child: Text(titles[i])),
                 ]))),
             const Spacer(),
@@ -198,7 +207,8 @@ class _MicCamWatchAppState extends State<MicCamWatchApp> {
             const SizedBox(height: 10),
             _panel(c, Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text(l[snapshot?.engine['mode'] == 'read_only_development' ? 'readOnly'
-                  : snapshot?.engine['mode'] == 'controlled_development' ? 'controlled' : 'hybrid'],
+                  : snapshot?.engine['mode'] == 'controlled_development' ? 'controlled'
+                  : snapshot?.engine['mode'] == 'settings_development' ? 'settingsDevelopment' : 'hybrid'],
                 style: c.type(14, bold: true)),
               const SizedBox(height: 4),
               Text(l[sequence == 0 ? 'connecting' : session.state.name],
@@ -209,8 +219,9 @@ class _MicCamWatchAppState extends State<MicCamWatchApp> {
             ])),
             const SizedBox(height: 14),
             if (page == 0) ..._overview(c, l, snapshot),
-            if (page == 1) ..._diagnostics(c, l, snapshot),
-            if (page == 2) ..._about(c, l, snapshot),
+            if (page == 1) PreferencesPanel(client: preferenceCommands, locale: snapshot?.locale ?? 'en'),
+            if (page == 2) ..._diagnostics(c, l, snapshot),
+            if (page == 3) ..._about(c, l, snapshot),
             const SizedBox(height: 14),
             Text(l['limits'], style: c.type(12, muted: true)),
             const SizedBox(height: 12),
@@ -338,8 +349,9 @@ class _MicCamWatchAppState extends State<MicCamWatchApp> {
       const SizedBox(height: 8),
       Text('Rust owns collection, protection, permissions, preferences, history and the tray. '
         'This disposable Flutter window displays snapshots and submits typed requests over private inherited pipes. '
-        'Only Rust applies microphone commands. Closing the window does not release protection. '
-        'Other controls and settings remain available in the native interfaces.', style: c.type(14, muted: true)),
+        'Only Rust applies microphone commands and merges permitted preference changes. '
+        'Closing the window does not release protection. Other controls remain available in the native interfaces.',
+        style: c.type(14, muted: true)),
       const SizedBox(height: 12),
       Text('Protocol ${wire.protocolVersion} · Typed Rust commands · No direct hardware access', style: c.type(12, muted: true)),
       if (snapshot != null) Text('Engine ${snapshot.engine['version']} · mode: ${snapshot.engine['mode']}', style: c.type(12, muted: true)),

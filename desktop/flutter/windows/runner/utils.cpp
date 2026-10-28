@@ -16,7 +16,7 @@ void EmitRunnerTiming(const char* stage) {
   char event[256];
   const int length = snprintf(
       event, sizeof(event),
-      "{\"type\":\"timing\",\"protocol_version\":2,\"stage\":\"%s\","
+      "{\"type\":\"timing\",\"protocol_version\":3,\"stage\":\"%s\","
       "\"elapsed_ms\":%llu}\n",
       stage, GetTickCount64() - runner_started);
   if (length <= 0 || static_cast<size_t>(length) >= sizeof(event)) return;

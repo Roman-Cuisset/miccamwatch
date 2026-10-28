@@ -5,7 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:miccamwatch_desktop/snapshot.dart';
 
 Map<String, dynamic> frame({int sequence = 1}) => {
-  'type': 'snapshot', 'protocol_version': 2, 'sequence': sequence,
+  'type': 'snapshot', 'protocol_version': 3, 'sequence': sequence,
   'observed_at': '2026-10-27T08:00:00Z', 'locale': 'en',
   'engine': {'version': '0.21.1', 'platform': 'windows',
     'mode': 'read_only_development', 'state': 'healthy', 'detail': null},
@@ -29,6 +29,14 @@ Map<String, dynamic> frame({int sequence = 1}) => {
   'controls': {'session': '', 'microphone': {
     'can_enable': false, 'can_release': false, 'current_requested': null,
     'generation': 0, 'reason': 'Read-only connection'}, 'command': null},
+  'preferences': {
+    'available': false, 'writable': false, 'profile_writable': false,
+    'values': null, 'applied_profile': null,
+    'effects': {'capture_notifications_supported': false,
+      'capture_sounds_supported': false, 'history_recording_supported': false,
+      'history_recording_active': false},
+    'reason': 'Native observation pending', 'command': null,
+  },
 };
 List<int> encode(Map<String, dynamic> value) => utf8.encode(jsonEncode(value));
 
@@ -84,8 +92,8 @@ void main() {
   test('schema, types, enum, version and monotonic sequence are required', () {
     final changes = <void Function(Map<String, dynamic>)>[
       (v) => v.remove('protection'),
-      (v) => v['protocol_version'] = 3,
-      (v) => v['protocol_version'] = 2.0,
+      (v) => v['protocol_version'] = 4,
+      (v) => v['protocol_version'] = 3.0,
       (v) => v['type'] = 'command',
       (v) => v['sequence'] = '1',
       (v) => v['resources'][0]['activity'] = 'safe',

@@ -3,7 +3,9 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 
-const protocolVersion = 2;
+import 'preferences_model.dart';
+
+const protocolVersion = 3;
 const maxFrameBytes = 262144;
 const resourceNames = ['microphone', 'camera'];
 const activityNames = ['active', 'ready', 'none_observed', 'unknown'];
@@ -11,8 +13,9 @@ const healthNames = ['healthy', 'degraded', 'unavailable'];
 
 // Rust owns the versioned observation and narrowly typed command boundary.
 class Snapshot {
-  Snapshot._(this.data);
+  Snapshot._(this.data, this.preferences);
   final Map<String, dynamic> data;
+  final PreferenceView preferences;
   int get sequence => data['sequence'] as int;
   String get locale => data['locale'] as String;
   DateTime get observedAt => DateTime.parse(data['observed_at'] as String);
@@ -35,7 +38,7 @@ class Snapshot {
     final value = jsonDecode(utf8.decode(bytes));
     final root = _object(value, const ['type', 'protocol_version', 'sequence',
       'observed_at', 'engine', 'locale', 'resources', 'accesses', 'collectors',
-      'observation_gaps', 'protection', 'diagnostics', 'truncated', 'controls']);
+      'observation_gaps', 'protection', 'diagnostics', 'truncated', 'controls', 'preferences']);
     if (root['type'] != 'snapshot' || root['protocol_version'] is! int ||
         root['protocol_version'] != protocolVersion) {
       _invalid('Unsupported snapshot protocol');
@@ -48,7 +51,7 @@ class Snapshot {
     final engine = _object(root['engine'], const ['version', 'platform', 'mode', 'state', 'detail']);
     _text(engine['version']);
     _enum(engine['platform'], const ['windows', 'linux', 'macos']);
-    _enum(engine['mode'], const ['read_only_development', 'controlled_development', 'operational']);
+    _enum(engine['mode'], const ['read_only_development', 'controlled_development', 'settings_development', 'operational']);
     _enum(engine['state'], healthNames);
     _nullableText(engine['detail']);
     _enum(root['locale'], const ['en', 'fr', 'de', 'es', 'ja', 'zh', 'ru']);
@@ -124,7 +127,11 @@ class Snapshot {
       if (result['code'] != null && utf8.encode(result['code'] as String).length > 64) _invalid('Invalid result code');
       _nullableText(result['detail']);
     }
-    return Snapshot._(root);
+    final preferences = PreferenceView.fromJson(root['preferences']);
+    if ((preferences.writable || preferences.command != null) && token.isEmpty) {
+      _invalid('Preferences lack an authenticated command session');
+    }
+    return Snapshot._(root, preferences);
   }
 
   // Rust owns collector-specific interpretation on every platform. The view

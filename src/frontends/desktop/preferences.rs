@@ -4,8 +4,7 @@ use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
 use super::commands::{
-    CommandEnvelope, CommandState, authorize_envelope, deserialize_request_id,
-    deserialize_sequence,
+    CommandEnvelope, CommandState, authorize_envelope, deserialize_request_id, deserialize_sequence,
 };
 use crate::settings::{PrivacyProfile, Settings};
 
@@ -156,7 +155,9 @@ impl PreferenceValues {
 
     pub fn current_value(&self, key: PreferenceKey) -> PreferenceValue {
         match key {
-            PreferenceKey::NotificationsEnabled => PreferenceValue::Bool(self.notifications_enabled),
+            PreferenceKey::NotificationsEnabled => {
+                PreferenceValue::Bool(self.notifications_enabled)
+            }
             PreferenceKey::SoundEnabled => PreferenceValue::Bool(self.sound_enabled),
             PreferenceKey::HistoryEnabled => PreferenceValue::Bool(self.history_enabled),
             PreferenceKey::Profile => PreferenceValue::Profile(self.profile),
@@ -269,19 +270,35 @@ impl PreferenceSession {
             };
         }
         if request.validate_types().is_err() {
-            return self.reject(&request, "invalid_type", "Preference value type does not match its key");
+            return self.reject(
+                &request,
+                "invalid_type",
+                "Preference value type does not match its key",
+            );
         }
         let Some(values) = view.values.as_ref().filter(|_| view.available) else {
-            return self.reject(&request, "unavailable", "Current preferences are unavailable");
+            return self.reject(
+                &request,
+                "unavailable",
+                "Current preferences are unavailable",
+            );
         };
         if !view.writable {
             return self.reject(&request, "read_only", "Preferences are not writable");
         }
         if request.key == PreferenceKey::Profile && !view.profile_writable {
-            return self.reject(&request, "profile_managed", "Assessment profile is managed by configuration");
+            return self.reject(
+                &request,
+                "profile_managed",
+                "Assessment profile is managed by configuration",
+            );
         }
         if values.current_value(request.key) != request.expected_value {
-            return self.reject(&request, "stale", "Preference changed since the observed snapshot");
+            return self.reject(
+                &request,
+                "stale",
+                "Preference changed since the observed snapshot",
+            );
         }
         self.pending = Some((request.id, request.key, request.value));
         self.outcome = Some(PreferenceResult {
@@ -386,8 +403,10 @@ pub struct PreferenceCompletion {
 /// One process-owned persistence worker, created lazily by the native owner.
 /// Dropping a UI must not drop this worker or cancel an admitted settings write.
 pub struct PreferenceWorker {
-    pub requests: std::sync::mpsc::SyncSender<PreferenceWork>,
-    pub responses: std::sync::mpsc::Receiver<PreferenceCompletion>,
+    requests: std::sync::mpsc::SyncSender<PreferenceWork>,
+    responses: std::sync::mpsc::Receiver<PreferenceCompletion>,
+    pending: Option<u64>,
+    disconnected: bool,
 }
 
 impl PreferenceWorker {
@@ -415,7 +434,57 @@ impl PreferenceWorker {
         Ok(Self {
             requests,
             responses,
+            pending: None,
+            disconnected: false,
         })
+    }
+
+    pub fn enqueue(owner: &mut Option<Self>, work: PreferenceWork) -> Result<()> {
+        if owner.is_none() {
+            *owner = Some(Self::start()?);
+        }
+        let worker = owner.as_mut().expect("created persistence worker");
+        ensure!(
+            !worker.disconnected,
+            "Preferences worker unavailable; restart the tray"
+        );
+        ensure!(
+            worker.pending.is_none(),
+            "A native preference write is pending"
+        );
+        let ticket = work.ticket;
+        worker
+            .requests
+            .try_send(work)
+            .context("native preference queue unavailable")?;
+        worker.pending = Some(ticket);
+        Ok(())
+    }
+
+    pub fn is_pending(&self) -> bool {
+        self.pending.is_some()
+    }
+
+    pub fn is_available(&self) -> bool {
+        !self.disconnected
+    }
+
+    pub fn try_complete(&mut self) -> Option<PreferenceCompletion> {
+        use std::sync::mpsc::TryRecvError;
+        let expected = self.pending?;
+        match self.responses.try_recv() {
+            Ok(completion) if completion.ticket == expected => {
+                self.pending = None;
+                Some(completion)
+            }
+            Err(TryRecvError::Empty) => None,
+            Ok(_) | Err(TryRecvError::Disconnected) => {
+                self.pending = None;
+                self.disconnected = true;
+                Some(PreferenceCompletion { ticket: expected,
+                    result: Err("Native preference completion unavailable; saved state may be uncertain. Restart the tray before another write".into()) })
+            }
+        }
     }
 }
 
@@ -469,7 +538,10 @@ mod tests {
         )
     }
 
-    fn admit(session: &mut PreferenceSession, request: PreferenceRequest) -> Option<PreferenceRequest> {
+    fn admit(
+        session: &mut PreferenceSession,
+        request: PreferenceRequest,
+    ) -> Option<PreferenceRequest> {
         session.admit(request, SESSION, 9, true, &snapshot())
     }
 
@@ -480,7 +552,10 @@ mod tests {
     #[test]
     fn strict_request_decoder_checks_types_keys_actions_and_counters() {
         let valid = serde_json::to_value(request(1)).unwrap();
-        assert_eq!(serde_json::from_value::<PreferenceRequest>(valid.clone()).unwrap(), request(1));
+        assert_eq!(
+            serde_json::from_value::<PreferenceRequest>(valid.clone()).unwrap(),
+            request(1)
+        );
         for (field, value) in [
             ("key", json!("mute_on_lock")),
             ("key", json!("camera")),
@@ -501,14 +576,25 @@ mod tests {
         ] {
             let mut payload = valid.clone();
             payload[field] = value;
-            assert!(serde_json::from_value::<PreferenceRequest>(payload).is_err(), "{field}");
+            assert!(
+                serde_json::from_value::<PreferenceRequest>(payload).is_err(),
+                "{field}"
+            );
         }
         for extra in ["path", "args", "settings", "method", "environment"] {
             let mut payload = valid.clone();
             payload[extra] = json!("injected");
             assert!(serde_json::from_value::<PreferenceRequest>(payload).is_err());
         }
-        for missing in ["session", "id", "action", "observed_sequence", "key", "value", "expected_value"] {
+        for missing in [
+            "session",
+            "id",
+            "action",
+            "observed_sequence",
+            "key",
+            "value",
+            "expected_value",
+        ] {
             let mut payload = valid.clone();
             payload.as_object_mut().unwrap().remove(missing);
             assert!(serde_json::from_value::<PreferenceRequest>(payload).is_err());
@@ -520,24 +606,43 @@ mod tests {
 
     #[test]
     fn finite_profile_values_and_boolean_pairs_decode() {
-        for profile in [PrivacyProfile::Private, PrivacyProfile::Meeting, PrivacyProfile::Development, PrivacyProfile::Balanced] {
+        for profile in [
+            PrivacyProfile::Private,
+            PrivacyProfile::Meeting,
+            PrivacyProfile::Development,
+            PrivacyProfile::Balanced,
+        ] {
             let mut request = profile_request(u32::MAX as u64);
             request.value = PreferenceValue::Profile(profile);
             request.observed_sequence = i64::MAX as u64;
             let wire = serde_json::to_value(&request).unwrap();
-            assert_eq!(serde_json::from_value::<PreferenceRequest>(wire).unwrap(), request);
+            assert_eq!(
+                serde_json::from_value::<PreferenceRequest>(wire).unwrap(),
+                request
+            );
         }
         let valid = serde_json::to_value(profile_request(1)).unwrap();
-        for (field, value) in [("value", json!(true)), ("expected_value", json!(false)), ("value", json!("unknown"))] {
+        for (field, value) in [
+            ("value", json!(true)),
+            ("expected_value", json!(false)),
+            ("value", json!("unknown")),
+        ] {
             let mut wire = valid.clone();
             wire[field] = value;
             assert!(serde_json::from_value::<PreferenceRequest>(wire).is_err());
         }
-        for key in [PreferenceKey::NotificationsEnabled, PreferenceKey::SoundEnabled, PreferenceKey::HistoryEnabled] {
+        for key in [
+            PreferenceKey::NotificationsEnabled,
+            PreferenceKey::SoundEnabled,
+            PreferenceKey::HistoryEnabled,
+        ] {
             let mut request = request(1);
             request.key = key;
             let wire = serde_json::to_value(&request).unwrap();
-            assert_eq!(serde_json::from_value::<PreferenceRequest>(wire).unwrap(), request);
+            assert_eq!(
+                serde_json::from_value::<PreferenceRequest>(wire).unwrap(),
+                request
+            );
         }
     }
 
@@ -548,7 +653,11 @@ mod tests {
             ..PreferenceEffects::default()
         };
         let observed = PreferencesSnapshot::observed(
-            Ok(&Settings::default()), false, true, Some(PrivacyProfile::Meeting), effects,
+            Ok(&Settings::default()),
+            false,
+            true,
+            Some(PrivacyProfile::Meeting),
+            effects,
         );
         assert!(observed.available);
         assert!(!observed.writable);
@@ -557,14 +666,21 @@ mod tests {
         assert_eq!(observed.values.unwrap().profile, PrivacyProfile::Balanced);
         assert!(!observed.effects.history_recording_active);
         let unavailable = PreferencesSnapshot::observed(
-            Err("unavailable"), true, true, Some(PrivacyProfile::Private), effects,
+            Err("unavailable"),
+            true,
+            true,
+            Some(PrivacyProfile::Private),
+            effects,
         );
         assert!(!unavailable.available);
         assert!(!unavailable.writable);
         assert!(!unavailable.profile_writable);
         assert!(unavailable.values.is_none());
         assert_eq!(unavailable.applied_profile, Some(PrivacyProfile::Private));
-        assert_eq!(PreferencesSnapshot::default().effects, PreferenceEffects::default());
+        assert_eq!(
+            PreferencesSnapshot::default().effects,
+            PreferenceEffects::default()
+        );
         assert!(!PreferencesSnapshot::default().available);
         assert!(PreferencesSnapshot::default().values.is_none());
     }
@@ -573,7 +689,11 @@ mod tests {
     fn snapshot_reason_is_bounded_at_utf8_boundary() {
         let reason = format!("{}é", "a".repeat(1023));
         let observed = PreferencesSnapshot::observed(
-            Err(&reason), true, true, None, PreferenceEffects::default(),
+            Err(&reason),
+            true,
+            true,
+            None,
+            PreferenceEffects::default(),
         );
         assert_eq!(observed.reason.unwrap(), "a".repeat(1023));
     }
@@ -593,9 +713,17 @@ mod tests {
     #[test]
     fn live_connection_session_is_the_only_authority() {
         let mut session = PreferenceSession::default();
-        assert!(session.admit(request(1), "different-live-session", 9, true, &snapshot()).is_none());
+        assert!(
+            session
+                .admit(request(1), "different-live-session", 9, true, &snapshot())
+                .is_none()
+        );
         assert_eq!(outcome(&session).code.as_deref(), Some("unauthorized"));
-        assert!(session.admit(request(1), SESSION, 9, true, &snapshot()).is_some());
+        assert!(
+            session
+                .admit(request(1), SESSION, 9, true, &snapshot())
+                .is_some()
+        );
         let mut independent = PreferenceSession::default();
         assert!(admit(&mut independent, request(1)).is_some());
     }
@@ -605,7 +733,12 @@ mod tests {
         let mut session = PreferenceSession::default();
         assert!(admit(&mut session, request(1)).is_some());
         let accepted = outcome(&session);
-        for (id, sequence) in [(0, 9), (u32::MAX as u64 + 1, 9), (2, 0), (2, i64::MAX as u64 + 1)] {
+        for (id, sequence) in [
+            (0, 9),
+            (u32::MAX as u64 + 1, 9),
+            (2, 0),
+            (2, i64::MAX as u64 + 1),
+        ] {
             let mut invalid = request(id);
             invalid.observed_sequence = sequence;
             assert!(admit(&mut session, invalid).is_none());
@@ -619,7 +752,11 @@ mod tests {
     #[test]
     fn readiness_future_sequence_and_replay_are_rejected() {
         let mut session = PreferenceSession::default();
-        assert!(session.admit(request(1), SESSION, 9, false, &snapshot()).is_none());
+        assert!(
+            session
+                .admit(request(1), SESSION, 9, false, &snapshot())
+                .is_none()
+        );
         assert_eq!(outcome(&session).code.as_deref(), Some("unavailable"));
         assert!(admit(&mut session, request(1)).is_none());
         assert_eq!(outcome(&session).code.as_deref(), Some("replay"));
@@ -663,7 +800,14 @@ mod tests {
 
     #[test]
     fn unavailable_read_only_and_managed_profile_gates_are_independent() {
-        for view in [PreferencesSnapshot::default(), PreferencesSnapshot { available: true, writable: true, ..PreferencesSnapshot::default() }] {
+        for view in [
+            PreferencesSnapshot::default(),
+            PreferencesSnapshot {
+                available: true,
+                writable: true,
+                ..PreferencesSnapshot::default()
+            },
+        ] {
             let mut session = PreferenceSession::default();
             assert!(session.admit(request(1), SESSION, 9, true, &view).is_none());
             assert_eq!(outcome(&session).code.as_deref(), Some("unavailable"));
@@ -671,13 +815,25 @@ mod tests {
         let mut read_only = snapshot();
         read_only.writable = false;
         let mut session = PreferenceSession::default();
-        assert!(session.admit(request(1), SESSION, 9, true, &read_only).is_none());
+        assert!(
+            session
+                .admit(request(1), SESSION, 9, true, &read_only)
+                .is_none()
+        );
         assert_eq!(outcome(&session).code.as_deref(), Some("read_only"));
         let mut managed = snapshot();
         managed.profile_writable = false;
-        assert!(session.admit(profile_request(2), SESSION, 9, true, &managed).is_none());
+        assert!(
+            session
+                .admit(profile_request(2), SESSION, 9, true, &managed)
+                .is_none()
+        );
         assert_eq!(outcome(&session).code.as_deref(), Some("profile_managed"));
-        assert!(session.admit(request(3), SESSION, 9, true, &managed).is_some());
+        assert!(
+            session
+                .admit(request(3), SESSION, 9, true, &managed)
+                .is_some()
+        );
     }
 
     #[test]
@@ -702,7 +858,12 @@ mod tests {
 
     #[test]
     fn all_final_states_retain_results_and_bound_utf8_diagnostics() {
-        for state in [CommandState::Succeeded, CommandState::Failed, CommandState::Rejected, CommandState::Uncertain] {
+        for state in [
+            CommandState::Succeeded,
+            CommandState::Failed,
+            CommandState::Rejected,
+            CommandState::Uncertain,
+        ] {
             let mut session = PreferenceSession::default();
             assert!(admit(&mut session, profile_request(1)).is_some());
             let code = format!("{}é", "a".repeat(63));
@@ -711,7 +872,10 @@ mod tests {
             let result = outcome(&session);
             assert_eq!(result.state, state);
             assert_eq!(result.key, PreferenceKey::Profile);
-            assert_eq!(result.value, PreferenceValue::Profile(PrivacyProfile::Private));
+            assert_eq!(
+                result.value,
+                PreferenceValue::Profile(PrivacyProfile::Private)
+            );
             assert_eq!(result.code.unwrap(), "a".repeat(63));
             assert_eq!(result.detail.unwrap(), "b".repeat(1023));
             assert!(!session.pending());
@@ -737,15 +901,27 @@ mod tests {
 
     #[test]
     fn apply_to_changes_only_selected_latest_field() {
-        for key in [PreferenceKey::NotificationsEnabled, PreferenceKey::SoundEnabled, PreferenceKey::HistoryEnabled, PreferenceKey::Profile] {
+        for key in [
+            PreferenceKey::NotificationsEnabled,
+            PreferenceKey::SoundEnabled,
+            PreferenceKey::HistoryEnabled,
+            PreferenceKey::Profile,
+        ] {
             let mut settings = protected_settings();
             let before = serde_json::to_value(&settings).unwrap();
             let expected_value = key.current_value(&settings);
             let value = match expected_value {
                 PreferenceValue::Bool(value) => PreferenceValue::Bool(!value),
-                PreferenceValue::Profile(_) => PreferenceValue::Profile(PrivacyProfile::Development),
+                PreferenceValue::Profile(_) => {
+                    PreferenceValue::Profile(PrivacyProfile::Development)
+                }
             };
-            let request = PreferenceRequest { key, value, expected_value, ..request(1) };
+            let request = PreferenceRequest {
+                key,
+                value,
+                expected_value,
+                ..request(1)
+            };
             request.apply_to(&mut settings).unwrap();
             assert_eq!(key.current_value(&settings), value);
             let mut expected = before;

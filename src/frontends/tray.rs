@@ -76,12 +76,32 @@ mod windows_observer;
 
 #[cfg(feature = "flutter-desktop")]
 pub fn run_read_only_development(lang: Language, initial_window: bool, theme: &str) -> Result<()> {
-    windows_observer::run(lang, initial_window, theme, false)
+    windows_observer::run(
+        lang,
+        initial_window,
+        theme,
+        windows_observer::DevelopmentMode::ReadOnly,
+    )
 }
 
 #[cfg(feature = "flutter-desktop")]
 pub fn run_controlled_development(lang: Language, initial_window: bool, theme: &str) -> Result<()> {
-    windows_observer::run(lang, initial_window, theme, true)
+    windows_observer::run(
+        lang,
+        initial_window,
+        theme,
+        windows_observer::DevelopmentMode::Controlled,
+    )
+}
+
+#[cfg(feature = "flutter-desktop")]
+pub fn run_settings_development(lang: Language, initial_window: bool, theme: &str) -> Result<()> {
+    windows_observer::run(
+        lang,
+        initial_window,
+        theme,
+        windows_observer::DevelopmentMode::Settings,
+    )
 }
 
 #[cfg(feature = "flutter-desktop")]
@@ -176,6 +196,7 @@ struct TrayRefresh {
     camera: Result<CameraControlObservation, String>,
     camera_generation: u64,
     lock_state: SessionLockState,
+    applied_profile: Option<PrivacyProfile>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -262,6 +283,8 @@ struct TrayAppState {
     #[cfg(feature = "flutter-desktop")]
     flutter: Option<crate::frontends::desktop::windows::Supervisor>,
     #[cfg(feature = "flutter-desktop")]
+    preference_worker: Option<crate::frontends::desktop::preferences::PreferenceWorker>,
+    #[cfg(feature = "flutter-desktop")]
     desktop_observation: Option<DesktopObservation>,
     #[cfg(feature = "flutter-desktop")]
     desktop_sequence: u64,
@@ -276,6 +299,7 @@ struct TrayAppState {
     autostart_state: crate::autostart::AutostartState,
     settings: Settings,
     explicit_policy: bool,
+    applied_profile: Option<PrivacyProfile>,
     lock_state: SessionLockState,
     policy_lock_state: SessionLockState,
     microphone_worker: microphone_worker::Worker,
@@ -363,6 +387,7 @@ fn start_refresh_worker(
                     camera: Err("Camera observation unavailable".to_owned()),
                     camera_generation: 0,
                     lock_state: SessionLockState::Unknown,
+                    applied_profile: None,
                 });
                 let h = hwnd_cell.load(Ordering::Relaxed);
                 if h != 0 {
@@ -395,13 +420,7 @@ fn start_refresh_worker(
                 && !explicit_policy
                 && applied_profile != Some(settings.profile)
             {
-                policy.profile = match settings.profile {
-                    PrivacyProfile::Private => crate::config::Profile::Strict,
-                    PrivacyProfile::Development => crate::config::Profile::Conservative,
-                    PrivacyProfile::Meeting | PrivacyProfile::Balanced => {
-                        crate::config::Profile::Balanced
-                    }
-                };
+                policy.profile = settings.profile.assessment_profile();
                 monitor.set_policy(policy.clone());
                 applied_profile = Some(settings.profile);
             }
@@ -446,6 +465,7 @@ fn start_refresh_worker(
                     camera: camera.clone(),
                     camera_generation,
                     lock_state,
+                    applied_profile,
                 },
             )
             .is_err()
@@ -595,6 +615,8 @@ pub fn run_tray(
         #[cfg(feature = "flutter-desktop")]
         flutter: None,
         #[cfg(feature = "flutter-desktop")]
+        preference_worker: None,
+        #[cfg(feature = "flutter-desktop")]
         desktop_observation: None,
         #[cfg(feature = "flutter-desktop")]
         desktop_sequence: 0,
@@ -602,6 +624,7 @@ pub fn run_tray(
         settings_error: None,
         settings,
         explicit_policy,
+        applied_profile: None,
         lock_state,
         policy_lock_state: lock_state,
         microphone_worker,
@@ -832,7 +855,7 @@ unsafe extern "system" fn tray_wnd_proc(
                         notify_async(
                             state,
                             "MicCamWatch",
-                            "Finish pending privacy operations or UAC prompts before exiting. Nothing was cancelled.",
+                            "Finish pending privacy operations, preference writes, or UAC prompts before exiting. Nothing was cancelled.",
                         );
                     }
                 }
@@ -864,6 +887,17 @@ fn request_safe_close(hwnd: HWND) -> usize {
     let Some(state) = state(hwnd) else {
         return UPDATE_BUSY;
     };
+    // The persistence worker belongs to this process, not the Flutter child.
+    // Keep normal exit/update-stop busy until its write and readback finish,
+    // even if the user has already closed the Flutter window.
+    #[cfg(feature = "flutter-desktop")]
+    if state
+        .preference_worker
+        .as_ref()
+        .is_some_and(crate::frontends::desktop::preferences::PreferenceWorker::is_pending)
+    {
+        return UPDATE_BUSY;
+    }
     let mut activity = state.restore_activity.lock();
     if state.pending_microphone != 0
         || !can_close_tray(
@@ -1141,6 +1175,7 @@ fn refresh_state(hwnd: HWND, state: &mut TrayAppState) {
 }
 
 fn apply_refresh(hwnd: HWND, state: &mut TrayAppState, refresh: TrayRefresh) {
+    state.applied_profile = refresh.applied_profile;
     let old_camera_state = state.camera_state;
     if accepts_control_refresh(
         refresh.camera_generation,
@@ -2134,6 +2169,18 @@ fn flutter_snapshot(state: &TrayAppState) -> crate::frontends::desktop::DesktopS
             Err,
         ),
     );
+    frame.preferences = crate::frontends::desktop::observe_preferences(
+        true,
+        !state.explicit_policy,
+        state.applied_profile,
+        crate::frontends::desktop::preferences::PreferenceEffects {
+            capture_notifications_supported: false,
+            capture_sounds_supported: false,
+            history_recording_supported: true,
+            history_recording_active: state.settings.history_enabled,
+        },
+        state.preference_worker.as_ref(),
+    );
     frame
 }
 
@@ -2204,10 +2251,63 @@ fn open_native_desktop(hwnd: HWND) -> bool {
 fn refresh_desktop(hwnd: HWND) {
     #[cfg(feature = "flutter-desktop")]
     if let Some(s) = state(hwnd) {
-        let (command, changed) = s.flutter.as_mut().map_or((None, false), |ui| {
+        use crate::frontends::desktop::{
+            complete_preference,
+            preferences::{PreferenceWork, PreferenceWorker},
+        };
+
+        // Poll process-owned persistence even when no Flutter child is attached.
+        // UI closure neither cancels an admitted write nor discards its readback.
+        let completion = s
+            .preference_worker
+            .as_mut()
+            .and_then(PreferenceWorker::try_complete);
+        let preference_completed = completion.is_some();
+        if let Some(completion) = completion {
+            complete_preference(s.flutter.as_mut(), &completion);
+            match completion.result {
+                Ok(settings) => {
+                    if !settings.history_enabled {
+                        s.previous_accesses.clear();
+                    }
+                    s.settings = settings;
+                    s.settings_error = None;
+                }
+                Err(error) => s.settings_error = Some(error),
+            }
+        }
+        let (command, preference, changed) = s.flutter.as_mut().map_or((None, None, false), |ui| {
             ui.poll();
-            (ui.take_command(), ui.take_controls_changed())
+            (
+                ui.take_command(),
+                ui.take_preference(),
+                ui.take_controls_changed(),
+            )
         });
+        let preference_submitted = preference.is_some();
+        if let Some(preference) = preference {
+            let ticket = preference.ticket;
+            if let Err(error) = PreferenceWorker::enqueue(
+                &mut s.preference_worker,
+                PreferenceWork {
+                    ticket,
+                    request: preference.request,
+                    profile_writable: !s.explicit_policy,
+                },
+            ) {
+                // Admission is not persistence. A missing/full worker must
+                // explicitly finish this ticket without claiming a saved value.
+                if let Some(ui) = s.flutter.as_mut() {
+                    ui.complete_preference(
+                        ticket,
+                        crate::frontends::desktop::commands::CommandState::Rejected,
+                        Some("preferences_unavailable"),
+                        Some(format!("Preference was not queued or applied: {error:#}")),
+                    );
+                }
+                s.settings_error = Some(format!("Preference queue unavailable: {error:#}"));
+            }
+        }
         if let Some(command) = command {
             let request = microphone_worker::Request::Set {
                 ticket: command.ticket,
@@ -2226,13 +2326,17 @@ fn refresh_desktop(hwnd: HWND) {
                 );
             }
         }
-        if changed || command.is_some() {
+        if changed || command.is_some() || preference_submitted || preference_completed {
             s.desktop_sequence = s.desktop_sequence.saturating_add(1);
-            let frame = flutter_snapshot(s);
-            if let Some(ui) = s.flutter.as_mut()
-                && let Err(error) = ui.publish(frame)
-            {
-                s.settings_error = Some(format!("Desktop command state delivery: {error:#}"));
+            // Reading/serializing preferences is presentation work: do it only
+            // for a running child. open_flutter_desktop reads the initial frame.
+            if s.flutter.as_ref().is_some_and(|ui| ui.is_running()) {
+                let frame = flutter_snapshot(s);
+                if let Some(ui) = s.flutter.as_mut()
+                    && let Err(error) = ui.publish(frame)
+                {
+                    s.settings_error = Some(format!("Desktop command state delivery: {error:#}"));
+                }
             }
         }
     }

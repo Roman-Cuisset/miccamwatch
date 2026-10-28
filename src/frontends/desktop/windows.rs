@@ -2,6 +2,7 @@
 use super::{
     DesktopSnapshot, EventLines, UiEvent,
     commands::{CommandSession, CommandState, MicrophoneCapability},
+    preferences::{PreferenceRequest, PreferenceSession, PreferencesSnapshot},
 };
 use anyhow::{Context, Result, ensure};
 use std::{
@@ -147,6 +148,10 @@ struct Child {
     capability: MicrophoneCapability,
     queued_command: Option<AuthorizedCommand>,
     pending_ticket: Option<(u64, u64)>,
+    preferences: PreferenceSession,
+    preference_capability: PreferencesSnapshot,
+    queued_preference: Option<AuthorizedPreference>,
+    pending_preference_ticket: Option<(u64, u64)>,
     controls_changed: bool,
     last_frame_at: Instant,
     // Pin all path components and the single-link executable for the child's lifetime.
@@ -156,6 +161,8 @@ impl Child {
     fn frame(&mut self, snapshot: &mut DesktopSnapshot) -> Result<Frame> {
         self.capability = std::mem::take(&mut snapshot.controls.microphone);
         snapshot.controls = self.commands.controls(self.capability.clone());
+        self.preference_capability = std::mem::take(&mut snapshot.preferences);
+        snapshot.preferences = self.preferences.view(self.preference_capability.clone());
         let frame = Frame {
             sequence: snapshot.sequence,
             bytes: snapshot.encode()?,
@@ -185,6 +192,12 @@ pub struct AuthorizedCommand {
     pub requested: bool,
     pub expected_requested: bool,
     pub expected_generation: u64,
+}
+
+#[derive(Debug)]
+pub struct AuthorizedPreference {
+    pub ticket: u64,
+    pub request: PreferenceRequest,
 }
 
 fn new_command_session() -> Result<CommandSession> {
@@ -281,6 +294,29 @@ impl Supervisor {
     pub fn take_command(&mut self) -> Option<AuthorizedCommand> {
         self.child.as_mut()?.queued_command.take()
     }
+    pub fn take_preference(&mut self) -> Option<AuthorizedPreference> {
+        self.child.as_mut()?.queued_preference.take()
+    }
+
+    pub fn complete_preference(
+        &mut self,
+        ticket: u64,
+        outcome: CommandState,
+        code: Option<&str>,
+        detail: Option<String>,
+    ) {
+        let Some(child) = self.child.as_mut() else {
+            return;
+        };
+        let Some((expected, id)) = child.pending_preference_ticket else {
+            return;
+        };
+        if ticket == expected && child.preferences.finish(id, outcome, code, detail) {
+            child.pending_preference_ticket = None;
+            child.controls_changed = true;
+        }
+    }
+
     pub fn take_controls_changed(&mut self) -> bool {
         self.child
             .as_mut()
@@ -367,6 +403,35 @@ impl Supervisor {
                                         "Command ticket space exhausted; restart the frontend"
                                             .into(),
                                     ),
+                                );
+                            }
+                        }
+                        child.controls_changed = true;
+                    }
+                    UiEvent::PreferencesCommand { request, .. } => {
+                        let ready = child.ready
+                            && child.closing.is_none()
+                            && !child.exited()
+                            && !child.signals.disconnected.load(Ordering::Acquire)
+                            && child.last_frame_at.elapsed() <= Duration::from_secs(5);
+                        if let Some(request) = child.preferences.admit(
+                            request,
+                            child.commands.session(),
+                            child.signals.written_sequence.load(Ordering::Acquire),
+                            ready,
+                            &child.preference_capability,
+                        ) {
+                            if let Some(ticket) = self.next_ticket.checked_add(1) {
+                                self.next_ticket = ticket;
+                                child.pending_preference_ticket = Some((ticket, request.id));
+                                child.queued_preference =
+                                    Some(AuthorizedPreference { ticket, request });
+                            } else {
+                                child.preferences.finish(
+                                    request.id,
+                                    CommandState::Rejected,
+                                    Some("unavailable"),
+                                    Some("Command ticket space exhausted".into()),
                                 );
                             }
                         }
@@ -740,6 +805,10 @@ fn spawn(path: &Path, mut initial: DesktopSnapshot, theme: &'static str) -> Resu
         capability: MicrophoneCapability::default(),
         queued_command: None,
         pending_ticket: None,
+        preferences: PreferenceSession::default(),
+        preference_capability: PreferencesSnapshot::default(),
+        queued_preference: None,
+        pending_preference_ticket: None,
         controls_changed: false,
         last_frame_at: started,
         _bundle: bundle,

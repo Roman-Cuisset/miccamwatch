@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import 'snapshot.dart' show protocolVersion;
+
 /// Keep one client above navigation and call [update] for every snapshot and
 /// connection change. This controller never represents actual protection.
 class MicrophoneCommandClient extends ChangeNotifier {
@@ -167,7 +169,7 @@ class MicrophoneCommandClient extends ChangeNotifier {
     _error = null;
     final envelope = <String, dynamic>{
       'type': 'command',
-      'protocol_version': 2,
+      'protocol_version': protocolVersion,
       'request': <String, dynamic>{
         'session': _session,
         'id': operation.id,

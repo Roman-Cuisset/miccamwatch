@@ -549,16 +549,70 @@ pub fn complete_microphone(
                 } else {
                     "Native SDK unmute readback confirmed; active inputs released, not restored to original states"
                 };
-                supervisor.complete(
-                    ticket,
-                    CommandState::Succeeded,
-                    None,
-                    Some(detail.into()),
-                );
+                supervisor.complete(ticket, CommandState::Succeeded, None, Some(detail.into()));
             } else {
                 supervisor.complete(ticket, CommandState::Uncertain, Some("readback_unconfirmed"),
                     Some("The native request completed, but effective endpoint mute/guard could not be confirmed; do not assume protection or restoration".into()));
             }
+        }
+    }
+}
+
+/// Read the native preference store only when preparing an attached/opening UI.
+/// Saving is delegated to the process-owned worker; never block collection on
+/// the stable settings lock or infer applied policy from the saved selection.
+pub fn observe_preferences(
+    writable: bool,
+    profile_writable: bool,
+    applied_profile: Option<crate::settings::PrivacyProfile>,
+    effects: preferences::PreferenceEffects,
+    worker: Option<&preferences::PreferenceWorker>,
+) -> preferences::PreferencesSnapshot {
+    let settings = crate::settings::Settings::load().map_err(|error| format!("{error:#}"));
+    let mut view = preferences::PreferencesSnapshot::observed(
+        settings.as_ref().map_err(String::as_str),
+        writable,
+        profile_writable,
+        applied_profile,
+        effects,
+    );
+    if worker.is_some_and(preferences::PreferenceWorker::is_pending) {
+        view.writable = false;
+        view.profile_writable = false;
+        view.reason =
+            Some("Native preference write pending; saved values are not an acknowledgement".into());
+    } else if worker.is_some_and(|worker| !worker.is_available()) {
+        view.writable = false;
+        view.profile_writable = false;
+        view.reason = Some("Preferences worker unavailable; restart the tray".into());
+    } else if view.writable && !view.profile_writable {
+        view.reason = Some("Assessment profile is managed by explicit configuration".into());
+    }
+    view
+}
+
+#[cfg(windows)]
+pub fn complete_preference(
+    supervisor: Option<&mut windows::Supervisor>,
+    completion: &preferences::PreferenceCompletion,
+) {
+    let outcome = if completion.result.is_ok() {
+        "succeeded"
+    } else {
+        "failed"
+    };
+    eprintln!(
+        "{{\"event\":\"preference_result\",\"ticket\":{},\"outcome\":\"{outcome}\"}}",
+        completion.ticket
+    );
+    if let Some(supervisor) = supervisor {
+        match &completion.result {
+            Ok(_) => supervisor.complete_preference(completion.ticket,
+                commands::CommandState::Succeeded, None,
+                Some("Saved preference readback confirmed; applied policy and delivery remain separate".into())),
+            Err(error) => supervisor.complete_preference(completion.ticket,
+                commands::CommandState::Failed, Some("preferences_error"),
+                Some(format!("Preference write/readback failed or may be partial: {error}"))),
         }
     }
 }
@@ -770,14 +824,14 @@ mod tests {
     fn parser_rejects_mutations_versions_extra_fields_and_bad_types() {
         for line in [
             r#"{"type":"mute","protocol_version":1}"#,
-            r#"{"type":"ready","protocol_version":3,"sequence":1}"#,
+            r#"{"type":"ready","protocol_version":4,"sequence":1}"#,
             r#"{"type":"ready","protocol_version":1,"sequence":1,"command":"unmute"}"#,
             r#"{"type":"ready","protocol_version":1,"sequence":"1"}"#,
             r#"{"type":"timing","protocol_version":1,"stage":"shell","elapsed_ms":0}"#,
         ] {
             assert!(parse_event(line.as_bytes()).is_err());
         }
-        assert!(parse_event(br#"{"type":"ready","protocol_version":2,"sequence":1}"#).is_ok());
+        assert!(parse_event(br#"{"type":"ready","protocol_version":3,"sequence":1}"#).is_ok());
     }
     #[test]
     fn oversized_line_cannot_smuggle_suffix_and_next_line_recovers() {
@@ -793,11 +847,11 @@ mod tests {
         };
         lines.feed(&vec![b'x'; MAX_EVENT_BYTES + 1], &mut feed);
         lines.feed(
-            b"{\"type\":\"ready\",\"protocol_version\":2,\"sequence\":1}\n",
+            b"{\"type\":\"ready\",\"protocol_version\":3,\"sequence\":1}\n",
             &mut feed,
         );
         lines.feed(
-            b"{\"type\":\"ready\",\"protocol_version\":2,\"sequence\":2}\n",
+            b"{\"type\":\"ready\",\"protocol_version\":3,\"sequence\":2}\n",
             &mut feed,
         );
         assert_eq!((accepted, rejected), (1, 1));
@@ -811,7 +865,7 @@ mod tests {
         assert_eq!(output.0.len(), MAX_FRAME_BYTES);
         let mut lines = EventLines::default();
         let mut results = Vec::new();
-        lines.feed(b"{\"type\":\"timing\",\"protocol_version\":2,", |e| {
+        lines.feed(b"{\"type\":\"timing\",\"protocol_version\":3,", |e| {
             results.push(e)
         });
         assert!(results.is_empty());
