@@ -6,10 +6,11 @@ use serde::{Deserialize, Serialize};
 use std::io::{self, Write};
 
 pub mod commands;
+pub mod preferences;
 #[cfg(windows)]
 pub mod windows;
 
-pub const PROTOCOL_VERSION: u8 = 2;
+pub const PROTOCOL_VERSION: u8 = 3;
 pub const MAX_FRAME_BYTES: usize = 262_144;
 pub const MAX_EVENT_BYTES: usize = 4096;
 const MAX_STRING_BYTES: usize = 1024;
@@ -33,6 +34,7 @@ pub struct DesktopSnapshot {
     pub diagnostics: Vec<String>,
     pub truncated: bool,
     pub controls: commands::Controls,
+    pub preferences: preferences::PreferencesSnapshot,
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct Engine {
@@ -218,6 +220,7 @@ impl DesktopSnapshot {
             },
             diagnostics: Vec::new(),
             controls: commands::Controls::default(),
+            preferences: preferences::PreferencesSnapshot::default(),
             truncated,
         };
         if let Some(s) = source {
@@ -369,6 +372,11 @@ pub(crate) enum UiEvent {
         protocol_version: u8,
         request: commands::UiCommand,
     },
+    #[serde(rename = "preferences_command")]
+    PreferencesCommand {
+        protocol_version: u8,
+        request: preferences::PreferenceRequest,
+    },
 }
 #[derive(Debug, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -402,6 +410,9 @@ pub(crate) fn parse_event(line: &[u8]) -> Result<UiEvent> {
             protocol_version, ..
         }
         | UiEvent::Timing {
+            protocol_version, ..
+        }
+        | UiEvent::PreferencesCommand {
             protocol_version, ..
         }
         | UiEvent::Command {

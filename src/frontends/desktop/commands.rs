@@ -76,6 +76,55 @@ pub struct CommandSession {
     outcome: Option<CommandResult>,
 }
 
+pub(super) struct CommandEnvelope<'a> {
+    pub session: &'a str,
+    pub id: u64,
+    pub observed_sequence: u64,
+}
+
+pub(super) struct AdmissionRejection {
+    pub code: &'static str,
+    pub detail: &'static str,
+    pub correlatable: bool,
+}
+
+/// Shared private-pipe admission; replay counters and pending work are scoped
+/// to each bounded lane. Preferences cannot mutate protections or permissions.
+pub(super) fn authorize_envelope(
+    request: CommandEnvelope<'_>,
+    expected_session: &str,
+    last_request_id: &mut u64,
+    last_written_sequence: u64,
+    ready: bool,
+    pending: bool,
+) -> std::result::Result<(), AdmissionRejection> {
+    let reject = |code, detail, correlatable| AdmissionRejection {
+        code, detail, correlatable,
+    };
+    if request.id == 0 || request.id > u32::MAX as u64
+        || request.observed_sequence == 0 || request.observed_sequence > MAX_WIRE_COUNTER
+    {
+        return Err(reject("invalid_counter", "Invalid command counters", false));
+    }
+    if request.session != expected_session {
+        return Err(reject("unauthorized", "Command session does not match", true));
+    }
+    if request.id <= *last_request_id {
+        return Err(reject("replay", "Command ID has already been consumed", true));
+    }
+    *last_request_id = request.id;
+    if !ready || last_written_sequence == 0 || last_written_sequence > MAX_WIRE_COUNTER {
+        return Err(reject("unavailable", "Desktop connection is not ready", true));
+    }
+    if request.observed_sequence > last_written_sequence {
+        return Err(reject("stale", "Command refers to an unwritten snapshot", true));
+    }
+    if pending {
+        return Err(reject("busy", "A command is already pending in this lane", true));
+    }
+    Ok(())
+}
+
 impl CommandSession {
     pub fn new(session: String) -> Result<Self> {
         ensure!(
@@ -129,34 +178,20 @@ impl CommandSession {
         ready: bool,
         capability: &MicrophoneCapability,
     ) -> Option<UiCommand> {
-        // Wire decoding normally rejects these. Direct callers must not publish
-        // invalid result IDs, disturb an outcome, or consume a valid counter.
-        if request.id == 0
-            || request.id > u32::MAX as u64
-            || request.expected_generation > MAX_WIRE_COUNTER
-            || request.observed_sequence == 0
-            || request.observed_sequence > MAX_WIRE_COUNTER
-        {
+        if request.expected_generation > MAX_WIRE_COUNTER {
             return None;
         }
-        // An alien connection must not consume this session's request counter.
-        if request.session != self.session {
-            return self.reject(&request, "unauthorized", "Command session does not match");
-        }
-        if request.id <= self.last_request_id {
-            return self.reject(&request, "replay", "Command ID has already been consumed");
-        }
-        // Valid IDs are consumed even on rejection: retry requires a new ID and
-        // fresh explicit user intent, not replay of an earlier request.
-        self.last_request_id = request.id;
-        if !ready || last_written_sequence == 0 || last_written_sequence > MAX_WIRE_COUNTER {
-            return self.reject(&request, "unavailable", "Desktop connection is not ready");
-        }
-        if request.observed_sequence > last_written_sequence {
-            return self.reject(&request, "stale", "Command refers to an unwritten snapshot");
-        }
-        if self.pending() {
-            return self.reject(&request, "busy", "A microphone command is already pending");
+        let pending = self.pending();
+        if let Err(rejected) = authorize_envelope(
+            CommandEnvelope { session: &request.session, id: request.id,
+                observed_sequence: request.observed_sequence },
+            &self.session, &mut self.last_request_id, last_written_sequence, ready, pending,
+        ) {
+            return if rejected.correlatable {
+                self.reject(&request, rejected.code, rejected.detail)
+            } else {
+                None
+            };
         }
         let Some(current_requested) = capability.current_requested else {
             return self.reject(
@@ -234,6 +269,10 @@ impl CommandSession {
         true
     }
 
+    pub(super) fn session(&self) -> &str {
+        &self.session
+    }
+
     pub fn pending(&self) -> bool {
         self.pending.is_some()
     }
@@ -250,7 +289,7 @@ impl CommandSession {
     }
 }
 
-fn deserialize_request_id<'de, D: serde::Deserializer<'de>>(
+pub(super) fn deserialize_request_id<'de, D: serde::Deserializer<'de>>(
     decoder: D,
 ) -> std::result::Result<u64, D::Error> {
     let value = u32::deserialize(decoder)?;
@@ -272,7 +311,7 @@ fn deserialize_generation<'de, D: serde::Deserializer<'de>>(
     Ok(value)
 }
 
-fn deserialize_sequence<'de, D: serde::Deserializer<'de>>(
+pub(super) fn deserialize_sequence<'de, D: serde::Deserializer<'de>>(
     decoder: D,
 ) -> std::result::Result<u64, D::Error> {
     let value = deserialize_generation(decoder)?;

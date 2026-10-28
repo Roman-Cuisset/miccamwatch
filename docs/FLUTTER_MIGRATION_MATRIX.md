@@ -6,6 +6,19 @@ The priority letters in the inventory mean **A = current microphone slice**, **B
 
 Stage A implementation update: Windows now has explicit desired-state microphone commands through the existing Rust worker, private protocol2 admission and native readback. Real mute/release, UI process exit, retained native guard and reopening without duplicate UI have been exercised. Other controls/platforms remain gated; this inventory's source references and “inspection only” evidence describe the pinned baseline, not the later runtime qualification. Sidebar/Windows branding now uses official assets; macOS/Linux Flutter packaging identity remains unqualified. See the current stage A results in the ROADMAP.
 
+### Next tranche after stage A approval — B1
+
+| Priority | Remaining function | Scope and gate |
+|---|---|---|
+| P0, this tranche | Notification/sound/history preferences and assessment profile | Reuse native settings/merge semantics. Strict typed CAS, confirmed storage, separately observed applied profile. Windows capture-alert delivery gaps must remain visible. |
+| P1, parallel | Collector CPU | Compare identical workloads, retain signatures and cadence; no stale verdict cache or invented Active capture. |
+| P1, next control tranche | Camera and lock/protection options | Platform-specific authority, UAC/helper/profile ownership and restoration; no device-changing test without specific permission. Windows microphone release remains all-supported-input unmute, not Unix owned-original restore. |
+| P2 | Notification pause, autostart, complete diagnostics and history presentation | Reuse bounded native operations; host autostart writes need safe qualification. Native history browser/export APIs do not yet exist. |
+| P2 | Language/theme/version/update presentation | Local theme and version display already exist. Do not invent persisted language/theme settings or a generic installer-independent updater. |
+| Cross-platform preparation | Linux x64/ARM64 and macOS Intel/Apple Silicon Flutter integration | Common app/protocol, authenticated owned process transport, native fallback retained until actual qualification; architecture/build preparation is not runtime or ARM hardware proof. |
+
+B1 implementations are in progress and unqualified until the next recorded smoke/build results. Baseline line references below remain pinned, not current line numbers.
+
 ## Summary
 
 - **Stage A can reuse the existing Windows microphone owner**, without migrating camera authorization, restoration, settings, or maintenance. The native tray microphone worker currently accepts **toggle**, not an explicit desired-state assignment; the underlying Rust API already supports `set_microphone_mute(bool)`.

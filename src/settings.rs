@@ -67,6 +67,12 @@ impl Settings {
         update_at(&settings_path()?, change)
     }
 
+    /// Validate against the latest values while holding the existing stable
+    /// settings lock. A rejected change never replaces the persisted file.
+    pub fn update_checked(change: impl FnOnce(&mut Self) -> Result<()>) -> Result<Self> {
+        update_checked_at(&settings_path()?, change)
+    }
+
     pub fn notifications_paused(&self) -> bool {
         self.pause_notifications_until
             .is_some_and(|until| until > Utc::now())
@@ -85,6 +91,16 @@ fn load_at(path: &std::path::Path) -> Result<Settings> {
 }
 
 fn update_at(path: &std::path::Path, change: impl FnOnce(&mut Settings)) -> Result<Settings> {
+    update_checked_at(path, |settings| {
+        change(settings);
+        Ok(())
+    })
+}
+
+fn update_checked_at(
+    path: &std::path::Path,
+    change: impl FnOnce(&mut Settings) -> Result<()>,
+) -> Result<Settings> {
     fs::create_dir_all(path.parent().context("settings path has no parent")?)?;
     let mut options = fs::OpenOptions::new();
     options.read(true).write(true).create(true).truncate(false);
@@ -102,7 +118,7 @@ fn update_at(path: &std::path::Path, change: impl FnOnce(&mut Settings)) -> Resu
         .context("cannot open settings lock")?;
     lock.lock().context("cannot lock settings")?;
     let mut settings = load_at(path)?;
-    change(&mut settings);
+    change(&mut settings)?;
     save_at(&settings, path)?;
     Ok(settings)
 }
