@@ -86,6 +86,8 @@ use winreg::{RegKey, enums::HKEY_CURRENT_USER};
 mod camera_activity;
 #[path = "windows_profile.rs"]
 mod profile;
+#[path = "windows_process.rs"]
+mod process_inventory;
 #[path = "windows_mute.rs"]
 mod microphone_lock;
 pub(crate) use microphone_protection::{
@@ -1911,6 +1913,9 @@ pub struct ProcessTable {
 impl ProcessTable {
     pub fn load() -> Self {
         let _profile = profile::Span::new("process_inventory");
+        if let Some(table) = process_inventory::load() {
+            return table;
+        }
         let Ok(snapshot) = (unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) }) else {
             return Self {
                 by_name: HashMap::new(),
@@ -1945,6 +1950,7 @@ impl ProcessTable {
             }
         }
         let _ = unsafe { CloseHandle(snapshot) };
+        profile::inventory_work("toolhelp", by_pid.len(), 0, 0, 0);
         Self { by_name, by_pid }
     }
 

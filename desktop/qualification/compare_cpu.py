@@ -34,7 +34,8 @@ import psutil
 from windows import Host, U, sha, until, windows
 
 
-STAGES = ('snapshot', 'signature', 'process_inventory', 'sensor')
+STAGES = ('snapshot', 'signature', 'process_inventory', 'sensor',
+          'microphone', 'camera_registry_modules', 'winverifytrust', 'signer')
 MEMORY = ('private_commit', 'rss', 'uss', 'shareable_rss', 'process_count')
 NORMALIZATION = {
     'ignored_fields': ['top-level tool_version'],

@@ -90,39 +90,198 @@ impl Outbox {
     }
 }
 
-/// Keep the bundle path components open for the lifetime of the exact owned child.
-/// Mutable-by-other-user or symlinked bundles cannot authorize settings writes.
+/// Pin every directory by walking relative to the preceding opened directory.
+/// A root-owned sticky common ancestor (for example /tmp) cannot be used by
+/// another user to replace a child owned by this account.
+pub(crate) fn pin_directory_chain(path: &Path) -> Result<Vec<File>> {
+    use std::{ffi::CString, os::unix::{ffi::OsStrExt, io::FromRawFd}, path::Component};
+    ensure!(path.is_absolute(), "directory must be absolute");
+    let mut pins: Vec<File> = Vec::new();
+    for component in path.components() {
+        let name = match component {
+            Component::RootDir => std::ffi::OsStr::new("/"),
+            Component::Normal(name) => name,
+            _ => anyhow::bail!("directory chain must not contain relative components"),
+        };
+        let name = CString::new(name.as_bytes())?;
+        let parent = pins.last().map_or(libc::AT_FDCWD, AsRawFd::as_raw_fd);
+        let descriptor = unsafe {
+            libc::openat(parent, name.as_ptr(), libc::O_RDONLY | libc::O_DIRECTORY
+                | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        };
+        ensure!(descriptor >= 0, "open trusted directory {}: {}", path.display(), io::Error::last_os_error());
+        let directory = unsafe { File::from_raw_fd(descriptor) };
+        let metadata = directory.metadata()?;
+        let root_sticky = metadata.uid() == 0 && metadata.mode() & 0o1000 != 0;
+        ensure!(trusted_owner(&metadata) && (metadata.mode() & 0o022 == 0 || root_sticky),
+            "unsafe directory ownership or permissions: {}", path.display());
+        #[cfg(target_os = "macos")]
+        reject_mutating_acl(&directory)?;
+        pins.push(directory);
+    }
+    Ok(pins)
+}
+
+fn trusted_owner(metadata: &std::fs::Metadata) -> bool {
+    metadata.uid() == 0 || metadata.uid() == unsafe { libc::geteuid() }
+}
+
+/// Darwin ACL grants are independent of the POSIX mode bits. Keep harmless
+/// read/execute grants and ordinary deny-delete home ACLs, but fail closed on
+/// any explicit grant capable of changing a pinned object or its children.
+#[cfg(target_os = "macos")]
+fn reject_mutating_acl(file: &File) -> Result<()> {
+    use std::ffi::c_void;
+    unsafe extern "C" {
+        fn acl_get_fd_np(fd: libc::c_int, kind: libc::c_int) -> *mut c_void;
+        fn acl_get_entry(acl: *mut c_void, index: libc::c_int, entry: *mut *mut c_void) -> libc::c_int;
+        fn acl_get_tag_type(entry: *mut c_void, tag: *mut libc::c_int) -> libc::c_int;
+        fn acl_get_permset_mask_np(entry: *mut c_void, mask: *mut u64) -> libc::c_int;
+        fn acl_free(acl: *mut c_void) -> libc::c_int;
+    }
+    struct Acl(*mut c_void);
+    impl Drop for Acl {
+        fn drop(&mut self) { unsafe { acl_free(self.0); } }
+    }
+    // Constants and ABI from Darwin sys/acl.h (ACL_TYPE_EXTENDED).
+    let raw = unsafe { acl_get_fd_np(file.as_raw_fd(), 0x100) };
+    if raw.is_null() {
+        let error = io::Error::last_os_error();
+        // On an already-open descriptor, Darwin reports a missing FILESEC_ACL
+        // property as ENOENT; there is no pathname lookup to fail here.
+        if matches!(error.raw_os_error(), Some(libc::ENOENT) | Some(libc::EOPNOTSUPP)) {
+            return Ok(());
+        }
+        return Err(error).context("read desktop ownership ACL");
+    }
+    let acl = Acl(raw);
+    let mut index = 0; // ACL_FIRST_ENTRY; Darwin uses -1 for ACL_NEXT_ENTRY.
+    loop {
+        let mut entry = std::ptr::null_mut();
+        if unsafe { acl_get_entry(acl.0, index, &mut entry) } != 0 {
+            let error = io::Error::last_os_error();
+            if error.raw_os_error() == Some(libc::EINVAL) { break; }
+            return Err(error).context("enumerate desktop ownership ACL");
+        }
+        index = -1;
+        let mut tag = 0;
+        let mut mask = 0u64;
+        ensure!(unsafe { acl_get_tag_type(entry, &mut tag) } == 0
+            && unsafe { acl_get_permset_mask_np(entry, &mut mask) } == 0,
+            "cannot inspect desktop ownership ACL");
+        const MUTATING: u64 = (1 << 2) | (1 << 4) | (1 << 5) | (1 << 6)
+            | (1 << 8) | (1 << 10) | (1 << 12) | (1 << 13);
+        ensure!(tag != 1 || mask & MUTATING == 0, "unsafe desktop ownership ACL grant");
+    }
+    Ok(())
+}
+
+struct PayloadPin {
+    path: PathBuf,
+    file: File,
+}
+/// Validate the entire runtime, not only the launcher. The retained directory
+/// and file handles identify everything that may consume the private challenge.
 struct Bundle {
-    _pins: Vec<File>,
+    _ancestors: Vec<File>,
+    payload: Vec<PayloadPin>,
     executable: File,
 }
 impl Bundle {
     fn open(path: &Path) -> Result<Self> {
         ensure!(path.is_absolute(), "desktop executable must be absolute");
-        let mut pins = Vec::new();
-        let mut component_path = PathBuf::new();
-        for component in path.parent().context("desktop has no directory")?.components() {
-            component_path.push(component);
-            let directory = OpenOptions::new().read(true)
-                .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
-                .open(&component_path).with_context(|| format!("open bundle directory {}", component_path.display()))?;
-            let metadata = directory.metadata()?;
-            let root_sticky = metadata.uid() == 0 && metadata.mode() & 0o1000 != 0;
-            ensure!((metadata.uid() == 0 || metadata.uid() == unsafe { libc::geteuid() })
-                && (metadata.mode() & 0o022 == 0 || root_sticky), "unsafe desktop directory ownership or permissions");
-            pins.push(directory);
+        let parent = path.parent().context("desktop has no directory")?;
+        let ancestors = pin_directory_chain(parent)?;
+        #[cfg(target_os = "linux")]
+        let root = parent.to_path_buf();
+        #[cfg(target_os = "macos")]
+        let root = {
+            ensure!(parent.file_name().is_some_and(|name| name == "MacOS"),
+                "desktop executable is not in an App bundle");
+            let contents = parent.parent().context("desktop has no Contents directory")?;
+            ensure!(contents.file_name().is_some_and(|name| name == "Contents"),
+                "desktop executable is not in an App bundle");
+            let app = contents.parent().context("desktop has no App bundle")?;
+            ensure!(app.extension().is_some_and(|extension| extension == "app"),
+                "desktop executable is not in an App bundle");
+            app.to_path_buf()
+        };
+        let executable = Self::open_file(path, true)?;
+        let mut payload = Vec::new();
+        Self::pin_tree(&root, &root, &mut payload)?;
+        #[cfg(target_os = "linux")]
+        for relative in ["lib/libflutter_linux_gtk.so", "lib/libapp.so"] {
+            let library = root.join(relative);
+            ensure!(library.canonicalize()?.starts_with(&root),
+                "Flutter runtime library escapes bundle");
+            ensure!(std::fs::metadata(&library)?.is_file(), "missing Flutter runtime library");
         }
-        let executable = OpenOptions::new().read(true)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC).open(path)
-            .with_context(|| format!("open Flutter bundle executable {}", path.display()))?;
-        let metadata = executable.metadata()?;
-        ensure!(metadata.is_file() && metadata.nlink() == 1 && metadata.mode() & 0o111 != 0
-            && metadata.mode() & 0o022 == 0
-            && (metadata.uid() == 0 || metadata.uid() == unsafe { libc::geteuid() }),
-            "unsafe desktop executable ownership, links or permissions");
-        Ok(Self { _pins: pins, executable })
+        Ok(Self { _ancestors: ancestors, payload, executable })
+    }
+    fn open_file(path: &Path, executable: bool) -> Result<File> {
+        let file = OpenOptions::new().read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK).open(path)
+            .with_context(|| format!("open Flutter payload {}", path.display()))?;
+        let metadata = file.metadata()?;
+        ensure!(metadata.is_file() && metadata.nlink() == 1 && metadata.mode() & 0o022 == 0
+            && trusted_owner(&metadata) && (!executable || metadata.mode() & 0o111 != 0),
+            "unsafe desktop payload ownership, links or permissions: {}", path.display());
+        #[cfg(target_os = "macos")]
+        reject_mutating_acl(&file)?;
+        Ok(file)
+    }
+    fn pin_tree(root: &Path, path: &Path, pins: &mut Vec<PayloadPin>) -> Result<()> {
+        let metadata = std::fs::symlink_metadata(path)?;
+        if metadata.file_type().is_symlink() {
+            ensure!(trusted_owner(&metadata), "unsafe desktop symlink owner");
+            let target = std::fs::read_link(path)?;
+            let (mut normalized, relative) = if target.is_absolute() {
+                (root.to_path_buf(), target.strip_prefix(root)
+                    .context("absolute desktop payload symlink leaves bundle")?)
+            } else {
+                (path.parent().context("payload link has no parent")?.to_path_buf(), target.as_path())
+            };
+            for component in relative.components() {
+                match component {
+                    std::path::Component::ParentDir => { normalized.pop(); }
+                    std::path::Component::CurDir => {}
+                    component => normalized.push(component),
+                }
+                ensure!(normalized.starts_with(root),
+                    "desktop payload symlink leaves bundle: {}", path.display());
+            }
+            // Standard macOS frameworks use Versions/Current and top-level
+            // aliases. Keep those layouts, but never follow a link outside .app.
+            let resolved = path.canonicalize()?;
+            ensure!(resolved.starts_with(root), "desktop payload symlink escapes bundle: {}", path.display());
+            return Ok(());
+        }
+        if metadata.is_dir() {
+            let directory = OpenOptions::new().read(true)
+                .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC).open(path)?;
+            let opened = directory.metadata()?;
+            ensure!(opened.dev() == metadata.dev() && opened.ino() == metadata.ino()
+                && trusted_owner(&opened) && opened.mode() & 0o022 == 0,
+                "unsafe desktop payload directory: {}", path.display());
+            #[cfg(target_os = "macos")]
+            reject_mutating_acl(&directory)?;
+            pins.push(PayloadPin { path: path.to_path_buf(), file: directory });
+            for entry in std::fs::read_dir(path)? {
+                Self::pin_tree(root, &entry?.path(), pins)?;
+            }
+        } else {
+            pins.push(PayloadPin { path: path.to_path_buf(), file: Self::open_file(path, false)? });
+        }
+        Ok(())
     }
     fn verify(&self, path: &Path, pid: u32) -> Result<()> {
+        for pin in &self.payload {
+            let expected = pin.file.metadata()?;
+            let actual = std::fs::symlink_metadata(&pin.path)?;
+            ensure!(expected.dev() == actual.dev() && expected.ino() == actual.ino()
+                && !actual.file_type().is_symlink() && trusted_owner(&actual)
+                && actual.mode() & 0o022 == 0, "desktop payload changed during spawn");
+        }
         let expected = self.executable.metadata()?;
         let actual = std::fs::symlink_metadata(path)?;
         ensure!(expected.dev() == actual.dev() && expected.ino() == actual.ino()
@@ -138,12 +297,62 @@ impl Bundle {
     }
 }
 
+/// The unreaped leader reserves the PID/PGID until the final group signal.
+/// Neither normal exit observation nor a failed opening may release it early.
+struct OwnedProcess {
+    process: Process,
+    owns_pid: bool,
+}
+impl OwnedProcess {
+    fn new(process: Process) -> Self { Self { process, owns_pid: true } }
+    fn id(&self) -> u32 { self.process.id() }
+    fn completion(&mut self) -> io::Result<Option<std::process::ExitStatus>> {
+        use std::os::unix::process::ExitStatusExt;
+        if !self.owns_pid { return Err(io::Error::from_raw_os_error(libc::ECHILD)); }
+        let mut info = unsafe { std::mem::zeroed::<libc::siginfo_t>() };
+        let result = unsafe {
+            libc::waitid(libc::P_PID, self.id(), &mut info,
+                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT)
+        };
+        if result == -1 {
+            let error = io::Error::last_os_error();
+            if error.raw_os_error() == Some(libc::ECHILD) { self.owns_pid = false; }
+            if error.kind() == io::ErrorKind::Interrupted { return Ok(None); }
+            return Err(error);
+        }
+        if unsafe { info.si_pid() } == 0 { return Ok(None); }
+        let code = unsafe { info.si_status() };
+        let raw = match info.si_code {
+            libc::CLD_EXITED => code << 8,
+            libc::CLD_KILLED => code,
+            libc::CLD_DUMPED => code | 0x80,
+            _ => return Err(io::Error::other("unexpected Flutter waitid completion state")),
+        };
+        Ok(Some(std::process::ExitStatus::from_raw(raw)))
+    }
+    fn cleanup(&mut self) {
+        // Detect an external reaper before touching either numeric ID.
+        if !self.owns_pid { return; }
+        let _ = self.completion();
+        if !self.owns_pid { return; }
+        unsafe { libc::kill(-(self.id() as i32), libc::SIGKILL); }
+        let _ = self.process.kill();
+        let waited = self.process.wait();
+        if waited.is_ok() || waited.as_ref().err().is_some_and(|error| error.raw_os_error() == Some(libc::ECHILD)) {
+            self.owns_pid = false;
+        }
+    }
+}
+impl Drop for OwnedProcess {
+    fn drop(&mut self) { self.cleanup(); }
+}
+
 pub struct AuthorizedPreference {
     pub ticket: u64,
     pub request: PreferenceRequest,
 }
 struct Child {
-    process: Process,
+    process: OwnedProcess,
     input: Option<ChildStdin>,
     output: ChildStdout,
     outbox: Outbox,
@@ -214,13 +423,7 @@ impl Child {
         self.input.take();
         self.outbox.stop();
     }
-    fn kill_owned(&mut self) {
-        if matches!(self.process.try_wait(), Ok(Some(_))) { return; }
-        // The process owns a new group; never signal an unowned PID or caller-supplied endpoint.
-        unsafe { libc::kill(-(self.process.id() as i32), libc::SIGKILL); }
-        let _ = self.process.kill();
-        let _ = self.process.wait();
-    }
+    fn failed_opening(&self) -> bool { !self.ready && self.closing.is_none() }
     fn pump(&mut self, next_ticket: &mut u64, now: Instant) -> Result<()> {
         if let Some(input) = self.input.as_mut() { self.outbox.pump(input, now)?; }
         let mut buffer = [0u8; 4096];
@@ -254,7 +457,7 @@ impl Child {
     }
 }
 impl Drop for Child {
-    fn drop(&mut self) { self.begin_close(Instant::now()); self.kill_owned(); }
+    fn drop(&mut self) { self.begin_close(Instant::now()); }
 }
 
 /// Lazy process owner. Singleton opens reuse the one owned child and challenge.
@@ -264,6 +467,7 @@ pub struct Supervisor {
     child: Option<Child>,
     next_ticket: u64,
     error: Option<String>,
+    open_failure: Option<String>,
 }
 impl Supervisor {
     pub fn new() -> Result<Self> {
@@ -273,7 +477,7 @@ impl Supervisor {
         let executable = root.join("miccamwatch_desktop");
         #[cfg(target_os = "macos")]
         let executable = root.join("MicCamWatch.app/Contents/MacOS/MicCamWatch");
-        Ok(Self { executable, child: None, next_ticket: 0, error: None })
+        Ok(Self { executable, child: None, next_ticket: 0, error: None, open_failure: None })
     }
     pub fn is_running(&self) -> bool { self.child.is_some() }
     pub fn open(&mut self, initial: DesktopSnapshot, theme: &str) -> Result<()> {
@@ -292,6 +496,7 @@ impl Supervisor {
         }
         self.child = Some(spawn(&self.executable, initial, theme)?);
         self.error = None;
+        self.open_failure = None;
         Ok(())
     }
     pub fn publish(&mut self, snapshot: DesktopSnapshot) -> Result<()> {
@@ -307,17 +512,27 @@ impl Supervisor {
     pub fn poll(&mut self) {
         let now = Instant::now();
         let Some(child) = self.child.as_mut() else { return };
-        let exited = match child.process.try_wait() {
+        let exited = match child.process.completion() {
             Ok(Some(status)) => {
+                let failure = format!("Flutter child exited before readiness: {status}");
+                if child.failed_opening() { self.open_failure = Some(failure); }
                 if !status.success() { self.error = Some(format!("Flutter child exited: {status}")); }
                 true
             }
             Ok(None) => false,
-            Err(error) => { self.error = Some(error.to_string()); child.begin_close(now); false }
+            Err(error) => {
+                let failure = format!("observe owned Flutter child: {error}");
+                if child.failed_opening() { self.open_failure = Some(failure.clone()); }
+                self.error = Some(failure);
+                child.begin_close(now);
+                false
+            }
         };
         if !exited && child.closing.is_none() {
             if let Err(error) = child.pump(&mut self.next_ticket, now) {
-                self.error = Some(format!("{error:#}"));
+                let failure = format!("{error:#}");
+                if child.failed_opening() { self.open_failure = Some(failure.clone()); }
+                self.error = Some(failure);
                 child.begin_close(now);
             }
         }
@@ -334,6 +549,8 @@ impl Supervisor {
         self.child.as_mut().is_some_and(|child| std::mem::take(&mut child.changed))
     }
     pub fn take_error(&mut self) -> Option<String> { self.error.take() }
+    /// A requested opening failed before ready; explicit closes are not failures.
+    pub fn take_open_failure(&mut self) -> Option<String> { self.open_failure.take() }
     pub fn complete_preference(&mut self, ticket: u64, outcome: CommandState,
         code: Option<&str>, detail: Option<String>) {
         let Some(child) = self.child.as_mut() else { return };
@@ -363,18 +580,34 @@ fn challenge() -> Result<String> {
 fn spawn(path: &Path, initial: DesktopSnapshot, theme: &str) -> Result<Child> {
     let bundle = Bundle::open(path)?;
     let commands = CommandSession::new(challenge()?)?;
-    let process = Command::new(path).arg(format!("--theme={theme}"))
+    let mut command = Command::new(path);
+    command.arg(format!("--theme={theme}"))
         .current_dir(path.parent().context("desktop has no bundle directory")?)
         .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::inherit())
-        .process_group(0).spawn().context("start bundled Flutter desktop")?;
-    let mut process = process;
-    let (input, output) = match (process.stdin.take(), process.stdout.take()) {
-        (Some(input), Some(output)) => (input, output),
-        _ => {
-            let _ = process.kill();
-            let _ = process.wait();
-            anyhow::bail!("owned Flutter private pipes missing");
+        .process_group(0);
+    #[cfg(target_os = "linux")]
+    {
+        // Capture before fork, not inside the child: death between fork and
+        // prctl must fail closed. Only async-signal-safe libc calls run here.
+        let expected_parent = unsafe { libc::getpid() };
+        unsafe {
+            command.pre_exec(move || {
+                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) == -1 {
+                    return Err(io::Error::last_os_error());
+                }
+                if libc::getppid() != expected_parent {
+                    return Err(io::Error::from_raw_os_error(libc::ESRCH));
+                }
+                Ok(())
+            });
         }
+    }
+    #[cfg(target_os = "macos")]
+    command.env("MCW_DESKTOP_OWNER_PID", unsafe { libc::getpid() }.to_string());
+    let mut process = OwnedProcess::new(command.spawn().context("start bundled Flutter desktop")?);
+    let (input, output) = match (process.process.stdin.take(), process.process.stdout.take()) {
+        (Some(input), Some(output)) => (input, output),
+        _ => anyhow::bail!("owned Flutter private pipes missing"),
     };
     // From this point, every fallible step has the child's RAII owner.
     let mut child = Child {
@@ -458,13 +691,44 @@ mod tests {
         assert!(!outbox.accepts(4));
         assert!(outbox.writing.is_none() && outbox.latest.is_none());
     }
+    fn private_fixture_dirs(root: &Path, path: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::create_dir_all(path).unwrap();
+        let mut directory = root.to_path_buf();
+        for component in path.strip_prefix(root).unwrap().components() {
+            directory.push(component);
+            std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+    }
+    fn bundle_fixture() -> (tempfile::TempDir, PathBuf, PathBuf) {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::Builder::new().prefix("mcw-flutter-owner-").tempdir_in("/tmp").unwrap();
+        let base = directory.path().canonicalize().unwrap();
+        #[cfg(target_os = "linux")]
+        let (root, executable) = (base.clone(), base.join("runner"));
+        #[cfg(target_os = "macos")]
+        let (root, executable) = {
+            let root = base.join("Fixture.app");
+            (root.clone(), root.join("Contents/MacOS/runner"))
+        };
+        private_fixture_dirs(&base, executable.parent().unwrap());
+        #[cfg(target_os = "linux")]
+        {
+            private_fixture_dirs(&root, &root.join("lib"));
+            for library in ["libflutter_linux_gtk.so", "libapp.so"] {
+                std::fs::write(root.join("lib").join(library), b"fixture library").unwrap();
+                std::fs::set_permissions(root.join("lib").join(library),
+                    std::fs::Permissions::from_mode(0o600)).unwrap();
+            }
+        }
+        std::fs::write(&executable, b"fixture; never executed").unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+        (directory, root, executable)
+    }
     #[test]
     fn bundle_requires_single_link_owned_executable_and_no_symlink() {
         use std::os::unix::fs::{PermissionsExt, symlink};
-        let directory = tempfile::Builder::new().prefix("mcw-flutter-owner-").tempdir_in("/tmp").unwrap();
-        let root = directory.path().canonicalize().unwrap();
-        let executable = root.join("runner");
-        std::fs::write(&executable, b"fixture; never executed").unwrap();
+        let (_directory, root, executable) = bundle_fixture();
         std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o600)).unwrap();
         assert!(Bundle::open(&executable).is_err());
         std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -478,6 +742,167 @@ mod tests {
         std::fs::remove_file(link).unwrap();
         std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o722)).unwrap();
         assert!(Bundle::open(&executable).is_err());
+    }
+    #[test]
+    fn entire_runtime_rejects_mutable_payload_and_external_links() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let (_directory, root, executable) = bundle_fixture();
+        let resources = root.join("resources");
+        private_fixture_dirs(&root, &resources);
+        let payload = resources.join("runtime");
+        std::fs::write(&payload, b"code or resources").unwrap();
+        std::fs::set_permissions(&payload, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(Bundle::open(&executable).is_ok());
+        std::fs::set_permissions(&payload, std::fs::Permissions::from_mode(0o622)).unwrap();
+        assert!(Bundle::open(&executable).is_err());
+        std::fs::set_permissions(&payload, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::fs::set_permissions(&resources, std::fs::Permissions::from_mode(0o722)).unwrap();
+        assert!(Bundle::open(&executable).is_err());
+        std::fs::set_permissions(&resources, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let outside = tempfile::tempdir_in("/tmp").unwrap();
+        symlink(outside.path(), resources.join("external")).unwrap();
+        assert!(Bundle::open(&executable).is_err());
+    }
+    #[test]
+    fn framework_version_links_stay_inside_bundle() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let (_directory, root, executable) = bundle_fixture();
+        let framework = root.join("Contents/Frameworks/Fixture.framework");
+        private_fixture_dirs(&root, &framework.join("Versions/A/Resources"));
+        std::fs::write(framework.join("Versions/A/Fixture"), b"framework").unwrap();
+        std::fs::set_permissions(framework.join("Versions/A/Fixture"),
+            std::fs::Permissions::from_mode(0o600)).unwrap();
+        symlink("A", framework.join("Versions/Current")).unwrap();
+        symlink("Versions/Current/Fixture", framework.join("Fixture")).unwrap();
+        symlink("Versions/Current/Resources", framework.join("Resources")).unwrap();
+        assert!(Bundle::open(&executable).is_ok());
+        let outside = tempfile::tempdir_in("/tmp").unwrap();
+        // Even an external alias that resolves back inside is not a trusted route.
+        symlink(&framework, outside.path().join("back")).unwrap();
+        symlink(outside.path().join("back/Fixture"), framework.join("external-hop")).unwrap();
+        assert!(Bundle::open(&executable).is_err());
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn runtime_engine_and_aot_library_are_required() {
+        let (_directory, root, executable) = bundle_fixture();
+        std::fs::remove_file(root.join("lib/libapp.so")).unwrap();
+        assert!(Bundle::open(&executable).is_err());
+    }
+    #[test]
+    fn directory_chain_rejects_mutable_ancestors_and_symlinks() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let directory = tempfile::tempdir_in("/tmp").unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let ancestor = root.join("ancestor");
+        let leaf = ancestor.join("private");
+        private_fixture_dirs(&root, &leaf);
+        std::fs::set_permissions(&leaf, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(pin_directory_chain(&leaf).is_ok());
+        std::fs::set_permissions(&ancestor, std::fs::Permissions::from_mode(0o722)).unwrap();
+        assert!(pin_directory_chain(&leaf).is_err());
+        std::fs::set_permissions(&ancestor, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let alias = root.join("alias");
+        symlink(&ancestor, &alias).unwrap();
+        assert!(pin_directory_chain(&alias.join("private")).is_err());
+        assert!(pin_directory_chain(&ancestor.join("../ancestor/private")).is_err());
+    }
+    fn await_completion(process: &mut OwnedProcess) -> std::process::ExitStatus {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Some(status) = process.completion().unwrap() { return status; }
+            assert!(Instant::now() < deadline, "fixture child did not exit");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+    #[test]
+    fn exited_leader_remains_waitable_until_group_cleanup() {
+        let mut process = OwnedProcess::new(Command::new("/bin/sh")
+            .args(["-c", "sleep 30 & exit 0"]).process_group(0).stdout(Stdio::piped()).spawn().unwrap());
+        let mut output = process.process.stdout.take().unwrap();
+        nonblocking(&output).unwrap();
+        assert!(await_completion(&mut process).success());
+        assert!(process.completion().unwrap().unwrap().success());
+        assert!(process.owns_pid);
+        process.cleanup();
+        assert!(!process.owns_pid);
+        // The descendant inherited stdout. EOF proves cleanup did not merely
+        // reap the already-exited shell and leave the group member running.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            match output.read(&mut [0u8; 1]) {
+                Ok(0) => break,
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+                result => panic!("unexpected fixture output: {result:?}"),
+            }
+            assert!(Instant::now() < deadline, "descendant survived owned group cleanup");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        process.cleanup(); // Idempotent: never signal the released group ID.
+    }
+    #[test]
+    fn external_reap_revokes_numeric_signal_ownership() {
+        let mut process = OwnedProcess::new(Command::new("/bin/sh")
+            .args(["-c", "exit 0"]).process_group(0).spawn().unwrap());
+        assert!(process.process.wait().unwrap().success());
+        assert_eq!(process.completion().unwrap_err().raw_os_error(), Some(libc::ECHILD));
+        assert!(!process.owns_pid);
+        process.cleanup();
+    }
+    // Lifecycle fixtures never execute a Flutter bundle or touch a device.
+    fn opening_fixture(script: &str) -> (tempfile::TempDir, Supervisor) {
+        let (directory, _root, executable) = bundle_fixture();
+        let bundle = Bundle::open(&executable).unwrap();
+        let mut process = OwnedProcess::new(Command::new("/bin/sh")
+            .args(["-c", script]).process_group(0).stdin(Stdio::piped())
+            .stdout(Stdio::piped()).spawn().unwrap());
+        let input = process.process.stdin.take().unwrap();
+        let output = process.process.stdout.take().unwrap();
+        nonblocking(&input).unwrap();
+        nonblocking(&output).unwrap();
+        let child = Child {
+            process, input: Some(input), output, outbox: Outbox::default(),
+            lines: EventLines::default(), events: Vec::new(),
+            commands: CommandSession::new("0123456789abcdef0123456789abcdef".into()).unwrap(),
+            preferences: PreferenceSession::default(), capability: PreferencesSnapshot::default(),
+            queued: None, pending: None, changed: false, ready: false,
+            started: Instant::now(), closing: None, _bundle: bundle,
+        };
+        (directory, Supervisor { executable, child: Some(child), next_ticket: 0,
+            error: None, open_failure: None })
+    }
+    #[test]
+    fn before_ready_exit_is_open_failure_but_ready_exit_and_explicit_close_are_not() {
+        for (ready, closing, expected) in [(false, false, true), (true, false, false), (false, true, false)] {
+            let (_directory, mut supervisor) = opening_fixture("exit 0");
+            let child = supervisor.child.as_mut().unwrap();
+            child.ready = ready;
+            await_completion(&mut child.process);
+            if closing { supervisor.close().unwrap(); }
+            supervisor.poll();
+            assert_eq!(supervisor.take_open_failure().is_some(), expected);
+            assert!(supervisor.take_open_failure().is_none());
+            assert!(!supervisor.is_running());
+        }
+    }
+    #[test]
+    fn readiness_timeout_and_event_eof_report_failed_opening() {
+        let (_directory, mut supervisor) = opening_fixture("sleep 30");
+        supervisor.child.as_mut().unwrap().started = Instant::now() - READY_TIMEOUT;
+        supervisor.poll();
+        assert!(supervisor.take_open_failure().unwrap().contains("readiness timed out"));
+        drop(supervisor);
+        let (_directory, mut supervisor) = opening_fixture("exec 1>&-; sleep 30");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            supervisor.poll();
+            if let Some(failure) = supervisor.take_open_failure() {
+                assert!(failure.contains("closed its event pipe"));
+                break;
+            }
+            assert!(Instant::now() < deadline, "event EOF was not observed");
+            std::thread::sleep(Duration::from_millis(5));
+        }
     }
     #[test]
     fn preference_challenge_reconnect_and_replay_are_not_transferable() {

@@ -1873,6 +1873,9 @@ impl FlutterFrontend {
         }
         Ok(changed)
     }
+    fn take_open_failure(&mut self) -> Option<String> {
+        self.ui.as_mut().and_then(crate::frontends::desktop::unix::Supervisor::take_open_failure)
+    }
     fn finish(&mut self) {
         if let Some(ui) = self.ui.as_mut() { let _ = ui.close(); }
         // Persistence admitted by this process is not cancelled by a close or stop.
@@ -1893,6 +1896,8 @@ fn show_desktop(flutter: &mut FlutterFrontend, native: &mut DesktopHost) -> Resu
     match flutter.open("system") {
         Ok(()) => Ok(()),
         Err(error) => {
+            // A synchronous failure is handled here, not again on the next poll.
+            let _ = flutter.take_open_failure();
             eprintln!("MicCamWatch Flutter unavailable, opening native desktop: {error:#}");
             native.show_window()
         }
@@ -1911,9 +1916,12 @@ pub fn run_settings_development(lang: Language, initial_window: bool, theme: &st
 }
 
 #[cfg(feature = "flutter-desktop")]
-fn development_paths() -> Result<()> {
+fn development_paths() -> Result<Vec<File>> {
+    use crate::frontends::desktop::unix::pin_directory_chain;
     let home = std::env::var_os("HOME").context("development HOME is required")?;
-    let home = Path::new(&home).canonicalize().context("resolve development HOME")?;
+    let home = Path::new(&home);
+    let mut pins = pin_directory_chain(home).context("pin development HOME ancestors")?;
+    let home = home.canonicalize().context("resolve development HOME")?;
     // HOME may itself be redirected by the development launcher. Also exclude
     // the account's real normal trees, so that cannot disguise the stable store.
     let mut record: libc::passwd = unsafe { std::mem::zeroed() };
@@ -1928,12 +1936,16 @@ fn development_paths() -> Result<()> {
     let account = unsafe { std::ffi::CStr::from_ptr(record.pw_dir) };
     let account = Path::new(std::ffi::OsStr::from_bytes(account.to_bytes()));
     ensure!(account.is_absolute(), "account home is not absolute");
+    pins.extend(pin_directory_chain(account).context("pin account home ancestors")?);
     let account = account.canonicalize().context("resolve account home")?;
     let mut roots = Vec::new();
     for (variable, fallback) in [("XDG_CONFIG_HOME", ".config"), ("XDG_DATA_HOME", ".local/share")] {
         let value = std::env::var_os(variable).with_context(|| format!("explicit private {variable} required"))?;
         let path = Path::new(&value);
         ensure!(path.is_absolute(), "{variable} must be absolute");
+        // Validate the original environment pathname before resolving it: later
+        // settings accesses use this spelling, not just its canonical target.
+        pins.extend(pin_directory_chain(path).with_context(|| format!("pin {variable} ancestors"))?);
         let metadata = fs::symlink_metadata(path).with_context(|| format!("prepare a private {variable} directory first"))?;
         ensure!(metadata.is_dir() && !metadata.file_type().is_symlink()
             && metadata.uid() == uid() && metadata.mode() & 0o077 == 0,
@@ -1966,13 +1978,14 @@ fn development_paths() -> Result<()> {
     }
     ensure!(!roots[0].starts_with(&roots[1]) && !roots[1].starts_with(&roots[0]),
         "development config/data roots must be separate");
-    Ok(())
+    Ok(pins)
 }
 
 #[cfg(feature = "flutter-desktop")]
 fn run_flutter_development(lang: Language, initial_window: bool, theme: &str, writable: bool) -> Result<()> {
     ensure!(matches!(theme, "system" | "light" | "dark"), "unsupported desktop theme");
-    development_paths()?;
+    // Keep every ancestor pinned until the worker, frontend and lifecycle stop.
+    let _directory_pins = development_paths()?;
     // Reuse the authenticated native singleton implementation unchanged, including
     // Linux SO_PEERPIDFD/image verification. The isolated XDG roots own this namespace.
     let Some(lifecycle) = Lifecycle::acquire_for_launch(initial_window, false)? else { return Ok(()) };
@@ -1984,11 +1997,29 @@ fn run_flutter_development(lang: Language, initial_window: bool, theme: &str, wr
     }
     let pending = Arc::new(std::sync::Mutex::new(None::<Reading>));
     let stop = Arc::new(AtomicBool::new(false));
-    struct Stop(Arc<AtomicBool>);
-    impl Drop for Stop { fn drop(&mut self) { self.0.store(true, Ordering::Release); } }
-    let _stop = Stop(stop.clone());
+    struct Observer {
+        stop: Arc<AtomicBool>,
+        thread: Option<thread::JoinHandle<()>>,
+    }
+    impl Observer {
+        fn stop_and_join(&mut self) -> Result<()> {
+            self.stop.store(true, Ordering::Release);
+            if let Some(thread) = self.thread.take() {
+                thread.join().map_err(|_| anyhow::anyhow!("development Unix observer panicked"))?;
+            }
+            Ok(())
+        }
+    }
+    impl Drop for Observer {
+        fn drop(&mut self) {
+            if let Err(error) = self.stop_and_join() {
+                eprintln!("MicCamWatch development observer shutdown failed: {error:#}");
+            }
+        }
+    }
     let readings = pending.clone();
-    thread::Builder::new().name("miccamwatch-unix-observer".into()).spawn(move || {
+    let observer_stop = stop.clone();
+    let observer_thread = thread::Builder::new().name("miccamwatch-unix-observer".into()).spawn(move || {
         let result = PlatformMonitor::new(Policy::default());
         let mut monitor = match result {
             Ok(monitor) => monitor,
@@ -2000,7 +2031,7 @@ fn run_flutter_development(lang: Language, initial_window: bool, theme: &str, wr
             }
         };
         let filter = Filter { include_ready: true, ..Filter::default() };
-        while !stop.load(Ordering::Acquire) {
+        while !observer_stop.load(Ordering::Acquire) {
             let profile = Settings::load().ok().map(|settings| settings.profile);
             if let Some(profile) = profile {
                 monitor.set_policy(Policy { profile: profile.assessment_profile(), ..Policy::default() });
@@ -2009,16 +2040,20 @@ fn run_flutter_development(lang: Language, initial_window: bool, theme: &str, wr
             *readings.lock().unwrap_or_else(|e| e.into_inner()) =
                 Some(Reading { snapshot, at: chrono::Utc::now(), applied_profile: profile });
             let until = Instant::now() + INTERVAL;
-            while !stop.load(Ordering::Acquire) && Instant::now() < until {
+            while !observer_stop.load(Ordering::Acquire) && Instant::now() < until {
                 thread::sleep(Duration::from_millis(50));
             }
         }
     }).context("start real Unix collector")?;
-    if initial_window { frontend.open(theme)?; }
-    lifecycle.ready.store(true, Ordering::Release);
+    let mut observer = Observer { stop, thread: Some(observer_thread) };
     let outcome = (|| -> Result<()> {
+        if initial_window { frontend.open(theme)?; }
+        lifecycle.ready.store(true, Ordering::Release);
         while !lifecycle.stop.load(Ordering::Acquire) {
             frontend.refresh()?;
+            if let Some(error) = frontend.take_open_failure() {
+                bail!("development Flutter desktop failed before ready: {error}");
+            }
             if lifecycle.open_requested.swap(false, Ordering::AcqRel) { frontend.open(theme)?; }
             if let Some(reading) = pending.lock().unwrap_or_else(|e| e.into_inner()).take() {
                 frontend.applied_profile = reading.applied_profile;
@@ -2031,6 +2066,7 @@ fn run_flutter_development(lang: Language, initial_window: bool, theme: &str, wr
     })();
     lifecycle.ready.store(false, Ordering::Release);
     frontend.finish();
+    let outcome = outcome.and(observer.stop_and_join());
     lifecycle.clean_shutdown.store(outcome.is_ok(), Ordering::Release);
     outcome
 }
@@ -2126,7 +2162,17 @@ pub fn run_tray(
             }
             host.check()?;
             #[cfg(feature = "flutter-desktop")]
-            if flutter.refresh()? { next_poll = Instant::now(); }
+            {
+                if flutter.refresh()? { next_poll = Instant::now(); }
+                if let Some(error) = flutter.take_open_failure() {
+                    eprintln!("MicCamWatch Flutter failed before ready, opening native desktop: {error}");
+                    if let Err(error) = host.show_window() {
+                        feedback = Some(format!("{}: {error:#}", words(lang).failed));
+                        action_error = true;
+                    }
+                    next_poll = Instant::now();
+                }
+            }
             #[cfg(target_os = "linux")]
             if let Some(error) = host.take_window_error() {
                 feedback = Some(format!("{}: {error}", words(lang).failed));

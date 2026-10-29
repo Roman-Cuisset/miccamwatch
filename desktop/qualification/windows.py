@@ -3,6 +3,9 @@ Default runner is read-only. Controlled Host requires explicit isolated environm
 and paired CLI identity; its UI can invoke native microphone actions after consent.
 Settings-only Host requires a settings_development manifest and explicit isolated
 APPDATA/LOCALAPPDATA beneath the qualification root. It never permits CLI children.
+The explicit notification_probe variant uses a matching probe manifest and only
+TEST-labelled synthetic alert events; collectors/dashboard remain genuine, all
+hardware commands stay disabled, and Windows uses a separate qualification AUMID.
 Requires Python3.12+, psutil and Pillow. No administrator rights.
 """
 import argparse
@@ -134,25 +137,29 @@ class Host:
     settings_development=False
 
 
-    def __init__(self,prefix,theme,controlled=False,environment=None,*,settings_development=False):
+    def __init__(self,prefix,theme,controlled=False,environment=None,*,settings_development=False,notification_probe=False):
         self.prefix=prefix.resolve();self.exe=self.prefix/'mcw-tray.exe'
         self.ui=self.prefix/'desktop/miccamwatch_desktop.exe'
+        if notification_probe and not settings_development:
+            raise RuntimeError('Notification probe requires explicit isolated settings-development mode')
         if controlled and settings_development:
             raise RuntimeError('Controlled and settings-only development modes are mutually exclusive')
         self.controlled=controlled;self.settings_development=settings_development
+        self.notification_probe=notification_probe
         self.cli=self.prefix/'mcw.exe'
         allowed=Path(os.environ['LOCALAPPDATA'])/'MicCamWatchQualification'
         if not self.prefix.is_relative_to(allowed.resolve()):
             raise RuntimeError('Qualification prefix must be under the dedicated local evidence root')
         manifest=json.loads((self.prefix/'qualification-manifest.json').read_text(encoding='utf-8-sig'))
-        if manifest.get('mode') not in ['read_only_development','controlled_development','settings_development'] or manifest.get('feature')!='flutter-desktop':
+        if manifest.get('mode') not in ['read_only_development','controlled_development','settings_development','settings_notification_probe_development'] or manifest.get('feature')!='flutter-desktop':
             raise RuntimeError('Development manifest missing')
         if controlled and (manifest.get('mode')!='controlled_development' or not environment
                            or sha(self.cli)!=manifest.get('cli_sha256')):
             raise RuntimeError('Controlled mode requires explicit isolated environment and paired CLI identity')
         if settings_development:
-            if manifest.get('mode')!='settings_development' or not environment:
-                raise RuntimeError('Settings mode requires its matching manifest and explicit isolated environment')
+            expected_mode='settings_notification_probe_development' if notification_probe else 'settings_development'
+            if manifest.get('mode')!=expected_mode or not environment:
+                raise RuntimeError('Settings/probe mode requires its matching manifest and explicit isolated environment')
             isolated=[]
             for key in ('APPDATA','LOCALAPPDATA'):
                 value=environment.get(key)
@@ -171,7 +178,8 @@ class Host:
         if sha(self.exe)=='5a0253ea90a77bf7478f6a9f1826290f6a6055723cb12bdf4975b89bdfb1b6fe':
             raise RuntimeError('Refusing the stable binary: its parser lacks the development mode')
         self.lines=[];self.theme=theme;self.started=time.perf_counter()
-        mode=('--settings-development' if settings_development else
+        mode=('--settings-notification-probe-development' if notification_probe else
+              '--settings-development' if settings_development else
               '--controlled-development' if controlled else '--read-only-development')
         self.proc=subprocess.Popen([str(self.exe),mode,'--desktop-theme',theme],
             stdout=subprocess.PIPE,stderr=subprocess.STDOUT,encoding='utf-8',errors='replace',

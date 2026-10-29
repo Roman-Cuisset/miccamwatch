@@ -107,15 +107,32 @@ pub(crate) fn deliver_message(
         )
     })?;
     let notifier = ToastNotificationManager::CreateToastNotifierWithId(identity_id(identity))?;
-    let availability = notifier.Setting()?;
-    if availability != NotificationSetting::Enabled {
-        return Err(windows::core::Error::new(
-            windows::core::HRESULT(0x80070005u32 as i32),
-            format!("Windows notifications unavailable for this application (setting {})", availability.0),
-        ));
-    }
+    let catalog_missing = match notifier.Setting() {
+        Ok(NotificationSetting::Enabled) => false,
+        Ok(setting) => return Err(unavailable_notification_setting(setting)),
+        // An unpackaged AUMID's notification catalog entry is created by its
+        // first official Show, not by CreateToastNotifier/registry metadata.
+        // Show still enforces Windows policy; no OS preference is changed here.
+        Err(error) if error.code() == windows::core::HRESULT(0x80070490u32 as i32) => true,
+        Err(error) => return Err(error),
+    };
     notifier.Show(&toast)?;
+    if catalog_missing {
+        // Never turn absent/unknown permission into an enabled claim.
+        let setting = notifier.Setting()?;
+        if setting != NotificationSetting::Enabled {
+            return Err(unavailable_notification_setting(setting));
+        }
+    }
     Ok(DeliveryOutcome::Submitted)
+}
+
+#[cfg(windows)]
+fn unavailable_notification_setting(setting: NotificationSetting) -> windows::core::Error {
+    windows::core::Error::new(
+        windows::core::HRESULT(0x80070005u32 as i32),
+        format!("Windows notifications unavailable for this application (setting {})", setting.0),
+    )
 }
 
 #[cfg(windows)]
