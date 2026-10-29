@@ -27,6 +27,7 @@ pub(crate) const APP_ID: &HSTRING = windows::core::h!("MicCamWatch.MicCamWatch")
 #[derive(Clone, Copy)]
 pub(crate) enum NotificationIdentity {
     Installed,
+    #[cfg(any(test, feature = "flutter-desktop"))]
     Qualification,
 }
 
@@ -34,6 +35,7 @@ pub(crate) enum NotificationIdentity {
 fn identity_id(identity: NotificationIdentity) -> &'static HSTRING {
     match identity {
         NotificationIdentity::Installed => APP_ID,
+        #[cfg(any(test, feature = "flutter-desktop"))]
         NotificationIdentity::Qualification => windows::core::h!("MicCamWatch.Qualification"),
     }
 }
@@ -46,6 +48,7 @@ fn ensure_identity_for(identity: NotificationIdentity) -> anyhow::Result<()> {
     ))?;
     key.set_value("DisplayName", &match identity {
         NotificationIdentity::Installed => "MicCamWatch",
+        #[cfg(any(test, feature = "flutter-desktop"))]
         NotificationIdentity::Qualification => "MicCamWatch TEST Qualification",
     })?;
     key.set_value("ShowInSettings", &1u32)?;

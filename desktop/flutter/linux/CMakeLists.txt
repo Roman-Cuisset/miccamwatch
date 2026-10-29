@@ -82,6 +82,13 @@ set(BUILD_BUNDLE_DIR "${PROJECT_BINARY_DIR}/bundle")
 if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
   set(CMAKE_INSTALL_PREFIX "${BUILD_BUNDLE_DIR}" CACHE PATH "..." FORCE)
 endif()
+# An earlier configure failure can cache CMake's default before the block above
+# runs. Never turn a resumed `flutter build` into an implicit system install.
+if(CMAKE_INSTALL_PREFIX STREQUAL "/usr/local")
+  message(FATAL_ERROR
+    "Refusing the cached system install prefix. Configure with "
+    "-DCMAKE_INSTALL_PREFIX=${BUILD_BUNDLE_DIR}; do not run this build as root.")
+endif()
 
 # Start with a clean build bundle directory every time.
 install(CODE "

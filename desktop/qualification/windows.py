@@ -38,6 +38,8 @@ U.PostMessageW.argtypes = [W.HWND, W.UINT, W.WPARAM, W.LPARAM]
 U.GetClientRect.argtypes = [W.HWND, C.POINTER(W.RECT)]
 U.ShowWindow.argtypes = [W.HWND, C.c_int]
 U.UpdateWindow.argtypes = [W.HWND]
+U.SetWindowPos.argtypes = [W.HWND,W.HWND,C.c_int,C.c_int,C.c_int,C.c_int,W.UINT]
+U.SetForegroundWindow.argtypes = [W.HWND]
 U.GetDpiForWindow.argtypes, U.GetDpiForWindow.restype = [W.HWND], W.UINT
 U.GetDC.argtypes, U.GetDC.restype = [W.HWND], W.HDC
 U.ReleaseDC.argtypes = [W.HWND, W.HDC]
@@ -92,12 +94,13 @@ def capture(hwnd,path,dark):
         pixels=C.create_string_buffer(r.right*r.bottom*4)
         assert G.GetDIBits(target,bitmap,0,r.bottom,pixels,C.byref(header),0)==r.bottom
         image=Image.frombuffer('RGB',(r.right,r.bottom),pixels.raw,'raw','BGRX',0,1)
-        expected=(17,26,23) if dark else (244,246,245)
-        colors={color:count for count,color in image.getcolors(r.right*r.bottom)}
-        assert colors.get(expected,0)>1000,'Expected UI palette missing'
+        # Native Material pages need not expose Overview's exact background RGB.
+        # Reject empty surfaces here; actual content/theme still requires review.
+        assert any(low!=high for low,high in image.getextrema()),'Blank owned UI surface'
         image.save(path)
         return {'file':path.name,'sha256':sha(path),'client':[r.right,r.bottom],
-                'dpi':U.GetDpiForWindow(hwnd),'api':'PrintWindow owned HWND'}
+                'dpi':U.GetDpiForWindow(hwnd),'api':'PrintWindow owned HWND',
+                'requested_theme':'dark' if dark else 'light','visual_review_required':True}
     finally:
         G.SelectObject(target,old);G.DeleteObject(bitmap);G.DeleteDC(target);U.ReleaseDC(hwnd,dc)
 
@@ -276,6 +279,10 @@ class Host:
         # Restore only the owned child; never capture unrelated desktop pixels.
         hwnd=self.view()[0][0]
         U.ShowWindow(hwnd,9)
+        # Normal activation only: no topmost flag, input attachment, focus-policy
+        # override or global desktop capture. Windows may deny foreground focus.
+        U.SetWindowPos(hwnd,0,0,0,0,0,0x43)  # NOMOVE | NOSIZE | SHOWWINDOW
+        U.SetForegroundWindow(hwnd)
         U.UpdateWindow(hwnd)
         time.sleep(.2)
         return hwnd

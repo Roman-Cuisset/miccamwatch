@@ -500,12 +500,11 @@ impl Supervisor {
         Ok(())
     }
     pub fn publish(&mut self, snapshot: DesktopSnapshot) -> Result<()> {
-        if let Some(child) = self.child.as_mut() {
-            if child.closing.is_none() && child.outbox.accepts(snapshot.sequence) {
-                let frame = child.frame(snapshot)?;
-                child.outbox.replace(frame);
-                child.changed = false;
-            }
+        if let Some(child) = self.child.as_mut()
+            && child.closing.is_none() && child.outbox.accepts(snapshot.sequence) {
+            let frame = child.frame(snapshot)?;
+            child.outbox.replace(frame);
+            child.changed = false;
         }
         Ok(())
     }
@@ -528,13 +527,12 @@ impl Supervisor {
                 false
             }
         };
-        if !exited && child.closing.is_none() {
-            if let Err(error) = child.pump(&mut self.next_ticket, now) {
-                let failure = format!("{error:#}");
-                if child.failed_opening() { self.open_failure = Some(failure.clone()); }
-                self.error = Some(failure);
-                child.begin_close(now);
-            }
+        if !exited && child.closing.is_none()
+            && let Err(error) = child.pump(&mut self.next_ticket, now) {
+            let failure = format!("{error:#}");
+            if child.failed_opening() { self.open_failure = Some(failure.clone()); }
+            self.error = Some(failure);
+            child.begin_close(now);
         }
         if exited || child.closing.is_some_and(|at| now.saturating_duration_since(at) >= CLOSE_GRACE) {
             self.child.take();

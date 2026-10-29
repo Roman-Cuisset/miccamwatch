@@ -184,6 +184,7 @@ impl CaptureAlerts {
     }
 }
 
+#[cfg(feature = "flutter-desktop")]
 /// Explicit qualification-only fixture, never returned as dashboard observations.
 /// Two independent resource starts; duplicates, Ready, and an observation gap
 /// traverse exactly the same transition/cooldown/delivery path as native snapshots.
@@ -337,23 +338,28 @@ mod tests {
         assert_eq!(health.undelivered.load(Ordering::Relaxed), 1);
     }
     #[test]
-    fn disconnected_worker_reports_failure_and_fixture_is_bounded_and_labelled() {
+    fn repeated_capture_cooldown_and_disconnected_delivery_are_distinct() {
         let (sender, pending) = mpsc::sync_channel(NOTIFICATION_QUEUE_CAPACITY);
         let worker = NotificationWorker { sender, health: Arc::new(NotificationHealth::default()) };
         let mut alerts = CaptureAlerts::default();
-        submit_test_sequence(&mut alerts, &worker, Language::En);
-        let first = pending.try_recv().unwrap();
-        let second = pending.try_recv().unwrap();
-        for (title, detail) in [first, second] {
-            assert!(title.starts_with("TEST — "));
-            assert!(detail.starts_with("TEST fixture only; no hardware capture."));
-        }
-        assert!(pending.try_recv().is_err());
-        submit_test_sequence(&mut alerts, &worker, Language::En);
-        assert!(pending.try_recv().is_err(), "immediate replay stays in process cooldown");
+        let active = Snapshot {
+            collectors: Vec::new(),
+            accesses: vec![
+                access(Resource::Microphone, "microphone", Activity::Active),
+                access(Resource::Camera, "camera", Activity::Active),
+            ],
+            observation_gaps: Vec::new(),
+        };
+        let stopped = Snapshot { collectors: Vec::new(), accesses: Vec::new(), observation_gaps: Vec::new() };
+        alerts.observe(&active, &worker, Language::En, false);
+        let _microphone = pending.try_recv().unwrap();
+        let _camera = pending.try_recv().unwrap();
+        alerts.observe(&stopped, &worker, Language::En, false);
+        alerts.observe(&active, &worker, Language::En, false);
+        assert!(matches!(pending.try_recv(), Err(mpsc::TryRecvError::Empty)));
         assert_eq!(worker.health.suppressed_cooldown.load(Ordering::Relaxed), 2);
         drop(pending);
-        assert!(!worker.submit("TEST", "disconnected"));
+        assert!(!worker.submit("capture", "disconnected"));
         assert_eq!(worker.health.undelivered.load(Ordering::Relaxed), 1);
     }
 }
