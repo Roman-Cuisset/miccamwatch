@@ -1,4 +1,4 @@
-# Native feature migration inventory — stages A and B1
+# Native feature migration inventory — stages A, B1 and B2
 
 Source baseline: `b5cf391c1905cbc391c47220f1347c55ba8e24cc`, 27 October 2026. Inspection only; runtime qualification is recorded separately. This inventory preserves every native/public CLI capability and its actual limitations.
 
@@ -6,7 +6,24 @@ The inventory priorities mean **A = microphone**, **B = presentation/preferences
 
 Stage A implementation update: Windows now has explicit desired-state microphone commands through the existing Rust worker, private protocol2 admission and native readback. Real mute/release, UI process exit, retained native guard and reopening without duplicate UI have been exercised. Other controls/platforms remain gated; this inventory's source references and “inspection only” evidence describe the pinned baseline, not the later runtime qualification. Sidebar/Windows branding now uses official assets; macOS/Linux Flutter packaging identity remains unqualified. See the current stage A results in the ROADMAP.
 
-### Next tranche after stage A approval — B1
+## Current B2 qualification — 29 October 2026
+
+Paired performance checkpoint `d37c8e8`; final code/build and Windows/Linux lifecycle smoke checkpoint `9aa4689`. See [B2 results, methods and remaining gates](FLUTTER_B2_QUALIFICATION.md). This is not full parity, installed-package qualification or a public0.21.1 release.
+
+| Function / platform | B2 state actually established | Remaining gate |
+|---|---|---|
+| Windows capture notifications and sound | Existing Rust snapshots/transitions connected to a bounded native worker; live master/pause/audio preferences, cooldown and failures. TEST pipeline submitted while Flutter was absent; actual Flutter writes persisted; OS history confirmed silent/sound requests. | Physical audibility/banner, controlled genuine capture and other Windows configurations not tested. Operational path compiled, not installed over stable MSI. |
+| Four safe preferences | Windows actual GUI/native CAS/readback retained; same Dart components and typed preferences wired to Unix owner. | Linux GUI mutation not yet exercised; no macOS runtime. History flag controls future recording only and is explicitly ineffective in development mode. |
+| Windows background CPU | Fresh kernel generation inventory with immutable birth facts only; matched closed CPU17.53→11.60%, signatures fresh, cadence not reduced. | Non-negligible remaining signature cost; no universal/significance/Windows10 gain claim. Active-capture and trust-mutation latency cases untested. |
+| Linux x64 frontend | Rust and Flutter release builds, real WSLg X11 display/IPC snapshots, light/dark captures, six close/reopens, same-child activation and stopped-child parent-death check. Unknown/unavailable media sources displayed honestly. | Real SNI tray/native fallback surface, hardware controls, native Wayland, package lifecycle and physical Linux/GPU not qualified. Software llvmpipe open CPU39.09% remains a performance limitation. |
+| Linux ARM64 | Architecture-neutral Unix route prepared; original ELF/installer checks retained. | No new Flutter ARM64 build/package/runtime or physical ARM validation. Earlier native CI is not B2 proof. |
+| macOS Intel / Apple Silicon | Unix route, official runner branding, activation and independent native parent monitoring prepared; AppKit retained. | No available macOS/Xcode host: all builds, sandbox/IPC, execution, visuals, controls and signing/package checks remain open. Respect native macOS15 minimum. |
+| Common appearance | Same Dart app/protocol3, navigation, cards, preferences, themes and official sidebar asset; seven-language widget checks on Windows/Linux. | Real visuals only French125% Windows and English100% Linux; not seven native visual reviews or full accessibility/DPI qualification. |
+
+Still absent from Flutter: pause/resume UI (native CLI was exercised), autostart, full doctor/history presentation, camera/lock/maintenance flows and platform-specific Unix microphone controls. No browser/export API or persisted language/theme API is invented. Windows explicit release still unmutes supported active inputs rather than restoring each original; B2 does not invoke or generalize it. Bundle-aware installation/update/uninstall is not qualified by private prefixes. GTK/AppKit must remain until replacements pass their real gates.
+
+
+### Historical B1 handoff
 
 | Priority | Remaining function | Scope and gate |
 |---|---|---|
@@ -23,9 +40,9 @@ B1 runtime `a0411ea` is compiled and exercised on Windows with isolated preferen
 
 - **Stage A can reuse the existing Windows microphone owner**, without migrating camera authorization, restoration, settings, or maintenance. The native tray microphone worker currently accepts **toggle**, not an explicit desired-state assignment; the underlying Rust API already supports `set_microphone_mute(bool)`.
 - **Requested protection, effective SDK/PnP/profile state, and observed capture are independent.** Neither “mute requested” nor “SDK muted” means microphone permission denied.
-- Important actual gaps: **no export command/history browser**, no tray/native process termination, unused persisted `show_ready`, Linux TUI camera controls deliberately disabled, and Windows tray notification/sound preferences do **not** currently implement capture-event alerts/chimes.
+- Baseline gaps at the pinned source revision: **no export command/history browser**, no tray/native process termination, unused persisted `show_ready`, Linux TUI camera controls deliberately disabled, and Windows tray preferences did **not** implement capture-event alerts/chimes. The current B2 section supersedes that Windows alert gap.
 
-**Evidence scope:** source and asset inspection only. No edits, builds, tests, process/device actions, or settings changes.
+**Baseline evidence scope:** source and asset inspection only. The later B1/B2 runtime results above are separate evidence, not retroactive validation of these pinned line references.
 
 ## Files
 
@@ -171,7 +188,7 @@ Evidence: **SET:20-74,88-147**; **WT:2177-2227**; **U:2118-2140,2239-2260**. Rep
 
 `src/config.rs:5-94`. Publisher/path rules are policy evidence, not an OS per-app privacy permission editor. Online trust explicitly permits native trust-network behavior; no GUI rule editor currently exists.
 
-**Actual alert-delivery discrepancies to preserve/report—not silently call implemented:**
+**Baseline alert-delivery discrepancies — Windows capture dispatch superseded by B2 above:**
 
 - Windows tray records access history but does **not dispatch capture-event notifications/chimes**. Its asynchronous toasts report operations/errors and are not gated by notification-enable/pause preferences. Evidence: **WT:1061-1114,1142-1247,1248-1315**; all `notify_async` callers are control/settings/lifecycle paths.
 - Windows `watch` computes notification gating at startup; sound is independent of that notification gate. **MAIN:184-208**; `src/watcher/windows.rs:332-375`.

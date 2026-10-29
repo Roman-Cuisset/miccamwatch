@@ -2615,3 +2615,67 @@ Lots futurs **à approuver, aucun correctif appliqué** :
 - Premier essai de notifications TEST réel : Flutter absent, un seul processus, sortie propre ;2échecs WinRT `0x80070490`, donc **aucune remise réussie revendiquée sur cet essai**. Cause isolée par sonde native : pour un AUMID neuf, `Setting()` échoue avant le premier `Show`, puis le premier envoi officiel initialise le canal et permet sa relecture activée. Un toast TEST silencieux retrouvé dans l’historique du seul canal de qualification. Canal MSI lu uniquement pour disponibilité, jamais utilisé pour envoyer un test ; aucun raccourci/autorisation système modifié.
 - Correctif du premier envoi ajouté : seul le catalogue absent autorise la tentative officielle ; les autres erreurs/refus restent bloquants, et une disponibilité activée est exigée après cette initialisation. Pas encore de build/essai du worker corrigé à ce point. Prochaines preuves : notifications/pause/master/audio persistés et Flutter fermé, mesures CPU AB/BA, vrai affichage/IPC/cycle de vie Linux, puis matrice et bilan B2. Aucun push, merge, tag, déploiement, installation stable ou action matérielle.
 - Après corrections : Clippy Windows strict,5tests d’inventaire/générations,10tests notifications et build release des deux exécutables réussis ; **15tests du superviseur Unix réellement exécutés et réussis sur Linux**. Build Flutter Linux maintenant lié, mais installation du bundle refusée vers `/usr/local` : le cache CMake du premier configure incomplet a conservé son préfixe par défaut. Aucun droit élevé demandé ; remettre explicitement le préfixe sur le bundle privé avant la reprise, sans installation système.
+
+## 2026-10-29 — Tranche B2 livrée, arrêt pour validation avant B3
+
+- Branche locale `work/flutter-hybrid-0211` ; checkpoints `27948eb`, `d37c8e8`, puis `9aa4689`.
+  [Bilan B2 détaillé et limites](FLUTTER_B2_QUALIFICATION.md) ; [matrice de parité](FLUTTER_MIGRATION_MATRIX.md).
+  Aucun push, merge, tag, release, déploiement ni remplacement du MSI stable.
+- **Notifications Windows effectives dans Rust**, indépendamment de Flutter : mêmes snapshots de capture, transitions Active seulement,
+  cooldown30s, file bornée32, master/pause/audio persistés et relus avant livraison. Ready, répétitions et source incomplète ne créent pas de départ.
+  Erreurs et file indisponible restent visibles ; Submitted n'est pas une preuve de bannière affichée ou de son physiquement entendu.
+- Qualification isolée réelle : deux départs TEST remis Flutter fermé ; répétition immédiate supprimée ;
+  désactivation par la vraie fenêtre Flutter, persistance après redémarrage, réactivation et son sauvegardés/relus.
+  Pause/reprise par la CLI native vérifiées après redémarrage, Flutter fermé et collecte continuée.
+  Historique WinRT du seul canal TEST : sept entrées, dont deux demandes audio non silencieuses et cinq silencieuses.
+  Préférences privées remises à leurs valeurs initiales ; aucune commande matérielle B2.
+- Premier AUMID neuf : le préflight `Setting()` pouvait échouer avant le premier `Show`.
+  Correctif qualifié : seule l'absence du catalogue autorise la tentative officielle ; refus/politiques OS restent applicables,
+  et disponibilité relue après initialisation. Les messages opérationnels génériques gardent leur comportement B1.
+- **CPU Windows apparié**, builds release `27948eb` contre `d37c8e8`, deux tours AB/BA,20s par intervalle, mêmes états observés aux bornes :
+  Flutter fermé17,53→11,60% d'un cœur ; ouvert15,94→15,07%, mais deltas ouverts de signes opposés, donc gain ouvert non établi.
+  Une seule caméra Ready dans cette charge ; aucune latence de capture active ni plusieurs applis actives contrôlées revendiquées.
+- Optimisation : inventaire frais `SystemBasicProcessInformation` sur Windows11 compatible ; cache des seules dates de naissance
+  par PID/génération noyau, nouvelles naissances confirmées et fallback Toolhelp sur générations finales non échantillonnées.
+  Aucun cache de signature, jeton, chemin, module, verdict ou autorisation. Windows10 garde le chemin ancien, non mesuré ici.
+  Passe instrumentée séparée : inventaire12,87/14,91msCPU→0,45/0,22ms ; une vérification WinVerifyTrust par snapshot avant/après,
+  34/34 puis36/36 snapshots/vérifications par intervalle et cadence non réduite. Les signatures restent un coût important.
+- Mémoire Windows du comparatif : RSS fermé19,29→20,63Mio ; ouvert132,88→133,99Mio.
+  Sondes fonctionnelles distinctes : worker après remise TEST fermé26,86Mio ; réglages ouverts143,23Mio ; même owner après fermeture20,12Mio.
+  Ne pas mélanger ces modes en un seul benchmark. Bundle de qualification final Windows38,31Mio,15fichiers.
+- **Linux x64 réellement exécuté sous WSLg/X11** : même Flutter release, snapshots Linux réels dégradés/inconnus,
+  six ouvertures/fermetures sur les deux thèmes, demandes répétées réutilisant le même enfant, zéro Flutter après fermeture.
+  Première fenêtre X11 visible≈2,08s puis0,87–0,97s : mesure de fenêtre mappée, pas de premier raster.
+  Arrêt natif propre ; décès du parent jetable termine aussi un enfant explicitement suspendu via `PR_SET_PDEATHSIG`.
+  Captures Windows/français125% et Linux/anglais100% réellement examinées ; pas sept validations visuelles natives.
+- **Limite graphique Linux non masquée** : après stabilisation, llvmpipe logiciel confirmé,
+  fenêtre ouverte270,30–271,24MioRSS et39,09% d'un cœur ; fermée5,75Mio et1,20%, un processus, aucune bibliothèque Flutter dans Rust.
+  Ce n'est ni une validation Linux accéléré/Mint/Wayland physique ni une mesure du tray SNI opérationnel.
+  Aucune cadence, permission, règle ptrace, configuration GPU ou protection modifiée pour améliorer les chiffres.
+- Superviseur Unix renforcé après revue : groupe nettoyé avant reap, payload/ancêtres épinglés,
+  observateur stop-and-join, fallback natif sur échec avant Ready, parent surveillé indépendamment de Dart.
+  GTK/AppKit conservés. Sous macOS, monitor natif préparé mais suspendable avec tout le processus :
+  pas de garantie noyau équivalente à Linux. Aucun hôte/Xcode accessible, donc **aucun build/runtime/IPC/visuel/package macOS qualifié**.
+  Minimum effectif moteur/helper macOS15 conservé. ARM64 : préparation générique, aucune nouvelle compilation Flutter ni validation matérielle B2.
+- Vérifications finales : Clippy Windows strict natif seul et hybride,5tests générations,10tests notifications,42tests desktop,
+  builds release CLI/tray réussis ; Linux Clippy strict,49tests desktop dont15de confinement, build natif release réussi.
+  Flutter Windows/Linux : analyse sans erreur,47tests chacun, builds release réussis.
+  Cache CMake partiel corrigé vers un bundle privé ; garde `/usr/local` refusée par essai négatif avant installation, rebuild privé réussi.
+  Aucun paquet système installé : SDK/paquets vérifiés et extraits dans le répertoire de qualification.
+- Smoke final sur le code `9aa4689` : Windows trois cycles, activations concurrentes sans doublon, collecte continuée,
+  préférences privées identiques ; protocole-ready470/371/309ms dans ce seul essai.
+  Linux réutilisation de fenêtre, capture réelle, fermeture Flutter avec Rust vivant, puis arrêt natif exit0.
+  Bundle Linux final33,36Mio,14fichiers ; pas un package public final.
+- Préservation finale : binaires MSI, préférences stables et identité de notification installée identiques ; préfixe historique original conservé.
+  **Deux journaux d'intention stables ont évolué pendant la session**, auteur exact non établi ; verrou propriétaire actif non lisible.
+  Ils ont été laissés intacts, sans restauration forcée ni interruption du tray MSI/de son enfant.
+  Ne pas convertir ce contrôle en affirmation que tous les états de protection ou les neuf fichiers sont inchangés.
+  Les notifications TEST et leurs seules métadonnées créées ont été retirées après sauvegarde ; catalogue OS non modifié.
+  Un défaut de durée de vie COM du seul outil jetable de nettoyage a été corrigé, vérification finale lecture seule exit0.
+- Preuves privées : `%LOCALAPPDATA%\MicCamWatchQualification\flutter-b2-20261029-082656`
+  et `/home/roman/mcw-qualification/b2-20261029-082656`.
+  Conserver JSON/manifests, journaux et captures ; revue confidentialité avant toute diffusion de ces traces contenant chemins/processus.
+- **Point de reprise B3, après validation du propriétaire** : Linux accéléré/SNI et vraies interactions préférences ;
+  builds/exécution macOS Intel/Apple Silicon et Linux ARM64 ; contrats pause UI/autostart/diagnostics/historique.
+  Commandes caméra/lock, restauration individuelle des sourdines initiales et packaging/updater Flutter restent séparément à qualifier.
+  Aucun remplacement des anciennes interfaces ni annonce de parité complète, compatibilité ARM physique ou publication0.21.1.
