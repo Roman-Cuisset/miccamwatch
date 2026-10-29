@@ -833,7 +833,7 @@ impl Lifecycle {
         let server_open = open_requested.clone();
         #[cfg(target_os = "macos")]
         let window_input = Arc::new(DesktopInput::default());
-        #[cfg(target_os = "macos")]
+        #[cfg(all(target_os = "macos", not(feature = "flutter-desktop")))]
         let server_input = window_input.clone();
         let flags = (
             ready.clone(),
@@ -882,13 +882,13 @@ impl Lifecycle {
                                     {
                                         Ok("stopping\n")
                                     } else {
-                                        #[cfg(target_os = "macos")]
+                                        #[cfg(all(target_os = "macos", not(feature = "flutter-desktop")))]
                                         ensure!(
                                             !server_input.closed.load(Ordering::Acquire),
                                             "AppKit helper input closed; window request was not accepted"
                                         );
                                         server_open.store(true, Ordering::Release);
-                                        #[cfg(target_os = "macos")]
+                                        #[cfg(all(target_os = "macos", not(feature = "flutter-desktop")))]
                                         if flags.0.load(Ordering::Acquire)
                                             && server_open.swap(false, Ordering::AcqRel)
                                         {
@@ -1768,6 +1768,273 @@ fn make_view(
     view
 }
 
+/// Shared process-owned Flutter presentation/preferences lane. Native collectors,
+/// controls and alerts never depend on the disposable child remaining open.
+#[cfg(feature = "flutter-desktop")]
+struct FlutterFrontend {
+    ui: Option<crate::frontends::desktop::unix::Supervisor>,
+    worker: Option<crate::frontends::desktop::preferences::PreferenceWorker>,
+    current: Option<(Result<Snapshot, String>, chrono::DateTime<chrono::Utc>)>,
+    sequence: u64,
+    writable: bool,
+    profile_writable: bool,
+    operational: bool,
+    applied_profile: Option<PrivacyProfile>,
+    lang: Language,
+}
+#[cfg(feature = "flutter-desktop")]
+impl FlutterFrontend {
+    fn new(lang: Language, writable: bool, profile_writable: bool, operational: bool) -> Self {
+        Self {
+            ui: None, worker: None, sequence: 1, writable, profile_writable, operational,
+            applied_profile: None, lang,
+            current: None,
+        }
+    }
+    fn attached(&self) -> bool {
+        self.ui.as_ref().is_some_and(crate::frontends::desktop::unix::Supervisor::is_running)
+    }
+    fn frame(&mut self) -> crate::frontends::desktop::DesktopSnapshot {
+        self.sequence = self.sequence.checked_add(1).expect("desktop sequence exhausted");
+        let (snapshot, observed_at) = self.current.as_ref().map_or(
+            (Err("Initial native observation pending"), chrono::Utc::now()),
+            |(snapshot, at)| (snapshot.as_ref().map_err(String::as_str), *at),
+        );
+        let mut frame = crate::frontends::desktop::DesktopSnapshot::from_snapshot(
+            self.sequence, observed_at, self.lang.code(), snapshot,
+            if self.operational { "operational" } else if self.writable {
+                "settings_development"
+            } else { "read_only_development" },
+        );
+        frame.preferences = crate::frontends::desktop::observe_preferences(
+            self.writable, self.profile_writable, self.applied_profile,
+            crate::frontends::desktop::preferences::PreferenceEffects {
+                capture_notifications_supported: self.operational,
+                capture_sounds_supported: self.operational,
+                history_recording_supported: self.operational,
+                history_recording_active: false,
+            }, self.worker.as_ref(),
+        );
+        frame.preferences.effects.history_recording_active = self.operational
+            && frame.preferences.values.as_ref().is_some_and(|values| values.history_enabled);
+        frame
+    }
+    fn observe(&mut self, snapshot: Result<Snapshot, String>, observed_at: chrono::DateTime<chrono::Utc>) {
+        // Move the existing native observation; no DTO copies/serialization while
+        // closed, and reopening never starts with a deliberately stale last UI.
+        self.current = Some((snapshot, observed_at));
+    }
+    fn publish(&mut self) -> Result<()> {
+        if self.attached() {
+            let frame = self.frame();
+            self.ui.as_mut().expect("attached UI").publish(frame)?;
+        }
+        Ok(())
+    }
+    fn open(&mut self, theme: &str) -> Result<()> {
+        if self.ui.is_none() {
+            self.ui = Some(crate::frontends::desktop::unix::Supervisor::new()?);
+        }
+        let frame = self.frame();
+        self.ui.as_mut().expect("initialized UI").open(frame, theme)
+    }
+    fn refresh(&mut self) -> Result<bool> {
+        use crate::frontends::desktop::{
+            commands::CommandState,
+            preferences::{PreferenceWork, PreferenceWorker},
+            unix::Supervisor,
+        };
+        if let Some(ui) = self.ui.as_mut() { ui.poll(); }
+        let mut changed = false;
+        if let Some(completion) = self.worker.as_mut().and_then(PreferenceWorker::try_complete) {
+            if let Some(ui) = self.ui.as_mut() {
+                match completion.result {
+                    Ok(_) => ui.complete_preference(completion.ticket, CommandState::Succeeded, None,
+                        Some("Saved preference readback confirmed; applied policy and delivery remain separate".into())),
+                    Err(error) => ui.complete_preference(completion.ticket, CommandState::Failed,
+                        Some("preferences_error"), Some(format!("Preference write/readback failed or may be partial: {error}"))),
+                }
+            }
+            changed = true;
+        }
+        if let Some(command) = self.ui.as_mut().and_then(Supervisor::take_preference) {
+            let ticket = command.ticket;
+            let work = PreferenceWork { ticket, request: command.request, profile_writable: self.profile_writable };
+            if let Err(error) = PreferenceWorker::enqueue(&mut self.worker, work) {
+                self.ui.as_mut().expect("request UI").complete_preference(ticket, CommandState::Rejected,
+                    Some("preferences_worker"), Some(format!("Preference request not queued: {error:#}")));
+            }
+            changed = true;
+        }
+        changed |= self.ui.as_mut().is_some_and(Supervisor::take_controls_changed);
+        if changed { self.publish()?; }
+        if let Some(error) = self.ui.as_mut().and_then(Supervisor::take_error) {
+            eprintln!("MicCamWatch Flutter desktop: {error}; native controls remain available");
+        }
+        Ok(changed)
+    }
+    fn finish(&mut self) {
+        if let Some(ui) = self.ui.as_mut() { let _ = ui.close(); }
+        // Persistence admitted by this process is not cancelled by a close or stop.
+        while self.worker.as_ref().is_some_and(crate::frontends::desktop::preferences::PreferenceWorker::is_pending) {
+            let _ = self.refresh();
+            thread::sleep(Duration::from_millis(20));
+        }
+        self.ui.take();
+    }
+}
+#[cfg(feature = "flutter-desktop")]
+impl Drop for FlutterFrontend {
+    fn drop(&mut self) { self.finish(); }
+}
+
+#[cfg(feature = "flutter-desktop")]
+fn show_desktop(flutter: &mut FlutterFrontend, native: &mut DesktopHost) -> Result<()> {
+    match flutter.open("system") {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            eprintln!("MicCamWatch Flutter unavailable, opening native desktop: {error:#}");
+            native.show_window()
+        }
+    }
+}
+
+/// Explicit development modes never enter run_tray, resume protection, inspect
+/// camera controls, dispatch capture alerts, or run automatic lock policies.
+#[cfg(feature = "flutter-desktop")]
+pub fn run_read_only_development(lang: Language, initial_window: bool, theme: &str) -> Result<()> {
+    run_flutter_development(lang, initial_window, theme, false)
+}
+#[cfg(feature = "flutter-desktop")]
+pub fn run_settings_development(lang: Language, initial_window: bool, theme: &str) -> Result<()> {
+    run_flutter_development(lang, initial_window, theme, true)
+}
+
+#[cfg(feature = "flutter-desktop")]
+fn development_paths() -> Result<()> {
+    let home = std::env::var_os("HOME").context("development HOME is required")?;
+    let home = Path::new(&home).canonicalize().context("resolve development HOME")?;
+    // HOME may itself be redirected by the development launcher. Also exclude
+    // the account's real normal trees, so that cannot disguise the stable store.
+    let mut record: libc::passwd = unsafe { std::mem::zeroed() };
+    let mut result = std::ptr::null_mut();
+    let mut buffer = [0u8; 16_384];
+    let status = unsafe {
+        libc::getpwuid_r(uid(), &mut record, buffer.as_mut_ptr().cast(), buffer.len(), &mut result)
+    };
+    ensure!(status == 0 && !result.is_null() && !record.pw_dir.is_null(),
+        "cannot identify the account home for development isolation");
+    use std::os::unix::ffi::OsStrExt;
+    let account = unsafe { std::ffi::CStr::from_ptr(record.pw_dir) };
+    let account = Path::new(std::ffi::OsStr::from_bytes(account.to_bytes()));
+    ensure!(account.is_absolute(), "account home is not absolute");
+    let account = account.canonicalize().context("resolve account home")?;
+    let mut roots = Vec::new();
+    for (variable, fallback) in [("XDG_CONFIG_HOME", ".config"), ("XDG_DATA_HOME", ".local/share")] {
+        let value = std::env::var_os(variable).with_context(|| format!("explicit private {variable} required"))?;
+        let path = Path::new(&value);
+        ensure!(path.is_absolute(), "{variable} must be absolute");
+        let metadata = fs::symlink_metadata(path).with_context(|| format!("prepare a private {variable} directory first"))?;
+        ensure!(metadata.is_dir() && !metadata.file_type().is_symlink()
+            && metadata.uid() == uid() && metadata.mode() & 0o077 == 0,
+            "{variable} must be a private owned directory, not a symlink");
+        let root = path.canonicalize()?;
+        for home in [&home, &account] {
+            let normal = home.join(fallback);
+            let normal = normal.canonicalize().unwrap_or(normal);
+            ensure!(!root.starts_with(&normal) && !normal.starts_with(&root),
+                "{variable} must be isolated from the normal preference/data tree");
+        }
+        let app = root.join("MicCamWatch");
+        match fs::symlink_metadata(&app) {
+            Ok(metadata) => ensure!(metadata.is_dir() && !metadata.file_type().is_symlink()
+                && metadata.uid() == uid() && metadata.mode() & 0o022 == 0,
+                "existing development app directory must be owned, non-writable by others, and not a symlink"),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+        if variable == "XDG_CONFIG_HOME" {
+            match fs::symlink_metadata(app.join("settings.toml")) {
+                Ok(metadata) => ensure!(metadata.is_file() && !metadata.file_type().is_symlink()
+                    && metadata.nlink() == 1 && metadata.uid() == uid() && metadata.mode() & 0o022 == 0,
+                    "existing development settings must be an owned non-writable-by-others single-link file"),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+        roots.push(root);
+    }
+    ensure!(!roots[0].starts_with(&roots[1]) && !roots[1].starts_with(&roots[0]),
+        "development config/data roots must be separate");
+    Ok(())
+}
+
+#[cfg(feature = "flutter-desktop")]
+fn run_flutter_development(lang: Language, initial_window: bool, theme: &str, writable: bool) -> Result<()> {
+    ensure!(matches!(theme, "system" | "light" | "dark"), "unsupported desktop theme");
+    development_paths()?;
+    // Reuse the authenticated native singleton implementation unchanged, including
+    // Linux SO_PEERPIDFD/image verification. The isolated XDG roots own this namespace.
+    let Some(lifecycle) = Lifecycle::acquire_for_launch(initial_window, false)? else { return Ok(()) };
+    let mut frontend = FlutterFrontend::new(lang, writable, writable, false);
+    struct Reading {
+        snapshot: Result<Snapshot, String>,
+        at: chrono::DateTime<chrono::Utc>,
+        applied_profile: Option<PrivacyProfile>,
+    }
+    let pending = Arc::new(std::sync::Mutex::new(None::<Reading>));
+    let stop = Arc::new(AtomicBool::new(false));
+    struct Stop(Arc<AtomicBool>);
+    impl Drop for Stop { fn drop(&mut self) { self.0.store(true, Ordering::Release); } }
+    let _stop = Stop(stop.clone());
+    let readings = pending.clone();
+    thread::Builder::new().name("miccamwatch-unix-observer".into()).spawn(move || {
+        let result = PlatformMonitor::new(Policy::default());
+        let mut monitor = match result {
+            Ok(monitor) => monitor,
+            Err(error) => {
+                *readings.lock().unwrap_or_else(|e| e.into_inner()) = Some(Reading {
+                    snapshot: Err(format!("{error:#}")), at: chrono::Utc::now(), applied_profile: None,
+                });
+                return;
+            }
+        };
+        let filter = Filter { include_ready: true, ..Filter::default() };
+        while !stop.load(Ordering::Acquire) {
+            let profile = Settings::load().ok().map(|settings| settings.profile);
+            if let Some(profile) = profile {
+                monitor.set_policy(Policy { profile: profile.assessment_profile(), ..Policy::default() });
+            }
+            let snapshot = monitor.snapshot((&filter).into()).map_err(|error| format!("{error:#}"));
+            *readings.lock().unwrap_or_else(|e| e.into_inner()) =
+                Some(Reading { snapshot, at: chrono::Utc::now(), applied_profile: profile });
+            let until = Instant::now() + INTERVAL;
+            while !stop.load(Ordering::Acquire) && Instant::now() < until {
+                thread::sleep(Duration::from_millis(50));
+            }
+        }
+    }).context("start real Unix collector")?;
+    if initial_window { frontend.open(theme)?; }
+    lifecycle.ready.store(true, Ordering::Release);
+    let outcome = (|| -> Result<()> {
+        while !lifecycle.stop.load(Ordering::Acquire) {
+            frontend.refresh()?;
+            if lifecycle.open_requested.swap(false, Ordering::AcqRel) { frontend.open(theme)?; }
+            if let Some(reading) = pending.lock().unwrap_or_else(|e| e.into_inner()).take() {
+                frontend.applied_profile = reading.applied_profile;
+                frontend.observe(reading.snapshot, reading.at);
+                frontend.publish()?;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        Ok(())
+    })();
+    lifecycle.ready.store(false, Ordering::Release);
+    frontend.finish();
+    lifecycle.clean_shutdown.store(outcome.is_ok(), Ordering::Release);
+    outcome
+}
+
 pub fn run_tray(
     mut monitor: PlatformMonitor,
     mut policy: Policy,
@@ -1780,6 +2047,8 @@ pub fn run_tray(
     let Some(lifecycle) = Lifecycle::acquire_for_launch(initial_window, explicit_policy)? else {
         return Ok(());
     };
+    #[cfg(feature = "flutter-desktop")]
+    let mut flutter = FlutterFrontend::new(lang, true, !explicit_policy, true);
     let (sender, actions) = mpsc::sync_channel(32);
     let mut inspection = CameraInspectionWorker::default();
     #[cfg(target_os = "macos")]
@@ -1810,7 +2079,9 @@ pub fn run_tray(
         initial,
         lifecycle.window_input.clone(),
     )?;
-    #[cfg(target_os = "macos")]
+    #[cfg(feature = "flutter-desktop")]
+    if initial_window { show_desktop(&mut flutter, &mut host)?; }
+    #[cfg(all(target_os = "macos", not(feature = "flutter-desktop")))]
     if initial_window {
         // The initial unavailable state is already native-ready. Opening must
         // not wait for the first potentially slow device/privacy observation.
@@ -1846,7 +2117,7 @@ pub fn run_tray(
     let mut lock = SessionLockState::Unknown;
     #[cfg(target_os = "macos")]
     let mut requested = [None; 2];
-    #[cfg(target_os = "linux")]
+    #[cfg(all(target_os = "linux", not(feature = "flutter-desktop")))]
     let mut show_initial_window = initial_window;
     let outcome = (|| -> Result<()> {
         loop {
@@ -1854,18 +2125,24 @@ pub fn run_tray(
                 break;
             }
             host.check()?;
+            #[cfg(feature = "flutter-desktop")]
+            if flutter.refresh()? { next_poll = Instant::now(); }
             #[cfg(target_os = "linux")]
             if let Some(error) = host.take_window_error() {
                 feedback = Some(format!("{}: {error}", words(lang).failed));
                 action_error = true;
                 next_poll = Instant::now();
             }
-            if lifecycle.open_requested.swap(false, Ordering::AcqRel)
-                && let Err(error) = host.show_window()
-            {
-                feedback = Some(format!("{}: {error:#}", words(lang).failed));
-                action_error = true;
-                next_poll = Instant::now();
+            if lifecycle.open_requested.swap(false, Ordering::AcqRel) {
+                #[cfg(feature = "flutter-desktop")]
+                let opened = show_desktop(&mut flutter, &mut host);
+                #[cfg(not(feature = "flutter-desktop"))]
+                let opened = host.show_window();
+                if let Err(error) = opened {
+                    feedback = Some(format!("{}: {error:#}", words(lang).failed));
+                    action_error = true;
+                    next_poll = Instant::now();
+                }
             }
             #[cfg(target_os = "macos")]
             if inspection.poll() {
@@ -1893,6 +2170,8 @@ pub fn run_tray(
                     monitor.set_policy(policy.clone());
                     applied_profile = settings.profile;
                 }
+                #[cfg(feature = "flutter-desktop")]
+                { flutter.applied_profile = (!explicit_policy).then_some(applied_profile); }
                 lock = crate::platform::session_lock_state();
                 if lock == SessionLockState::Locked
                     && lock_previous != SessionLockState::Locked
@@ -1931,6 +2210,8 @@ pub fn run_tray(
                 }
                 match monitor.snapshot((&filter).into()) {
                     Ok(snapshot) => {
+                        #[cfg(feature = "flutter-desktop")]
+                        let observed_at = chrono::Utc::now();
                         #[cfg(target_os = "macos")]
                         {
                             overview =
@@ -1942,8 +2223,12 @@ pub fn run_tray(
                             dispatcher.dispatch(access, action)
                         })?;
                         (summary, visual) = observation_status(&snapshot, lang);
+                        #[cfg(feature = "flutter-desktop")]
+                        flutter.observe(Ok(snapshot), observed_at);
                     }
                     Err(error) => {
+                        #[cfg(feature = "flutter-desktop")]
+                        flutter.observe(Err(format!("{error:#}")), chrono::Utc::now());
                         #[cfg(target_os = "macos")]
                         {
                             overview = DesktopOverview::default();
@@ -2019,6 +2304,8 @@ pub fn run_tray(
                     }
                 }
                 next_poll = Instant::now() + INTERVAL;
+                #[cfg(feature = "flutter-desktop")]
+                flutter.publish()?;
                 host.update(make_view(
                     (summary.clone(), if action_error { "error" } else { visual }),
                     mute,
@@ -2036,7 +2323,7 @@ pub fn run_tray(
                         overview: &overview,
                     },
                 ))?;
-                #[cfg(target_os = "linux")]
+                #[cfg(all(target_os = "linux", not(feature = "flutter-desktop")))]
                 if show_initial_window {
                     if let Err(error) = host.show_window() {
                         feedback = Some(format!("{}: {error:#}", words(lang).failed));
@@ -2050,7 +2337,11 @@ pub fn run_tray(
                 Ok(Command::Exit) => break,
                 Ok(command) => {
                     if matches!(command, Command::Status) {
-                        if let Err(error) = host.show_window() {
+                        #[cfg(feature = "flutter-desktop")]
+                        let opened = show_desktop(&mut flutter, &mut host);
+                        #[cfg(not(feature = "flutter-desktop"))]
+                        let opened = host.show_window();
+                        if let Err(error) = opened {
                             feedback = Some(format!("{}: {error:#}", words(lang).failed));
                             action_error = true;
                             next_poll = Instant::now();
@@ -2191,6 +2482,8 @@ pub fn run_tray(
         Ok(())
     })();
     lifecycle.ready.store(false, Ordering::Release);
+    #[cfg(feature = "flutter-desktop")]
+    flutter.finish();
     // Unknown or still-locked sessions never justify restoring lock-owned controls.
     // Manual operations invalidate stale lock restoration inside the platform monitor.
     let restore = if lock == SessionLockState::Unlocked && lock_intent && settings.restore_on_unlock

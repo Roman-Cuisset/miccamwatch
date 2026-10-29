@@ -9,6 +9,9 @@ use crate::{
     privacy::{CameraControlObservation, CameraPrivacyState},
     settings::{PrivacyProfile, Settings},
 };
+use crate::notify::capture::{CaptureAlerts, NotificationHealth, NotificationWorker};
+#[cfg(test)]
+use crate::notify::capture::NOTIFICATION_QUEUE_CAPACITY;
 use anyhow::{Context, Result};
 use parking_lot::Mutex;
 use std::{
@@ -103,6 +106,17 @@ pub fn run_settings_development(lang: Language, initial_window: bool, theme: &st
         windows_observer::DevelopmentMode::Settings,
     )
 }
+#[cfg(feature = "flutter-desktop")]
+pub fn run_settings_notification_probe_development(
+    lang: Language,
+    initial_window: bool,
+    theme: &str,
+) -> Result<()> {
+    windows_observer::run(
+        lang, initial_window, theme, windows_observer::DevelopmentMode::SettingsProbe,
+    )
+}
+
 
 #[cfg(feature = "flutter-desktop")]
 struct DesktopObservation {
@@ -331,6 +345,7 @@ struct TrayAppState {
     restore_activity: Arc<Mutex<RestoreActivity>>,
     workers_alive: Arc<AtomicBool>,
     notifications: NotificationWorker,
+    capture_alerts: CaptureAlerts,
 }
 
 impl Drop for TrayAppState {
@@ -649,6 +664,7 @@ pub fn run_tray(
         pending_lock_restore: None,
         workers_alive,
         notifications: NotificationWorker::start(),
+        capture_alerts: CaptureAlerts::default(),
         previous_accesses: HashMap::new(),
         green_icon: create_status_icon((34, 197, 94), IconGlyph::Check, icon_size)?,
         yellow_icon: create_status_icon((245, 158, 11), IconGlyph::Ready, icon_size)?,
@@ -1078,61 +1094,6 @@ fn apply_lock_policy(state: &mut TrayAppState, current: SessionLockState) {
     }
 }
 
-const NOTIFICATION_QUEUE_CAPACITY: usize = 32;
-#[derive(Default)]
-struct NotificationHealth {
-    undelivered: AtomicU64,
-    unavailable: AtomicBool,
-}
-impl NotificationHealth {
-    fn failed(&self) {
-        self.undelivered.fetch_add(1, Ordering::Relaxed);
-        self.unavailable.store(true, Ordering::Relaxed);
-    }
-    fn delivered(&self) {
-        self.unavailable.store(false, Ordering::Relaxed);
-    }
-}
-struct NotificationWorker {
-    sender: SyncSender<(String, String)>,
-    health: Arc<NotificationHealth>,
-}
-impl NotificationWorker {
-    fn start() -> Self {
-        let (sender, pending) = mpsc::sync_channel::<(String, String)>(NOTIFICATION_QUEUE_CAPACITY);
-        let health = Arc::new(NotificationHealth::default());
-        let delivery = Arc::clone(&health);
-        thread::spawn(move || {
-            // A single shell round-trip at a time. Dropping the sender ends this
-            // finite worker after accepted toasts are drained.
-            while let Ok((title, message)) = pending.recv() {
-                if let Err(error) = crate::notify::notify_message(&title, &message) {
-                    delivery.failed();
-                    eprintln!("notification failed: {error}");
-                } else {
-                    // This is positive delivery evidence, not deletion of loss history.
-                    delivery.delivered();
-                }
-            }
-        });
-        Self { sender, health }
-    }
-    fn submit(&self, title: &str, message: &str) -> bool {
-        if self
-            .sender
-            .try_send((title.to_owned(), message.to_owned()))
-            .is_err()
-        {
-            self.health.failed();
-            eprintln!(
-                "notification queue overloaded/unavailable; toast not delivered: {title}: {message}"
-            );
-            false
-        } else {
-            true
-        }
-    }
-}
 fn notify_async(state: &mut TrayAppState, title: &str, message: &str) {
     if !state.notifications.submit(title, message) {
         state.visual = TrayVisual::Error;
@@ -1214,6 +1175,7 @@ fn apply_refresh(hwnd: HWND, state: &mut TrayAppState, refresh: TrayRefresh) {
     }
     apply_lock_policy(state, refresh.lock_state);
     if let Ok(snapshot) = &refresh.snapshot {
+        state.capture_alerts.observe(snapshot, &state.notifications, state.lang, false);
         record_history_changes(state, snapshot);
     }
     state.overview = windows_desktop::Overview::from_snapshot(
@@ -1304,35 +1266,7 @@ fn history_current(
     previous: &HashMap<String, Access>,
     snapshot: &Snapshot,
 ) -> HashMap<String, Access> {
-    let mut unavailable_mic = false;
-    let mut unavailable_camera = false;
-    for collector in snapshot
-        .collectors
-        .iter()
-        .filter(|collector| collector.state == CollectorState::Unavailable)
-    {
-        match collector.collector {
-            "wasapi" => unavailable_mic = true,
-            "privacy_store" | "module_scanner" => unavailable_camera = true,
-            _ => {
-                unavailable_mic = true;
-                unavailable_camera = true;
-            }
-        }
-    }
-    let mut current = snapshot
-        .accesses
-        .iter()
-        .map(|access| (access.key.clone(), access.clone()))
-        .collect::<HashMap<_, _>>();
-    for (key, access) in previous {
-        if (access.resource == Resource::Microphone && unavailable_mic)
-            || (access.resource == Resource::Camera && unavailable_camera)
-        {
-            current.entry(key.clone()).or_insert_with(|| access.clone());
-        }
-    }
-    current
+    crate::notify::capture::current_observations(previous, snapshot)
 }
 
 fn append_history_event(access: &Access, action: Action) {
@@ -1518,6 +1452,12 @@ fn refreshed_status(
             "\nNotification history: {undelivered} undelivered toasts"
         );
     }
+    let _ = write!(summary, "\nNative notifications: {} submitted to Windows; {} suppressed (disabled {}, paused {}, cooldown {}); {undelivered} failed",
+        status.notifications.submitted.load(Ordering::Relaxed),
+        status.notifications.suppressed.load(Ordering::Relaxed),
+        status.notifications.suppressed_disabled.load(Ordering::Relaxed),
+        status.notifications.suppressed_paused.load(Ordering::Relaxed),
+        status.notifications.suppressed_cooldown.load(Ordering::Relaxed));
     if notification_unavailable {
         visual = TrayVisual::Error;
         summary.push_str("\nNotification delivery currently overloaded/unavailable");
@@ -2174,8 +2114,8 @@ fn flutter_snapshot(state: &TrayAppState) -> crate::frontends::desktop::DesktopS
         !state.explicit_policy,
         state.applied_profile,
         crate::frontends::desktop::preferences::PreferenceEffects {
-            capture_notifications_supported: false,
-            capture_sounds_supported: false,
+            capture_notifications_supported: true,
+            capture_sounds_supported: true,
             history_recording_supported: true,
             history_recording_active: state.settings.history_enabled,
         },

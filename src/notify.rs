@@ -1,4 +1,6 @@
 mod content;
+#[cfg(windows)]
+pub(crate) mod capture;
 #[cfg(unix)]
 mod unix;
 #[cfg(unix)]
@@ -15,19 +17,44 @@ use winreg::{RegKey, enums::HKEY_CURRENT_USER};
 #[cfg(windows)]
 use windows::{
     Data::Xml::Dom::XmlDocument,
-    UI::Notifications::{ToastNotification, ToastNotificationManager, ToastTemplateType},
+    UI::Notifications::{NotificationSetting, ToastNotification, ToastNotificationManager, ToastTemplateType},
     core::HSTRING,
 };
 #[cfg(windows)]
 pub(crate) const APP_ID: &HSTRING = windows::core::h!("MicCamWatch.MicCamWatch");
 
 #[cfg(windows)]
-pub fn ensure_identity() -> anyhow::Result<()> {
+#[derive(Clone, Copy)]
+pub(crate) enum NotificationIdentity {
+    Installed,
+    Qualification,
+}
+
+#[cfg(windows)]
+fn identity_id(identity: NotificationIdentity) -> &'static HSTRING {
+    match identity {
+        NotificationIdentity::Installed => APP_ID,
+        NotificationIdentity::Qualification => windows::core::h!("MicCamWatch.Qualification"),
+    }
+}
+
+#[cfg(windows)]
+fn ensure_identity_for(identity: NotificationIdentity) -> anyhow::Result<()> {
     let root = RegKey::predef(HKEY_CURRENT_USER);
-    let (key, _) = root.create_subkey(format!(r"Software\Classes\AppUserModelId\{APP_ID}"))?;
-    key.set_value("DisplayName", &"MicCamWatch")?;
+    let (key, _) = root.create_subkey(format!(
+        r"Software\Classes\AppUserModelId\{}", identity_id(identity)
+    ))?;
+    key.set_value("DisplayName", &match identity {
+        NotificationIdentity::Installed => "MicCamWatch",
+        NotificationIdentity::Qualification => "MicCamWatch TEST Qualification",
+    })?;
     key.set_value("ShowInSettings", &1u32)?;
     Ok(())
+}
+
+#[cfg(windows)]
+pub fn ensure_identity() -> anyhow::Result<()> {
+    ensure_identity_for(NotificationIdentity::Installed)
 }
 
 #[cfg(windows)]
@@ -45,25 +72,69 @@ pub fn notify_message(title: &str, detail: &str) -> windows::core::Result<()> {
 
 #[cfg(windows)]
 fn show_toast(title: &str, detail: &str) -> windows::core::Result<()> {
+    deliver_message(title, detail, NotificationIdentity::Installed).map(|_| ())
+}
+
+#[cfg(windows)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DeliveryOutcome {
+    SuppressedDisabled,
+    SuppressedPaused,
+    Submitted,
+}
+
+#[cfg(windows)]
+pub(crate) fn deliver_message(
+    title: &str,
+    detail: &str,
+    identity: NotificationIdentity,
+) -> windows::core::Result<DeliveryOutcome> {
     let settings = crate::settings::Settings::load().map_err(|error| {
         windows::core::Error::new(
             windows::core::HRESULT(0x80004005u32 as i32),
             format!("failed to read notification preferences: {error:#}"),
         )
     })?;
-    if !settings.notifications_enabled || settings.notifications_paused() {
-        return Ok(());
+    if let Some(suppressed) = preference_gate(&settings) {
+        return Ok(suppressed);
     }
     let xml = toast_document(title, detail, settings.sound_enabled)?;
     let toast = ToastNotification::CreateToastNotification(&xml)?;
-    ensure_identity().map_err(|error| {
+    ensure_identity_for(identity).map_err(|error| {
         windows::core::Error::new(
             windows::core::HRESULT(0x80004005u32 as i32),
             format!("failed to register notification identity: {error:#}"),
         )
     })?;
-    let notifier = ToastNotificationManager::CreateToastNotifierWithId(APP_ID)?;
-    notifier.Show(&toast)
+    let notifier = ToastNotificationManager::CreateToastNotifierWithId(identity_id(identity))?;
+    let availability = notifier.Setting()?;
+    if availability != NotificationSetting::Enabled {
+        return Err(windows::core::Error::new(
+            windows::core::HRESULT(0x80070005u32 as i32),
+            format!("Windows notifications unavailable for this application (setting {})", availability.0),
+        ));
+    }
+    notifier.Show(&toast)?;
+    Ok(DeliveryOutcome::Submitted)
+}
+
+#[cfg(windows)]
+fn preference_gate(settings: &crate::settings::Settings) -> Option<DeliveryOutcome> {
+    preference_gate_at(settings, chrono::Utc::now())
+}
+
+#[cfg(windows)]
+fn preference_gate_at(
+    settings: &crate::settings::Settings,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<DeliveryOutcome> {
+    if !settings.notifications_enabled {
+        Some(DeliveryOutcome::SuppressedDisabled)
+    } else if settings.pause_notifications_until.is_some_and(|until| until > now) {
+        Some(DeliveryOutcome::SuppressedPaused)
+    } else {
+        None
+    }
 }
 
 #[cfg(windows)]
@@ -88,6 +159,31 @@ fn toast_document(title: &str, detail: &str, sound: bool) -> windows::core::Resu
 mod tests {
     use super::*;
     use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoUninitialize};
+
+    #[test]
+    fn live_master_and_pause_gates_are_conservative_at_exact_expiry() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-10-29T12:00:00Z")
+            .unwrap().with_timezone(&chrono::Utc);
+        let mut settings = crate::settings::Settings {
+            notifications_enabled: false,
+            sound_enabled: true,
+            pause_notifications_until: Some(now + chrono::Duration::seconds(1)),
+            ..Default::default()
+        };
+        assert_eq!(preference_gate_at(&settings, now), Some(DeliveryOutcome::SuppressedDisabled));
+        settings.notifications_enabled = true;
+        assert_eq!(preference_gate_at(&settings, now), Some(DeliveryOutcome::SuppressedPaused));
+        assert_eq!(preference_gate_at(&settings, now + chrono::Duration::seconds(1)), None);
+        settings.pause_notifications_until = None;
+        assert_eq!(preference_gate_at(&settings, now), None);
+        settings.notifications_enabled = false;
+        assert_eq!(preference_gate_at(&settings, now), Some(DeliveryOutcome::SuppressedDisabled));
+    }
+
+    #[test]
+    fn qualification_identity_is_not_the_installed_identity() {
+        assert_ne!(identity_id(NotificationIdentity::Qualification), APP_ID);
+    }
 
     #[test]
     fn native_toast_audio_obeys_the_sound_preference_without_delivery() -> anyhow::Result<()> {

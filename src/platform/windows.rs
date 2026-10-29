@@ -84,6 +84,8 @@ use winreg::{RegKey, enums::HKEY_CURRENT_USER};
 
 #[path = "windows_camera.rs"]
 mod camera_activity;
+#[path = "windows_profile.rs"]
+mod profile;
 #[path = "windows_mute.rs"]
 mod microphone_lock;
 pub(crate) use microphone_protection::{
@@ -437,6 +439,7 @@ impl PlatformMonitor {
     }
 
     pub fn snapshot(&self, scope: CaptureScope) -> Result<Snapshot> {
+        let _profile = profile::Span::new("snapshot");
         let mut accesses = Vec::new();
         let mut collectors = Vec::new();
         if scope.microphone {
@@ -835,6 +838,7 @@ impl PlatformMonitor {
     }
 
     fn microphone_accesses(&self) -> Result<Vec<Access>> {
+        let _profile = profile::Span::new("microphone");
         let collection = unsafe {
             self.enumerator
                 .EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE)
@@ -928,6 +932,7 @@ impl PlatformMonitor {
     }
 
     fn sensor_camera_accesses(&self) -> Result<(Vec<Access>, std::collections::HashSet<String>)> {
+        let _profile = profile::Span::new("sensor");
         let cameras = camera_devices()?;
         let reports = camera_activity::collect(&cameras)?;
         // No sensor records can consume process identities in this snapshot.
@@ -1265,6 +1270,7 @@ fn camera_accesses(
     policy: &Policy,
     mut signature_for: impl FnMut(&str) -> SignatureInfo,
 ) -> Result<Vec<Access>> {
+    let _profile = profile::Span::new("camera_registry_modules");
     let root = RegKey::predef(HKEY_CURRENT_USER);
     let webcam = webcam_consent_store(root.open_subkey(format!(r"{CONSENT_STORE}\webcam")))?;
     let processes = ProcessTable::load();
@@ -1649,6 +1655,7 @@ fn classify_forensic(
 // ---------------------------------------------------------------------------
 
 fn verify_signature_with_policy(path: &str, trust_policy: TrustPolicy) -> SignatureInfo {
+    let _profile = profile::Span::new("signature");
     let wide_path: Vec<u16> = path.encode_utf16().chain(Some(0)).collect();
     let mut file_info = WINTRUST_FILE_INFO {
         cbStruct: size_of::<WINTRUST_FILE_INFO>() as u32,
@@ -1675,12 +1682,15 @@ fn verify_signature_with_policy(path: &str, trust_policy: TrustPolicy) -> Signat
         ..Default::default()
     };
 
-    let status = unsafe {
-        WinVerifyTrust(
-            HWND::default(),
-            &mut WINTRUST_ACTION_GENERIC_VERIFY_V2.clone(),
-            &mut trust_data as *mut _ as _,
-        )
+    let status = {
+        let _profile = profile::Span::new("winverifytrust");
+        unsafe {
+            WinVerifyTrust(
+                HWND::default(),
+                &mut WINTRUST_ACTION_GENERIC_VERIFY_V2.clone(),
+                &mut trust_data as *mut _ as _,
+            )
+        }
     };
 
     let signer = get_signer_name(&wide_path);
@@ -1708,6 +1718,7 @@ fn verify_signature_with_policy(path: &str, trust_policy: TrustPolicy) -> Signat
 }
 
 fn get_signer_name(wide_path: &[u16]) -> Option<String> {
+    let _profile = profile::Span::new("signer");
     let mut cert_context: *mut CERT_CONTEXT = ptr::null_mut();
     let mut msg_and_cert_type = CERT_QUERY_ENCODING_TYPE(0);
     let mut content_type = CERT_QUERY_CONTENT_TYPE(0);
@@ -1899,6 +1910,7 @@ pub struct ProcessTable {
 
 impl ProcessTable {
     pub fn load() -> Self {
+        let _profile = profile::Span::new("process_inventory");
         let Ok(snapshot) = (unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) }) else {
             return Self {
                 by_name: HashMap::new(),

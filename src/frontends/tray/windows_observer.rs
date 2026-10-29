@@ -16,6 +16,10 @@ use crate::{
     privacy::CameraControlObservation,
 };
 use anyhow::{Context, Result, ensure};
+use crate::notify::{
+    NotificationIdentity,
+    capture::{CaptureAlerts, NotificationWorker, submit_test_sequence},
+};
 use parking_lot::Mutex;
 use std::{
     sync::{
@@ -57,12 +61,15 @@ const REFRESH: u32 = WM_APP + 61;
 const OPEN: usize = 1;
 const EXIT: usize = 2;
 const TIMER: usize = 61;
+const TEST_NOTIFICATIONS: usize = 3;
+const PROBE_MESSAGE: u32 = WM_APP + 62;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum DevelopmentMode {
     ReadOnly,
     Controlled,
     Settings,
+    SettingsProbe,
 }
 impl DevelopmentMode {
     fn preferences_enabled(self) -> bool {
@@ -73,6 +80,7 @@ impl DevelopmentMode {
             Self::ReadOnly => "read_only_development",
             Self::Controlled => "controlled_development",
             Self::Settings => "settings_development",
+            Self::SettingsProbe => "settings_development",
         }
     }
     fn label(self) -> &'static str {
@@ -80,6 +88,7 @@ impl DevelopmentMode {
             Self::ReadOnly => "READ ONLY",
             Self::Controlled => "CONTROLLED",
             Self::Settings => "PREFERENCES ONLY",
+            Self::SettingsProbe => "TEST NOTIFICATIONS; REAL ALERTS DISABLED",
         }
     }
 }
@@ -112,6 +121,9 @@ struct Observer {
     microphone_result: Option<Result<MicrophoneProtectionStatus, String>>,
     presentation_sequence: u64,
     control_used: bool,
+    notifications: Option<NotificationWorker>,
+    probe_alerts: CaptureAlerts,
+    last_alert_health: Option<(u64, u64, u64, bool)>,
 }
 impl Observer {
     fn microphone(&self) -> Result<&MicrophoneProtectionStatus, &str> {
@@ -160,6 +172,12 @@ impl Observer {
             snapshot,
             mode,
         );
+        if self.mode == DevelopmentMode::SettingsProbe {
+            let observed_detail = frame.engine.detail.take().unwrap_or_default();
+            frame.engine.detail = Some(format!(
+                "TEST native notification probe; real-source alerts disabled; dashboard observations remain real. {observed_detail}"
+            ));
+        }
         if let Some(reading) = &self.current {
             frame.set_protection(
                 self.microphone(),
@@ -178,7 +196,11 @@ impl Observer {
             self.current
                 .as_ref()
                 .and_then(|reading| reading.applied_profile),
-            Default::default(),
+            crate::frontends::desktop::preferences::PreferenceEffects {
+                capture_notifications_supported: self.notifications.is_some(),
+                capture_sounds_supported: self.notifications.is_some(),
+                ..Default::default()
+            },
             self.preference_worker.as_ref(),
         );
         frame
@@ -281,6 +303,26 @@ impl Observer {
             .ui
             .as_mut()
             .is_some_and(Supervisor::take_controls_changed);
+        if let Some(notifications) = &self.notifications {
+            let health = &notifications.health;
+            let current = (
+                health.submitted.load(Ordering::Relaxed),
+                health.suppressed.load(Ordering::Relaxed),
+                health.undelivered.load(Ordering::Relaxed),
+                health.unavailable.load(Ordering::Relaxed),
+            );
+            if self.last_alert_health != Some(current) {
+                self.last_alert_health = Some(current);
+                eprintln!("native alerts: submitted={} suppressed={} (disabled={} paused={} cooldown={}) failures={} unavailable={}",
+                    health.submitted.load(Ordering::Relaxed),
+                    health.suppressed.load(Ordering::Relaxed),
+                    health.suppressed_disabled.load(Ordering::Relaxed),
+                    health.suppressed_paused.load(Ordering::Relaxed),
+                    health.suppressed_cooldown.load(Ordering::Relaxed),
+                    health.undelivered.load(Ordering::Relaxed),
+                    health.unavailable.load(Ordering::Relaxed));
+            }
+        }
         let next = self.pending.lock().take();
         if let Some(reading) = next {
             changed = true;
@@ -320,6 +362,14 @@ impl Observer {
         }
         Ok(())
     }
+    fn notification_probe(&mut self) {
+        if self.mode == DevelopmentMode::SettingsProbe
+            && let Some(worker) = &self.notifications
+        {
+            submit_test_sequence(&mut self.probe_alerts, worker, self.lang);
+            eprintln!("TEST native notification fixture submitted; no hardware or dashboard observations simulated");
+        }
+    }
     fn menu(&mut self) -> Result<()> {
         unsafe {
             let menu = CreatePopupMenu()?;
@@ -331,6 +381,7 @@ impl Observer {
                     format_wide(match self.mode {
                         DevelopmentMode::Controlled => "Open MicCamWatch — controlled test",
                         DevelopmentMode::Settings => "Open MicCamWatch — isolated preferences",
+                        DevelopmentMode::SettingsProbe => "Open MicCamWatch — TEST notifications",
                         DevelopmentMode::ReadOnly => "Open MicCamWatch — read only",
                     })
                     .as_ptr(),
@@ -342,6 +393,10 @@ impl Observer {
                 0,
                 PCWSTR(format_wide(&self.summary).as_ptr()),
             )?;
+            if self.mode == DevelopmentMode::SettingsProbe {
+                AppendMenuW(menu, MF_STRING, TEST_NOTIFICATIONS,
+                    PCWSTR(format_wide("TEST native notifications (30-second cooldown)").as_ptr()))?;
+            }
             AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null())?;
             AppendMenuW(
                 menu,
@@ -372,6 +427,7 @@ impl Observer {
                     eprintln!("desktop event=open_trigger source=context_menu");
                     self.open()?;
                 }
+                TEST_NOTIFICATIONS => self.notification_probe(),
                 EXIT => {
                     PostMessageW(Some(self.hwnd), WM_CLOSE, WPARAM(0), LPARAM(0))?;
                 }
@@ -393,6 +449,13 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, message: u32, w: WPARAM, l: LPARA
     let Some(observer) = (unsafe { state(hwnd) }) else {
         return unsafe { DefWindowProcW(hwnd, message, w, l) };
     };
+    if message == PROBE_MESSAGE && w.0 == unsafe { GetCurrentProcessId() } as usize {
+        if observer.mode == DevelopmentMode::SettingsProbe {
+            observer.notification_probe();
+            return LRESULT(1);
+        }
+        return LRESULT(0);
+    }
     let result = match message {
         WM_OPEN_DESKTOP if w.0 == unsafe { GetCurrentProcessId() } as usize => {
             eprintln!("desktop event=open_trigger source=window_activation");
@@ -446,6 +509,12 @@ fn start_collector(observer: &Observer) -> thread::JoinHandle<()> {
         || Arc::new(AtomicU64::new(0)),
         |worker| Arc::clone(&worker.sequence),
     );
+    let lang = observer.lang;
+    let notifications = if observer.mode == DevelopmentMode::Settings {
+        observer.notifications.clone()
+    } else {
+        None
+    };
     thread::spawn(move || {
         let mut policy = Policy::default();
         let mut applied_profile = crate::settings::PrivacyProfile::Balanced;
@@ -457,6 +526,7 @@ fn start_collector(observer: &Observer) -> thread::JoinHandle<()> {
         let mut sequence = 0u64;
         let mut camera = Err("Initial camera observation pending".to_owned());
         let mut camera_at = None;
+        let mut capture_alerts = CaptureAlerts::default();
         while alive.load(Ordering::Acquire) {
             if preferences_enabled
                 && let Ok(settings) = crate::settings::Settings::load()
@@ -480,6 +550,11 @@ fn start_collector(observer: &Observer) -> thread::JoinHandle<()> {
                 ),
                 Err(error) => (Err(error.clone()), Err(error.clone())),
             };
+            // Observe before the UI's coalescing slot: an unattached/slow Flutter
+            // client cannot discard capture edges or stop native alert delivery.
+            if let (Ok(snapshot), Some(worker)) = (&snapshot, &notifications) {
+                capture_alerts.observe(snapshot, worker, lang, false);
+            }
             if camera_at.is_none_or(|at: Instant| at.elapsed() >= Duration::from_secs(5)) {
                 camera = crate::privacy::camera_observation().map_err(|e| format!("{e:#}"));
                 camera_at = Some(Instant::now());
@@ -510,7 +585,7 @@ fn start_collector(observer: &Observer) -> thread::JoinHandle<()> {
     })
 }
 
-fn reuse_read_only(initial_window: bool) -> Result<bool> {
+fn reuse_read_only(initial_window: bool, probe: bool) -> Result<bool> {
     let class = format_wide(CLASS);
     let Ok(hwnd) = (unsafe { FindWindowW(PCWSTR(class.as_ptr()), PCWSTR::null()) }) else {
         return Ok(false);
@@ -538,6 +613,13 @@ fn reuse_read_only(initial_window: bool) -> Result<bool> {
         peer == std::env::current_exe()?.canonicalize()?,
         "another development build owns the read-only tray; it was preserved"
     );
+    if probe {
+        let accepted = unsafe { SendMessageW(
+            hwnd, PROBE_MESSAGE, Some(WPARAM(pid as usize)), Some(LPARAM(0)),
+        ) };
+        ensure!(accepted.0 == 1,
+            "existing development owner is not TEST notification mode; close it before starting the probe");
+    }
     if initial_window {
         unsafe {
             SendMessageW(
@@ -561,7 +643,7 @@ pub(super) fn run(
     let controlled = mode == DevelopmentMode::Controlled;
     if controlled {
         verify_controlled_scope()?;
-    } else if mode == DevelopmentMode::Settings {
+    } else if matches!(mode, DevelopmentMode::Settings | DevelopmentMode::SettingsProbe) {
         verify_isolated_scope()?;
     }
     enable_dpi_awareness();
@@ -570,7 +652,7 @@ pub(super) fn run(
     if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
         let deadline = Instant::now() + Duration::from_secs(5);
         while Instant::now() < deadline {
-            if reuse_read_only(initial_window)? {
+            if reuse_read_only(initial_window, mode == DevelopmentMode::SettingsProbe)? {
                 return Ok(());
             }
             thread::sleep(Duration::from_millis(50));
@@ -612,6 +694,10 @@ pub(super) fn run(
         microphone_result: None,
         presentation_sequence: 0,
         control_used: false,
+        notifications: matches!(mode, DevelopmentMode::Settings | DevelopmentMode::SettingsProbe)
+            .then(|| NotificationWorker::with_identity(NotificationIdentity::Qualification)),
+        probe_alerts: CaptureAlerts::default(),
+        last_alert_health: None,
     });
     let hwnd = unsafe {
         CreateWindowExW(
@@ -650,6 +736,9 @@ pub(super) fn run(
         ));
     }
     let worker = start_collector(&observer);
+    if mode == DevelopmentMode::SettingsProbe {
+        observer.notification_probe();
+    }
     let timer = unsafe { SetTimer(Some(hwnd), TIMER, 250, None) };
     let mut result = if timer == 0 {
         Err(anyhow::anyhow!("cannot start read-only tray timer"))

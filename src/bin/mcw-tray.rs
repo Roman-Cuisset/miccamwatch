@@ -30,7 +30,8 @@ fn run() -> Result<()> {
     anyhow::ensure!(
         !std::env::args_os().any(|argument| argument == "--read-only-development"
             || argument == "--controlled-development"
-            || argument == "--settings-development"),
+            || argument == "--settings-development"
+            || argument == "--settings-notification-probe-development"),
         "Development modes require a build with flutter-desktop; no tray started"
     );
     let initial_window = std::env::args_os()
@@ -41,6 +42,7 @@ fn run() -> Result<()> {
         argument == "--read-only-development"
             || argument == "--controlled-development"
             || argument == "--settings-development"
+            || argument == "--settings-notification-probe-development"
     }) {
         // No operational singleton/resume. Controlled mode additionally requires
         // isolated data paths and a released native resource at startup.
@@ -51,6 +53,8 @@ fn run() -> Result<()> {
         let settings = arguments
             .iter()
             .any(|argument| argument == "--settings-development");
+        let notification_probe = arguments.iter()
+            .any(|argument| argument == "--settings-notification-probe-development");
         anyhow::ensure!(
             arguments
                 .iter()
@@ -59,6 +63,7 @@ fn run() -> Result<()> {
                     "--read-only-development"
                         | "--controlled-development"
                         | "--settings-development"
+                        | "--settings-notification-probe-development"
                 ))
                 .count()
                 == 1,
@@ -69,6 +74,9 @@ fn run() -> Result<()> {
             .find(|pair| pair[0] == "--desktop-theme")
             .map_or("light", |pair| pair[1].as_str());
         anyhow::ensure!(matches!(theme, "light" | "dark"), "Invalid desktop theme");
+        if notification_probe {
+            return tray::run_settings_notification_probe_development(Language::detect(), initial_window, theme);
+        }
         if settings {
             return tray::run_settings_development(Language::detect(), initial_window, theme);
         }

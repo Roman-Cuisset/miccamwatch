@@ -1,6 +1,8 @@
 #include "my_application.h"
 
 #include <flutter_linux/flutter_linux.h>
+#include <glib-unix.h>
+#include <signal.h>
 #ifdef GDK_WINDOWING_X11
 #include <gdk/gdkx.h>
 #endif
@@ -10,6 +12,7 @@
 struct _MyApplication {
   GtkApplication parent_instance;
   char** dart_entrypoint_arguments;
+  guint activation_signal_source;
 };
 
 G_DEFINE_TYPE(MyApplication, my_application, GTK_TYPE_APPLICATION)
@@ -19,11 +22,41 @@ static void first_frame_cb(MyApplication* self, FlView* view) {
   gtk_widget_show(gtk_widget_get_toplevel(GTK_WIDGET(view)));
 }
 
+// The native owner signals only its already-ready child; no public activation IPC.
+static gboolean activate_owned_window(gpointer application) {
+  GtkWindow* window =
+      gtk_application_get_active_window(GTK_APPLICATION(application));
+  if (window != nullptr) {
+    gtk_window_present(window);
+  }
+  return G_SOURCE_CONTINUE;
+}
+
+static void set_bundled_window_icon(GtkWindow* window) {
+  g_autoptr(GError) error = nullptr;
+  g_autofree gchar* executable = g_file_read_link("/proc/self/exe", &error);
+  if (executable == nullptr) {
+    g_warning("Cannot locate MicCamWatch bundle icon: %s", error->message);
+    return;
+  }
+  g_autofree gchar* bundle_directory = g_path_get_dirname(executable);
+  // This is the existing pubspec asset in Flutter's installed relocatable bundle.
+  // Never resolve against the caller's CWD or claim the native installer's identity.
+  g_autofree gchar* icon = g_build_filename(
+      bundle_directory, "data", "flutter_assets", "assets", "miccamwatch.png",
+      nullptr);
+  if (!gtk_window_set_icon_from_file(window, icon, &error)) {
+    g_warning("Cannot load MicCamWatch bundle icon: %s", error->message);
+  }
+}
+
 // Implements GApplication::activate.
 static void my_application_activate(GApplication* application) {
   MyApplication* self = MY_APPLICATION(application);
   GtkWindow* window =
       GTK_WINDOW(gtk_application_window_new(GTK_APPLICATION(application)));
+  gtk_window_set_title(window, "MicCamWatch");
+  set_bundled_window_icon(window);
 
   // Use a header bar when running in GNOME as this is the common style used
   // by applications and is the setup most users will be using (e.g. Ubuntu
@@ -48,8 +81,6 @@ static void my_application_activate(GApplication* application) {
     gtk_header_bar_set_title(header_bar, "MicCamWatch");
     gtk_header_bar_set_show_close_button(header_bar, TRUE);
     gtk_window_set_titlebar(window, GTK_WIDGET(header_bar));
-  } else {
-    gtk_window_set_title(window, "MicCamWatch");
   }
 
   gtk_window_set_default_size(window, 1040, 700);
@@ -105,11 +136,10 @@ static gboolean my_application_local_command_line(GApplication* application,
 
 // Implements GApplication::startup.
 static void my_application_startup(GApplication* application) {
-  // MyApplication* self = MY_APPLICATION(object);
-
-  // Perform any actions required at application startup.
-
   G_APPLICATION_CLASS(my_application_parent_class)->startup(application);
+  MyApplication* self = MY_APPLICATION(application);
+  self->activation_signal_source =
+      g_unix_signal_add(SIGUSR1, activate_owned_window, application);
 }
 
 // Implements GApplication::shutdown.
@@ -124,6 +154,10 @@ static void my_application_shutdown(GApplication* application) {
 // Implements GObject::dispose.
 static void my_application_dispose(GObject* object) {
   MyApplication* self = MY_APPLICATION(object);
+  if (self->activation_signal_source != 0) {
+    g_source_remove(self->activation_signal_source);
+    self->activation_signal_source = 0;
+  }
   g_clear_pointer(&self->dart_entrypoint_arguments, g_strfreev);
   G_OBJECT_CLASS(my_application_parent_class)->dispose(object);
 }
@@ -140,11 +174,10 @@ static void my_application_class_init(MyApplicationClass* klass) {
 static void my_application_init(MyApplication* self) {}
 
 MyApplication* my_application_new() {
-  // Set the program name to the application ID, which helps various systems
-  // like GTK and desktop environments map this running application to its
-  // corresponding .desktop file. This ensures better integration by allowing
-  // the application to be recognized beyond its binary name.
+  // Preserve the Flutter development ID; this is not the installed native GTK
+  // application's desktop/notification identity. The visible name is shared.
   g_set_prgname(APPLICATION_ID);
+  g_set_application_name("MicCamWatch");
 
   return MY_APPLICATION(g_object_new(my_application_get_type(),
                                      "application-id", APPLICATION_ID, "flags",

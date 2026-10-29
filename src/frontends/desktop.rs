@@ -9,6 +9,8 @@ pub mod commands;
 pub mod preferences;
 #[cfg(windows)]
 pub mod windows;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub mod unix;
 
 pub const PROTOCOL_VERSION: u8 = 3;
 pub const MAX_FRAME_BYTES: usize = 262_144;
