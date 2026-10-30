@@ -2822,6 +2822,26 @@ Lots futurs **à approuver, aucun correctif appliqué** :
   pas de nouvelle installation ni répétition inutile des6cycles déjà validés sur les mêmes octets.
 - Prochain contrôle **Intel seulement**, sans rebâtir ni relancer les jobs ARM/Linux verts : sondes passives précompilées
   CGSession/NSScreen et NSApplication.shared, avant ouverture/après fermeture/pendant réouverture. Processus de diagnostic
-  propres, borniers, sans fenêtre, permissions, entrée injectée ou commande produit. Échantillon tardif possédé et journal
+  propres, bornés, sans fenêtre, permissions, entrée injectée ou commande produit. Échantillon tardif possédé et journal
   horodaté ajoutés uniquement à ce mode. Ces contrôles peuvent perturber le timing/contexte ; un succès conditionnel ne
   clôturera pas à lui seul les échecs Intel non instrumentés. Résultat encore non exécuté à ce checkpoint.
+- Contrôle Intel ciblé `41070188421` sur `e2f3be8`, mêmes produits7e794d2 : sondes sans Flutter réussies avant ouverture
+  (session274ms, AppKit214ms), puis toutes deux sans réponse dans leur fenêtre bornée après fermeture et pendant réouverture.
+  Sonde AppKit et enfant Flutter attendent get_session_port/WindowServer ; sonde session attend SLSessionCopyCurrentDictionary.
+  Enfant5230 encore dans ce bootstrap lors du prélèvement tardif,11,19s après création. Toujours échec Ready15s ;
+  pas de deuxième ligne Metal dans cette séquence horodatée. Les processus de contrôle sont possédés, arrêtés et reapés.
+  ZIP artefact12984942123 vérifié `e9326e141db6eb3175d7c717a6b0ad677e84dddeaa142e767151eed04b005d71`.
+- Conclusion prudente : défaut de réactivité du contexte/service graphique dans cette expérience, pas seulement Dart/IPC.
+  Le déclencheur OS/image/fermeture/contexte de lancement n'est pas établi ; ne pas prétendre que tous les runners Intel
+  sont fondamentalement incapables. Aucun correctif produit sûr démontré, donc aucune permission/sandbox/timeout/signature assoupli.
+  Inspection : propriétaire Mac de développement sans DesktopHost permanent, contrairement au tray opérationnel.
+  Prochain discriminant : qualification native menu bar persistante avec mutations désactivées et contrôle fermeture AppKit sans Flutter.
+  AppKit de secours conservé, pas d'exigence de Mac physique ; l'échec Intel reste explicitement ouvert.
+- Fin B3 pour validation propriétaire : Windows commandes/erreurs/cycles/captures, Mint6cycles/captures/bundle et ARM CI réels acquis ;
+  comparaison CPU fermée5,73→5,53%, différence modeste, pas résolution générale. Linux accéléré/Wayland/ARM Flutter et parité complète
+  encore non qualifiés. Rapport détaillé `docs/FLUTTER_B3_QUALIFICATION.md`, matrice actualisée, preuves privées indexées et hashées
+  dans `%LOCALAPPDATA%\MicCamWatchQualification\flutter-b3-20261030-081807\B3-EVIDENCE-INDEX.json`.
+  Windows MSI/settings/protections/verrous inchangés ; préfixe initial de l'historique conservé, identité installée inchangée.
+  Mint stable strictement préservé. Main73369ab, tag06d800b→3d74686,8worktrees et stash conservés. Aucun changement site/README,
+  aucune release/déploiement ni push sur main/branche de travail. Seule la branche CI explicitement autorisée a été poussée.
+  Arrêt après sauvegarde documentaire ; attendre validation B3 avant migration des protections/installations ou publication.

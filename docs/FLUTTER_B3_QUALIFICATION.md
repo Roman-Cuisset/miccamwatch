@@ -258,16 +258,51 @@ cycles, native failure/restoration and owned desktop teardown also passed.
 Intel reproducibly failed reopening; its owned live sample localized one1-second
 interval to NSApplication/WindowServer session-port lookup before Flutter startup.
 This is **not** proof of a permanent runner defect or the whole timeout's cause;
-another Impeller line appears later without PID/timestamp attribution. A bounded
-session/bootstrap control is being prepared. No timeout increase or workaround.
+another Impeller line appears later without PID/timestamp attribution. The subsequent
+bounded controls below supply stronger evidence. No timeout increase or workaround.
 
-The next **Intel-only** replay adds observational CGSession/NSScreen and
-NSApplication.shared controls before open, after close and during reopen, plus
-one late owned-child sample and timestamped owner output. No product rebuild,
-deadline change, privileged session reassignment, permission or other-platform
-rerun. These unsandboxed harness descendants do not prove the sandboxed product's
-exact context; they can perturb timing. A passing controlled experiment is marked
-`diagnostic-condition-passed`, not unconditioned Intel qualification.
+### Intel control result: session/bootstrap availability is also failing
+
+[Intel-only41070188421](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/41070188421)
+reused the exact source7e794d2 products, with controller e2f3be8. Original source/
+digests/manifests/seals were verified; no release product or passing ARM/Linux job
+was rebuilt/rerun. Two one-shot unsandboxed probes contain no Flutter or product IPC.
+
+Before open they completed: session0.274s, NSApplication.shared0.214s. After normal
+close, **both probes stopped responding within their bounded observation**; during
+reopen, fresh probes did likewise and were reaped by their owning controllers.
+The AppKit-only sample waits in the same WindowServer/get_session_port path;
+the session-only sample waits in SLSessionCopyCurrentDictionary/Mach message.
+The after-close and reopen-stalled AppKit stdout files contain only the pre-initialization marker.
+Product PID5230 was still in AppKit bootstrap in early and late live, identity-
+checked samples; the late sample began about11.19s after launch. No second Metal
+line appeared in this run's timestamped sequence. Native15s Ready still failed.
+
+This establishes a **broader graphical-service/context responsiveness failure in
+this experiment**, not an isolated Dart/protocol failure. It does not establish
+whether the OS/runner image, launch context or closing the product triggered it,
+nor that all hosted Intel runners are fundamentally incapable. Controls can
+perturb timing and are not sandboxed Rust children; their exit codes are not
+product success. No safe product fix is demonstrated; do not remove the sandbox,
+ownership, signatures or timeouts to make this pass.
+
+Source inspection also confirms the development Mac owner is window-only
+(`run_flutter_development`), whereas operational `run_tray` keeps an AppKit
+DesktopHost. A device-mutation-disabled persistent native menu-host qualification
+and a pure-AppKit window-close control are the next discriminants. Keep the native
+fallback and the Intel reopen gate **failed**, without requiring a physical Mac.
+Do not repeat the same failed workflow without changing the hypothesis/context.
+
+Primary context: [Apple NSApplication.shared](https://developer.apple.com/documentation/appkit/nsapplication/shared)
+creates the WindowServer connection; [Apple TN2083](https://developer.apple.com/library/archive/technotes/tn2083/_index.html)
+explains inherited GUI/bootstrap contexts. Unix UID/SID/PGID alone is not proof of
+Mach session equivalence. Historical documentation is not a macOS15 root-cause proof.
+
+CI6 artifact12984942123 ZIP SHA256
+`e9326e141db6eb3175d7c717a6b0ad677e84dddeaa142e767151eed04b005d71`;
+native evidence TAR
+`1590fba0e5b47d5dfba4992b66da83e28bf257996d05a3f9650048d791eb282f`.
+Private raw controls, timestamps, early/late samples and diagnosis remain together.
 
 CI: [41023711442](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/41023711442),
 [41024851203](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/41024851203),
@@ -303,3 +338,28 @@ No main/tag/release/site or installed MSI change. Only the explicitly authorized
 has `[CF-Pages-Skip] [skip ci]`; no deployment/release job is invoked. Direct
 Cloudflare inventory lacked a token, so live Cloudflare configuration is not
 claimed inspected. Local work branch, other worktrees/stash remain preserved.
+
+## Handoff and next authorized tranche
+
+Saved code checkpoints:3cf3a06 (safe pause),1fe5640 (module-name decoding),
+f4bb9bd (validated engine-platform controls),7e794d2 (frozen integrated products),
+4cabb1b (runtime replay/qualification fixes),e2f3be8 (Intel controls).
+Later documentation commits do not change the qualified products. Work branch
+remains local; only the separately authorized CI ref was pushed. Eight worktrees
+and the existing stash remain; main73369ab and the stable annotated tag/target
+06d800b/3d74686 are unchanged. The public site/README were not modified in B3.
+
+1. Resolve/qualify Intel bootstrap using the native permanent-menu architecture
+   and a discriminating no-Flutter control in a suitable hosted context. No physical
+   Mac prerequisite, no blind timeout or environment/security workaround.
+2. Measure accelerated Mint from an already-authorized local graphical session;
+   do not treat XRDP llvmpipe figures as accelerated-console results or alter drivers.
+3. Qualify Flutter ARM64 builds/packages, then continue safe autostart/history/
+   doctor and platform-specific protection parity with their authorization gates.
+4. Complete macOS dark/native preferences/menu integration, seven-language native
+   visual/accessibility and actual installation/update packaging gates.
+
+B3 delivers real Windows/Linux features and ARM hosted runtime evidence, **not**
+a fully migrated or release-ready0.21.1. Intel remains a recorded failed gate;
+accelerated Linux, physical hardware and the remaining parity are not invented.
+Stable installations/settings/protections are preserved. Stop here for owner review.
