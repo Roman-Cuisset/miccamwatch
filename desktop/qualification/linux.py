@@ -436,12 +436,18 @@ def _qualify(args, out, check, accessibility=None):
         reader = threading.Thread(target=drain, daemon=True); reader.start()
         generations = {}
         def ui():
-            found = [p for p in tree(process.pid)[1:] if Path(f'/proc/{p}/exe').resolve()==prefix/'desktop/miccamwatch_desktop']
+            found = []
+            for child in tree(process.pid)[1:]:
+                try:
+                    if Path(f'/proc/{child}/exe').resolve() != prefix/'desktop/miccamwatch_desktop':
+                        continue
+                    fields = Path(f'/proc/{child}/stat').read_text().rsplit(')',1)[1].split()
+                except FileNotFoundError:
+                    continue  # Normal child exit between tree and /proc reads.
+                generations.setdefault(child, fields[19])
+                found.append(child)
             if len(found)>1:
                 raise RuntimeError('Duplicate owned UI')
-            for child in found:
-                fields = Path(f'/proc/{child}/stat').read_text().rsplit(')',1)[1].split()
-                generations.setdefault(child, fields[19])
             return found[0] if found else None
         def window(pid, action='info', path=None):
             fields = Path(f'/proc/{pid}/stat').read_text().rsplit(')',1)[1].split()
@@ -472,6 +478,12 @@ def _qualify(args, out, check, accessibility=None):
                 state = until(lambda:window(pid))
                 item = {'pid':pid, 'window':state,'mapped_ms':(time.monotonic()-started)*1000}
                 row['cycles'].append(item)
+                ready = until(lambda: next((event for event in events
+                    if event['monotonic'] >= started and re.search(
+                        r'desktop event=ready\b.*\bpid='+str(pid)+r'\b.*\bsequence=[1-9]\d*',
+                        event['line'])), None))
+                item['native_ready'] = ready
+                item['usable_native_ready_ms'] = (ready['monotonic']-started)*1000
                 if cycle == 0:
                     for _ in range(3):
                         native_command(prefix,env,'--settings-development','--open')
@@ -496,9 +508,11 @@ def _qualify(args, out, check, accessibility=None):
                     if args.captures:
                         if not window(pid,'capture',out/f'{theme}.ppm'):
                             raise RuntimeError('Owned capture failed; no desktop fallback permitted')
+                closing = time.monotonic()
                 if not window(pid,'close'):
                     raise RuntimeError('Owned close failed')
                 until(lambda:ui() is None)
+                item['process_exit_ms'] = (time.monotonic()-closing)*1000
                 if process.poll() is not None:
                     raise RuntimeError('Rust owner exited with disposable UI')
             row['closed_final'] = interval(process.pid,args.seconds)

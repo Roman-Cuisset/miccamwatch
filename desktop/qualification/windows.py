@@ -326,7 +326,7 @@ def main():
             row['open']=host.open(burst=10)
             row['opened']=host.idle(args.idle_seconds)
             if args.captures and index==0:
-                row['capture']=capture(host.view()[0][0],args.out/f'live-{args.theme}.png',args.theme=='dark')
+                row['capture']=capture(host.expose(),args.out/f'live-{args.theme}.png',args.theme=='dark')
             row['close']=host.close()
             tick=max(host.ticks());time.sleep(1)
             row['closed_after']=host.idle(args.idle_seconds)

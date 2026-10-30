@@ -746,10 +746,17 @@ for test in cases {
     require(nativeWindow.firstResponder === settingsResponder, "observation failure stole settings focus")
     consultation.update(frame, diagnostic: content.diagnostic)
     for (name, button) in [("notifications", consultation.notifications), ("sound", consultation.sound), ("history", consultation.history)] {
-        for state in [NSControl.StateValue.on, .off] {
-            button.state = state == .on ? .off : .on
+        if frame.preferences!.writable {
+            for state in [NSControl.StateValue.on, .off] {
+                button.state = state == .on ? .off : .on
+                button.performClick(nil)
+                require(button.state == state, "native preference checkbox did not adopt desired value: \(name)")
+            }
+        } else {
+            let authoritativeState = button.state
             button.performClick(nil)
-            require(button.state == state, "native preference checkbox did not adopt desired value: \(name)")
+            require(!button.isEnabled && button.state == authoritativeState,
+                    "disabled native preference checkbox changed: \(name)")
         }
     }
     let profileEntry = entries.first { $0.action == "profile" }!
@@ -1225,6 +1232,8 @@ def main():
         expected = []
         for case in cases:
             expected.extend(dispatched(case['frame']['items']))
+            # Disabled performClick calls above must emit no preference actions;
+            # the complete event-stream equality below enforces that absence.
             if case['frame']['preferences']['writable']:
                 for preference in ('notifications', 'sound', 'history'):
                     expected.extend(dict(kind='action', action=preference + '_' + value) for value in ('enable', 'disable'))
@@ -1235,7 +1244,7 @@ def main():
                             if row['action'] in ('mic', 'camera', 'pause', 'camera_inspect', 'autostart') and row['enabled'])
         expected += [dict(kind='action', action='profile_meeting'),
                      dict(kind='ready', protocol=4), dict(kind='action', action='mic')]
-        require(events == expected, 'native dispatch lost retained controls or consultation/About emitted a device action')
+        require(events == expected, 'native dispatch lost retained controls, a disabled preference emitted an action, or consultation/About emitted a device action')
     (proof / 'scope.txt').write_text(
         'Real production AppKit NSMenu intrinsic width and menu tracking; real enabled action dispatch; '
         'Simulated input data only; no claim of hardware capture coverage. '

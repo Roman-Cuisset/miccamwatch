@@ -5,7 +5,15 @@ name: Flutter desktop qualification (no release)
 # reviewed bridge. Neither push, pull_request, tags nor a schedule runs this job.
 on:
   workflow_dispatch:
+    inputs:
+      runtime-replay:
+        type: boolean
+        default: false
   workflow_call:
+    inputs:
+      runtime-replay:
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -13,6 +21,9 @@ permissions:
 jobs:
   macos:
     name: macOS 15 ${{ matrix.architecture }} owned qualification
+    permissions:
+      contents: read
+      actions: read
     strategy:
       fail-fast: false
       matrix:
@@ -58,9 +69,21 @@ jobs:
         with:
           toolchain: 1.98.1
           components: clippy
+      - name: Restore pinned CI4 products and retain original build provenance
+        if: ${{ inputs.runtime-replay }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          rustc -Vv | tee "$RUNNER_TEMP/mcw-flutter-macos/replay-rust.log"
+          test "$(rustc --version | cut -d ' ' -f 2)" = 1.98.1
+          python3 -B desktop/qualification/replay_products.py --platform macos \
+            --root "$RUNNER_TEMP/mcw-flutter-macos"
       - name: Install exact SHA-256 verified official Flutter study SDK
+        if: ${{ !inputs.runtime-replay }}
         run: python3 -B desktop/qualification/macos_sdk.py --proof "$RUNNER_TEMP/mcw-flutter-macos"
       - name: Record and require exact Rust Flutter and Dart revisions
+        if: ${{ !inputs.runtime-replay }}
         run: |
           set -euo pipefail
           rustc -Vv | tee "$RUNNER_TEMP/mcw-flutter-macos/rust.log"
@@ -69,6 +92,7 @@ jobs:
           python3 -c 'import json,os; p=json.load(open(os.environ["RUNNER_TEMP"]+"/mcw-flutter-macos/flutter-version.json")); assert p["frameworkVersion"]=="3.47.8" and p["frameworkRevision"]=="737ba8f885dc774b53b442759999a312c9461e4e" and p["dartSdkVersion"].split()[0]=="3.13.7",p'
           flutter doctor -v 2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/flutter-doctor.log"
       - name: Check shared Rust commands ownership and settings without hardware actions
+        if: ${{ !inputs.runtime-replay }}
         run: |
           set -euo pipefail
           cargo clippy --all-targets --locked --features flutter-desktop -- -D warnings \
@@ -78,10 +102,12 @@ jobs:
           cargo test --lib --locked --features flutter-desktop settings::tests \
             2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/rust-settings-tests.log"
       - name: Build real native engine with development parser and unchanged AppKit fallback
+        if: ${{ !inputs.runtime-replay }}
         run: |
           set -euo pipefail
           cargo build --locked --release --features flutter-desktop --bin mcw 2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/rust-build.log"
       - name: Build normal sandboxed Flutter release
+        if: ${{ !inputs.runtime-replay }}
         working-directory: desktop/flutter
         run: |
           set -euo pipefail
@@ -91,6 +117,7 @@ jobs:
           flutter build macos --release --no-pub 2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/flutter-build.log"
           /usr/bin/ditto build/macos/Build/Products/Release/MicCamWatch.app "$RUNNER_TEMP/mcw-flutter-macos/release/MicCamWatch.app"
       - name: Build separately identified native-window instrumentation (same release sandbox)
+        if: ${{ !inputs.runtime-replay }}
         working-directory: desktop/flutter
         run: |
           set -euo pipefail
@@ -107,8 +134,8 @@ jobs:
           set -euo pipefail
           python3 -B desktop/qualification/macos.py \
             --proof "$RUNNER_TEMP/mcw-flutter-macos/evidence" \
-            --release-app "$RUNNER_TEMP/mcw-flutter-macos/release/MicCamWatch.app" \
-            --instrumented-app "$RUNNER_TEMP/mcw-flutter-macos/instrumented/MicCamWatch.app" \
+            --release-app "${MCW_FROZEN_RELEASE_APP:-$RUNNER_TEMP/mcw-flutter-macos/release/MicCamWatch.app}" \
+            --instrumented-app "${MCW_FROZEN_INSTRUMENTED_APP:-$RUNNER_TEMP/mcw-flutter-macos/instrumented/MicCamWatch.app}" \
             2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/qualification.log"
       - name: Summarize observed graphical status (never infer from a successful build)
         if: always()
@@ -143,7 +170,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: flutter-macos-${{ matrix.architecture }}-${{ github.sha }}
+          name: flutter-macos-${{ matrix.architecture }}-${{ github.sha }}${{ inputs.runtime-replay && '-runtime-replay' || '' }}
           if-no-files-found: error
           retention-days: 14
           include-hidden-files: true
@@ -152,9 +179,13 @@ jobs:
             ${{ runner.temp }}/mcw-flutter-macos/*.json
             ${{ runner.temp }}/mcw-flutter-macos/evidence-native.tar.gz
             ${{ runner.temp }}/mcw-flutter-macos/evidence-native.SHA256SUMS
+            ${{ runner.temp }}/mcw-flutter-macos/replay/artifact.json
 
   linux-x64-baseline:
     name: Ubuntu 22.04 x64 Mint-baseline development bundle
+    permissions:
+      contents: read
+      actions: read
     runs-on: ubuntu-22.04
     timeout-minutes: 50
     env:
@@ -199,10 +230,12 @@ jobs:
             libgl1-mesa-dri libegl1-mesa libgl1 mesa-utils \
             2>&1 | tee "$RUNNER_TEMP/mcw-flutter-linux-setup/apt-install.log"
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        if: ${{ !inputs.runtime-replay }}
         with:
           toolchain: 1.98.1
           components: clippy
       - name: Download exact official Linux Flutter SDK and verify before execution
+        if: ${{ !inputs.runtime-replay }}
         run: |
           python3 - <<'PY'
           import hashlib, json, os, pathlib, subprocess, urllib.request
@@ -234,6 +267,7 @@ jobs:
               path.write(str(root / 'flutter/bin') + '\n')
           PY
       - name: Require exact Rust Flutter and Dart versions
+        if: ${{ !inputs.runtime-replay }}
         run: |
           set -euo pipefail
           rustc -Vv | tee "$RUNNER_TEMP/mcw-flutter-linux-setup/rust.log"
@@ -241,10 +275,19 @@ jobs:
           flutter --version --machine > "$RUNNER_TEMP/mcw-flutter-linux-setup/flutter-version.json"
           python3 -c 'import json,os; p=json.load(open(os.environ["RUNNER_TEMP"]+"/mcw-flutter-linux-setup/flutter-version.json")); assert p["frameworkVersion"]=="3.47.8" and p["frameworkRevision"]=="737ba8f885dc774b53b442759999a312c9461e4e" and p["dartSdkVersion"].split()[0]=="3.13.7",p'
       - name: Build package and audit actual Ubuntu 22.04 symbol floors
+        if: ${{ !inputs.runtime-replay }}
         run: |
           set -euo pipefail
           bash desktop/qualification/linux_hosted.sh "$MCW_LINUX_OUTPUT" \
             2>&1 | tee "$RUNNER_TEMP/mcw-flutter-linux-setup/build.log"
+      - name: Restore pinned CI4 baseline products without recompilation
+        if: ${{ inputs.runtime-replay }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 -B desktop/qualification/replay_products.py --platform linux \
+            --root "$MCW_LINUX_OUTPUT"
       - name: Exercise owned X11 lifecycle native SNI and safe preferences in private virtual desktop
         run: |
           set -euo pipefail
@@ -268,7 +311,7 @@ jobs:
         if: ${{ always() && env.MCW_LINUX_OUTPUT != '' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: flutter-linux-x64-ubuntu2204-baseline-${{ github.sha }}
+          name: flutter-linux-x64-ubuntu2204-baseline-${{ github.sha }}${{ inputs.runtime-replay && '-runtime-replay' || '' }}
           if-no-files-found: error
           retention-days: 14
           include-hidden-files: true
@@ -281,5 +324,6 @@ jobs:
             ${{ env.MCW_LINUX_OUTPUT }}/*.SHA256SUMS
             ${{ env.MCW_LINUX_OUTPUT }}/*.tar.gz
             ${{ env.MCW_LINUX_OUTPUT }}/linux_xwindow
+            ${{ env.MCW_LINUX_OUTPUT }}/replay/artifact.json
             ${{ runner.temp }}/mcw-flutter-linux-setup/*.log
             ${{ runner.temp }}/mcw-flutter-linux-setup/*.json

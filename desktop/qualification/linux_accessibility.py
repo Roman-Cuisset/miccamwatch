@@ -401,8 +401,13 @@ def exercise(pid, root, output, start_ticks, owner_pid, owner_start_ticks, execu
                 if path.is_dir():
                     path.rmdir()
                 backup.rename(path)
+    wait(lambda:any(n == 'Capture sounds' for n in ui.inspect()),
+         'Restored native preferences did not reload in the real UI')
+    wait(lambda:any('Not paused according to native.' in n for n in ui.inspect()),
+         'Restored native pause state did not reload')
     evidence['complete']=True
-    record({'case':'fixture_restored','settings':content()})
+    record({'case':'fixture_restored','settings':content(),'ui':ui.inspect()})
+    ui.click('Overview')
     return evidence
 
 

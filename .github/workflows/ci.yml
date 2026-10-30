@@ -19,6 +19,10 @@ on:
           - macos
           - windows
           - flutter
+      flutter-runtime-replay:
+        description: With native-platform=flutter, replay pinned CI41037181504 products without rebuilding them
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       native-only:
@@ -35,6 +39,11 @@ jobs:
   flutter-qualification:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.native-platform == 'flutter' }}
     uses: ./.github/workflows/flutter-qualification.yml
+    permissions:
+      contents: read
+      actions: read
+    with:
+      runtime-replay: ${{ inputs.flutter-runtime-replay || false }}
 
   windows:
     if: ${{ !inputs.native-only && inputs.native-platform != 'flutter' }}

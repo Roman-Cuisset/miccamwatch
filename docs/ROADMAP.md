@@ -2732,7 +2732,7 @@ Lots futurs **à approuver, aucun correctif appliqué** :
   Fermé5,73→5,53% d'un cœur, ouvert8,46→8,00% avec deltas par tour ouverts de signes opposés ; RSS candidat20,77/138,36Mio.
   Ne pas revendiquer un gros gain ni comparer directement aux11,60% B2 d'un autre contexte. Profilage instrumenté séparé terminé, analyse détaillée à suivre.
 - Run CI `41024851203` sur `fc941c0` : Rust/Flutter release et tests réussis sur Ubuntu22.04 et les deux Mac.
-  Ubuntu53desktop+5notifications ; chaque Mac52desktop+5notifications. Échec ultérieur de qualification conservé :
+  Ubuntu53desktop+5settings ; chaque Mac52desktop+5settings. Échec ultérieur de qualification conservé :
   Linux : socket privé165octets, limite native104 non modifiée ; HOME imbriqué du harness corrigé et feuille privée raccourcie.
   macOS : vrai entitlement `get-task-allow=true` injecté par Xcode ; Release désactive maintenant uniquement l'injection de base,
   suivant la recommandation Apple, sans assouplir l'assertion ni le sandbox. Aucune réussite runtime Mac n'est encore affirmée.
@@ -2774,3 +2774,25 @@ Lots futurs **à approuver, aucun correctif appliqué** :
   LSP Dart indisponible dans ce worktree ; références inventoriées et unique appel main.dart migré, analyse/tests/build en cours.
 - Contrôle Windows stable après les essais : binaires MSI, settings, fichiers de protection/verrous strictement identiques.
   Historique enrichi pendant la session mais préfixe initial intégralement conservé ; aucune troncature/restauration forcée.
+- Mint22.2, bundle Ubuntu figé `fc941c0` : six cycles réels réussis (3clair/3sombre), SNI, même enfant sur activations,
+  préférences sons/pause/reprise, refus natif de lecture, restauration, arrêt0 et zéro Flutter résiduel.
+  Bus/registre AT-SPI privés réellement fonctionnels puis arrêtés ; course normale de disparition `/proc` corrigée uniquement
+  dans le contrôleur. Archive privée vérifiée `mint-first-qualified-evidence.tar.gz`,
+  SHA256 `edf4611cf163f214507881d0e73b44b789db689cb6482faacb05968e30f94175`.
+- Mint XRDP/llvmpipe : RSS final Rust10,11–10,17Mio, ouvert327,73–334,76Mio ; PSS296,05–303,19Mio ouvert.
+  CPU échantillonné24,17–26,21% ouvert,1,45–1,50% fermé ; borne inférieure excluant les enfants très courts entre échantillons.
+  Premières fenêtres mappées4,72–4,84s, réouvertures0,97–1,21s ; aucun résultat accéléré revendiqué.
+  Requalification du produit `7e794d2` et capture d'un dashboard normal après restauration encore à faire.
+- Run `41037181504` (`7e794d2`) : builds/tests des3cibles réussis ; Mac ARM, Flutter réel release puis instrumenté,
+  IPC positif,3activations, fermeture sans moteur résident, réouverture et mort du propriétaire réussis.
+  Fixture natif AppKit échoue ensuite en exigeant à tort le basculement d'une préférence désactivée :
+  correction du test pour conserver l'état autoritatif et exiger zéro événement ; aucun garde de production assoupli.
+- Mac Intel : release/IPC positif réussis ; premier lancement instrumenté,3activations/capture/fermeture réussis ;
+  la réouverture n'atteint pas Ready. Cause non établie. Nouveau reçu persiste le PID avant attente et tente un échantillon
+  en lecture seule du seul enfant encore possédé, sans entitlement de debug, permission ni augmentation du timeout.
+- Replay **runtime seulement** préparé : mêmes produits du run41037181504, IDs et SHA256 ZIP/TAR figés, source produit7e794d2,
+  source du contrôleur séparée. Manifeste/ancêtre/diff/API vérifiés avant exécution ; aucune recompilation Rust/Flutter de production.
+  Seul le producteur de fixtures natif Rust/Swift peut être compilé. Nouveaux contrôles CI encore non exécutés à ce checkpoint.
+- Contrôles locaux actualisés : analyse Flutter sans erreur,61tests et build Windows release réussis ; 19hashes du vrai bundle
+  Linux relus par le restaurateur. Capture PrintWindow actuelle vide malgré47nœuds UIA réels et fenêtre possédée au premier plan :
+  diagnostic de capture en cours, aucune image vide présentée comme validation visuelle ni repli vers le bureau entier.

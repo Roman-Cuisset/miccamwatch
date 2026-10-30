@@ -137,6 +137,36 @@ def alive(pid):
     return result.returncode == 0 and bool(result.stdout.strip()) and not result.stdout.strip().startswith('Z')
 
 
+def diagnose_reopen(prefix, owner, child, proof):
+    """Read-only owned-child sample; no debugger entitlement or permission grant."""
+    expected = str((prefix / 'desktop/MicCamWatch.app/Contents/MacOS/MicCamWatch').resolve())
+    record = dict(child=child, owner=owner.pid, status='not-sampled')
+    if owner.poll() is not None or (child, expected) not in descendants(owner.pid):
+        record['reason'] = 'Owned live relationship no longer present'
+        return record
+    before = command(['/bin/ps', '-p', str(child), '-o', 'lstart=,pid=,ppid=,stat=,comm='],
+                     proof / 'reopen-process-before', check=False)
+    try:
+        result = command(['/usr/bin/sample', str(child), '1', '1', '-file', proof / 'reopen-sample.txt'],
+                         proof / 'reopen-sample', check=False, timeout=8)
+        after = command(['/bin/ps', '-p', str(child), '-o', 'lstart=,pid=,ppid=,stat=,comm='],
+                        proof / 'reopen-process-after', check=False)
+        # State can change legitimately; compare creation/identity, not stat.
+        def identity(value):
+            rows = value.stdout.decode(errors='replace').strip().split(None, 8)
+            return rows[:7], rows[8:] if len(rows) >= 9 else []
+        valid = (owner.poll() is None and (child, expected) in descendants(owner.pid)
+                 and before.returncode == after.returncode == 0
+                 and identity(before) == identity(after))
+        record.update(status='sampled' if valid and result.returncode == 0 else 'unverified',
+                      exit=result.returncode, identity_consistent=valid)
+        if not valid:
+            (proof / 'reopen-sample.txt').unlink(missing_ok=True)
+    except (subprocess.SubprocessError, OSError) as error:
+        record.update(status='diagnostic-failed', error=str(error))
+    return record
+
+
 def smoke(prefix, proof, session, instrumented):
     proof.mkdir(parents=True)
     receipt = dict(status='running', mode='real-Rust-read-only-development', session=session,
@@ -209,8 +239,19 @@ def smoke(prefix, proof, session, instrumented):
             receipt['cases'].append(dict(case='normal-owned-window-close-no-resident-engine', status='passed'))
             command(argv, proof / 'reopen', env=env)
             child = wait_for(owned_child, 'Native activation failed to reopen Flutter')
-            wait_for(lambda: re.search(r'desktop event=ready .*pid=' + str(child) + r'\b.*sequence=[1-9]\d*', text()),
-                     'Reopened child did not establish IPC')
+            receipt['reopened_child_pid'] = child
+            save(proof / 'receipt.json', receipt)
+            reopen_started = time.monotonic()
+            diagnosed = False
+            def reopened_ready():
+                nonlocal diagnosed
+                ready = re.search(r'desktop event=ready .*pid=' + str(child) + r'\b.*sequence=[1-9]\d*', text())
+                if not ready and not diagnosed and time.monotonic() - reopen_started >= 1.5:
+                    diagnosed = True
+                    receipt['reopen_diagnostic'] = diagnose_reopen(prefix, owner, child, proof)
+                    save(proof / 'receipt.json', receipt)
+                return ready
+            wait_for(reopened_ready, 'Reopened child did not establish IPC')
             receipt['cases'].append(dict(case='reopen-new-owned-child', status='passed', child=child))
         else:
             receipt['cases'].append(dict(case='window-close-activation-capture', status='not-executed',
