@@ -18,6 +18,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 
@@ -170,7 +171,7 @@ def environment():
     info = base.lstat()
     if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
         raise RuntimeError('~/mcw-qualification must be owned private non-symlink directory')
-    root = private_new(base/f'linux-b3-{time.time_ns()}')
+    root = Path(tempfile.mkdtemp(prefix='linux-b3-', dir=base))
     env = os.environ.copy()
     original_runtime = env.get('XDG_RUNTIME_DIR')
     if original_runtime:

@@ -121,6 +121,24 @@ jobs:
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as out:
               out.write('## macOS ' + os.environ['EXPECTED_ARCH'] + ' qualification\n\n```json\n' + json.dumps(value, indent=2) + '\n```\n\nNo release, deploy, physical capture, Developer ID or notarization claim.\n')
           PY
+      - name: Preserve Unix modes and symlinks and verify restored bundle seals
+        if: always()
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/mcw-flutter-macos"
+          if [[ -d "$root/evidence" ]]; then
+            tar -C "$root" -czf "$root/evidence-native.tar.gz" evidence
+            shasum -a256 "$root/evidence-native.tar.gz" | tee "$root/evidence-native.SHA256SUMS"
+            mkdir "$root/archive-check"
+            tar -C "$root/archive-check" -xzf "$root/evidence-native.tar.gz"
+            for variant in release instrumented; do
+              app="$root/archive-check/evidence/$variant-prefix/desktop/MicCamWatch.app"
+              if [[ -d "$app" ]]; then
+                test -x "$app/Contents/MacOS/MicCamWatch"
+                codesign --verify --deep --strict "$app"
+              fi
+            done
+          fi
       - name: Preserve exact qualification logs captures and development payload identities
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -132,7 +150,8 @@ jobs:
           path: |
             ${{ runner.temp }}/mcw-flutter-macos/*.log
             ${{ runner.temp }}/mcw-flutter-macos/*.json
-            ${{ runner.temp }}/mcw-flutter-macos/evidence/**
+            ${{ runner.temp }}/mcw-flutter-macos/evidence-native.tar.gz
+            ${{ runner.temp }}/mcw-flutter-macos/evidence-native.SHA256SUMS
 
   linux-x64-baseline:
     name: Ubuntu 22.04 x64 Mint-baseline development bundle

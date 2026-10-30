@@ -240,9 +240,9 @@ def main():
     proof.mkdir(parents=True, exist_ok=True)
     prefixes = []
     for name, app in (('release', args.release_app), ('instrumented', args.instrumented_app)):
-        prefix = prepare_prefix(proof / (name + '-prefix'), app.resolve())
+        prefixes.append(prepare_prefix(proof / (name + '-prefix'), app.resolve()))
+    for name, prefix in zip(('release', 'instrumented'), prefixes):
         inspect(prefix, proof / (name + '-inspection'))
-        prefixes.append(prefix)
     helper = proof / 'session-probe'
     command(['xcrun', 'swiftc', '-target', platform.machine() + '-apple-macosx15.0',
              REPO / 'desktop/qualification/macos_session.swift', '-o', helper], proof / 'session-build')

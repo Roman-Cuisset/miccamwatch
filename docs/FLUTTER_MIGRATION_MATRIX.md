@@ -1,12 +1,32 @@
-# Native feature migration inventory — stages A, B1 and B2
+# Native feature migration inventory — stages A, B1, B2 and B3
 
 Source baseline: `b5cf391c1905cbc391c47220f1347c55ba8e24cc`, 27 October 2026. Inspection only; runtime qualification is recorded separately. This inventory preserves every native/public CLI capability and its actual limitations.
 
-The inventory priorities mean **A = microphone**, **B = presentation/preferences**, **C = sensitive operations**; the owner's cross-platform and visual-finalization gates remain separate. Camera/lock/maintenance actions still require their command-specific gates. Current protocol3 and B1 evidence: [FLUTTER_PREFERENCES_B1.md](FLUTTER_PREFERENCES_B1.md). [Protocol2 stage-A history](FLUTTER_COMMANDS_STAGE_A.md) is retained, not a compatibility contract for the current runtime.
+The inventory priorities mean **A = microphone**, **B = presentation/preferences**, **C = sensitive operations**; the owner's cross-platform and visual-finalization gates remain separate. Camera/lock/maintenance actions still require their command-specific gates. Current B3 runtime uses strict protocol4; protocol3 is not a downgrade path. [B1 protocol3 evidence](FLUTTER_PREFERENCES_B1.md) and [protocol2 stage-A history](FLUTTER_COMMANDS_STAGE_A.md) remain historical records, not current compatibility contracts.
 
 Stage A implementation update: Windows now has explicit desired-state microphone commands through the existing Rust worker, private protocol2 admission and native readback. Real mute/release, UI process exit, retained native guard and reopening without duplicate UI have been exercised. Other controls/platforms remain gated; this inventory's source references and “inspection only” evidence describe the pinned baseline, not the later runtime qualification. Sidebar/Windows branding now uses official assets; macOS/Linux Flutter packaging identity remains unqualified. See the current stage A results in the ROADMAP.
 
-## Current B2 qualification — 29 October 2026
+## Current B3 checkpoint — 30 October 2026
+
+This is development qualification, not a public0.21.1 release or complete parity.
+The detailed native inventory below preserves its pinned source baseline;
+the current delta and actual runtime gates are listed here.
+
+| Function / platform | B3 evidence actually established | Remaining gate |
+|---|---|---|
+| Notification pause/resume | Real Windows Flutter clicks, server-derived30-minute deadline, exact timestamp CAS, native readback, persisted restart, independent Rust TEST delivery while Flutter is absent. Resume clears the deadline without enabling a disabled master. | Flutter offers30 minutes/resume, not the CLI's full1–10080-minute choice. No new genuine-capture or physical audibility test. |
+| Errors and lifecycle | Private read-only settings reject mutation; held settings lock reaches uncertain timeout without invented success; close/reopen while accepted work completes shows real native state. All owned processes exit; original private preference values restored. | Native serialization normalized the private fixture's CRLF to LF; semantic restoration, not byte-identical formatting. Stable user settings were not used for writes. |
+| Windows CPU | Two paired AB/BA rounds,60 seconds per open/closed interval, equivalent snapshots and fresh signatures. Closed5.73→5.53% of one core; open8.46→8.00%, with opposite-sign open round deltas. RSS20.77MiB closed,138.36MiB open. | Small descriptive difference, not a proven large/significant/general speedup; B2's earlier11.60% is a different workload. Separate instrumentation must not be mixed with clean CPU figures. Controlled capture/trust-mutation latency remains unmeasured. |
+| Ubuntu22.04 x64 | CI41024851203: strict Rust checks,53desktop+5notification tests, Flutter checks/release, baseline ELF/package hashes passed. Actual SNI watcher/host registered. | Lifecycle stopped before UI on an overlong private socket path. Harness correction retains real HOME and shortens exclusively created private leaf; unchanged product limit. Runtime requalification pending. |
+| Linux Mint22.2 | Authorized existing SSH/X11/XFCE session discovered; stable application identified and left running. Intel HD520 exists, but actual XRDP GLX renderer reports llvmpipe/no acceleration. Verified Ubuntu-built bundle available. | Real bundle UI/IPC/preferences/cycles and actual child renderer still to run; no Intel-accelerated or native-Wayland claim. |
+| macOS15 Intel / Apple Silicon | CI41024851203: both Rust/Flutter release builds,52desktop+5notification Rust tests, Flutter checks and native instrumentation builds passed. Strict signature seal passed. | Unexpected Xcode-injected get-task-allow caught by unchanged entitlement gate; Release injection now disabled, sandbox unchanged. Runtime/IPC/graphics and restored-tar seal verification pending. No physical/manual Mac is required or claimed. |
+| Identity / language | Official assets unchanged;59Flutter widget tests passed, real French125% Windows light/dark pause captures examined. | No seven-language native visual review; no new ARM64 Flutter build/runtime or physical ARM qualification. |
+
+Still absent: autostart UI, complete doctor/history presentation, camera/lock/maintenance
+flows, Unix microphone commands and persisted language/theme APIs. Windows microphone
+release semantics remain unchanged; no device-changing B3 test. GTK/AppKit remain.
+
+## Historical B2 qualification — 29 October 2026
 
 Paired performance checkpoint `d37c8e8`; final code/build and Windows/Linux lifecycle smoke checkpoint `9aa4689`. See [B2 results, methods and remaining gates](FLUTTER_B2_QUALIFICATION.md). This is not full parity, installed-package qualification or a public0.21.1 release.
 

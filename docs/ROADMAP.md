@@ -2725,3 +2725,17 @@ Lots futurs **à approuver, aucun correctif appliqué** :
 - Windows Flutter final :59tests réussis en une passe et build release réussi après correction des textes.
   Premier clic Pause réel a bien sauvegardé l'échéance native ; confirmation accessible en cours, le harness initial cherchait
   à tort des noms atomiques alors que MSAA regroupe les paragraphes et expose les champs sélectionnables via leur valeur.
+- Checkpoint B3 suivant : gestes Windows pause/reprise, maître désactivé, refus d'écriture et timeout/reconnexion réellement exercés.
+  Deadline native exacte conservée par CAS ; après fermeture, Rust seul soumet/supprime les événements TEST selon la pause persistée.
+  Tous les processus possédés sont terminés ; valeurs privées initiales restaurées, sérialisation LF au lieu de CRLF documentée.
+- Comparatif propre B3 `cpu-clean-9773` terminé :2tours AB/BA,60s par intervalle, charge et signatures comparables.
+  Fermé5,73→5,53% d'un cœur, ouvert8,46→8,00% avec deltas par tour ouverts de signes opposés ; RSS candidat20,77/138,36Mio.
+  Ne pas revendiquer un gros gain ni comparer directement aux11,60% B2 d'un autre contexte. Profilage instrumenté séparé terminé, analyse détaillée à suivre.
+- Run CI `41024851203` sur `fc941c0` : Rust/Flutter release et tests réussis sur Ubuntu22.04 et les deux Mac.
+  Ubuntu53desktop+5notifications ; chaque Mac52desktop+5notifications. Échec ultérieur de qualification conservé :
+  Linux : socket privé165octets, limite native104 non modifiée ; HOME imbriqué du harness corrigé et feuille privée raccourcie.
+  macOS : vrai entitlement `get-task-allow=true` injecté par Xcode ; Release désactive maintenant uniquement l'injection de base,
+  suivant la recommandation Apple, sans assouplir l'assertion ni le sandbox. Aucune réussite runtime Mac n'est encore affirmée.
+- ZIP des artefacts Mac ne préservait pas les liens de frameworks ; correction d'archivage tar natif, SHA256 et contrôle du sceau
+  après extraction préparée. Préparer les deux préfixes avant inspection conserve aussi le payload instrumenté en cas d'échec.
+  Bundle Ubuntu du run2 intégralement vérifié (19fichiers, ELF, manifeste, SHA256, tar) ; transfert Mint encore à effectuer.

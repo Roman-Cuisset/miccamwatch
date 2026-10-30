@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Disposable Ubuntu22.04 CI desktop, real XFCE SNI, no global input/hardware.
 Run under dbus-run-session -- xvfb-run. Never attach to a user's desktop bus.
+Keep the hosted runner HOME; isolate desktop state through private XDG dirs.
 """
 import argparse
 import json
@@ -25,8 +26,9 @@ def main():
         raise RuntimeError('Disposable hosted Linux desktop only; never attach this fixture to a user bus')
     out=linux.private_new(args.out)
     env=os.environ.copy()
-    home=out/'desktop-home'; home.mkdir(mode=0o700)
-    env['HOME']=str(home)
+    # Nesting HOME under the evidence path makes the qualification tray's Unix
+    # socket exceed its native limit. This disposable runner's existing HOME
+    # keeps ~/mcw-qualification short; linux.environment owns each new fixture.
     for key,name in [('XDG_CONFIG_HOME','config'),('XDG_DATA_HOME','data'),
                      ('XDG_CACHE_HOME','cache'),('XDG_STATE_HOME','state'),('XDG_RUNTIME_DIR','runtime')]:
         directory=out/name; directory.mkdir(mode=0o700); env[key]=str(directory)
