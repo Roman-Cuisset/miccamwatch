@@ -28,8 +28,11 @@ FLOORS = {'GLIBC': (2, 35), 'GLIBCXX': (3, 4, 30), 'CXXABI': (1, 3, 13)}
 
 
 def command(args, **kwargs):
+    provided_env = kwargs.pop('env', None)
+    env = dict(os.environ if provided_env is None else provided_env)
+    env['LC_ALL'] = 'C'  # machine-parsed readelf/ldd/gdbus output, not user locale
     return subprocess.run([str(a) for a in args], check=True, text=True,
-                          capture_output=True, timeout=60, **kwargs).stdout
+                          capture_output=True, timeout=60, env=env, **kwargs).stdout
 
 
 def save(path, value):
@@ -273,7 +276,7 @@ def interval(parent, seconds):
 def sni_owned(pid, env):
     def call(dest, path, method, *arguments):
         return command(['gdbus','call','--session','--dest',dest,'--object-path',path,
-                        '--method',method,*arguments], env=env)
+                        '--method',method,'--',*arguments], env=env)
     raw = call('org.kde.StatusNotifierWatcher','/StatusNotifierWatcher',
                'org.freedesktop.DBus.Properties.Get',
                'org.kde.StatusNotifierWatcher','RegisteredStatusNotifierItems')
@@ -435,6 +438,9 @@ def qualify(args):
             row['success'] = True
         except BaseException as error:
             row['error'] = repr(error)
+            if isinstance(error, subprocess.CalledProcessError):
+                row['failed_command'] = {'argv': error.cmd, 'exit': error.returncode,
+                                         'stdout': error.stdout, 'stderr': error.stderr}
             raise
         finally:
             try:

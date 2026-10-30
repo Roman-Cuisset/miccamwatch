@@ -2739,3 +2739,23 @@ Lots futurs **à approuver, aucun correctif appliqué** :
 - ZIP des artefacts Mac ne préservait pas les liens de frameworks ; correction d'archivage tar natif, SHA256 et contrôle du sceau
   après extraction préparée. Préparer les deux préfixes avant inspection conserve aussi le payload instrumenté en cas d'échec.
   Bundle Ubuntu du run2 intégralement vérifié (19fichiers, ELF, manifeste, SHA256, tar) ; transfert Mint encore à effectuer.
+- Run `41028974295` sur `deef4ec` : builds/tests toujours réussis, debug entitlement supprimé, inspections architecture/sandbox/sceau
+  et restauration tar des deux builds Mac réussies. Session Aqua disponible ; premier lancement arrêté par le même garde de chemin :
+  le socket dépend de **XDG_DATA_HOME**, pas de XDG_RUNTIME_DIR. Le harness Mac utilise désormais un nouveau petit arbre0700 sous
+  `~/mcw-qualification`, propriétaire vérifié ; aucune limite ni permission native assouplie. Nouvelle exécution encore nécessaire.
+- Bundle Ubuntu `fc941c0` transféré et SHA256 vérifié sur Mint22.2 dans un préfixe neuf, sans toucher au mcw stable1406412.
+  Filtre tar Python avait ignoré les modes de répertoire et hérité de l'umask SSH775 ; seuls les8répertoires extraits ont été
+  remis à leurs modes déclarés700. Aucun parent ni droit système modifié ; préfixe et19sommes de contrôle inchangés.
+- Deux défauts du contrôleur Linux reproduits sans mutation : `gdbus` interprétait la profondeur `-1` comme une option ;
+  ajout du terminateur `--`. Locale française masquait «Version needs section» et donnait à tort des versions ELF vides ;
+  seules les sorties de commandes analysées sont maintenant forcées en locale C. Vérification réelle : mcw/runner GLIBC2.34,
+  moteur Flutter2.18, GLIBCXX3.4/CXXABI1.3 ; aucune réduction des plafonds. Stdout/stderr d'échec sont désormais conservés.
+- Mint : vrai SNI possédé, activation et première fenêtre Flutter1040×700 réelle affichée, logo et état inconnu/dégradé honnêtes.
+  Le vrai enfant possède des threads llvmpipe : rendu logiciel confirmé. Capture claire examinée, pas de claim Intel accéléré.
+  Automatisation préférences encore bloquée sur AT-SPI («Settings» indisponible), après fermeture propre0 et zéro UI possédée.
+  Toolkit-accessibility existant=false ; ne jamais activer globalement ou modifier les réglages utilisateur pour contourner le test.
+- Profilage Windows séparé : fermé54vérifications WinVerifyTrust baseline/candidat en60s ; candidat46410entrées de modules
+  fraîches énumérées,162noms décodés. Évitements de décodage = preuve de mécanisme, pas gain CPU mesuré ; coûts inclusifs non additifs.
+  Vérifications de confiance restent fraîches, coût résiduel important ; latence de capture contrôlée non mesurée faute d'action matérielle autorisée.
+- Historique de notifications TEST vidé puis relu0 ; seule la clé AUMID Qualification créée par la mission retirée après contrôle exact
+  des2valeurs et absence de sous-clé. Identité MSI strictement identique ; catalogue Windows géré par l'OS non modifié.

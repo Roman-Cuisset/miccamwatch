@@ -16,7 +16,9 @@ import plistlib
 import re
 import shutil
 import signal
+import stat
 import subprocess
+import tempfile
 import time
 
 REPO = Path(__file__).resolve().parents[2]
@@ -144,7 +146,14 @@ def smoke(prefix, proof, session, instrumented):
     child = None
     log = None
     try:
-        config, data = proof / 'config', proof / 'data'
+        private_base = Path.home() / 'mcw-qualification'
+        private_base.mkdir(mode=0o700, exist_ok=True)
+        metadata = private_base.lstat()
+        require(stat.S_ISDIR(metadata.st_mode) and metadata.st_uid == os.getuid()
+                and metadata.st_mode & 0o077 == 0, 'Unsafe private qualification base')
+        private_tree = Path(tempfile.mkdtemp(prefix='mac-b3-', dir=private_base))
+        receipt['private_tree'] = str(private_tree)
+        config, data = private_tree / 'config', private_tree / 'data'
         for path in (config, data):
             path.mkdir(mode=0o700)
         env = dict(os.environ, XDG_CONFIG_HOME=str(config), XDG_DATA_HOME=str(data),
