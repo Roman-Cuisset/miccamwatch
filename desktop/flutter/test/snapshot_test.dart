@@ -5,7 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:miccamwatch_desktop/snapshot.dart';
 
 Map<String, dynamic> frame({int sequence = 1}) => {
-  'type': 'snapshot', 'protocol_version': 3, 'sequence': sequence,
+  'type': 'snapshot', 'protocol_version': 4, 'sequence': sequence,
   'observed_at': '2026-10-27T08:00:00Z', 'locale': 'en',
   'engine': {'version': '0.21.1', 'platform': 'windows',
     'mode': 'read_only_development', 'state': 'healthy', 'detail': null},
@@ -92,8 +92,8 @@ void main() {
   test('schema, types, enum, version and monotonic sequence are required', () {
     final changes = <void Function(Map<String, dynamic>)>[
       (v) => v.remove('protection'),
-      (v) => v['protocol_version'] = 4,
-      (v) => v['protocol_version'] = 3.0,
+      (v) => v['protocol_version'] = 3,
+      (v) => v['protocol_version'] = 4.0,
       (v) => v['type'] = 'command',
       (v) => v['sequence'] = '1',
       (v) => v['resources'][0]['activity'] = 'safe',
@@ -123,6 +123,38 @@ void main() {
     final longText = frame();
     longText['diagnostics'] = [List.filled(513, 'é').join()];
     expect(() => Snapshot.decode(encode(longText)), throwsFormatException);
+  });
+
+  test('protocol four carries exact pause state in the authenticated preference lane', () {
+    const nativeDeadline = '2026-10-30T10:30:00.123456789+00:00';
+    final value = frame();
+    value['controls']['session'] = '0123456789abcdef0123456789abcdef';
+    value['preferences'] = {
+      'available': true, 'writable': true, 'profile_writable': true,
+      'values': {
+        'notifications_enabled': true, 'sound_enabled': false,
+        'history_enabled': false, 'profile': 'balanced',
+        'pause_notifications_until': nativeDeadline,
+        'notifications_paused': true,
+      },
+      'applied_profile': 'balanced',
+      'effects': {
+        'capture_notifications_supported': false,
+        'capture_sounds_supported': false, 'history_recording_supported': false,
+        'history_recording_active': false,
+      },
+      'reason': null,
+      'command': {
+        'id': 1, 'key': 'notification_pause', 'value': 'pause_30_minutes',
+        'state': 'succeeded', 'code': null, 'detail': null,
+      },
+    };
+    final snapshot = Snapshot.decode(encode(value));
+    expect(snapshot.preferences.values!.pauseNotificationsUntil, nativeDeadline);
+    expect(snapshot.preferences.values!.notificationsPaused, isTrue);
+    expect(snapshot.preferences.command!.value, 'pause_30_minutes');
+    value['controls']['session'] = '';
+    expect(() => Snapshot.decode(encode(value)), throwsFormatException);
   });
 
   test('stale uses elapsed receipt time, errors retain only last snapshot', () {

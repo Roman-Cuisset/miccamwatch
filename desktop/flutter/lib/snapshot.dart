@@ -5,7 +5,7 @@ import 'package:flutter/foundation.dart';
 
 import 'preferences_model.dart';
 
-const protocolVersion = 3;
+const protocolVersion = 4;
 const maxFrameBytes = 262144;
 const resourceNames = ['microphone', 'camera'];
 const activityNames = ['active', 'ready', 'none_observed', 'unknown'];

@@ -1,9 +1,11 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:miccamwatch_desktop/preferences.dart';
 import 'package:miccamwatch_desktop/preferences_model.dart';
+import 'package:miccamwatch_desktop/snapshot.dart' show protocolVersion;
 
 const sessionA = '0123456789abcdef0123456789abcdef';
 const sessionB = 'abcdef0123456789abcdef0123456789';
@@ -13,6 +15,8 @@ Map<String, dynamic> preferenceJson({
   bool writable = true,
   bool profileWritable = true,
   bool notifications = true,
+  String? pauseUntil,
+  bool paused = false,
   bool sound = false,
   bool history = true,
   String profile = 'balanced',
@@ -30,6 +34,8 @@ Map<String, dynamic> preferenceJson({
     'sound_enabled': sound,
     'history_enabled': history,
     'profile': profile,
+    'pause_notifications_until': pauseUntil,
+    'notifications_paused': paused,
   } : null,
   'applied_profile': applied,
   'effects': <String, dynamic>{
@@ -53,11 +59,15 @@ Map<String, dynamic> outcome(String state, {
 
 PreferenceView view({
   bool history = true,
+  bool notifications = true,
+  String? pauseUntil,
+  bool paused = false,
   String profile = 'balanced',
   String? applied = 'balanced',
   Map<String, dynamic>? command,
 }) => PreferenceView.fromJson(preferenceJson(
-  history: history, profile: profile, applied: applied, command: command));
+  history: history, notifications: notifications, pauseUntil: pauseUntil,
+  paused: paused, profile: profile, applied: applied, command: command));
 
 final _clients = <PreferenceCommandClient>{};
 void disposeClient(PreferenceCommandClient client) {
@@ -94,6 +104,15 @@ void main() {
         (json) => (json['values'] as Map)['history_enabled'] = 'false',
         (json) => (json['values'] as Map)['sound_enabled'] = 0,
         (json) => (json['values'] as Map)['notifications_enabled'] = null,
+        (json) => (json['values'] as Map)['notifications_paused'] = 'true',
+        (json) => (json['values'] as Map).remove('notifications_paused'),
+        (json) => (json['values'] as Map).remove('pause_notifications_until'),
+        (json) => (json['values'] as Map)['pause_notifications_until'] = 30,
+        (json) => (json['values'] as Map)['pause_notifications_until'] = 'tomorrow',
+        (json) => (json['values'] as Map)['pause_notifications_until'] = '2026-10-30T10:00:00',
+        (json) => (json['values'] as Map)['pause_notifications_until'] = '2026-10-30T10:00:00+01:00',
+        (json) => (json['values'] as Map)['pause_notifications_until'] = '2026-02-30T10:00:00Z',
+        (json) => (json['values'] as Map)['pause_notifications_until'] = '2026-10-30T24:00:00Z',
         (json) => (json['values'] as Map)['profile'] = true,
         (json) => (json['values'] as Map)['profile'] = 'aggressive',
         (json) => (json['values'] as Map)['autostart'] = true,
@@ -180,6 +199,13 @@ void main() {
     await client.request(PreferenceKey.historyEnabled, 'false');
     await client.request(PreferenceKey.profile, true);
     await client.request(PreferenceKey.profile, 'unknown');
+    for (final value in [null, true, 30, 'pause', 'pause_60_minutes',
+        '2026-10-30T10:00:00Z']) {
+      if (value != null) {
+        await client.request(PreferenceKey.notificationPause, value);
+      }
+      expect(isPreferenceValue(PreferenceKey.notificationPause, value), isFalse);
+    }
     expect(client.pending, isFalse);
     expect(sent, isEmpty);
     expect(client.view!.values!.historyEnabled, isTrue);
@@ -492,5 +518,287 @@ void main() {
     expect(find.byKey(const ValueKey('preferences.notificationsUnsupported')),
       findsNothing);
     expect(find.byKey(const ValueKey('preferences.soundsUnsupported')), findsNothing);
+  });
+
+  group('native notification pause contract', () {
+    const original = '2026-10-30T10:30:00.123456789+00:00';
+    const changed = '2026-10-30T11:00:00Z';
+
+    test('pause and resume send actions and exact nullable native CAS values', () async {
+      final sent = <Map<String, dynamic>>[];
+      final client = makeClient(sent);
+      client.update(view(), sessionA, 1, true);
+      await client.request(PreferenceKey.notificationPause, 'pause_30_minutes');
+      expect(sent.single, {
+        'type': 'preferences_command',
+        'protocol_version': protocolVersion,
+        'request': {
+          'session': sessionA, 'id': 1, 'action': 'set_preference',
+          'observed_sequence': 1, 'key': 'notification_pause',
+          'value': 'pause_30_minutes', 'expected_value': null,
+        },
+      });
+      expect(client.view!.values!.pauseNotificationsUntil, isNull);
+      expect(client.view!.values!.notificationsPaused, isFalse);
+      client.update(view(command: outcome('accepted',
+        key: PreferenceKey.notificationPause, value: 'pause_30_minutes')),
+        sessionA, 2, true);
+      expect(client.pending, isTrue);
+      expect(client.view!.values!.notificationsPaused, isFalse);
+      client.update(view(pauseUntil: original, paused: true, command:
+        outcome('succeeded', key: PreferenceKey.notificationPause,
+          value: 'pause_30_minutes')), sessionA, 3, true);
+      expect(client.pending, isFalse);
+      expect(client.view!.values!.notificationsPaused, isTrue);
+      await client.request(PreferenceKey.notificationPause, 'resume');
+      expect(sent.last['request'], {
+        'session': sessionA, 'id': 2, 'action': 'set_preference',
+        'observed_sequence': 3, 'key': 'notification_pause',
+        'value': 'resume', 'expected_value': original,
+      });
+      // Even a matching success result cannot synthesize cleared native values.
+      client.update(view(pauseUntil: original, paused: true, command:
+        outcome('succeeded', id: 2, key: PreferenceKey.notificationPause,
+          value: 'resume')), sessionA, 4, true);
+      expect(client.view!.values!.pauseNotificationsUntil, original);
+      expect(client.view!.values!.notificationsPaused, isTrue);
+      client.update(view(), sessionA, 5, true);
+      expect(client.view!.values!.pauseNotificationsUntil, isNull);
+      expect(client.view!.values!.notificationsPaused, isFalse);
+    });
+
+    test('concurrent native pause is not cleared or extended by stale requests', () async {
+      for (final action in ['resume', 'pause_30_minutes']) {
+        var nativeDeadline = changed;
+        var sequence = 3;
+        late PreferenceCommandClient client;
+        client = makeClient([], send: (message) async {
+          final request = message['request'] as Map<String, dynamic>;
+          final matched = request['expected_value'] == nativeDeadline;
+          if (matched) {
+            nativeDeadline = action == 'resume' ? '' : original;
+          }
+          client.update(view(
+            pauseUntil: nativeDeadline.isEmpty ? null : nativeDeadline,
+            paused: nativeDeadline.isNotEmpty,
+            command: outcome(matched ? 'succeeded' : 'rejected',
+              id: request['id'] as int, key: PreferenceKey.notificationPause,
+              value: request['value'] as Object)),
+            sessionA, ++sequence, true);
+        });
+        client.update(view(pauseUntil: original, paused: true), sessionA, 2, true);
+        client.update(view(), sessionA, 1, true);
+        await client.request(PreferenceKey.notificationPause, action);
+        expect(client.state, 'rejected');
+        expect(nativeDeadline, changed);
+        expect(client.view!.values!.pauseNotificationsUntil, changed);
+        // The next explicit action uses the newly observed timestamp.
+        await client.request(PreferenceKey.notificationPause, action);
+        expect(client.state, 'succeeded');
+        expect(client.view!.values!.pauseNotificationsUntil,
+          action == 'resume' ? isNull : original);
+      }
+    });
+
+    test('new and retired sessions cannot inherit pause completion', () async {
+      final client = makeClient([]);
+      client.update(view(pauseUntil: original, paused: true), sessionA, 8, true);
+      await client.request(PreferenceKey.notificationPause, 'resume');
+      client.update(view(pauseUntil: changed, paused: true), sessionB, 1, true);
+      expect(client.state, isNull);
+      await client.request(PreferenceKey.notificationPause, 'resume');
+      client.update(view(command: outcome('succeeded',
+        key: PreferenceKey.notificationPause, value: 'resume')),
+        sessionA, 99, true);
+      expect(client.session, sessionB);
+      expect(client.pending, isTrue);
+      expect(client.view!.values!.pauseNotificationsUntil, changed);
+      // Wrong action from the current session is not a matching result either.
+      client.update(view(pauseUntil: changed, paused: true, command:
+        outcome('succeeded', key: PreferenceKey.notificationPause,
+          value: 'pause_30_minutes')), sessionB, 2, true);
+      expect(client.pending, isTrue);
+      client.update(view(command: outcome('succeeded',
+        key: PreferenceKey.notificationPause, value: 'resume')),
+        sessionB, 3, true);
+      expect(client.pending, isFalse);
+      expect(client.view!.values!.pauseNotificationsUntil, isNull);
+    });
+
+    for (final state in ['failed', 'rejected', 'uncertain']) {
+      testWidgets('$state is visible without optimistic resume', (tester) async {
+        final client = makeClient([]);
+        client.update(view(pauseUntil: original, paused: true), sessionA, 1, true);
+        await tester.pumpWidget(host(client));
+        await tester.tap(find.byKey(const ValueKey('preferences.resume')));
+        await tester.pump();
+        expect(client.view!.values!.notificationsPaused, isTrue);
+        expect(tester.widget<OutlinedButton>(
+          find.byKey(const ValueKey('preferences.resume'))).onPressed, isNull);
+        client.update(view(pauseUntil: original, paused: true, command:
+          outcome(state, key: PreferenceKey.notificationPause, value: 'resume')),
+          sessionA, 2, true);
+        await tester.pump();
+        expect(client.state, state);
+        expect(find.textContaining(original), findsOneWidget);
+        final status = tester.widget<Semantics>(
+          find.byKey(const ValueKey('preferences.commandStatus')));
+        expect(status.child, isA<Text>());
+        expect((status.child! as Text).style!.color,
+          Theme.of(tester.element(find.byType(PreferencesPanel))).colorScheme.error);
+        expect(client.view!.values!.notificationsPaused, isTrue);
+      });
+    }
+
+    testWidgets('pause timeout and delivery failure stay uncertain without retry',
+        (tester) async {
+      for (final fails in [false, true]) {
+        var deliveries = 0;
+        final client = makeClient([], timeout: const Duration(seconds: 2),
+          send: (_) async {
+            deliveries++;
+            if (fails) throw StateError('closed pipe');
+          });
+        client.update(view(), sessionA, 1, true);
+        await tester.pumpWidget(host(client));
+        await tester.tap(find.byKey(const ValueKey('preferences.pause')));
+        await tester.pump(const Duration(seconds: 3));
+        expect(client.state, 'uncertain');
+        expect(client.pending, isTrue);
+        expect(client.view!.values!.notificationsPaused, isFalse);
+        expect(tester.widget<FilledButton>(
+          find.byKey(const ValueKey('preferences.pause'))).onPressed, isNull);
+        await tester.pump(const Duration(minutes: 31));
+        expect(deliveries, 1);
+        client.update(view(command: outcome('accepted',
+          key: PreferenceKey.notificationPause, value: 'pause_30_minutes')),
+          sessionA, 2, true);
+        expect(client.state, 'uncertain');
+        disposeClient(client);
+        await tester.pumpWidget(const SizedBox());
+      }
+    });
+
+    testWidgets('only native snapshots expire pauses, including restored old timestamps',
+        (tester) async {
+      final client = makeClient([]);
+      client.update(view(pauseUntil: original, paused: true), sessionA, 1, true);
+      await tester.pumpWidget(host(client));
+      final activeStatus = tester.widget<Text>(find.descendant(
+        of: find.byKey(const ValueKey('preferences.pauseStatus')),
+        matching: find.byType(Text))).data;
+      await tester.pump(const Duration(days: 365));
+      expect(client.view!.values!.notificationsPaused, isTrue);
+      expect(tester.widget<Text>(find.descendant(
+        of: find.byKey(const ValueKey('preferences.pauseStatus')),
+        matching: find.byType(Text))).data, activeStatus);
+      client.update(view(pauseUntil: original, paused: false), sessionA, 2, true);
+      await tester.pump();
+      expect(tester.widget<Text>(find.descendant(
+        of: find.byKey(const ValueKey('preferences.pauseStatus')),
+        matching: find.byType(Text))).data, isNot(activeStatus));
+      // Expired persisted timestamps can still be explicitly cleared.
+      expect(tester.widget<OutlinedButton>(
+        find.byKey(const ValueKey('preferences.resume'))).onPressed, isNotNull);
+      expect(find.textContaining(original), findsOneWidget);
+    });
+
+    testWidgets('master off takes precedence and resume never enables alerts',
+        (tester) async {
+      final sent = <Map<String, dynamic>>[];
+      final client = makeClient(sent);
+      client.update(view(notifications: false, pauseUntil: original, paused: true),
+        sessionA, 1, true);
+      await tester.pumpWidget(host(client));
+      expect(tester.widget<FilledButton>(
+        find.byKey(const ValueKey('preferences.pause'))).onPressed, isNull);
+      final offStatus = tester.widget<Text>(find.descendant(
+        of: find.byKey(const ValueKey('preferences.pauseStatus')),
+        matching: find.byType(Text))).data;
+      await tester.tap(find.byKey(const ValueKey('preferences.resume')));
+      await tester.pump();
+      client.update(view(notifications: false, command: outcome('succeeded',
+        key: PreferenceKey.notificationPause, value: 'resume')),
+        sessionA, 2, true);
+      await tester.pump();
+      expect(sent.single['request']['value'], 'resume');
+      expect(client.view!.values!.notificationsEnabled, isFalse);
+      expect(tester.widgetList<SwitchListTile>(find.byType(SwitchListTile))
+        .first.value, isFalse);
+      expect(tester.widget<Text>(find.descendant(
+        of: find.byKey(const ValueKey('preferences.pauseStatus')),
+        matching: find.byType(Text))).data, offStatus);
+      expect(tester.widget<OutlinedButton>(
+        find.byKey(const ValueKey('preferences.resume'))).onPressed, isNull);
+    });
+
+    testWidgets('seven translated narrow layouts preserve native state and gates',
+        (tester) async {
+      tester.view.physicalSize = const Size(320, 900);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final client = makeClient([]);
+      final pauseLabels = <String>{};
+      var sequence = 0;
+      for (final locale in ['en', 'fr', 'de', 'es', 'ja', 'zh', 'ru']) {
+        client.update(view(pauseUntil: original, paused: true),
+          sessionA, ++sequence, true);
+        await tester.pumpWidget(host(client, locale: locale));
+        final pause = find.byKey(const ValueKey('preferences.pause'));
+        final resume = find.byKey(const ValueKey('preferences.resume'));
+        final label = tester.widget<Text>(
+          find.descendant(of: pause, matching: find.byType(Text))).data!;
+        pauseLabels.add(label);
+        expect(label, isNotEmpty);
+        await tester.ensureVisible(resume);
+        expect(tester.widget<OutlinedButton>(resume).onPressed, isNotNull);
+        client.update(view(pauseUntil: original, paused: true),
+          sessionA, ++sequence, false);
+        await tester.pump();
+        expect(tester.widget<OutlinedButton>(resume).onPressed, isNull);
+        expect(tester.widget<FilledButton>(pause).onPressed, isNull);
+        expect(find.byKey(const ValueKey('preferences.notificationsUnsupported')),
+          findsOneWidget);
+        expect(tester.takeException(), isNull);
+      }
+      expect(pauseLabels.length, greaterThanOrEqualTo(6));
+    });
+
+    testWidgets('keyboard activates pause once and pending disables both actions',
+        (tester) async {
+      final sent = <Map<String, dynamic>>[];
+      final client = makeClient(sent);
+      client.update(view(), sessionA, 1, true);
+      await tester.pumpWidget(host(client));
+      bool pauseFocused() {
+        var focused = false;
+        FocusManager.instance.primaryFocus?.context?.visitAncestorElements((element) {
+          if (element.widget is FilledButton &&
+              element.widget.key == const ValueKey('preferences.pause')) {
+            focused = true;
+          }
+          return !focused;
+        });
+        return focused;
+      }
+      for (var step = 0; step < 12 && !pauseFocused(); step++) {
+        await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+        await tester.pump();
+      }
+      expect(pauseFocused(), isTrue);
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pump();
+      expect(sent, hasLength(1));
+      expect(sent.single['request']['value'], 'pause_30_minutes');
+      expect(client.view!.values!.notificationsPaused, isFalse);
+      expect(tester.widget<FilledButton>(
+        find.byKey(const ValueKey('preferences.pause'))).onPressed, isNull);
+      expect(tester.widget<OutlinedButton>(
+        find.byKey(const ValueKey('preferences.resume'))).onPressed, isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+      disposeClient(client);
+      await tester.pump();
+    });
   });
 }

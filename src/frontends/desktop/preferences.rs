@@ -1,6 +1,7 @@
 //! Portable, bounded preferences lane for the owned desktop connection.
 //! Saved preferences are not assertions about applied collector policy or devices.
 use anyhow::{Context, Result, ensure};
+use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::commands::{
@@ -18,6 +19,7 @@ pub enum PreferenceKey {
     SoundEnabled,
     HistoryEnabled,
     Profile,
+    NotificationPause,
 }
 
 impl PreferenceKey {
@@ -27,6 +29,7 @@ impl PreferenceKey {
             Self::SoundEnabled => PreferenceValue::Bool(settings.sound_enabled),
             Self::HistoryEnabled => PreferenceValue::Bool(settings.history_enabled),
             Self::Profile => PreferenceValue::Profile(settings.profile),
+            Self::NotificationPause => PreferenceValue::PauseUntil(settings.pause_notifications_until),
         }
     }
 
@@ -37,7 +40,16 @@ impl PreferenceKey {
                 | (Self::NotificationsEnabled, PreferenceValue::Bool(_))
                 | (Self::SoundEnabled, PreferenceValue::Bool(_))
                 | (Self::HistoryEnabled, PreferenceValue::Bool(_))
+                | (Self::NotificationPause, PreferenceValue::PauseAction(_))
         )
+    }
+
+    fn accepts_expected(self, value: PreferenceValue) -> bool {
+        if self == Self::NotificationPause {
+            matches!(value, PreferenceValue::PauseUntil(_))
+        } else {
+            self.accepts(value)
+        }
     }
 }
 
@@ -46,6 +58,16 @@ impl PreferenceKey {
 pub enum PreferenceValue {
     Bool(bool),
     Profile(PrivacyProfile),
+    PauseAction(NotificationPauseAction),
+    PauseUntil(Option<DateTime<Utc>>),
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum NotificationPauseAction {
+    #[serde(rename = "pause_30_minutes")]
+    Pause30Minutes,
+    Resume,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -101,7 +123,7 @@ impl TryFrom<PreferenceRequestWire> for PreferenceRequest {
 impl PreferenceRequest {
     fn validate_types(&self) -> Result<()> {
         ensure!(
-            self.key.accepts(self.value) && self.key.accepts(self.expected_value),
+            self.key.accepts(self.value) && self.key.accepts_expected(self.expected_value),
             "preference key and value types do not match"
         );
         Ok(())
@@ -110,6 +132,14 @@ impl PreferenceRequest {
     /// The caller holds the stable settings lock. Validate before any mutation,
     /// then change precisely one field of the latest settings, never a snapshot.
     pub fn apply_to(&self, settings: &mut Settings) -> Result<()> {
+        self.apply_with_clock(settings, Utc::now)
+    }
+
+    fn apply_with_clock(
+        &self,
+        settings: &mut Settings,
+        now: impl FnOnce() -> DateTime<Utc>,
+    ) -> Result<()> {
         self.validate_types()?;
         ensure!(
             self.key.current_value(settings) == self.expected_value,
@@ -128,6 +158,16 @@ impl PreferenceRequest {
             (PreferenceKey::Profile, PreferenceValue::Profile(value)) => {
                 settings.profile = value;
             }
+            (PreferenceKey::NotificationPause, PreferenceValue::PauseAction(action)) => {
+                settings.pause_notifications_until = match action {
+                    NotificationPauseAction::Pause30Minutes => Some(
+                        now()
+                            .checked_add_signed(Duration::minutes(30))
+                            .context("notification pause deadline is out of range")?,
+                    ),
+                    NotificationPauseAction::Resume => None,
+                };
+            }
             _ => unreachable!("preference types were validated before mutation"),
         }
         Ok(())
@@ -141,6 +181,8 @@ pub struct PreferenceValues {
     pub sound_enabled: bool,
     pub history_enabled: bool,
     pub profile: PrivacyProfile,
+    pub pause_notifications_until: Option<DateTime<Utc>>,
+    pub notifications_paused: bool,
 }
 
 impl PreferenceValues {
@@ -150,6 +192,8 @@ impl PreferenceValues {
             sound_enabled: settings.sound_enabled,
             history_enabled: settings.history_enabled,
             profile: settings.profile,
+            pause_notifications_until: settings.pause_notifications_until,
+            notifications_paused: settings.notifications_paused(),
         }
     }
 
@@ -161,6 +205,7 @@ impl PreferenceValues {
             PreferenceKey::SoundEnabled => PreferenceValue::Bool(self.sound_enabled),
             PreferenceKey::HistoryEnabled => PreferenceValue::Bool(self.history_enabled),
             PreferenceKey::Profile => PreferenceValue::Profile(self.profile),
+            PreferenceKey::NotificationPause => PreferenceValue::PauseUntil(self.pause_notifications_until),
         }
     }
 }
@@ -378,10 +423,10 @@ pub fn apply_preference(request: &PreferenceRequest, profile_writable: bool) -> 
         request.key != PreferenceKey::Profile || profile_writable,
         "assessment profile is managed by configuration"
     );
-    Settings::update_checked(|settings| request.apply_to(settings))?;
+    let saved = Settings::update_checked(|settings| request.apply_to(settings))?;
     let confirmed = Settings::load().context("saved preference could not be read back")?;
     ensure!(
-        request.key.current_value(&confirmed) == request.value,
+        request.key.current_value(&confirmed) == request.key.current_value(&saved),
         "saved preference changed before readback; requested value is not confirmed"
     );
     Ok(confirmed)
@@ -915,6 +960,7 @@ mod tests {
                 PreferenceValue::Profile(_) => {
                     PreferenceValue::Profile(PrivacyProfile::Development)
                 }
+                _ => unreachable!("this case covers boolean and profile fields"),
             };
             let request = PreferenceRequest {
                 key,
@@ -939,6 +985,7 @@ mod tests {
             invalid.expected_value = match invalid.expected_value {
                 PreferenceValue::Bool(value) => PreferenceValue::Bool(!value),
                 PreferenceValue::Profile(_) => PreferenceValue::Profile(PrivacyProfile::Meeting),
+                _ => unreachable!("this case covers boolean and profile fields"),
             };
             assert!(invalid.apply_to(&mut settings).is_err());
             assert_eq!(serde_json::to_value(&settings).unwrap(), before);
@@ -946,6 +993,7 @@ mod tests {
             invalid.value = match invalid.value {
                 PreferenceValue::Bool(_) => PreferenceValue::Profile(PrivacyProfile::Private),
                 PreferenceValue::Profile(_) => PreferenceValue::Bool(false),
+                _ => unreachable!("this case covers boolean and profile fields"),
             };
             assert!(invalid.apply_to(&mut settings).is_err());
             assert_eq!(serde_json::to_value(&settings).unwrap(), before);
@@ -965,6 +1013,88 @@ mod tests {
         assert!(latest.mute_on_lock);
         assert!(request.apply_to(&mut latest).is_err());
         assert!(!latest.history_enabled);
+    }
+
+    fn pause_request(action: NotificationPauseAction, until: Option<DateTime<Utc>>) -> PreferenceRequest {
+        PreferenceRequest {
+            key: PreferenceKey::NotificationPause,
+            value: PreferenceValue::PauseAction(action),
+            expected_value: PreferenceValue::PauseUntil(until),
+            ..request(1)
+        }
+    }
+
+    #[test]
+    fn pause_contract_accepts_only_server_actions_and_observed_deadlines() {
+        let pause = pause_request(NotificationPauseAction::Pause30Minutes, None);
+        let wire = serde_json::to_value(&pause).unwrap();
+        assert_eq!(serde_json::from_value::<PreferenceRequest>(wire.clone()).unwrap(), pause);
+        for (field, value) in [
+            ("value", json!(null)), ("value", json!(true)),
+            ("value", json!("2026-10-30T08:00:00Z")), ("value", json!(60)),
+            ("expected_value", json!(true)), ("expected_value", json!("resume")),
+            ("expected_value", json!("not-a-timestamp")),
+        ] {
+            let mut invalid = wire.clone();
+            invalid[field] = value;
+            assert!(serde_json::from_value::<PreferenceRequest>(invalid).is_err());
+        }
+        let mut missing = wire;
+        missing.as_object_mut().unwrap().remove("expected_value");
+        assert!(serde_json::from_value::<PreferenceRequest>(missing).is_err());
+    }
+
+    #[test]
+    fn pause_uses_server_clock_preserves_other_settings_and_checks_exact_deadline() {
+        let now: DateTime<Utc> = "2026-10-30T08:00:00.123456789Z".parse().unwrap();
+        let mut settings = protected_settings();
+        settings.notifications_enabled = false;
+        let before = serde_json::to_value(&settings).unwrap();
+        pause_request(NotificationPauseAction::Pause30Minutes, settings.pause_notifications_until)
+            .apply_with_clock(&mut settings, || now).unwrap();
+        let until = now + Duration::minutes(30);
+        assert_eq!(settings.pause_notifications_until, Some(until));
+        let mut expected = before;
+        expected["pause_notifications_until"] = json!(until);
+        assert_eq!(serde_json::to_value(&settings).unwrap(), expected);
+
+        let resume = pause_request(NotificationPauseAction::Resume, Some(until));
+        settings.pause_notifications_until = Some(until + Duration::nanoseconds(1));
+        let concurrent = serde_json::to_value(&settings).unwrap();
+        assert!(resume.apply_with_clock(&mut settings, || now).is_err());
+        assert_eq!(serde_json::to_value(&settings).unwrap(), concurrent);
+        pause_request(NotificationPauseAction::Resume, settings.pause_notifications_until)
+            .apply_with_clock(&mut settings, || panic!("resume must not need a clock")).unwrap();
+        assert!(settings.pause_notifications_until.is_none());
+        assert!(!settings.notifications_enabled);
+    }
+
+    #[test]
+    fn pause_admission_rejects_stale_deadlines_and_readonly_connections() {
+        let until: DateTime<Utc> = "2026-10-30T08:00:00Z".parse().unwrap();
+        let settings = Settings { pause_notifications_until: Some(until), ..Settings::default() };
+        let mut view = PreferencesSnapshot::observed(
+            Ok(&settings), true, true, None, PreferenceEffects::default());
+        let mut session = PreferenceSession::default();
+        let mut stale = pause_request(NotificationPauseAction::Resume, None);
+        assert!(session.admit(stale.clone(), SESSION, 9, true, &view).is_none());
+        assert_eq!(outcome(&session).code.as_deref(), Some("stale"));
+        assert!(!session.pending());
+        stale.id = 2;
+        stale.expected_value = PreferenceValue::PauseUntil(Some(until));
+        view.writable = false;
+        assert!(session.admit(stale, SESSION, 9, true, &view).is_none());
+        assert_eq!(outcome(&session).code.as_deref(), Some("read_only"));
+        assert!(!session.pending());
+    }
+
+    #[test]
+    fn overflowing_pause_clock_never_mutates_saved_intent() {
+        let mut settings = protected_settings();
+        let before = serde_json::to_value(&settings).unwrap();
+        assert!(pause_request(NotificationPauseAction::Pause30Minutes, settings.pause_notifications_until)
+            .apply_with_clock(&mut settings, || DateTime::<Utc>::MAX_UTC).is_err());
+        assert_eq!(serde_json::to_value(&settings).unwrap(), before);
     }
 
     #[test]

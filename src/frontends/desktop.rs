@@ -12,7 +12,7 @@ pub mod windows;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod unix;
 
-pub const PROTOCOL_VERSION: u8 = 3;
+pub const PROTOCOL_VERSION: u8 = 4;
 pub const MAX_FRAME_BYTES: usize = 262_144;
 pub const MAX_EVENT_BYTES: usize = 4096;
 const MAX_STRING_BYTES: usize = 1024;
@@ -826,14 +826,15 @@ mod tests {
     fn parser_rejects_mutations_versions_extra_fields_and_bad_types() {
         for line in [
             r#"{"type":"mute","protocol_version":1}"#,
-            r#"{"type":"ready","protocol_version":4,"sequence":1}"#,
+            r#"{"type":"ready","protocol_version":3,"sequence":1}"#,
             r#"{"type":"ready","protocol_version":1,"sequence":1,"command":"unmute"}"#,
             r#"{"type":"ready","protocol_version":1,"sequence":"1"}"#,
             r#"{"type":"timing","protocol_version":1,"stage":"shell","elapsed_ms":0}"#,
         ] {
             assert!(parse_event(line.as_bytes()).is_err());
         }
-        assert!(parse_event(br#"{"type":"ready","protocol_version":3,"sequence":1}"#).is_ok());
+        assert!(matches!(parse_event(br#"{"type":"ready","protocol_version":4,"sequence":1}"#),
+            Ok(UiEvent::Ready { sequence: 1, .. })));
     }
     #[test]
     fn oversized_line_cannot_smuggle_suffix_and_next_line_recovers() {
@@ -849,11 +850,11 @@ mod tests {
         };
         lines.feed(&vec![b'x'; MAX_EVENT_BYTES + 1], &mut feed);
         lines.feed(
-            b"{\"type\":\"ready\",\"protocol_version\":3,\"sequence\":1}\n",
+            b"{\"type\":\"ready\",\"protocol_version\":4,\"sequence\":1}\n",
             &mut feed,
         );
         lines.feed(
-            b"{\"type\":\"ready\",\"protocol_version\":3,\"sequence\":2}\n",
+            b"{\"type\":\"ready\",\"protocol_version\":4,\"sequence\":2}\n",
             &mut feed,
         );
         assert_eq!((accepted, rejected), (1, 1));
@@ -867,7 +868,7 @@ mod tests {
         assert_eq!(output.0.len(), MAX_FRAME_BYTES);
         let mut lines = EventLines::default();
         let mut results = Vec::new();
-        lines.feed(b"{\"type\":\"timing\",\"protocol_version\":3,", |e| {
+        lines.feed(b"{\"type\":\"timing\",\"protocol_version\":4,", |e| {
             results.push(e)
         });
         assert!(results.is_empty());

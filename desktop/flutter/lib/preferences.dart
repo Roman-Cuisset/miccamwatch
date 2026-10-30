@@ -242,6 +242,45 @@ class PreferencesPanel extends StatelessWidget {
           group(labels['capture'], [
             toggle(PreferenceKey.notificationsEnabled, 'notifications',
                 values.notificationsEnabled),
+            Semantics(
+              liveRegion: true,
+              child: note(labels[!values.notificationsEnabled
+                  ? 'notificationsOff'
+                  : values.notificationsPaused ? 'pauseActive' : 'pauseInactive'],
+                  key: const ValueKey('preferences.pauseStatus')),
+            ),
+            if (!values.notificationsEnabled)
+              note(labels[values.notificationsPaused ? 'pauseActive' : 'pauseInactive'],
+                  key: const ValueKey('preferences.nativePauseStatus')),
+            if (values.pauseNotificationsUntil case final String deadline) ...[
+              note(labels['pauseDeadline']),
+              SelectableText(deadline,
+                  key: const ValueKey('preferences.pauseDeadline'),
+                  style: theme.textTheme.bodySmall),
+            ],
+            const SizedBox(height: 8),
+            Wrap(spacing: 8, runSpacing: 8, children: [
+              FilledButton.tonalIcon(
+                key: const ValueKey('preferences.pause'),
+                onPressed: values.notificationsEnabled &&
+                    client.canChange(PreferenceKey.notificationPause)
+                    ? () => client.request(
+                        PreferenceKey.notificationPause, 'pause_30_minutes')
+                    : null,
+                icon: const Icon(Icons.pause_circle_outline, size: 18),
+                label: Text(labels['pause30Minutes']),
+              ),
+              OutlinedButton.icon(
+                key: const ValueKey('preferences.resume'),
+                onPressed: values.pauseNotificationsUntil != null &&
+                    client.canChange(PreferenceKey.notificationPause)
+                    ? () => client.request(PreferenceKey.notificationPause, 'resume')
+                    : null,
+                icon: const Icon(Icons.play_circle_outline, size: 18),
+                label: Text(labels['resumeNotifications']),
+              ),
+            ]),
+            note(labels['pauseScope']),
             if (!view.effects.captureNotificationsSupported)
               note(labels['notificationsUnsupported'],
                   key: const ValueKey('preferences.notificationsUnsupported')),
@@ -293,7 +332,9 @@ class PreferencesPanel extends StatelessWidget {
         ],
         if (client.state != null) Padding(
           padding: const EdgeInsets.symmetric(vertical: 6),
-          child: Semantics(liveRegion: true, child: Text(
+          child: Semantics(
+            key: const ValueKey('preferences.commandStatus'),
+            liveRegion: true, child: Text(
             labels[client.state!],
             style: theme.textTheme.bodySmall?.copyWith(color:
               const ['failed', 'rejected', 'uncertain'].contains(client.state)
@@ -318,6 +359,29 @@ class _PreferenceLabels {
 const _labels = <String, List<String>>{
   'capture': ['Capture alerts', 'Alertes de capture', 'Aufnahmehinweise', 'Avisos de captura', 'キャプチャ通知', '采集提醒', 'Оповещения о захвате'],
   'notifications': ['Capture notifications', 'Notifications de capture', 'Aufnahmebenachrichtigungen', 'Notificaciones de captura', 'キャプチャの通知', '采集通知', 'Уведомления о захвате'],
+  'pause30Minutes': ['Pause 30 min', 'Pause 30 min', '30 Min. pausieren', 'Pausar 30 min', '30 分間一時停止', '暂停 30 分钟', 'Пауза на 30 мин'],
+  'resumeNotifications': ['Resume', 'Reprendre', 'Fortsetzen', 'Reanudar', '再開', '恢复', 'Возобновить'],
+  'pauseActive': ['Paused by native.', 'En pause selon le moteur.', 'Nativ pausiert.', 'En pausa según el motor.', 'ネイティブ側で一時停止中です。', '原生端报告已暂停。', 'Нативный модуль сообщает о паузе.'],
+  'pauseInactive': ['Not paused according to native.', 'Aucune pause selon le moteur.', 'Laut nativem Status nicht pausiert.', 'Sin pausa según el motor.', 'ネイティブ側では一時停止していません。', '原生端报告未暂停。', 'По данным нативного модуля паузы нет.'],
+  'pauseDeadline': ['Saved pause deadline (UTC)', 'Fin de pause enregistrée (UTC)', 'Gespeichertes Pausenende (UTC)', 'Fin de pausa guardada (UTC)', '保存済みの一時停止期限（UTC）', '已保存的暂停截止时间（UTC）', 'Сохранённый срок паузы (UTC)'],
+  'notificationsOff': [
+    'Capture notifications are off. Resuming only clears the pause; it does not turn notifications on.',
+    'Les notifications de capture sont désactivées. Reprendre efface seulement la pause, sans les activer.',
+    'Aufnahmebenachrichtigungen sind aus. Fortsetzen löscht nur die Pause und schaltet Benachrichtigungen nicht ein.',
+    'Las notificaciones de captura están desactivadas. Reanudar solo elimina la pausa; no las activa.',
+    'キャプチャ通知は無効です。再開は一時停止を解除するだけで、通知を有効にはしません。',
+    '采集通知已关闭。恢复仅清除暂停，不会开启通知。',
+    'Уведомления о захвате выключены. Возобновление только отменяет паузу, но не включает уведомления.',
+  ],
+  'pauseScope': [
+    'Rust sets the 30-minute deadline and reports expiry. Pause covers capture alerts, not protection or operation/error messages.',
+    'Rust fixe le délai de 30 minutes et signale son expiration. La pause concerne les alertes de capture, pas la protection ni les messages d’opération ou d’erreur.',
+    'Rust setzt die 30-Minuten-Frist und meldet deren Ablauf. Die Pause betrifft Aufnahmehinweise, nicht Schutz oder Betriebs- und Fehlermeldungen.',
+    'Rust establece el plazo de 30 minutos e informa de su vencimiento. La pausa afecta a los avisos de captura, no a la protección ni a los mensajes de operación o error.',
+    'Rust が 30 分の期限を設定し、終了を通知します。一時停止はキャプチャ通知のみが対象で、保護や操作・エラーメッセージには影響しません。',
+    'Rust 设置 30 分钟期限并报告到期状态。暂停仅影响采集提醒，不影响保护以及操作或错误提示。',
+    'Rust задаёт срок 30 минут и сообщает об истечении. Пауза касается оповещений о захвате, но не защиты и не сообщений об операциях или ошибках.',
+  ],
   'sound': ['Capture sounds', 'Sons de capture', 'Aufnahmeklänge', 'Sonidos de captura', 'キャプチャの通知音', '采集提示音', 'Звуки захвата'],
   'notificationsUnsupported': [
     'This preference can be saved, but capture notifications are unavailable in this runtime.',

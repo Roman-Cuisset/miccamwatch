@@ -3,12 +3,14 @@ import 'dart:convert';
 /// The complete preference surface. No arbitrary settings keys cross this lane.
 enum PreferenceKey {
   notificationsEnabled,
+  notificationPause,
   soundEnabled,
   historyEnabled,
   profile;
 
   String get wireName => switch (this) {
     notificationsEnabled => 'notifications_enabled',
+    notificationPause => 'notification_pause',
     soundEnabled => 'sound_enabled',
     historyEnabled => 'history_enabled',
     profile => 'profile',
@@ -17,10 +19,13 @@ enum PreferenceKey {
 
 const assessmentProfiles = ['private', 'meeting', 'development', 'balanced'];
 
-bool isPreferenceValue(PreferenceKey key, Object? value) =>
-    key == PreferenceKey.profile
-        ? value is String && assessmentProfiles.contains(value)
-        : value is bool;
+bool isPreferenceValue(PreferenceKey key, Object? value) => switch (key) {
+  PreferenceKey.profile =>
+    value is String && assessmentProfiles.contains(value),
+  PreferenceKey.notificationPause =>
+    value == 'pause_30_minutes' || value == 'resume',
+  _ => value is bool,
+};
 
 /// Immutable native state; construction validates the entire wire object.
 class PreferenceView {
@@ -86,27 +91,38 @@ class PreferenceView {
 
 class PreferenceValues {
   const PreferenceValues._(this.notificationsEnabled, this.soundEnabled,
-      this.historyEnabled, this.profile);
+      this.historyEnabled, this.profile, this.pauseNotificationsUntil,
+      this.notificationsPaused);
 
   final bool notificationsEnabled;
   final bool soundEnabled;
   final bool historyEnabled;
   final String profile;
 
+  /// Exact native text is retained for compare-and-set, never reformatted.
+  final String? pauseNotificationsUntil;
+
+  /// Evaluated by Rust; the client clock never determines pause expiry.
+  final bool notificationsPaused;
+
   factory PreferenceValues._decode(Object? value) {
     final values = _object(value, const [
       'notifications_enabled', 'sound_enabled', 'history_enabled', 'profile',
+      'pause_notifications_until', 'notifications_paused',
     ]);
     return PreferenceValues._(
       _boolean(values['notifications_enabled']),
       _boolean(values['sound_enabled']),
       _boolean(values['history_enabled']),
       _profile(values['profile']),
+      _pauseDeadline(values['pause_notifications_until']),
+      _boolean(values['notifications_paused']),
     );
   }
 
-  Object valueFor(PreferenceKey key) => switch (key) {
+  Object? valueFor(PreferenceKey key) => switch (key) {
     PreferenceKey.notificationsEnabled => notificationsEnabled,
+    PreferenceKey.notificationPause => pauseNotificationsUntil,
     PreferenceKey.soundEnabled => soundEnabled,
     PreferenceKey.historyEnabled => historyEnabled,
     PreferenceKey.profile => profile,
@@ -196,6 +212,31 @@ bool _boolean(Object? value) {
 String _profile(Object? value) {
   if (value is! String || !assessmentProfiles.contains(value)) {
     throw const FormatException('Unknown assessment profile');
+  }
+  return value;
+}
+
+final _pauseDeadlinePattern = RegExp(
+    r'^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?(?:Z|\+00:00)$');
+
+String? _pauseDeadline(Object? value) {
+  if (value == null) return null;
+  if (value is! String) {
+    throw const FormatException('Invalid native pause deadline');
+  }
+  final match = _pauseDeadlinePattern.firstMatch(value);
+  if (match == null || DateTime.tryParse(value) == null) {
+    throw const FormatException('Invalid native pause deadline');
+  }
+  final year = int.parse(match.group(1)!);
+  final month = int.parse(match.group(2)!);
+  final day = int.parse(match.group(3)!);
+  if (month < 1 || month > 12 || day < 1 ||
+      day > DateTime.utc(year, month + 1, 0).day ||
+      int.parse(match.group(4)!) > 23 ||
+      int.parse(match.group(5)!) > 59 ||
+      int.parse(match.group(6)!) > 59) {
+    throw const FormatException('Invalid calendar pause deadline');
   }
   return value;
 }
