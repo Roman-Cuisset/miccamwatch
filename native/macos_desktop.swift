@@ -88,14 +88,16 @@ struct DesktopOverview: Decodable {
     }
 }
 struct DesktopPreferences: Decodable {
+    let writable: Bool
     let notifications_enabled: Bool
     let sound_enabled: Bool
     let history_enabled: Bool
     let notifications_paused: Bool
-    private enum CodingKeys: String, CodingKey { case notifications_enabled, sound_enabled, history_enabled, notifications_paused }
+    private enum CodingKeys: String, CodingKey { case writable, notifications_enabled, sound_enabled, history_enabled, notifications_paused }
     init(from decoder: Decoder) throws {
-        try desktopFields(decoder, allowed: ["notifications_enabled", "sound_enabled", "history_enabled", "notifications_paused"])
+        try desktopFields(decoder, allowed: ["writable", "notifications_enabled", "sound_enabled", "history_enabled", "notifications_paused"])
         let fields = try decoder.container(keyedBy: CodingKeys.self)
+        writable = try fields.decode(Bool.self, forKey: .writable)
         notifications_enabled = try fields.decode(Bool.self, forKey: .notifications_enabled)
         sound_enabled = try fields.decode(Bool.self, forKey: .sound_enabled)
         history_enabled = try fields.decode(Bool.self, forKey: .history_enabled)
@@ -860,6 +862,9 @@ final class DesktopConsultation: NSObject {
         notifications.title = gui[11]; notifications.state = preferences.notifications_enabled ? .on : .off
         sound.title = gui[12]; sound.state = preferences.sound_enabled ? .on : .off
         history.title = gui[13]; history.state = preferences.history_enabled ? .on : .off
+        notifications.isEnabled = preferences.writable
+        sound.isEnabled = preferences.writable
+        history.isEnabled = preferences.writable
         notifications.setAccessibilityLabel(gui[11])
         sound.setAccessibilityLabel(gui[12])
         history.setAccessibilityLabel(gui[13])
@@ -908,7 +913,7 @@ final class DesktopConsultation: NSObject {
         desktopEmit(DesktopEvent(kind: "action", action: action))
     }
     @objc private func preferenceSelected(_ sender: NSButton) {
-        guard frame != nil, let key = sender.identifier?.rawValue,
+        guard frame?.preferences?.writable == true, let key = sender.identifier?.rawValue,
               ["notifications", "sound", "history"].contains(key), sender.isEnabled else { return }
         desktopEmit(DesktopEvent(kind: "action", action: key + (sender.state == .on ? "_enable" : "_disable")))
     }

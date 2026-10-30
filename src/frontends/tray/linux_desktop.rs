@@ -783,6 +783,7 @@ impl Ui {
                 view.preferences.sound_enabled,
                 view.preferences.history_enabled,
             ]) {
+                (api.gtk_widget_set_sensitive)(*widget, view.preferences.writable.into());
                 if ((api.gtk_toggle_button_get_active)(*widget) != 0) != active {
                     (api.gtk_toggle_button_set_active)(*widget, active.into());
                 }

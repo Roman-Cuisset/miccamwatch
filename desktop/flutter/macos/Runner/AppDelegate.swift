@@ -8,6 +8,12 @@ class AppDelegate: FlutterAppDelegate {
   private var activationSignalSource: DispatchSourceSignal?
   private let ownerQueue = DispatchQueue(label: "MicCamWatch.desktop-owner", qos: .userInitiated)
   private var ownerExitSource: DispatchSourceTimer?
+  #if MCW_QUALIFICATION
+  // Hosted-only instrumentation. Not compiled into the normal release runner.
+  // No public IPC endpoint, input injection, filesystem or device authority.
+  private var qualificationStateSource: DispatchSourceTimer?
+  private var qualificationCloseSource: DispatchSourceSignal?
+  #endif
 
   override init() {
     super.init()
@@ -38,14 +44,52 @@ class AppDelegate: FlutterAppDelegate {
       window.deminiaturize(nil)
       window.makeKeyAndOrderFront(nil)
       NSApp.activate(ignoringOtherApps: true)
+      #if MCW_QUALIFICATION
+      if ProcessInfo.processInfo.environment["MCW_DESKTOP_QUALIFICATION"] == "1" {
+        fputs("MCW_QUALIFICATION_ACTIVATED pid=\(getpid()) window=\(window.windowNumber)\n", stderr)
+      }
+      #endif
     }
     activationSignalSource = source
     source.resume()
+    #if MCW_QUALIFICATION
+    if ProcessInfo.processInfo.environment["MCW_DESKTOP_QUALIFICATION"] == "1" {
+      signal(SIGUSR2, SIG_IGN)
+      let close = DispatchSource.makeSignalSource(signal: SIGUSR2, queue: .main)
+      close.setEventHandler { [weak self] in
+        // Exercise the normal close-button path, not application termination.
+        self?.mainFlutterWindow?.performClose(nil)
+      }
+      qualificationCloseSource = close
+      close.resume()
+      let state = DispatchSource.makeTimerSource(queue: .main)
+      state.schedule(deadline: .now(), repeating: .milliseconds(500))
+      state.setEventHandler { [weak self] in
+        guard let window = self?.mainFlutterWindow else { return }
+        let row: [String: Any] = [
+          "pid": getpid(), "window": window.windowNumber,
+          "visible": window.isVisible, "miniaturized": window.isMiniaturized,
+          "key": window.isKeyWindow, "title": window.title,
+          "width": window.frame.width, "height": window.frame.height
+        ]
+        if let data = try? JSONSerialization.data(withJSONObject: row, options: [.sortedKeys]),
+           let json = String(data: data, encoding: .utf8) {
+          fputs("MCW_QUALIFICATION_STATE \(json)\n", stderr)
+        }
+      }
+      qualificationStateSource = state
+      state.resume()
+    }
+    #endif
   }
 
   deinit {
     activationSignalSource?.cancel()
     ownerExitSource?.cancel()
+    #if MCW_QUALIFICATION
+    qualificationStateSource?.cancel()
+    qualificationCloseSource?.cancel()
+    #endif
   }
 
   override func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

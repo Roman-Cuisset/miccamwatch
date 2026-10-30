@@ -1,0 +1,264 @@
+name: Flutter desktop qualification (no release)
+
+# New workflow_dispatch files may need an existing default-branch manual bridge
+# before they are dispatchable on a feature ref. workflow_call supports that
+# reviewed bridge. Neither push, pull_request, tags nor a schedule runs this job.
+on:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    name: macOS 15 ${{ matrix.architecture }} owned qualification
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-intel
+            architecture: x86_64
+          - runner: macos-15
+            architecture: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 50
+    env:
+      EXPECTED_ARCH: ${{ matrix.architecture }}
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+      MACOSX_DEPLOYMENT_TARGET: "15.0"
+      CARGO_TERM_COLOR: never
+      FLUTTER_SUPPRESS_ANALYTICS: "true"
+      CI: "true"
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Require disposable native host and pinned Xcode
+        run: |
+          set -euo pipefail
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$(uname -m)" = "$EXPECTED_ARCH"
+          test "$(id -u)" != 0
+          mkdir -m 700 "$RUNNER_TEMP/mcw-flutter-macos"
+          {
+            /usr/bin/sw_vers
+            /usr/bin/uname -a
+            /usr/bin/xcodebuild -version
+            /usr/bin/xcrun --show-sdk-version
+            /usr/bin/xcrun swiftc --version
+            printf 'source=%s\nrunner-image=%s\n' "$GITHUB_SHA" "${ImageVersion:-unknown}"
+          } 2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/environment.log"
+          test "$(/usr/bin/xcodebuild -version)" = $'Xcode 26.3\nBuild version 17C529'
+          test "$(/usr/bin/xcrun --show-sdk-version)" = 26.2
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: 1.98.1
+      - name: Install exact SHA-256 verified official Flutter study SDK
+        run: python3 -B desktop/qualification/macos_sdk.py --proof "$RUNNER_TEMP/mcw-flutter-macos"
+      - name: Record and require exact Rust Flutter and Dart revisions
+        run: |
+          set -euo pipefail
+          rustc -Vv | tee "$RUNNER_TEMP/mcw-flutter-macos/rust.log"
+          test "$(rustc --version | cut -d ' ' -f 2)" = 1.98.1
+          flutter --version --machine > "$RUNNER_TEMP/mcw-flutter-macos/flutter-version.json"
+          python3 -c 'import json,os; p=json.load(open(os.environ["RUNNER_TEMP"]+"/mcw-flutter-macos/flutter-version.json")); assert p["frameworkVersion"]=="3.47.8" and p["frameworkRevision"]=="737ba8f885dc774b53b442759999a312c9461e4e" and p["dartSdkVersion"].split()[0]=="3.13.7",p'
+          flutter doctor -v 2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/flutter-doctor.log"
+      - name: Check shared Rust commands ownership and settings without hardware actions
+        run: |
+          set -euo pipefail
+          cargo clippy --all-targets --locked --features flutter-desktop -- -D warnings \
+            2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/rust-clippy.log"
+          cargo test --lib --locked --features flutter-desktop frontends::desktop \
+            2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/rust-desktop-tests.log"
+          cargo test --lib --locked --features flutter-desktop settings::tests \
+            2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/rust-settings-tests.log"
+      - name: Build real native engine with development parser and unchanged AppKit fallback
+        run: |
+          set -euo pipefail
+          cargo build --locked --release --features flutter-desktop --bin mcw 2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/rust-build.log"
+      - name: Build normal sandboxed Flutter release
+        working-directory: desktop/flutter
+        run: |
+          set -euo pipefail
+          flutter pub get --enforce-lockfile 2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/pub.log"
+          flutter analyze --no-pub 2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/flutter-analyze.log"
+          flutter test --no-pub 2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/flutter-tests.log"
+          flutter build macos --release --no-pub 2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/flutter-build.log"
+          /usr/bin/ditto build/macos/Build/Products/Release/MicCamWatch.app "$RUNNER_TEMP/mcw-flutter-macos/release/MicCamWatch.app"
+      - name: Build separately identified native-window instrumentation (same release sandbox)
+        working-directory: desktop/flutter
+        run: |
+          set -euo pipefail
+          /usr/bin/xcodebuild -workspace macos/Runner.xcworkspace -scheme Runner \
+            -configuration Release -destination "platform=macOS,arch=$EXPECTED_ARCH" \
+            -derivedDataPath "$RUNNER_TEMP/mcw-flutter-macos/derived" \
+            CONFIGURATION_BUILD_DIR="$RUNNER_TEMP/mcw-flutter-macos/instrumented" \
+            ARCHS="$EXPECTED_ARCH" ONLY_ACTIVE_ARCH=YES \
+            SWIFT_ACTIVE_COMPILATION_CONDITIONS=MCW_QUALIFICATION \
+            CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual build \
+            2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/instrumented-build.log"
+      - name: Inspect bundle seals architectures ACLs and run owned Aqua smoke when available
+        run: |
+          set -euo pipefail
+          python3 -B desktop/qualification/macos.py \
+            --proof "$RUNNER_TEMP/mcw-flutter-macos/evidence" \
+            --release-app "$RUNNER_TEMP/mcw-flutter-macos/release/MicCamWatch.app" \
+            --instrumented-app "$RUNNER_TEMP/mcw-flutter-macos/instrumented/MicCamWatch.app" \
+            2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/qualification.log"
+      - name: Summarize observed graphical status (never infer from a successful build)
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib
+          root = pathlib.Path(os.environ['RUNNER_TEMP']) / 'mcw-flutter-macos'
+          receipt = root / 'evidence/graphical-receipt.json'
+          value = json.loads(receipt.read_text()) if receipt.exists() else {'status': 'not-completed', 'reason': 'See preserved build/runtime logs; no graphical success claimed'}
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as out:
+              out.write('## macOS ' + os.environ['EXPECTED_ARCH'] + ' qualification\n\n```json\n' + json.dumps(value, indent=2) + '\n```\n\nNo release, deploy, physical capture, Developer ID or notarization claim.\n')
+          PY
+      - name: Preserve exact qualification logs captures and development payload identities
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: flutter-macos-${{ matrix.architecture }}-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 14
+          include-hidden-files: true
+          path: |
+            ${{ runner.temp }}/mcw-flutter-macos/*.log
+            ${{ runner.temp }}/mcw-flutter-macos/*.json
+            ${{ runner.temp }}/mcw-flutter-macos/evidence/**
+
+  linux-x64-baseline:
+    name: Ubuntu 22.04 x64 Mint-baseline development bundle
+    runs-on: ubuntu-22.04
+    timeout-minutes: 50
+    env:
+      CARGO_TERM_COLOR: never
+      FLUTTER_SUPPRESS_ANALYTICS: "true"
+      DART_SUPPRESS_ANALYTICS: "true"
+      CI: "true"
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Require ephemeral native Ubuntu 22.04 x64 baseline
+        run: |
+          set -euo pipefail
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$(uname -m)" = x86_64
+          test "$(id -u)" != 0
+          test "$(. /etc/os-release; printf '%s' "$ID:$VERSION_ID")" = ubuntu:22.04
+          mkdir -m 700 "$RUNNER_TEMP/mcw-flutter-linux-setup"
+          if [ ! -e "$HOME/mcw-qualification" ]; then
+            mkdir -m 700 "$HOME/mcw-qualification"
+          fi
+          {
+            cat /etc/os-release
+            uname -a
+            ldd --version
+            printf 'source=%s\nrunner-image=%s\n' "$GITHUB_SHA" "${ImageVersion:-unknown}"
+          } 2>&1 | tee "$RUNNER_TEMP/mcw-flutter-linux-setup/environment.log"
+          printf 'MCW_LINUX_OUTPUT=%s/mcw-qualification/b3-hosted-%s-%s\n' "$HOME" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" >> "$GITHUB_ENV"
+      - name: Prepare build and isolated virtual-desktop tools on disposable hosted VM only
+        run: |
+          set -euo pipefail
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          sudo apt-get update 2>&1 | tee "$RUNNER_TEMP/mcw-flutter-linux-setup/apt-update.log"
+          sudo apt-get install -y --no-install-recommends \
+            clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libstdc++-12-dev \
+            libpipewire-0.3-dev libclang-dev python3 binutils libx11-dev \
+            dbus-x11 xvfb xauth openbox xfce4-panel xfconf at-spi2-core libatspi2.0-0 libatk-adaptor fonts-noto-core \
+            libgl1-mesa-dri libegl1-mesa libgl1 mesa-utils \
+            2>&1 | tee "$RUNNER_TEMP/mcw-flutter-linux-setup/apt-install.log"
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: 1.98.1
+      - name: Download exact official Linux Flutter SDK and verify before execution
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, subprocess, urllib.request
+          root = pathlib.Path(os.environ['RUNNER_TEMP']) / 'mcw-flutter-linux-setup'
+          base = 'https://storage.googleapis.com/flutter_infra_release/releases'
+          archive = 'stable/linux/flutter_linux_3.47.8-stable.tar.xz'
+          digest = 'baf7dcc5a3dbba60fe863bf493a6cf203195621f7786eaa5a1bba02cd0d87dd2'
+          revision = '737ba8f885dc774b53b442759999a312c9461e4e'
+          with urllib.request.urlopen(base + '/releases_linux.json', timeout=60) as response:
+              metadata = response.read()
+          (root / 'flutter-official-releases.json').write_bytes(metadata)
+          rows = [row for row in json.loads(metadata)['releases']
+                  if row.get('version') == '3.47.8' and row.get('channel') == 'stable'
+                  and row.get('dart_sdk_arch') == 'x64']
+          assert len(rows) == 1 and all(rows[0].get(key) == value for key, value in
+              dict(hash=revision, archive=archive, sha256=digest, dart_sdk_version='3.13.7').items()), rows
+          target = root / 'flutter.tar.xz'
+          with urllib.request.urlopen(base + '/' + archive, timeout=180) as response, target.open('xb') as output:
+              while block := response.read(1024 * 1024):
+                  output.write(block)
+          sha = hashlib.sha256()
+          with target.open('rb') as source:
+              while block := source.read(1024 * 1024):
+                  sha.update(block)
+          assert sha.hexdigest() == digest, 'Official SDK archive SHA256 mismatch'
+          subprocess.run(['tar', '-xJf', str(target), '-C', str(root)], check=True)
+          (root / 'sdk-pin.json').write_text(json.dumps(rows[0], indent=2) + '\n')
+          with open(os.environ['GITHUB_PATH'], 'a') as path:
+              path.write(str(root / 'flutter/bin') + '\n')
+          PY
+      - name: Require exact Rust Flutter and Dart versions
+        run: |
+          set -euo pipefail
+          rustc -Vv | tee "$RUNNER_TEMP/mcw-flutter-linux-setup/rust.log"
+          test "$(rustc --version | cut -d ' ' -f 2)" = 1.98.1
+          flutter --version --machine > "$RUNNER_TEMP/mcw-flutter-linux-setup/flutter-version.json"
+          python3 -c 'import json,os; p=json.load(open(os.environ["RUNNER_TEMP"]+"/mcw-flutter-linux-setup/flutter-version.json")); assert p["frameworkVersion"]=="3.47.8" and p["frameworkRevision"]=="737ba8f885dc774b53b442759999a312c9461e4e" and p["dartSdkVersion"].split()[0]=="3.13.7",p'
+      - name: Build package and audit actual Ubuntu 22.04 symbol floors
+        run: |
+          set -euo pipefail
+          bash desktop/qualification/linux_hosted.sh "$MCW_LINUX_OUTPUT" \
+            2>&1 | tee "$RUNNER_TEMP/mcw-flutter-linux-setup/build.log"
+      - name: Exercise owned X11 lifecycle native SNI and safe preferences in private virtual desktop
+        run: |
+          set -euo pipefail
+          dbus-run-session -- xvfb-run -a -s '-screen 0 1280x1000x24' \
+            python3 -B desktop/qualification/linux_hosted.py \
+              --prefix "$MCW_LINUX_OUTPUT/bundle" --out "$MCW_LINUX_OUTPUT/runtime" \
+              --xwindow "$MCW_LINUX_OUTPUT/linux_xwindow" \
+            2>&1 | tee "$RUNNER_TEMP/mcw-flutter-linux-setup/runtime.log"
+      - name: Summarize observed baseline bundle and hosted desktop evidence
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib
+          output = os.environ.get('MCW_LINUX_OUTPUT')
+          receipt = pathlib.Path(output) / 'runtime/hosted-result.json' if output else None
+          value = json.loads(receipt.read_text()) if receipt and receipt.exists() else {'complete': False, 'reason': 'Qualification did not complete; inspect build/runtime logs'}
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write('## Linux x64 Ubuntu22.04 baseline qualification\n\n```json\n' + json.dumps(value, indent=2) + '\n```\n\nQualification artifact only. Xvfb/software graphics is not physical Mint/GPU qualification. No ARM, hardware-control, release or deploy claim.\n')
+          PY
+      - name: Preserve qualification-only Linux bundle and actual build/runtime evidence
+        if: ${{ always() && env.MCW_LINUX_OUTPUT != '' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: flutter-linux-x64-ubuntu2204-baseline-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 14
+          include-hidden-files: true
+          path: |
+            ${{ env.MCW_LINUX_OUTPUT }}/bundle/**
+            ${{ env.MCW_LINUX_OUTPUT }}/runtime/**
+            ${{ env.MCW_LINUX_OUTPUT }}/*.json
+            ${{ env.MCW_LINUX_OUTPUT }}/*.log
+            ${{ env.MCW_LINUX_OUTPUT }}/*.txt
+            ${{ env.MCW_LINUX_OUTPUT }}/*.SHA256SUMS
+            ${{ env.MCW_LINUX_OUTPUT }}/*.tar.gz
+            ${{ env.MCW_LINUX_OUTPUT }}/linux_xwindow
+            ${{ runner.temp }}/mcw-flutter-linux-setup/*.log
+            ${{ runner.temp }}/mcw-flutter-linux-setup/*.json

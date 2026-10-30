@@ -18,6 +18,7 @@ on:
           - linux
           - macos
           - windows
+          - flutter
   workflow_call:
     inputs:
       native-only:
@@ -31,8 +32,12 @@ permissions:
   contents: read
 
 jobs:
+  flutter-qualification:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.native-platform == 'flutter' }}
+    uses: ./.github/workflows/flutter-qualification.yml
+
   windows:
-    if: ${{ !inputs.native-only }}
+    if: ${{ !inputs.native-only && inputs.native-platform != 'flutter' }}
     runs-on: windows-latest
     permissions:
       contents: read
@@ -180,7 +185,7 @@ jobs:
           path: ${{ runner.temp }}/windows-application-proof
 
   portable:
-    if: ${{ inputs.native-platform != 'windows' }}
+    if: ${{ inputs.native-platform != 'windows' && inputs.native-platform != 'flutter' }}
     strategy:
       fail-fast: false
       matrix:

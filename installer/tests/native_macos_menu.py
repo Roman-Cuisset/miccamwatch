@@ -528,7 +528,7 @@ for test in cases {
     let cancel = Timer(timeInterval: 0.15, repeats: false) { _ in
         require(menu.size.width <= 400, "tracked NSMenu exceeds width bound")
         tracked = true
-        if test.name == "en" && CGPreflightScreenCaptureAccess() {
+        if !CommandLine.arguments.contains("--no-screen-capture") && test.name == "en" && CGPreflightScreenCaptureAccess() {
             let screenshot = Process()
             screenshot.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
             screenshot.arguments = ["-x", proof.appendingPathComponent("en-native-menu-simulated.png").path]
@@ -620,6 +620,9 @@ for test in cases {
             consultation.sound.state == (frame.preferences!.sound_enabled ? .on : .off) &&
             consultation.history.state == (frame.preferences!.history_enabled ? .on : .off),
             "native preferences do not reflect authoritative producer values")
+    require([consultation.notifications, consultation.sound, consultation.history].allSatisfy {
+                $0.isEnabled == frame.preferences!.writable
+            }, "native preference authority gate lost")
     // Exercise empty-identity transitions in every UI language without pinning
     // incidental translated wording. Missing identities must never reuse the
     // observed-idle claim, even when all known rows have been omitted.
@@ -1101,7 +1104,8 @@ def fixture_cases():
             frame['overview'].update(microphone='idle', camera='idle', total_accesses=0, accesses=[])
         if case['name'] == 'unknown-protection':
             frame['overview'].update(microphone='unknown', camera='unknown', observed_at=None, total_accesses=0, accesses=[])
-        frame['preferences'] = dict(notifications_enabled=True, sound_enabled=False,
+        frame['preferences'] = dict(writable=case['name'] != 'disabled-capabilities',
+                                    notifications_enabled=True, sound_enabled=False,
                                     history_enabled=True, notifications_paused=False)
         frame['feedback'] = None
     long_inspection = json.loads(json.dumps(cases[0]))
@@ -1145,6 +1149,8 @@ def main():
     parser.add_argument('--proof', type=Path, required=True)
     parser.add_argument('--isolated-clipboard', action='store_true',
                         help='exercise native Copy only on a disposable runner; default leaves user clipboard untouched')
+    parser.add_argument('--no-screen-capture', action='store_true',
+                        help='disable optional whole-display menu capture; retain owned-view cache captures')
     args = parser.parse_args()
     require(platform.system() == 'Darwin', 'native AppKit proof requires macOS')
     proof = args.proof.resolve()
@@ -1201,6 +1207,8 @@ def main():
             command += ['-framework', framework]
         for name, argv in (('build', command), ('surface', [str(executable), str(fixtures), str(proof),
                                                          '1' if args.isolated_clipboard else '0'])):
+            if name == 'surface' and args.no_screen_capture:
+                argv.append('--no-screen-capture')
             result = subprocess.run(argv, capture_output=True, text=True, timeout=300)
             (proof / (name + '.stdout')).write_text(result.stdout)
             (proof / (name + '.stderr')).write_text(result.stderr)
@@ -1217,8 +1225,9 @@ def main():
         expected = []
         for case in cases:
             expected.extend(dispatched(case['frame']['items']))
-            for preference in ('notifications', 'sound', 'history'):
-                expected.extend(dict(kind='action', action=preference + '_' + value) for value in ('enable', 'disable'))
+            if case['frame']['preferences']['writable']:
+                for preference in ('notifications', 'sound', 'history'):
+                    expected.extend(dict(kind='action', action=preference + '_' + value) for value in ('enable', 'disable'))
             profile = next(row for row in case['frame']['items'] if row['action'] == 'profile')
             expected.extend(dict(kind='action', action=child['action']) for child in profile['children']
                             if profile['enabled'] and child['enabled'])

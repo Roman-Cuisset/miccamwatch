@@ -1,0 +1,72 @@
+{
+  "status": "prepared-not-executed",
+  "researched_at": "2026-10-30",
+  "purpose": "Manual hosted development qualification only; no release/deployment or physical Mac gate",
+  "dispatch": {
+    "registered_workflow": ".github/workflows/ci.yml",
+    "native-platform": "flutter",
+    "native-only": true,
+    "ref": "The separately authorized dedicated B3 branch, after parent validation and automatic-deployment checks",
+    "standalone": ".github/workflows/flutter-qualification.yml supports workflow_dispatch and workflow_call; a new file absent the default branch may not be directly dispatchable",
+    "permission": "Parent alone pushes/dispatches after explicit user authorization; this preparation performs neither"
+  },
+  "toolchain": {
+    "flutter": "3.47.8",
+    "flutter_revision": "737ba8f885dc774b53b442759999a312c9461e4e",
+    "dart": "3.13.7",
+    "rust": "1.98.1",
+    "xcode": "26.3 (17C529)",
+    "macos_sdk": "26.2",
+    "deployment_target": "15.0: intersection of Flutter upstream macOS12 minimum and MCW native macOS15 requirement",
+    "installation": "Private runner-temp official architecture-matched SDK archive, pinned SHA256 plus official manifest cross-check before execution; Rust via pinned existing rust-toolchain action and exact toolchain version; preinstalled Xcode selected by DEVELOPER_DIR without sudo or global xcode-select",
+    "x64_sdk_sha256": "b8a3c255a51a8c0c0943a4d5bdf9b26008c34f02febf69640c8aab413afd896f",
+    "arm64_sdk_sha256": "6114edc2dae3636cfefb7e4456a4510399ee856e324149b34dbacb509e329d05"
+  },
+  "support_findings": {
+    "intel_host": "Flutter3.47 still distributes an x64 macOS SDK and supports Intel development; deprecated, not already removed",
+    "intel_runtime": "Flutter3.47 supported-platform table lists macOS x64 and arm64, macOS12-27; upstream support is not MCW runtime qualification",
+    "intel_plan": "Public strategy proposes reduced Intel CI September2026, host development removal April/May2027 and eventual universal-runtime removal TBD aligned with Xcode. A proposal date is not proof that a stage executed; pinned3.47.8 is not a perpetual support promise",
+    "maintenance": "Revisit Intel strategy before adopting a future Flutter/Xcode version; run both native hosted architectures, never substitute Rosetta-only execution"
+  },
+  "actions": [
+    "Require disposable non-root GitHub-hosted macos-15-intel/x86_64 and macos-15/arm64; reject architecture/toolchain drift",
+    "Build locked flutter-desktop Rust engine retaining AppKit; build normal release Flutter using official CLI and pub lockfile",
+    "Build separate release-sandbox runner with MCW_QUALIFICATION compile flag; hooks absent normal release and only report native window state/perform owned NSWindow close, no mutable endpoint or entitlement",
+    "Copy full app preserving framework symlinks into private prefixes beside matching mcw; manifest file hashes, sizes and symlink destinations",
+    "Inspect actual bundle identity, official AppIcon presence, minimum OS15, complete Flutter/App frameworks, every Mach-O lipo architecture/build minimum, ACLs, actual codesign identity/entitlements and strict deep seal",
+    "Probe existing Aqua/on-console screen and existing Screen Recording authorization without prompting or granting anything",
+    "If Aqua absent emit explicit not-executed graphical receipt, never fabricate runtime/IPC/native/menu success",
+    "On Aqua run exact release and instrumented bundles through real read-only Rust owner, real collectors and positive-sequence parent-admitted Ready proving sandbox/inherited stdin-stdout IPC",
+    "Instrumented window: visible/title/geometry, three native singleton activations preserving one child/key window, normal performClose path with engine exit/no auto-reopen, native activation reopen, parent death while open",
+    "Capture only known owned window ID and only existing Screen Recording authorization; otherwise explicit not-executed capture receipt; never capture the desktop or grant TCC",
+    "Run existing native_macos_menu.py against unchanged production AppKit/menu/status-item declarations with explicitly simulated data and isolated fixture roots, preserving its actual native captures and provenance",
+    "Native fallback checkbox controls strictly decode required preferences.writable and disable all preference actions for qualification false; production true retains behavior, no legacy default/shim",
+    "Always upload command exits/stdout/stderr, source/toolchain pins, receipts, window captures if possible, and payload identities for14days; never publish release assets"
+  ],
+  "limitations": [
+    "All new hosted execution remains unexecuted until authorized push/dispatch completes",
+    "No physical capture/control, microphone/camera permission or restoration test",
+    "No physical/manual Mac is required or treated as a release blocker",
+    "No Developer ID signing, notarization or Gatekeeper acceptance claim from an ad-hoc seal",
+    "No app installation/update/uninstall qualification; prefixes are not public installer packages",
+    "Whole-process suspension can suspend the native parent monitor; no unconditional kernel-enforced Darwin parent-death guarantee",
+    "AppKit remains operational fallback; its simulated visual harness is not real Flutter IPC or hardware evidence",
+    "No new entitlements, sandbox removal, Rosetta installation, Accessibility grants or security relaxation",
+    "Official icon source PNGs and canonical SVG retained from B2; compiled icon presence and captures are not a new pixel-perfect branding certification"
+  ],
+  "sources": [
+    "https://docs.flutter.dev/reference/supported-platforms",
+    "https://docs.flutter.dev/install/manual",
+    "https://docs.flutter.dev/install/archive",
+    "https://storage.googleapis.com/flutter_infra_release/releases/releases_macos.json",
+    "https://flutter.dev/go/macos-intel-deprecation",
+    "https://docs.flutter.dev/platform-integration/macos/setup",
+    "https://static.rust-lang.org/dist/channel-rust-1.98.1.toml",
+    "https://raw.githubusercontent.com/actions/runner-images/main/images/macos/macos-15-Readme.md",
+    "https://raw.githubusercontent.com/actions/runner-images/main/images/macos/macos-15-arm64-Readme.md",
+    "https://github.com/flutter/flutter/blob/737ba8f885dc774b53b442759999a312c9461e4e/packages/flutter_tools/lib/src/commands/build_macos.dart",
+    "git:b8e1d7f:experiments/ui-study/RESEARCH.md",
+    "git:b8e1d7f:experiments/ui-study/REPORT.md",
+    "docs/FLUTTER_B2_QUALIFICATION.md"
+  ]
+}

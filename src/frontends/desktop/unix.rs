@@ -390,6 +390,10 @@ impl Child {
         match event {
             UiEvent::Ready { sequence, .. } => {
                 if sequence > 0 && sequence <= self.outbox.written && self.closing.is_none() {
+                    if !self.ready {
+                        eprintln!("desktop event=ready endpoint=parent_received pid={} sequence={sequence}",
+                            self.process.id());
+                    }
                     self.ready = true;
                 }
             }

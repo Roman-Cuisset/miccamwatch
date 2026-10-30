@@ -2679,3 +2679,36 @@ Lots futurs **à approuver, aucun correctif appliqué** :
   builds/exécution macOS Intel/Apple Silicon et Linux ARM64 ; contrats pause UI/autostart/diagnostics/historique.
   Commandes caméra/lock, restauration individuelle des sourdines initiales et packaging/updater Flutter restent séparément à qualifier.
   Aucun remplacement des anciennes interfaces ni annonce de parité complète, compatibilité ARM physique ou publication0.21.1.
+
+## 2026-10-30 — Tranche B3 en cours : pause sûre, Linux Mint et CI Flutter
+
+- Reprise vérifiée sur `570c40b`, arbre propre,8worktrees et stash conservés ; main/origin73369ab et tag stable inchangés.
+  Référence locale non destructive des binaires, préférences, journaux et identité native enregistrée sous
+  `%LOCALAPPDATA%\MicCamWatchQualification\flutter-b3-20261030-081807`.
+- Décision propriétaire : aucun Mac physique/manual ne sera disponible ni exigé comme condition bloquante.
+  Maximiser compilation, tests et exécution graphique automatisée des deux architectures sur runners ; chaque absence de preuve restera explicite.
+- Contrat B3 : protocole4 sans shim ; commandes `notification_pause` / `pause_30_minutes` et `resume`.
+  Comparaison sous verrou du timestamp natif exact observé, calcul serveur30min, sauvegarde/relecture de la vraie échéance ;
+  reprise ne réactive jamais le master notifications. Paramètres arbitraires et état optimiste interdits.
+- Quatre périmètres séparés : Linux/SNI/bundle, macOS/workflow, Flutter/7langues, inventaire CPU.
+  Optimisation candidate limitée au filtrage UTF-16 des noms DLL avant allocation, sans raccourcir l'énumération ni modifier les signatures.
+  Aucun gain B3 revendiqué avant mesures appariées.
+- Écart Linux démontré : binaire B2 Kali exige GLIBC2.39, donc pas de compatibilité Mint21/Ubuntu22.04 annoncée.
+  Préparation d'un vrai build Ubuntu22.04 x64 jetable avec audit ELF, bundle isolé et protocole Mint ; WSLg ne remplace pas le PC Mint.
+- **Autorisation supplémentaire reçue pour une branche CI B3 dédiée seulement**, après validation locale et contrôle des automatismes.
+  Aucune autorisation de push sur main, tag/release/site ou remplacement MSI. La CI publique actuelle ne contient pas encore ce frontend.
+  Pont manuel préparé dans CI existante vers workflow réutilisable ; aucun déclenchement push/PR/tag du nouveau workflow.
+- Inventaire Cloudflare API indisponible sans token dans cette session ; aucune connexion/condition contournée.
+  Prévention documentée : préfixe `[CF-Pages-Skip]` et marqueur `[skip ci]` sur le seul commit de tête envoyé,
+  pour omettre Pages et les workflows push, puis dispatch manuel B3.
+  [Cloudflare officiel](https://developers.cloudflare.com/pages/configuration/git-integration/github-integration/#skipping-a-build-via-a-commit-message) ;
+  [GitHub officiel](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/skip-workflow-runs).
+- Premiers contrôles Windows réussis : check tous targets, Clippy strict,46tests desktop et49tests plateforme, build Rust release.
+  Flutter : analyse sans erreur ;58tests réussis et un nouveau test clavier corrigé pour disposer son timer de fixture avant vérification,
+  puis cas ciblé réussi et build graphique release réussi. Ce n'est pas encore une validation des gestes réels pause/reprise.
+- Checkpoints locaux `3cf3a06` (contrat/UI pause) et `1fe5640` (filtrage DLL et compteurs) ; compilation/macOS/Linux encore à qualifier.
+  Parse Python, YAML manuel/read-only, scripts shell et fixtures natives vérifiés sans action matérielle.
+- Revue sécurité : ancien harness AppKit pouvait capturer tout l'écran si autorisé. L'appel B3 passe maintenant obligatoirement
+  `--no-screen-capture` ; seul le cache de vues possédées et la capture Flutter par windowID restent autorisés. Pas de capture globale.
+- Accès SSH existant identifié en lecture seule : Linux Mint22.2, GPU Intel HD520, compte propriétaire.
+  Session graphique encore à établir ; aucune connexion de bureau, installation ou permission modifiée.

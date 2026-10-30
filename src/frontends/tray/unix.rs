@@ -242,6 +242,7 @@ fn desktop_resource_activity(
 
 #[derive(Clone, Serialize)]
 struct DesktopPreferences {
+    writable: bool,
     notifications_enabled: bool,
     sound_enabled: bool,
     history_enabled: bool,
@@ -1753,6 +1754,7 @@ fn make_view(
         #[cfg(target_os = "linux")]
         overview: DesktopOverview::default(),
         preferences: DesktopPreferences {
+            writable: true,
             notifications_enabled: settings.notifications_enabled,
             sound_enabled: settings.sound_enabled,
             history_enabled: settings.history_enabled,
@@ -1981,6 +1983,59 @@ fn development_paths() -> Result<Vec<File>> {
     Ok(pins)
 }
 
+/// Build the real native presentation without probing control capabilities or
+/// autostart. Qualification is a separate observer, never an operational owner.
+#[cfg(all(feature = "flutter-desktop", target_os = "linux"))]
+fn qualification_view(lang: Language, snapshot: Option<&Snapshot>, writable: bool) -> View {
+    let text = words(lang);
+    let loaded = Settings::load();
+    let settings = loaded.as_ref().cloned().unwrap_or_default();
+    let (summary, visual) = snapshot.map_or_else(
+        || ("Isolated qualification — native observation unavailable".to_owned(), "partial"),
+        |snapshot| observation_status(snapshot, lang),
+    );
+    let mut view = View {
+        kind: "state",
+        summary: summary.clone(),
+        visual,
+        items: vec![
+            entry("header", "MicCamWatch — isolated qualification", false),
+            entry("status", &summary, true),
+            entry("mic", text.unavailable, false),
+            entry("camera", text.unavailable, false),
+            entry("pause", text.pause, false),
+            entry("profile", text.profile, false),
+            entry("autostart", text.unavailable, false),
+            entry("exit", text.exit, true),
+        ],
+        diagnostics: summary,
+        limited: false,
+        language: lang.code(),
+        version: env!("CARGO_PKG_VERSION"),
+        protection: DesktopProtection {
+            microphone: "unknown", camera: "unknown", requested: [None; 2],
+            microphone_on_lock: false, camera_on_lock: false,
+        },
+        overview: snapshot.map_or_else(DesktopOverview::default, |snapshot|
+            DesktopOverview::from_snapshot(snapshot, chrono::Utc::now())),
+        preferences: DesktopPreferences {
+            notifications_enabled: settings.notifications_enabled,
+            writable: false,
+            sound_enabled: settings.sound_enabled,
+            history_enabled: settings.history_enabled,
+            notifications_paused: settings.notifications_paused(),
+        },
+        feedback: Some(match loaded {
+            Err(error) => format!("Isolated settings unavailable: {error:#}"),
+            Ok(_) if writable => "Qualification only: preferences in Flutter; native mutations and all device/autostart commands disabled.".into(),
+            Ok(_) => "Read-only qualification: all mutations disabled.".into(),
+        }),
+        details_label: text.details,
+    };
+    bound_desktop_view(&mut view);
+    view
+}
+
 #[cfg(feature = "flutter-desktop")]
 fn run_flutter_development(lang: Language, initial_window: bool, theme: &str, writable: bool) -> Result<()> {
     ensure!(matches!(theme, "system" | "light" | "dark"), "unsupported desktop theme");
@@ -1990,6 +2045,26 @@ fn run_flutter_development(lang: Language, initial_window: bool, theme: &str, wr
     // Linux SO_PEERPIDFD/image verification. The isolated XDG roots own this namespace.
     let Some(lifecycle) = Lifecycle::acquire_for_launch(initial_window, false)? else { return Ok(()) };
     let mut frontend = FlutterFrontend::new(lang, writable, writable, false);
+    // Opt-in because WSLg/stock GNOME may have no actual StatusNotifierWatcher.
+    // Never fake registration or silently equate window-only mode with SNI proof.
+    #[cfg(target_os = "linux")]
+    let (mut native, native_actions) = {
+        let (sender, actions) = mpsc::sync_channel(32);
+        let host = if std::env::var_os("MCW_LINUX_QUALIFICATION_TRAY").as_deref()
+            == Some(std::ffi::OsStr::new("1"))
+        {
+            let host = DesktopHost::start(sender, lifecycle.ready.clone(),
+                qualification_view(lang, None, writable))?;
+            eprintln!("MicCamWatch qualification: actual SNI registration succeeded; device/autostart actions disabled");
+            Some(host)
+        } else { None };
+        (host, actions)
+    };
+    #[cfg(target_os = "linux")]
+    let native_only = std::env::var_os("MCW_LINUX_QUALIFICATION_NATIVE").as_deref()
+        == Some(std::ffi::OsStr::new("1"));
+    #[cfg(target_os = "linux")]
+    ensure!(!native_only || native.is_some(), "native qualification requires the real SNI host");
     struct Reading {
         snapshot: Result<Snapshot, String>,
         at: chrono::DateTime<chrono::Utc>,
@@ -2047,15 +2122,57 @@ fn run_flutter_development(lang: Language, initial_window: bool, theme: &str, wr
     }).context("start real Unix collector")?;
     let mut observer = Observer { stop, thread: Some(observer_thread) };
     let outcome = (|| -> Result<()> {
-        if initial_window { frontend.open(theme)?; }
+        let mut open = initial_window;
         lifecycle.ready.store(true, Ordering::Release);
         while !lifecycle.stop.load(Ordering::Acquire) {
+            #[cfg(target_os = "linux")]
+            if let Some(host) = native.as_mut() {
+                host.check()?;
+                if let Some(error) = host.take_window_error() {
+                    eprintln!("MicCamWatch qualification native window: {error}");
+                }
+                while let Ok(command) = native_actions.try_recv() {
+                    match command {
+                        Command::Status => open = true,
+                        Command::Exit => lifecycle.stop.store(true, Ordering::Release),
+                        _ => eprintln!("MicCamWatch qualification: rejected native mutation"),
+                    }
+                }
+            }
             frontend.refresh()?;
             if let Some(error) = frontend.take_open_failure() {
+                #[cfg(target_os = "linux")]
+                if let Some(host) = native.as_mut() {
+                    eprintln!("MicCamWatch qualification Flutter failed; opening native fallback: {error}");
+                    host.show_window()?;
+                } else {
+                    bail!("development Flutter desktop failed before ready: {error}");
+                }
+                #[cfg(target_os = "macos")]
                 bail!("development Flutter desktop failed before ready: {error}");
             }
-            if lifecycle.open_requested.swap(false, Ordering::AcqRel) { frontend.open(theme)?; }
+            open |= lifecycle.open_requested.swap(false, Ordering::AcqRel);
+            if open {
+                open = false;
+                #[cfg(target_os = "linux")]
+                if native_only {
+                    native.as_mut().expect("required native host").show_window()?;
+                } else if let Err(error) = frontend.open(theme) {
+                    if let Some(host) = native.as_mut() {
+                        eprintln!("MicCamWatch qualification Flutter unavailable; opening native fallback: {error:#}");
+                        let _ = frontend.take_open_failure();
+                        host.show_window()?;
+                    } else { return Err(error); }
+                }
+                #[cfg(target_os = "macos")]
+                frontend.open(theme)?;
+            }
             if let Some(reading) = pending.lock().unwrap_or_else(|e| e.into_inner()).take() {
+                #[cfg(target_os = "linux")]
+                if let Some(host) = native.as_mut() {
+                    host.observe(reading.snapshot.as_ref().ok());
+                    host.update(qualification_view(lang, reading.snapshot.as_ref().ok(), writable))?;
+                }
                 frontend.applied_profile = reading.applied_profile;
                 frontend.observe(reading.snapshot, reading.at);
                 frontend.publish()?;
@@ -2066,6 +2183,8 @@ fn run_flutter_development(lang: Language, initial_window: bool, theme: &str, wr
     })();
     lifecycle.ready.store(false, Ordering::Release);
     frontend.finish();
+    #[cfg(target_os = "linux")]
+    if let Some(host) = native.as_mut() { host.shutdown()?; }
     let outcome = outcome.and(observer.stop_and_join());
     lifecycle.clean_shutdown.store(outcome.is_ok(), Ordering::Release);
     outcome
@@ -2678,10 +2797,10 @@ struct LinuxTray {
 #[cfg(target_os = "linux")]
 impl ksni::Tray for LinuxTray {
     fn id(&self) -> String {
-        "miccamwatch".into()
+        if self.view.preferences.writable { "miccamwatch" } else { "miccamwatch-qualification" }.into()
     }
     fn title(&self) -> String {
-        "MicCamWatch".into()
+        if self.view.preferences.writable { "MicCamWatch" } else { "MicCamWatch — isolated qualification" }.into()
     }
     fn icon_pixmap(&self) -> Vec<ksni::Icon> {
         let color: [u8; 3] = match self.view.visual {
@@ -3087,6 +3206,26 @@ mod menu_tests {
             String::from_utf8_lossy(&output.stderr)
         );
         true
+    }
+
+    #[cfg(all(feature = "flutter-desktop", target_os = "linux"))]
+    #[test]
+    fn qualification_native_view_has_no_mutating_actions() {
+        let test = "frontends::tray::unix::menu_tests::qualification_native_view_has_no_mutating_actions";
+        if run_isolated_menu_fixture(test) { return; }
+        for writable in [false, true] {
+            let view = qualification_view(Language::En, None, writable);
+            assert!(!view.preferences.writable);
+            assert_eq!(view.protection.requested, [None; 2]);
+            assert_eq!(view.protection.microphone, "unknown");
+            assert_eq!(view.protection.camera, "unknown");
+            for item in &view.items {
+                assert_eq!(item.enabled, matches!(item.action, "status" | "exit"));
+                assert!(item.children.is_none());
+            }
+        }
+        let home = PathBuf::from(std::env::var_os("HOME").unwrap());
+        assert!(!home.join(".config/autostart").exists());
     }
 
     fn held_startup_lease() -> (PathBuf, File) {
