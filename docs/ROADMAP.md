@@ -2712,3 +2712,10 @@ Lots futurs **à approuver, aucun correctif appliqué** :
   `--no-screen-capture` ; seul le cache de vues possédées et la capture Flutter par windowID restent autorisés. Pas de capture globale.
 - Accès SSH existant identifié en lecture seule : Linux Mint22.2, GPU Intel HD520, compte propriétaire.
   Session graphique encore à établir ; aucune connexion de bureau, installation ou permission modifiée.
+- Revue commandes confirmée : CAS/horloge serveur/session/rejeu/pending corrects ; portée des notifications corrigée dans les7langues.
+  Sous Windows, master/pause concernent aussi les notifications natives d'opération/erreur ; aucun mécanisme de livraison modifié.
+- Session Mint existante identifiée : X11 via XRDP/XFCE, réutilisable sans nouvelle connexion de bureau.
+  GLX rapporte explicitement llvmpipe/accélération non disponible ; ce relevé n'est pas encore une mesure du vrai enfant Flutter.
+  Ne pas présenter cette session comme un test Intel accéléré ni changer pilote/permissions pour contourner cette limite.
+- Checkpoint CI dédié préparé sur la base de code `48d0d70` ; sources relues et contrôles locaux conservés,
+  qualification macOS/Ubuntu hébergée encore non exécutée à ce point. Ne pousser que le ref CI autorisé avec les marqueurs d'exclusion.
