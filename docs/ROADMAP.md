@@ -2719,3 +2719,9 @@ Lots futurs **à approuver, aucun correctif appliqué** :
   Ne pas présenter cette session comme un test Intel accéléré ni changer pilote/permissions pour contourner cette limite.
 - Checkpoint CI dédié préparé sur la base de code `48d0d70` ; sources relues et contrôles locaux conservés,
   qualification macOS/Ubuntu hébergée encore non exécutée à ce point. Ne pousser que le ref CI autorisé avec les marqueurs d'exclusion.
+- Run CI manuel `41023711442` sur `9773a1b` : SDK officiels et versions validés sur les3runners, mais arrêt avant compilation :
+  composant `cargo-clippy` absent du toolchain exact. Correction de préparation : demander explicitement `components: clippy`.
+  Aucun build/test macOS ou bundle Linux réussi sur ce run ; les reçus not-completed sont conservés, pas convertis en succès.
+- Windows Flutter final :59tests réussis en une passe et build release réussi après correction des textes.
+  Premier clic Pause réel a bien sauvegardé l'échéance native ; confirmation accessible en cours, le harness initial cherchait
+  à tort des noms atomiques alors que MSAA regroupe les paragraphes et expose les champs sélectionnables via leur valeur.
