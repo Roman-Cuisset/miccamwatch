@@ -9,9 +9,15 @@ on:
       runtime-replay:
         type: boolean
         default: false
+      intel-only:
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       runtime-replay:
+        type: boolean
+        default: false
+      intel-only:
         type: boolean
         default: false
 
@@ -27,11 +33,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - runner: macos-15-intel
-            architecture: x86_64
-          - runner: macos-15
-            architecture: arm64
+        include: ${{ fromJSON(inputs.intel-only && '[{"runner":"macos-15-intel","architecture":"x86_64"}]' || '[{"runner":"macos-15-intel","architecture":"x86_64"},{"runner":"macos-15","architecture":"arm64"}]') }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 50
     env:
@@ -132,10 +134,15 @@ jobs:
       - name: Inspect bundle seals architectures ACLs and run owned Aqua smoke when available
         run: |
           set -euo pipefail
+          extra=()
+          if [[ "${{ inputs.intel-only }}" == "true" ]]; then
+            extra+=(--intel-bootstrap-controls)
+          fi
           python3 -B desktop/qualification/macos.py \
             --proof "$RUNNER_TEMP/mcw-flutter-macos/evidence" \
             --release-app "${MCW_FROZEN_RELEASE_APP:-$RUNNER_TEMP/mcw-flutter-macos/release/MicCamWatch.app}" \
             --instrumented-app "${MCW_FROZEN_INSTRUMENTED_APP:-$RUNNER_TEMP/mcw-flutter-macos/instrumented/MicCamWatch.app}" \
+            "${extra[@]}" \
             2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/qualification.log"
       - name: Summarize observed graphical status (never infer from a successful build)
         if: always()
@@ -183,6 +190,7 @@ jobs:
 
   linux-x64-baseline:
     name: Ubuntu 22.04 x64 Mint-baseline development bundle
+    if: ${{ !inputs.intel-only }}
     permissions:
       contents: read
       actions: read

@@ -2796,3 +2796,32 @@ Lots futurs **à approuver, aucun correctif appliqué** :
 - Contrôles locaux actualisés : analyse Flutter sans erreur,61tests et build Windows release réussis ; 19hashes du vrai bundle
   Linux relus par le restaurateur. Capture PrintWindow actuelle vide malgré47nœuds UIA réels et fenêtre possédée au premier plan :
   diagnostic de capture en cours, aucune image vide présentée comme validation visuelle ni repli vers le bureau entier.
+- Checkpoint `4cabb1b` : replay runtime uniquement du run41037181504 déclenché sur la branche CI autorisée.
+  Run `41066470241` : ARM passe les deux vrais cycles release/instrumenté et le fixture AppKit corrigé ;
+  Ubuntu passe SNI,12cycles combinés lifecycle/préférences et fermeture des fixtures. Builds/suites initiaux explicitement hérités,
+  étapes de recompilation affichées skipped ; aucune reconstruction ou nouvelle publication de produit.
+- Mint produit final figé `7e794d2` :6nouveaux cycles, préférences/pause/reprise/refus/restauration réussis, zéro UI/fixture résiduel,
+  arrêt des2propriétaires0. Archive SHA256 `5c8408f4cd75eb279164a4f6fb5d386e5c897a540735fa30db05157fcd2d27c9`.
+  Captures Overview clair/sombre normales réellement examinées après relecture de la restauration.
+  RSS fermé9,97–10,24Mio, ouvert325,40–329,76Mio ; PSS ouvert293,77–298,12Mio. CPU ouvert23,07–23,18%, fermé1,60%,
+  toujours borne inférieure des processus échantillonnés et rendu llvmpipe. Ready initial1,41–1,49s mais fenêtre mappée4,86–4,97s :
+  ne pas confondre acquittement protocole et premier affichage utilisable. Réouverture mappée0,98–1,09s, arrêt172–234ms.
+  Stable Mint PID1406412, binaire, absence initiale des préférences/protections et historique strictement préservés.
+- Windows final7e794d2 :3réouvertures,10activations même enfant, crash du seul enfant et relance, collecte continue et fermeture0
+  de tous les PIDs possédés réussis. Ready initial580ms, réouvertures179/193/204ms ; RSS22,97Mio fermé/136,10Mio ouvert
+  sur cette passe descriptive, distincte du comparatif CPU contrôlé. Captures WGC des seuls HWND possédés clair/sombre réussies
+  et examinées ; identité PID/FILETIME/chemin tenue avant/après, aucun picker/capture globale/permission, PrintWindow vide conservé comme échec.
+- Intel replay conserve l'échec de Ready à la réouverture. Échantillon valide de l'enfant2960 sous owner2907 :
+  une seconde dans NSApplication→WindowServer/get_session_port, avant Flutter. Une autre ligne Impeller apparaît ensuite sans PID/temps :
+  pas de preuve d'un blocage permanent du runner ni d'une cause unique. READY_TIMEOUT=15s, IO_TIMEOUT=5s inchangés.
+  Contrôle passif timestampé session/AppKit en préparation ; aucune permission ni garde de production modifiée.
+- Bundle Mint autonome préparé hors dépôt : `miccamwatch-b3-mint.tar.gz`,13501124octets,
+  SHA256 `d17595f5d910a644872bc5ecaaa2f477b2dea7a06a3c52a7a6b7e001d3736254`.
+  Archive produit originale inchangée + contrôleurs4cabb1b séparés + helper vérifié + provenance/SHA256/notice française.
+  Extraction réelle dans un autre préfixe privé Mint,6hashes wrapper,19hashes produit et `linux.py check` réussis ;
+  pas de nouvelle installation ni répétition inutile des6cycles déjà validés sur les mêmes octets.
+- Prochain contrôle **Intel seulement**, sans rebâtir ni relancer les jobs ARM/Linux verts : sondes passives précompilées
+  CGSession/NSScreen et NSApplication.shared, avant ouverture/après fermeture/pendant réouverture. Processus de diagnostic
+  propres, borniers, sans fenêtre, permissions, entrée injectée ou commande produit. Échantillon tardif possédé et journal
+  horodaté ajoutés uniquement à ce mode. Ces contrôles peuvent perturber le timing/contexte ; un succès conditionnel ne
+  clôturera pas à lui seul les échecs Intel non instrumentés. Résultat encore non exécuté à ce checkpoint.

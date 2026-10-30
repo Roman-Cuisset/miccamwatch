@@ -18,6 +18,7 @@ import shutil
 import signal
 import stat
 import subprocess
+import threading
 import tempfile
 import time
 
@@ -137,7 +138,7 @@ def alive(pid):
     return result.returncode == 0 and bool(result.stdout.strip()) and not result.stdout.strip().startswith('Z')
 
 
-def diagnose_reopen(prefix, owner, child, proof):
+def diagnose_reopen(prefix, owner, child, proof, timeout=8):
     """Read-only owned-child sample; no debugger entitlement or permission grant."""
     expected = str((prefix / 'desktop/MicCamWatch.app/Contents/MacOS/MicCamWatch').resolve())
     record = dict(child=child, owner=owner.pid, status='not-sampled')
@@ -148,7 +149,7 @@ def diagnose_reopen(prefix, owner, child, proof):
                      proof / 'reopen-process-before', check=False)
     try:
         result = command(['/usr/bin/sample', str(child), '1', '1', '-file', proof / 'reopen-sample.txt'],
-                         proof / 'reopen-sample', check=False, timeout=8)
+                         proof / 'reopen-sample', check=False, timeout=timeout)
         after = command(['/bin/ps', '-p', str(child), '-o', 'lstart=,pid=,ppid=,stat=,comm='],
                         proof / 'reopen-process-after', check=False)
         # State can change legitimately; compare creation/identity, not stat.
@@ -167,14 +168,20 @@ def diagnose_reopen(prefix, owner, child, proof):
     return record
 
 
-def smoke(prefix, proof, session, instrumented):
+def smoke(prefix, proof, session, instrumented, bootstrap):
     proof.mkdir(parents=True)
     receipt = dict(status='running', mode='real-Rust-read-only-development', session=session,
                    capture=[], cases=[], instrumented=instrumented)
+    receipt['bootstrap_controls'] = bool(bootstrap)
+    if bootstrap:
+        receipt['scope'] = 'Controlled diagnostic reproduction, not unconditioned Intel qualification'
     save(proof / 'receipt.json', receipt)
     owner = None
     child = None
     log = None
+    reader = None
+    timeline = []
+    control_jobs = []
     try:
         private_base = Path.home() / 'mcw-qualification'
         private_base.mkdir(mode=0o700, exist_ok=True)
@@ -188,10 +195,47 @@ def smoke(prefix, proof, session, instrumented):
             path.mkdir(mode=0o700)
         env = dict(os.environ, XDG_CONFIG_HOME=str(config), XDG_DATA_HOME=str(data),
                    MCW_DESKTOP_QUALIFICATION='1' if instrumented else '0')
+        def controls(phase, synchronous=False):
+            output = proof / ('bootstrap-' + phase)
+            argv = ['python3', '-B', REPO / 'desktop/qualification/intel_bootstrap/controls.py',
+                    '--hosted-disposable', '--phase', phase, '--session-probe', bootstrap[0],
+                    '--appkit-probe', bootstrap[1], '--working-directory',
+                    prefix / 'desktop/MicCamWatch.app/Contents/MacOS', '--output', output]
+            if owner is not None:
+                argv += ['--owner-pid', owner.pid]
+            if child is not None:
+                argv += ['--child-pid', child]
+            argv = [str(value) for value in argv]
+            if synchronous:
+                try:
+                    result = command(argv, proof / ('control-' + phase), check=False, timeout=20, env=env)
+                    receipt.setdefault('control_commands', []).append(dict(phase=phase, exit=result.returncode))
+                except (subprocess.SubprocessError, OSError) as error:
+                    receipt.setdefault('control_commands', []).append(dict(phase=phase, error=str(error)))
+            else:
+                stream = (proof / ('control-' + phase + '.log')).open('wb')
+                try:
+                    job = subprocess.Popen(argv, stdout=stream, stderr=subprocess.STDOUT, env=env, cwd=prefix)
+                except BaseException:
+                    stream.close()
+                    raise
+                control_jobs.append((phase, job, stream))
+        if bootstrap:
+            controls('before-open', synchronous=True)
         log_path = proof / 'owner.log'
         log = log_path.open('wb')
         argv = [str(prefix / 'mcw'), '--read-only-development', '--open', '--desktop-theme', 'light']
-        owner = subprocess.Popen(argv, stdout=log, stderr=subprocess.STDOUT, env=env, cwd=prefix)
+        owner = subprocess.Popen(argv, stdout=subprocess.PIPE if bootstrap else log,
+                                 stderr=subprocess.STDOUT, env=env, cwd=prefix)
+        if bootstrap:
+            def drain():
+                for line in iter(owner.stdout.readline, b''):
+                    timeline.append(dict(monotonic=time.monotonic(), unix_time=time.time(),
+                                         line=line.decode(errors='replace').rstrip()))
+                    log.write(line)
+                    log.flush()
+            reader = threading.Thread(target=drain, daemon=True)
+            reader.start()
         def text():
             return log_path.read_text(errors='replace')
         def owned_child():
@@ -234,6 +278,8 @@ def smoke(prefix, proof, session, instrumented):
             receipt['cases'].append(dict(case='native-singleton-activation-three-times', status='passed', child=child))
             os.kill(child, signal.SIGUSR2)
             wait_for(lambda: not alive(child), 'NSWindow close left Flutter engine resident')
+            if bootstrap:
+                controls('after-close')
             time.sleep(2)
             require(owned_child() is None, 'Ready-window close automatically reopened Flutter')
             receipt['cases'].append(dict(case='normal-owned-window-close-no-resident-engine', status='passed'))
@@ -243,12 +289,21 @@ def smoke(prefix, proof, session, instrumented):
             save(proof / 'receipt.json', receipt)
             reopen_started = time.monotonic()
             diagnosed = False
+            late_diagnosed = False
             def reopened_ready():
-                nonlocal diagnosed
+                nonlocal diagnosed, late_diagnosed
                 ready = re.search(r'desktop event=ready .*pid=' + str(child) + r'\b.*sequence=[1-9]\d*', text())
                 if not ready and not diagnosed and time.monotonic() - reopen_started >= 1.5:
                     diagnosed = True
+                    if bootstrap:
+                        controls('reopen-stalled')
                     receipt['reopen_diagnostic'] = diagnose_reopen(prefix, owner, child, proof)
+                    save(proof / 'receipt.json', receipt)
+                if bootstrap and not ready and not late_diagnosed and time.monotonic() - reopen_started >= 10:
+                    late_diagnosed = True
+                    late = proof / 'reopen-late'
+                    late.mkdir()
+                    receipt['reopen_late_diagnostic'] = diagnose_reopen(prefix, owner, child, late, timeout=3)
                     save(proof / 'receipt.json', receipt)
                 return ready
             wait_for(reopened_ready, 'Reopened child did not establish IPC')
@@ -272,6 +327,20 @@ def smoke(prefix, proof, session, instrumented):
             # Never signal a possibly recycled orphan PID. The independently
             # armed native monitor owns shutdown; disposal owns failed-run residue.
             receipt['cleanup'] = 'Child still observed after owner cleanup; no PID-only orphan kill attempted'
+        for phase, job, stream in control_jobs:
+            try:
+                code = job.wait(timeout=15)
+                receipt.setdefault('control_commands', []).append(dict(phase=phase, exit=code))
+            except subprocess.TimeoutExpired:
+                job.kill()  # only this retained, unreaped direct diagnostic child
+                job.wait(timeout=3)
+                receipt.setdefault('control_commands', []).append(dict(phase=phase, forced_controller_stop=True))
+            finally:
+                stream.close()
+        if reader:
+            reader.join(timeout=3)
+            receipt['timeline_reader_stopped'] = not reader.is_alive()
+            save(proof / 'owner-timeline.json', timeline)
         if log:
             log.close()
         save(proof / 'receipt.json', receipt)
@@ -282,12 +351,16 @@ def main():
     parser.add_argument('--proof', type=Path, required=True)
     parser.add_argument('--release-app', type=Path, required=True)
     parser.add_argument('--instrumented-app', type=Path, required=True)
+    parser.add_argument('--intel-bootstrap-controls', action='store_true',
+                        help='Observational diagnostic reproduction only; not an unconditioned qualification pass')
     args = parser.parse_args()
     require(platform.system() == 'Darwin' and os.environ.get('RUNNER_ENVIRONMENT') == 'github-hosted'
             and os.getuid() != 0, 'Disposable non-root GitHub-hosted Mac only')
     proof = args.proof.resolve()
     require(proof.is_relative_to(Path(os.environ['RUNNER_TEMP']).resolve()), 'Evidence outside runner temp')
     proof.mkdir(parents=True, exist_ok=True)
+    require(not args.intel_bootstrap_controls or platform.machine() == 'x86_64',
+            'Intel bootstrap controls require a hosted Intel runner')
     prefixes = []
     for name, app in (('release', args.release_app), ('instrumented', args.instrumented_app)):
         prefixes.append(prepare_prefix(proof / (name + '-prefix'), app.resolve()))
@@ -304,14 +377,23 @@ def main():
             reason='Runner has no on-console Aqua screen; no runtime/menu/window/IPC success claimed'))
         print('::warning::macOS graphical qualification NOT EXECUTED: no Aqua session')
         return
+    bootstrap = None
+    if args.intel_bootstrap_controls:
+        appkit = proof / 'appkit-probe'
+        command(['xcrun', 'swiftc', '-target', 'x86_64-apple-macosx15.0',
+                 REPO / 'desktop/qualification/intel_bootstrap/appkit_bootstrap.swift', '-o', appkit],
+                proof / 'appkit-probe-build')
+        bootstrap = (helper, appkit)
     for prefix, instrumented in zip(prefixes, (False, True)):
-        smoke(prefix, proof / ('instrumented-runtime' if instrumented else 'release-runtime'), session, instrumented)
+        smoke(prefix, proof / ('instrumented-runtime' if instrumented else 'release-runtime'),
+              session, instrumented, bootstrap if instrumented else None)
     # Real production AppKit declarations/NSMenu/status item; simulated data,
     # not Flutter/hardware evidence. Harness itself preserves capture provenance.
     command(['python3', '-B', REPO / 'installer/tests/native_macos_menu.py',
              '--proof', proof / 'native-menu', '--no-screen-capture'],
             proof / 'native-menu-run', timeout=1200)
-    save(proof / 'graphical-receipt.json', dict(status='passed', session=session,
+    save(proof / 'graphical-receipt.json', dict(
+        status='diagnostic-condition-passed' if bootstrap else 'passed', session=session,
         flutter='real Rust owner; real snapshots; sandbox unchanged; separate build identities',
         native_menu='production AppKit with explicitly simulated input data',
         native_menu_capture='whole-display capture disabled; owned-view cache fixtures only',

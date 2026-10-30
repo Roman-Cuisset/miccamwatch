@@ -7,9 +7,9 @@ Flutter exists only while its window is open. Native GTK/AppKit remain available
 ## Checkpoint and scope
 
 Work branch: `work/flutter-hybrid-0211`, B2 baseline `570c40b`.
-Current saved integration checkpoint: `7e794d2`; later qualification-only fixes
-handle vanished Linux `/proc` entries and restore the owned Windows surface before
-capture. No installed application, hardware permission or protection is changed.
+Products currently exercised: source `7e794d2`; runtime-only replay controller
+checkpoint `4cabb1b`. Original CI product digests remain pinned and separate from
+harness changes. No installed application, hardware permission or protection changed.
 
 Private evidence root on the Windows qualification host:
 `%LOCALAPPDATA%\MicCamWatchQualification\flutter-b3-20261030-081807`.
@@ -56,6 +56,28 @@ These are TEST-labelled delivery probes, not a new genuine-capture, audible-bann
 or physical microphone/camera experiment. On Windows the master/pause also gates
 existing native operation/error notifications; all seven-language explanations
 reflect that scope. Saving a delivery preference does not prove OS delivery.
+
+### Latest Windows lifecycle and visual result
+
+Frozen7e794d2 release bundle:39.11MiB across15files. One actual read-only run
+passed three reopens, ten same-child activations, owned-child crash/recovery,
+monitoring advance with Flutter absent, and clean owner exit0/all owned PIDs gone.
+First native Ready580ms, visible684ms; reopen Ready179/193/204ms, visible247/285/
+311ms. Close-to-process-exit191–224ms across normal closes. These single-run
+figures are descriptive, not the controlled AB/BA CPU comparison below.
+
+Latest run RSS22.97MiB closed,136.10MiB open; private commit4.30/120.28MiB.
+Its CPU differed with workload and is not substituted for the paired comparison.
+`windows-final-lifecycle/qualification.json` retains all raw samples.
+
+PrintWindow remained uniformly blank despite real UIA content. A separate private
+offline-built WGC helper captured **only** each owned HWND, holding and validating
+the exact process creation FILETIME/path before and after, without a picker,
+monitor capture, permission request or fallback. Both actual French125% light/
+dark images were examined: official logos, real overview/application-ready state,
+readable cards and correctly disabled read-only controls. Automatic nonblank
+output alone was not treated as visual proof. Original BMPs, helper source/lock,
+JSON receipts and failed PrintWindow attempts remain in private evidence.
 
 ## Windows CPU: paired clean comparison
 
@@ -143,7 +165,38 @@ Open CPU24.17–26.21% of a core; final closed1.45–1.50%. These are lower-boun
 process-tree samples missing very short-lived children, not whole-system CPU.
 Mapped first windows4.72–4.84s; same-owner reopens0.97–1.21s. Software llvmpipe
 is confirmed in the actual child; no accelerated Mint result is claimed.
-Latest source7e794d2 product/timed Ready and normal-dashboard capture replay remains.
+
+The later source7e794d2 run also passed six cycles and real preference/error/
+restoration actions, with zero forced cleanup or remaining owned UI/AT-SPI process.
+Archive SHA256 `5c8408f4cd75eb279164a4f6fb5d386e5c897a540735fa30db05157fcd2d27c9`.
+Both **normal Overview** captures after native-state reload were examined.
+
+| Actual Mint source7e794d2 | Light | Dark |
+|---|---:|---:|
+| Open RSS, MiB | 325.40 | 329.76 |
+| Open PSS, MiB | 293.77 | 298.12 |
+| Final closed RSS, MiB | 9.97 | 10.24 |
+| Final closed PSS, MiB | 7.50 | 7.76 |
+| Open CPU, % of one core, lower bound | 23.18 | 23.07 |
+| Closed CPU, % of one core, lower bound | 1.60 | 1.60 |
+| First positive native Ready, ms | 1492 | 1409 |
+| First mapped window, ms | 4971 | 4858 |
+
+Reopen native Ready768–852ms, mapped976–1091ms; UI process exit172–234ms.
+Ready acknowledgment can precede the software compositor's mapped-window evidence;
+do not report it as first human-usable display. Actual llvmpipe remains the
+dominant open-window limitation. No driver, GPU setting or permission was changed.
+
+### Reproducible private Mint wrapper
+
+`miccamwatch-b3-mint.tar.gz` is13501124bytes, SHA256
+`d17595f5d910a644872bc5ecaaa2f477b2dea7a06a3c52a7a6b7e001d3736254`.
+It contains the byte-identical original native archive, separately pinned4cabb1b
+controllers, owned-window helper, provenance, six wrapper checksums and French
+instructions. No personal evidence/logs, SDK, installer or modified stable files.
+Its extraction, wrapper/product hashes and real runtime preflight were exercised
+in another new0700Mint prefix. Existing exact products already passed six cycles;
+this packaging check is not relabelled as another application lifecycle run.
 
 ### Qualification defects diagnosed without weakening guards
 
@@ -199,13 +252,30 @@ exact artifact IDs, API source/digest, ZIP/TAR SHA256, every payload manifest an
 source ancestry/controller-only diff checked before execution. Products remain
 source7e794d2; controller revision is recorded separately. Release builds and unit
 suites are inherited from the original run, not reported as newly executed.
-Current replay results are not yet established at this checkpoint.
+Replay41066470241 passed ARM real release/instrumented IPC/lifecycle and the corrected
+native AppKit fixture. Ubuntu hosted SNI, twelve combined lifecycle/preferences
+cycles, native failure/restoration and owned desktop teardown also passed.
+Intel reproducibly failed reopening; its owned live sample localized one1-second
+interval to NSApplication/WindowServer session-port lookup before Flutter startup.
+This is **not** proof of a permanent runner defect or the whole timeout's cause;
+another Impeller line appears later without PID/timestamp attribution. A bounded
+session/bootstrap control is being prepared. No timeout increase or workaround.
+
+The next **Intel-only** replay adds observational CGSession/NSScreen and
+NSApplication.shared controls before open, after close and during reopen, plus
+one late owned-child sample and timestamped owner output. No product rebuild,
+deadline change, privileged session reassignment, permission or other-platform
+rerun. These unsandboxed harness descendants do not prove the sandboxed product's
+exact context; they can perturb timing. A passing controlled experiment is marked
+`diagnostic-condition-passed`, not unconditioned Intel qualification.
 
 CI: [41023711442](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/41023711442),
 [41024851203](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/41024851203),
 [41028974295](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/41028974295).
 Current integrated requalification:
 [41037181504](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/41037181504).
+Runtime-only replay:
+[41066470241](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/41066470241).
 
 A physical/manual Mac is neither available nor a blocking development prerequisite.
 Hardware/TCC, installed packages, Developer ID/notarization and configurations not

@@ -23,6 +23,10 @@ on:
         description: With native-platform=flutter, replay pinned CI41037181504 products without rebuilding them
         type: boolean
         default: false
+      flutter-intel-only:
+        description: Target only the unresolved Intel runtime and enable observational bootstrap controls
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       native-only:
@@ -44,6 +48,7 @@ jobs:
       actions: read
     with:
       runtime-replay: ${{ inputs.flutter-runtime-replay || false }}
+      intel-only: ${{ inputs.flutter-intel-only || false }}
 
   windows:
     if: ${{ !inputs.native-only && inputs.native-platform != 'flutter' }}
