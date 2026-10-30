@@ -107,6 +107,8 @@ jobs:
             2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/rust-history-tests.log"
           cargo test --lib --locked --features flutter-desktop autostart::tests \
             2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/rust-autostart-tests.log"
+          cargo test --lib --locked --features flutter-desktop frontends::tray::unix::menu_tests::qualification_ \
+            2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/rust-native-qualification-gates.log"
       - name: Build real native engine with development parser and unchanged AppKit fallback
         if: ${{ !inputs.runtime-replay }}
         run: |

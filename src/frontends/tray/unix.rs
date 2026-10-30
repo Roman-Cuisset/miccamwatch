@@ -1869,7 +1869,8 @@ impl FlutterFrontend {
             changed = true;
         }
         changed |= self.ui.as_mut().is_some_and(Supervisor::take_controls_changed);
-        if changed { self.publish()?; }
+        let presentation_changed = self.ui.as_mut().is_some_and(Supervisor::take_presentation_changed);
+        if changed || presentation_changed { self.publish()?; }
         if let Some(error) = self.ui.as_mut().and_then(Supervisor::take_error) {
             eprintln!("MicCamWatch Flutter desktop: {error}; native controls remain available");
         }

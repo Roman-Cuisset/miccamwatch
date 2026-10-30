@@ -2875,3 +2875,13 @@ Lots futurs **à approuver, aucun correctif appliqué** :
 - Reprise : résoudre l'ownership autostart Unix ; terminer les suites/clippy/builds locaux ; pousser seulement le ref CI déjà autorisé
   avec `[CF-Pages-Skip] [skip ci]` et dispatch manuel frais (pas replay B3), analyser les reçus Mac/Linux/ARM, puis gestes/captures Windows/Mint.
   Aucun push de la branche de travail/main, tag, release, déploiement ou remplacement du stable autorisé.
+- Sauvegarde WIP locale `79b35db` effectuée avant les opérations longues. Revue indépendante ensuite :
+  correction de l'ownership Unix (registre et journal d'une autre installation préservés, y compris cible absente),
+  séparation des changements de présentation/observation Unix, suppression du profil par défaut trompeur dans le diagnostic.
+  Les deux revues ciblées confirment les corrections à l'inspection ; ce n'est pas une preuve d'exécution Unix.
+- Contrat strict : un test a révélé que les variantes Serde unitaires ignoraient les champs supplémentaires ;
+  elles sont maintenant des variantes struct sans champ, sans élargir les opérations acceptées.
+  Tests Windows réussis :50desktop,11historique,5autostart,19plateforme ; Clippy strict tous targets et build Rust release réussis.
+  Flutter :88cas réussis lors de la suite initiale ; échec de fixture clavier (timer de requête non terminé), puis cas ciblé corrigé réussi.
+  Analyse et build Windows release réussis ; avertissement MSBuild sur le worktree sous Temp conservé, pas masqué.
+  Formatage limité aux nouveaux modules B4. Aucun test physique ni changement de protections/autostart utilisateur.

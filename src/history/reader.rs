@@ -71,7 +71,11 @@ impl HistoryBrowser {
         if !(1..=50).contains(&limit) {
             bail!("history page limit must be between 1 and 50");
         }
-        if self.session.as_ref().is_some_and(|session| session.created.elapsed() >= SESSION_LIFETIME) {
+        if self
+            .session
+            .as_ref()
+            .is_some_and(|session| session.created.elapsed() >= SESSION_LIFETIME)
+        {
             self.session = None;
             self.cursor = None;
         }
@@ -86,11 +90,17 @@ impl HistoryBrowser {
         }
         // On I/O failure, discard all continuation state instead of returning an
         // invented empty success or continuing from an uncertain position.
-        let mut snapshot = self.session.take().context("history snapshot expired; refresh history")?;
+        let mut snapshot = self
+            .session
+            .take()
+            .context("history snapshot expired; refresh history")?;
         self.cursor = None;
         let mut events = Vec::with_capacity(usize::from(limit));
         let mut budget = PAGE_SCAN_BYTES;
-        while events.len() < usize::from(limit) && snapshot.current < snapshot.files.len() && budget > 0 {
+        while events.len() < usize::from(limit)
+            && snapshot.current < snapshot.files.len()
+            && budget > 0
+        {
             let file = &mut snapshot.files[snapshot.current];
             match file.next_record(&mut budget)? {
                 Record::Line(mut bytes) => {
@@ -99,11 +109,12 @@ impl HistoryBrowser {
                     snapshot.files[snapshot.current].line = bytes;
                     match decoded {
                         Ok(mut entry) => {
-                            if let Some(application) = &mut entry.application {
-                                if application.len() > MAX_TEXT_BYTES {
-                                    truncate_utf8(application, MAX_TEXT_BYTES);
-                                    snapshot.issue("An application name was truncated to 512 UTF-8 bytes.");
-                                }
+                            if let Some(application) = &mut entry.application
+                                && application.len() > MAX_TEXT_BYTES
+                            {
+                                truncate_utf8(application, MAX_TEXT_BYTES);
+                                snapshot
+                                    .issue("An application name was truncated to 512 UTF-8 bytes.");
                             }
                             events.push(entry);
                         }
@@ -124,11 +135,17 @@ impl HistoryBrowser {
         let mut issues = snapshot.issues.clone();
         let scan_limited = more && budget == 0;
         if scan_limited {
-            add_issue(&mut issues, "Page scan budget reached; continue with the next cursor.");
+            add_issue(
+                &mut issues,
+                "Page scan budget reached; continue with the next cursor.",
+            );
         }
         let incomplete = snapshot.incomplete || scan_limited;
         let next_cursor = if more {
-            self.sequence = self.sequence.checked_add(1).context("history cursor sequence exhausted")?;
+            self.sequence = self
+                .sequence
+                .checked_add(1)
+                .context("history cursor sequence exhausted")?;
             let first = self.nonce.hash_one((self.sequence, 0_u8));
             let second = self.nonce.hash_one((self.sequence, 1_u8));
             let token = format!("{first:016x}{second:016x}{:016x}", self.sequence);
@@ -138,7 +155,13 @@ impl HistoryBrowser {
         } else {
             None
         };
-        Ok(HistoryPage { events, next_cursor, incomplete, issues, ordering: "recorded_newest_first" })
+        Ok(HistoryPage {
+            events,
+            next_cursor,
+            incomplete,
+            issues,
+            ordering: "recorded_newest_first",
+        })
     }
 }
 
@@ -161,9 +184,15 @@ impl Snapshot {
         };
         // Only handle acquisition and length capture are serialized with writers.
         // No content scanning occurs under the lock.
-        let Some(_lock) = reader_lock(base)? else { return Ok(snapshot) };
+        let Some(_lock) = reader_lock(base)? else {
+            return Ok(snapshot);
+        };
         for index in 0..=HISTORY_FILES {
-            let path = if index == 0 { base.to_path_buf() } else { base.with_extension(format!("jsonl.{index}")) };
+            let path = if index == 0 {
+                base.to_path_buf()
+            } else {
+                base.with_extension(format!("jsonl.{index}"))
+            };
             let metadata = match fs::symlink_metadata(&path) {
                 Ok(metadata) => metadata,
                 Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
@@ -186,13 +215,19 @@ impl Snapshot {
                 // current writers and rename/remove rotation/clear unblocked.
                 options.share_mode(0x7).custom_flags(0x00200000);
             }
-            let file = options.open(path).context("failed to open history storage")?;
-            let metadata = file.metadata().context("failed to inspect opened history storage")?;
+            let file = options
+                .open(path)
+                .context("failed to open history storage")?;
+            let metadata = file
+                .metadata()
+                .context("failed to inspect opened history storage")?;
             if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
                 bail!("opened history storage is not a regular file");
             }
             if metadata.len() > MAX_FILE_BYTES {
-                snapshot.issue("An oversized history file was limited to its newest bounded byte range.");
+                snapshot.issue(
+                    "An oversized history file was limited to its newest bounded byte range.",
+                );
             }
             if metadata.len() > 0 {
                 snapshot.files.push(ReverseFile::new(file, metadata.len()));
@@ -208,7 +243,9 @@ impl Snapshot {
 }
 
 fn add_issue(issues: &mut Vec<String>, issue: &str) {
-    if issues.iter().any(|existing| existing == issue) { return; }
+    if issues.iter().any(|existing| existing == issue) {
+        return;
+    }
     if issues.len() < MAX_ISSUES {
         let mut issue = issue.to_owned();
         truncate_utf8(&mut issue, 256);
@@ -217,9 +254,13 @@ fn add_issue(issues: &mut Vec<String>, issue: &str) {
 }
 
 fn truncate_utf8(text: &mut String, max: usize) {
-    if text.len() <= max { return; }
+    if text.len() <= max {
+        return;
+    }
     let mut end = max;
-    while !text.is_char_boundary(end) { end -= 1; }
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
     text.truncate(end);
 }
 
@@ -227,7 +268,13 @@ fn truncate_utf8(text: &mut String, max: usize) {
 // indefinitely behind a writer or hold the writer lock while a user browses.
 #[cfg(windows)]
 fn reader_lock(_base: &Path) -> Result<Option<HistoryLock>> {
-    use windows::{Win32::{Foundation::{CloseHandle, WAIT_ABANDONED, WAIT_OBJECT_0}, System::Threading::{CreateMutexW, WaitForSingleObject}}, core::w};
+    use windows::{
+        Win32::{
+            Foundation::{CloseHandle, WAIT_ABANDONED, WAIT_OBJECT_0},
+            System::Threading::{CreateMutexW, WaitForSingleObject},
+        },
+        core::w,
+    };
     let handle = unsafe { CreateMutexW(None, false, w!("Local\\MicCamWatch.History")) }
         .context("failed to create history reader mutex")?;
     let result = unsafe { WaitForSingleObject(handle, LOCK_WAIT.as_millis() as u32) };
@@ -242,20 +289,31 @@ fn reader_lock(_base: &Path) -> Result<Option<HistoryLock>> {
 fn reader_lock(base: &Path) -> Result<Option<HistoryLock>> {
     use std::os::unix::fs::OpenOptionsExt;
     let lock_path = base.with_extension("jsonl.lock");
-    let file = match OpenOptions::new().create(true).truncate(false).write(true)
-        .custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW).open(lock_path) {
+    let file = match OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW)
+        .open(lock_path)
+    {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error).context("failed to open history reader lock"),
     };
-    if !file.metadata()?.is_file() { bail!("history lock is not a regular file"); }
+    if !file.metadata()?.is_file() {
+        bail!("history lock is not a regular file");
+    }
     let started = Instant::now();
     loop {
         match file.try_lock() {
             Ok(()) => return Ok(Some(HistoryLock { _file: file })),
-            Err(fs::TryLockError::WouldBlock) if started.elapsed() < LOCK_WAIT => std::thread::sleep(Duration::from_millis(2)),
+            Err(fs::TryLockError::WouldBlock) if started.elapsed() < LOCK_WAIT => {
+                std::thread::sleep(Duration::from_millis(2))
+            }
             Err(fs::TryLockError::WouldBlock) => bail!("history is busy; retry the request"),
-            Err(fs::TryLockError::Error(error)) => return Err(error).context("failed to lock history for reading"),
+            Err(fs::TryLockError::Error(error)) => {
+                return Err(error).context("failed to lock history for reading");
+            }
         }
     }
 }
@@ -281,33 +339,61 @@ enum Record {
 
 impl ReverseFile {
     fn new(file: File, length: u64) -> Self {
-        Self { file, position: length, floor: length.saturating_sub(MAX_FILE_BYTES), buffer: [0; 8192], buffered: 0, line: Vec::new(), oversized: false, terminated: false, finished: false }
+        Self {
+            file,
+            position: length,
+            floor: length.saturating_sub(MAX_FILE_BYTES),
+            buffer: [0; 8192],
+            buffered: 0,
+            line: Vec::new(),
+            oversized: false,
+            terminated: false,
+            finished: false,
+        }
     }
 
     fn next_record(&mut self, budget: &mut usize) -> Result<Record> {
         loop {
             if self.buffered == 0 && self.position == self.floor {
-                if self.finished { return Ok(Record::Finished); }
+                if self.finished {
+                    return Ok(Record::Finished);
+                }
                 self.finished = true;
                 if self.floor != 0 {
                     self.line.clear();
-                    return Ok(Record::Issue("The oldest partial record at the byte-range boundary was omitted."));
+                    return Ok(Record::Issue(
+                        "The oldest partial record at the byte-range boundary was omitted.",
+                    ));
                 }
                 if !self.terminated && (!self.line.is_empty() || self.oversized) {
                     self.line.clear();
-                    return Ok(Record::Issue("An incomplete final JSONL record was omitted."));
+                    return Ok(Record::Issue(
+                        "An incomplete final JSONL record was omitted.",
+                    ));
                 }
-                if self.oversized { return Ok(Record::Issue("A history record exceeded the 64 KiB line limit and was omitted.")); }
-                if self.line.is_empty() { return Ok(Record::Finished); }
+                if self.oversized {
+                    return Ok(Record::Issue(
+                        "A history record exceeded the 64 KiB line limit and was omitted.",
+                    ));
+                }
+                if self.line.is_empty() {
+                    return Ok(Record::Finished);
+                }
                 self.line.reverse();
                 return Ok(Record::Line(std::mem::take(&mut self.line)));
             }
-            if *budget == 0 { return Ok(Record::Budget); }
+            if *budget == 0 {
+                return Ok(Record::Budget);
+            }
             if self.buffered == 0 {
                 let count = (self.position - self.floor).min(self.buffer.len() as u64) as usize;
                 let start = self.position - count as u64;
-                self.file.seek(SeekFrom::Start(start)).context("failed to seek history snapshot")?;
-                self.file.read_exact(&mut self.buffer[..count]).context("history snapshot changed or could not be read")?;
+                self.file
+                    .seek(SeekFrom::Start(start))
+                    .context("failed to seek history snapshot")?;
+                self.file
+                    .read_exact(&mut self.buffer[..count])
+                    .context("history snapshot changed or could not be read")?;
                 self.position = start;
                 self.buffered = count;
             }
@@ -320,13 +406,19 @@ impl ReverseFile {
                     let incomplete = !self.line.is_empty() || self.oversized;
                     self.line.clear();
                     self.oversized = false;
-                    if incomplete { return Ok(Record::Issue("An incomplete final JSONL record was omitted.")); }
+                    if incomplete {
+                        return Ok(Record::Issue(
+                            "An incomplete final JSONL record was omitted.",
+                        ));
+                    }
                     continue;
                 }
                 if self.oversized {
                     self.line.clear();
                     self.oversized = false;
-                    return Ok(Record::Issue("A history record exceeded the 64 KiB line limit and was omitted."));
+                    return Ok(Record::Issue(
+                        "A history record exceeded the 64 KiB line limit and was omitted.",
+                    ));
                 }
                 self.line.reverse();
                 return Ok(Record::Line(std::mem::take(&mut self.line)));
@@ -359,12 +451,16 @@ fn decode(bytes: &[u8]) -> std::result::Result<HistoryEntry, &'static str> {
     // Inspect the version before decoding the current fields: future schemas
     // must be reported as unknown rather than guessed to fit today's model.
     #[derive(Deserialize)]
-    struct Version { schema_version: u64 }
-    let version: Version = serde_json::from_slice(bytes).map_err(|_| "A malformed history record was omitted.")?;
+    struct Version {
+        schema_version: u64,
+    }
+    let version: Version =
+        serde_json::from_slice(bytes).map_err(|_| "A malformed history record was omitted.")?;
     if version.schema_version != u64::from(SCHEMA_VERSION) {
         return Err("A history record uses an unsupported schema version and was omitted.");
     }
-    let entry: StoredEntry = serde_json::from_slice(bytes).map_err(|_| "A malformed history record was omitted.")?;
+    let entry: StoredEntry =
+        serde_json::from_slice(bytes).map_err(|_| "A malformed history record was omitted.")?;
     if entry.schema_version != u64::from(SCHEMA_VERSION)
         || !matches!(entry.action.as_str(), "start" | "update" | "stop")
         || !matches!(entry.resource.as_str(), "microphone" | "camera")
@@ -373,17 +469,33 @@ fn decode(bytes: &[u8]) -> std::result::Result<HistoryEntry, &'static str> {
         || entry.observed_at.len() > MAX_TEXT_BYTES
         || chrono::DateTime::parse_from_rfc3339(&entry.observed_at).is_err()
     {
-        return Err("A history record contains unsupported or invalid event fields and was omitted.");
+        return Err(
+            "A history record contains unsupported or invalid event fields and was omitted.",
+        );
     }
-    Ok(HistoryEntry { observed_at: entry.observed_at, action: entry.action, resource: entry.resource, activity: entry.activity, confidence: entry.confidence, application: entry.application, pid: entry.pid })
+    Ok(HistoryEntry {
+        observed_at: entry.observed_at,
+        action: entry.action,
+        resource: entry.resource,
+        activity: entry.activity,
+        confidence: entry.confidence,
+        application: entry.application,
+        pid: entry.pid,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::history::{append_at, rotate};
-    use crate::model::{Access, AccessEvent, Action, Activity, Confidence, EnforcementDecision, Resource, Risk, event_code};
-    use std::{io::Write, sync::{Mutex, MutexGuard, mpsc}};
+    use crate::model::{
+        Access, AccessEvent, Action, Activity, Confidence, EnforcementDecision, Resource, Risk,
+        event_code,
+    };
+    use std::{
+        io::Write,
+        sync::{Mutex, MutexGuard, mpsc},
+    };
 
     // Windows uses the same named mutex for all storage locations.
     static READER_TESTS: Mutex<()> = Mutex::new(());
@@ -395,9 +507,14 @@ mod tests {
 
     impl Storage {
         fn new() -> Self {
-            Self { _serial: READER_TESTS.lock().unwrap(), directory: tempfile::tempdir().unwrap() }
+            Self {
+                _serial: READER_TESTS.lock().unwrap(),
+                directory: tempfile::tempdir().unwrap(),
+            }
         }
-        fn path(&self) -> std::path::PathBuf { self.directory.path().join("history.jsonl") }
+        fn path(&self) -> std::path::PathBuf {
+            self.directory.path().join("history.jsonl")
+        }
     }
 
     fn event(pid: u32) -> AccessEvent {
@@ -407,9 +524,13 @@ mod tests {
             tool_version: env!("CARGO_PKG_VERSION"),
             action: Action::Update,
             // Deliberately descending dates: pagination must use append order.
-            observed_at: chrono::DateTime::parse_from_rfc3339(
-                if pid % 2 == 0 { "2020-01-01T01:02:03Z" } else { "2025-01-01T04:05:06Z" },
-            ).unwrap().with_timezone(&chrono::Utc),
+            observed_at: chrono::DateTime::parse_from_rfc3339(if pid.is_multiple_of(2) {
+                "2020-01-01T01:02:03Z"
+            } else {
+                "2025-01-01T04:05:06Z"
+            })
+            .unwrap()
+            .with_timezone(&chrono::Utc),
             access: Access {
                 key: format!("camera:{pid}"),
                 resource: Resource::Camera,
@@ -469,7 +590,9 @@ mod tests {
         assert_eq!(pids(&page), (6..=55).rev().collect::<Vec<_>>());
         assert_eq!(page.events[0].action, "stop");
         assert_eq!(page.events[0].confidence, "medium");
-        let rest = browser.page_at(&path, page.next_cursor.as_deref(), 50).unwrap();
+        let rest = browser
+            .page_at(&path, page.next_cursor.as_deref(), 50)
+            .unwrap();
         assert_eq!(rest.events.len(), 6);
         let oldest = rest.events.last().unwrap();
         assert_eq!(oldest.action, "start");
@@ -484,7 +607,9 @@ mod tests {
     fn reads_real_events_in_recorded_order_and_does_not_modify_history() {
         let storage = Storage::new();
         let path = storage.path();
-        for pid in 1..=5 { append_at(&path, &event(pid)).unwrap(); }
+        for pid in 1..=5 {
+            append_at(&path, &event(pid)).unwrap();
+        }
         let original = fs::read(&path).unwrap();
         let mut browser = HistoryBrowser::default();
         let first = browser.page_at(&path, None, 2).unwrap();
@@ -498,9 +623,13 @@ mod tests {
         assert_eq!(entry.activity, "ready");
         assert_eq!(entry.confidence, "low");
         assert_eq!(entry.application.as_deref(), Some("application-5.exe"));
-        let second = browser.page_at(&path, first.next_cursor.as_deref(), 2).unwrap();
+        let second = browser
+            .page_at(&path, first.next_cursor.as_deref(), 2)
+            .unwrap();
         assert_eq!(pids(&second), [3, 2]);
-        let last = browser.page_at(&path, second.next_cursor.as_deref(), 2).unwrap();
+        let last = browser
+            .page_at(&path, second.next_cursor.as_deref(), 2)
+            .unwrap();
         assert_eq!(pids(&last), [1]);
         assert!(last.next_cursor.is_none());
         assert!(browser.session.is_none());
@@ -531,12 +660,18 @@ mod tests {
         {
             let _lock = HistoryLock::acquire(&path).unwrap();
             for index in 0..=HISTORY_FILES {
-                let candidate = if index == 0 { path.clone() } else { path.with_extension(format!("jsonl.{index}")) };
+                let candidate = if index == 0 {
+                    path.clone()
+                } else {
+                    path.with_extension(format!("jsonl.{index}"))
+                };
                 fs::remove_file(candidate).unwrap();
             }
         }
         append_at(&path, &event(9)).unwrap();
-        let rest = browser.page_at(&path, first.next_cursor.as_deref(), 50).unwrap();
+        let rest = browser
+            .page_at(&path, first.next_cursor.as_deref(), 50)
+            .unwrap();
         assert_eq!(pids(&rest), [3, 2, 1]);
         assert!(rest.next_cursor.is_none());
         assert!(!rest.incomplete);
@@ -557,7 +692,9 @@ mod tests {
             let _lock = HistoryLock::acquire(&path).unwrap();
             writer.write_all(&line(3)).unwrap();
         }
-        let last = browser.page_at(&path, first.next_cursor.as_deref(), 50).unwrap();
+        let last = browser
+            .page_at(&path, first.next_cursor.as_deref(), 50)
+            .unwrap();
         assert_eq!(pids(&last), [1]);
         assert!(!last.incomplete);
         assert_eq!(pids(&browser.page_at(&path, None, 50).unwrap()), [3, 2, 1]);
@@ -567,7 +704,9 @@ mod tests {
     fn rejects_paths_replays_other_browsers_expiration_and_invalid_limits() {
         let storage = Storage::new();
         let path = storage.path();
-        for pid in 1..=4 { append_at(&path, &event(pid)).unwrap(); }
+        for pid in 1..=4 {
+            append_at(&path, &event(pid)).unwrap();
+        }
         let mut browser = HistoryBrowser::default();
         for limit in [0, 51, u16::MAX] {
             assert!(browser.page_at(&path, None, limit).is_err());
@@ -577,15 +716,28 @@ mod tests {
         assert!(cursor.len() <= MAX_CURSOR_BYTES);
         let mut other = HistoryBrowser::default();
         assert!(other.page_at(&path, Some(&cursor), 1).is_err());
-        for invalid in ["../history.jsonl", "C:\\history.jsonl", "", &"x".repeat(257)] {
+        for invalid in [
+            "../history.jsonl",
+            "C:\\history.jsonl",
+            "",
+            &"x".repeat(257),
+        ] {
             assert!(browser.page_at(&path, Some(invalid), 1).is_err());
         }
         let second = browser.page_at(&path, Some(&cursor), 1).unwrap();
         assert!(browser.page_at(&path, Some(&cursor), 1).is_err());
         let fresh = browser.page_at(&path, None, 1).unwrap();
-        assert!(browser.page_at(&path, second.next_cursor.as_deref(), 1).is_err());
+        assert!(
+            browser
+                .page_at(&path, second.next_cursor.as_deref(), 1)
+                .is_err()
+        );
         browser.session.as_mut().unwrap().created = Instant::now() - SESSION_LIFETIME;
-        assert!(browser.page_at(&path, fresh.next_cursor.as_deref(), 1).is_err());
+        assert!(
+            browser
+                .page_at(&path, fresh.next_cursor.as_deref(), 1)
+                .is_err()
+        );
         assert!(browser.session.is_none());
         assert!(browser.cursor.is_none());
     }
@@ -599,7 +751,11 @@ mod tests {
         assert!(missing.events.is_empty());
         assert!(missing.next_cursor.is_none());
         assert!(!missing.incomplete);
-        let nested = storage.directory.path().join("absent").join("history.jsonl");
+        let nested = storage
+            .directory
+            .path()
+            .join("absent")
+            .join("history.jsonl");
         assert!(!browser.page_at(&nested, None, 50).unwrap().incomplete);
         fs::create_dir(&path).unwrap();
         assert!(browser.page_at(&path, None, 50).is_err());
@@ -643,10 +799,22 @@ mod tests {
         assert_eq!(pids(&page), [4, 1]);
         assert!(page.incomplete);
         assert!(page.next_cursor.is_none());
-        assert!(page.issues.iter().any(|issue| issue.contains("unsupported schema")));
+        assert!(
+            page.issues
+                .iter()
+                .any(|issue| issue.contains("unsupported schema"))
+        );
         assert!(page.issues.iter().any(|issue| issue.contains("malformed")));
-        assert!(page.issues.iter().any(|issue| issue.contains("incomplete final")));
-        assert!(page.issues.iter().any(|issue| issue.contains("event fields")));
+        assert!(
+            page.issues
+                .iter()
+                .any(|issue| issue.contains("incomplete final"))
+        );
+        assert!(
+            page.issues
+                .iter()
+                .any(|issue| issue.contains("event fields"))
+        );
         assert!(page.issues.len() <= MAX_ISSUES);
         assert!(page.issues.iter().all(|issue| issue.len() <= 256));
         fs::write(&path, b"{\"unfinished\":").unwrap();
@@ -679,8 +847,15 @@ mod tests {
         let first = browser.page_at(&path, None, 50).unwrap();
         assert_eq!(pids(&first), [4]);
         assert!(first.incomplete);
-        assert!(first.issues.iter().any(|issue| issue.contains("scan budget")));
-        let last = browser.page_at(&path, first.next_cursor.as_deref(), 50).unwrap();
+        assert!(
+            first
+                .issues
+                .iter()
+                .any(|issue| issue.contains("scan budget"))
+        );
+        let last = browser
+            .page_at(&path, first.next_cursor.as_deref(), 50)
+            .unwrap();
         assert_eq!(pids(&last), [1]);
         assert!(last.incomplete);
         assert!(last.next_cursor.is_none());
@@ -707,7 +882,11 @@ mod tests {
         let app = page.events[0].application.as_ref().unwrap();
         assert_eq!(app.len(), MAX_TEXT_BYTES);
         assert_eq!(app, &"é".repeat(256));
-        assert!(page.issues.iter().any(|issue| issue.contains("oversized history")));
+        assert!(
+            page.issues
+                .iter()
+                .any(|issue| issue.contains("oversized history"))
+        );
         assert!(page.issues.iter().any(|issue| issue.contains("truncated")));
         let mut pages = 1;
         while let Some(cursor) = page.next_cursor.take() {
@@ -725,12 +904,25 @@ mod tests {
         let storage = Storage::new();
         let path = storage.path();
         // More than one I/O block ensures the continuation needs a fresh read.
-        fs::write(&path, [padded_line(1, 20_000), padded_line(2, 20_000)].concat()).unwrap();
+        fs::write(
+            &path,
+            [padded_line(1, 20_000), padded_line(2, 20_000)].concat(),
+        )
+        .unwrap();
         let mut browser = HistoryBrowser::default();
         let first = browser.page_at(&path, None, 1).unwrap();
         assert_eq!(pids(&first), [2]);
-        OpenOptions::new().write(true).open(&path).unwrap().set_len(0).unwrap();
-        assert!(browser.page_at(&path, first.next_cursor.as_deref(), 50).is_err());
+        OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_len(0)
+            .unwrap();
+        assert!(
+            browser
+                .page_at(&path, first.next_cursor.as_deref(), 50)
+                .is_err()
+        );
         assert!(browser.session.is_none());
         assert!(browser.cursor.is_none());
     }
@@ -738,7 +930,10 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn rejects_symlinks_and_special_files_without_blocking() {
-        use std::{ffi::CString, os::unix::{ffi::OsStrExt, fs::symlink}};
+        use std::{
+            ffi::CString,
+            os::unix::{ffi::OsStrExt, fs::symlink},
+        };
         let storage = Storage::new();
         let path = storage.path();
         let target = storage.directory.path().join("other.jsonl");

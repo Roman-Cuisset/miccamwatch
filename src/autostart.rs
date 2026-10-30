@@ -117,7 +117,7 @@ fn enable_locked(version: &str, current: &Path) -> Result<()> {
         );
     }
     if let Some(task) = &existing {
-        if !task.owned_by(&current) {
+        if !task.owned_by(current) {
             bail!("an unmanaged task named {TASK_NAME} exists; it was not modified");
         }
         if !task.enabled {
@@ -131,7 +131,7 @@ fn enable_locked(version: &str, current: &Path) -> Result<()> {
         return Ok(());
     }
     if let Some((command, enabled)) = run {
-        if !owned_command(&command, &current) {
+        if !owned_command(&command, current) {
             bail!("an unmanaged {RUN_VALUE} Run value exists; it was not modified");
         }
         if !enabled {
@@ -225,16 +225,21 @@ pub fn disable() -> Result<()> {
 fn disable_locked(current: &Path) -> Result<()> {
     if registered_task()?
         .as_ref()
-        .is_some_and(|task| task.enabled && task.owned_by(&current))
+        .is_some_and(|task| task.enabled && task.owned_by(current))
     {
         checked_schtasks(&["/Delete", "/TN", TASK_NAME, "/F"])?;
     }
     if run_registration()?
-        .is_some_and(|(command, enabled)| enabled && owned_command(&command, &current))
+        .is_some_and(|(command, enabled)| enabled && owned_command(&command, current))
     {
         remove_run_value()?;
     }
     Ok(())
+}
+
+/// Windows state already checks the task/Run command against this installation.
+pub fn state_for_current_installation() -> Result<AutostartState> {
+    state()
 }
 
 /// Compare and confirm this installation's registration under the same lock

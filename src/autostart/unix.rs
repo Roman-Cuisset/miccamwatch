@@ -217,7 +217,12 @@ pub fn state() -> Result<AutostartState> {
 }
 
 fn state_in(store: &Store) -> Result<AutostartState> {
-    let registration = store.snapshot()?.registration;
+    registration_state(store, store.snapshot()?.registration)
+}
+
+fn registration_state(store: &Store, registration: Option<Registration>) -> Result<AutostartState> {
+    #[cfg(target_os = "linux")]
+    let _ = store;
     #[cfg(target_os = "macos")]
     {
         let native = Native::open()?;
@@ -247,6 +252,42 @@ fn state_in(store: &Store) -> Result<AutostartState> {
         return Ok(AutostartState::Enabled);
     }
     Ok(AutostartState::Disabled)
+}
+
+fn current_installation_executable() -> Result<PathBuf> {
+    let executable = std::env::current_exe().context("cannot locate mcw executable")?;
+    // Darwin can report a Homebrew invocation alias. Match the same physical
+    // executable that the native registration backend owns.
+    #[cfg(target_os = "macos")]
+    let executable = std::fs::canonicalize(executable)
+        .context("cannot resolve the current executable; registration preserved")?;
+    Ok(executable)
+}
+
+fn installation_state_in(store: &Store, current: &Path) -> Result<AutostartState> {
+    let snapshot = store.snapshot()?;
+    let owned = |entry: &Registration| {
+        entry.executable == current && entry.version == env!("CARGO_PKG_VERSION")
+    };
+    let matches = if let Some(entry) = &snapshot.registration {
+        owned(entry)
+    } else if let Some(record) = &snapshot.record {
+        // A missing target does not authorize replacing another installation's
+        // retained restoration/ownership journal.
+        serde_json::from_slice::<Receipt>(record)?.registrations.iter().all(owned)
+    } else {
+        true
+    };
+    if !matches {
+        bail!("autostart belongs to another installation; registration and ownership journal preserved");
+    }
+    registration_state(store, snapshot.registration)
+}
+
+pub fn state_for_current_installation() -> Result<AutostartState> {
+    let current = current_installation_executable()?;
+    let store = Store::open()?;
+    installation_state_in(&store, &current)
 }
 
 pub fn enable() -> Result<()> {
@@ -306,13 +347,7 @@ fn enable_in(store: &Store, version: &str, activate: bool) -> Result<()> {
     if version != env!("CARGO_PKG_VERSION") {
         bail!("autostart refresh must be performed by the matching mcw {version} executable");
     }
-    let executable = std::env::current_exe().context("cannot locate mcw executable")?;
-    // Darwin may report the invocation alias, including Homebrew's writable
-    // prefix/bin link. Validate and register the physical executable instead;
-    // Explicit ordinary-user refresh updates owned Cellar targets before cleanup.
-    #[cfg(target_os = "macos")]
-    let executable = std::fs::canonicalize(executable)
-        .context("cannot resolve the current executable; registration preserved")?;
+    let executable = current_installation_executable()?;
     let executable_dir = Directory::open(
         executable.parent().context("mcw has no parent directory")?,
         false,
@@ -488,14 +523,19 @@ fn disable_in(store: &Store) -> Result<()> {
 /// Keep the existing ownership receipt, target and state lock across comparison,
 /// native mutation/rollback and actual readback. No privilege escalation.
 pub fn set_if_expected(expected: bool, requested: bool) -> Result<bool> {
+    let current = current_installation_executable()?;
     let store = Store::open()?;
-    let observed = state_in(&store)? == AutostartState::Enabled;
+    set_if_expected_in(&store, &current, expected, requested)
+}
+
+fn set_if_expected_in(store: &Store, current: &Path, expected: bool, requested: bool) -> Result<bool> {
+    let observed = installation_state_in(store, current)? == AutostartState::Enabled;
     if observed != expected { bail!("autostart changed since observation; unchanged"); }
     if requested != observed {
-        if requested { enable_in(&store, env!("CARGO_PKG_VERSION"), true)?; }
-        else { disable_in(&store)?; }
+        if requested { enable_in(store, env!("CARGO_PKG_VERSION"), true)?; }
+        else { disable_in(store)?; }
     }
-    let confirmed = state_in(&store)? == AutostartState::Enabled;
+    let confirmed = installation_state_in(store, current)? == AutostartState::Enabled;
     if confirmed != requested { bail!("autostart readback did not confirm requested state"); }
     Ok(confirmed)
 }
@@ -1168,6 +1208,65 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    fn isolated_store(temporary: &Temporary) -> Result<Store> {
+        let state = Directory::open(&temporary.0.join("state"), true)?;
+        let lock = state.lock("autostart.lock")?;
+        let path = temporary.0.join("startup/qualification-autostart");
+        Ok(Store {
+            state,
+            target: Directory::open(path.parent().unwrap(), true)?,
+            name: path.file_name().unwrap().to_str().unwrap().to_owned(),
+            path,
+            _lock: lock,
+        })
+    }
+
+    #[test]
+    fn installation_scoped_commands_preserve_other_registration_and_journal() -> Result<()> {
+        let temporary = Temporary::new()?;
+        let store = isolated_store(&temporary)?;
+        let foreign = Registration {
+            executable: temporary.0.join("other-installation/mcw"),
+            version: env!("CARGO_PKG_VERSION").into(),
+        };
+        let bytes = registration_bytes(&foreign)?;
+        store.target.replace(&store.name, None, Some(&bytes))?;
+        let record = store.save_receipt(vec![foreign], None)?;
+        let current = current_installation_executable()?;
+        assert!(installation_state_in(&store, &current).is_err());
+        for (expected, requested) in [(true, false), (false, true), (false, false)] {
+            assert!(set_if_expected_in(&store, &current, expected, requested).is_err());
+            assert_eq!(store.target.read(&store.name)?.as_deref(), Some(bytes.as_slice()));
+            assert_eq!(store.state.read(RECORD)?.as_deref(), Some(record.as_slice()));
+        }
+        store.target.replace(&store.name, Some(&bytes), None)?;
+        assert!(installation_state_in(&store, &current).is_err());
+        assert!(set_if_expected_in(&store, &current, false, true).is_err());
+        assert!(store.target.read(&store.name)?.is_none());
+        assert_eq!(store.state.read(RECORD)?, Some(record));
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn installation_scoped_cas_rejects_stale_state_and_reads_back_private_registration() -> Result<()> {
+        let temporary = Temporary::new()?;
+        let store = isolated_store(&temporary)?;
+        let current = current_installation_executable()?;
+        assert!(set_if_expected_in(&store, &current, false, true)?);
+        let saved = store.snapshot()?;
+        assert_eq!(saved.registration.as_ref().unwrap().executable, current);
+        assert!(set_if_expected_in(&store, &current, false, false).is_err());
+        let preserved = store.snapshot()?;
+        assert_eq!(preserved.bytes, saved.bytes);
+        assert_eq!(preserved.record, saved.record);
+        assert!(!set_if_expected_in(&store, &current, true, false)?);
+        assert_eq!(installation_state_in(&store, &current)?, AutostartState::Disabled);
+        assert!(store.target.read(&store.name)?.is_none());
+        assert!(store.state.read(RECORD)?.is_none());
+        Ok(())
     }
 
     #[cfg(target_os = "linux")]

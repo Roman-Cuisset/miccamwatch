@@ -370,6 +370,7 @@ struct Child {
     consultation_available: bool,
     autostart_writable: bool,
     changed: bool,
+    presentation_changed: bool,
     ready: bool,
     started: Instant,
     closing: Option<Instant>,
@@ -438,7 +439,7 @@ impl Child {
                         self.consultation.finish(request.id, Err("Consultation tickets exhausted".into()));
                     }
                 }
-                self.changed = true;
+                self.presentation_changed = true;
             }
         }
     }
@@ -534,6 +535,7 @@ impl Supervisor {
             let frame = child.frame(snapshot)?;
             child.outbox.replace(frame);
             child.changed = false;
+            child.presentation_changed = false;
         }
         Ok(())
     }
@@ -545,12 +547,12 @@ impl Supervisor {
         {
             child.pending_consultation = None;
             child.consultation.finish(id, completion.result);
-            child.changed = true;
+            child.presentation_changed = true;
         }
         let now = Instant::now();
         let Some(child) = self.child.as_mut() else { return };
         let available = consultation::Worker::available(&self.consultation_worker);
-        child.changed |= child.consultation_available != available;
+        child.presentation_changed |= child.consultation_available != available;
         child.consultation_available = available;
         let exited = match child.process.completion() {
             Ok(Some(status)) => {
@@ -580,7 +582,7 @@ impl Supervisor {
             if let Err(error) = consultation::Worker::enqueue(&mut self.consultation_worker, ticket, request, child.autostart_writable) {
                 child.pending_consultation = None;
                 child.consultation.finish(id, Err(format!("{error:#}")));
-                child.changed = true;
+                child.presentation_changed = true;
             }
         }
         if exited || child.closing.is_some_and(|at| now.saturating_duration_since(at) >= CLOSE_GRACE) {
@@ -595,6 +597,9 @@ impl Supervisor {
     pub fn take_preference(&mut self) -> Option<AuthorizedPreference> { self.child.as_mut()?.queued.take() }
     pub fn take_controls_changed(&mut self) -> bool {
         self.child.as_mut().is_some_and(|child| std::mem::take(&mut child.changed))
+    }
+    pub fn take_presentation_changed(&mut self) -> bool {
+        self.child.as_mut().is_some_and(|child| std::mem::take(&mut child.presentation_changed))
     }
     pub fn take_error(&mut self) -> Option<String> { self.error.take() }
     /// A requested opening failed before ready; explicit closes are not failures.
@@ -661,7 +666,8 @@ fn spawn(path: &Path, initial: DesktopSnapshot, theme: &str) -> Result<Child> {
     let mut child = Child {
         process, input: Some(input), output, outbox: Outbox::default(), lines: EventLines::default(),
         commands, preferences: PreferenceSession::default(), capability: PreferencesSnapshot::default(),
-        queued: None, pending: None, changed: false, ready: false, started: Instant::now(), closing: None,
+        queued: None, pending: None, changed: false, presentation_changed: false,
+        ready: false, started: Instant::now(), closing: None,
         consultation: consultation::Session::default(), queued_consultation: None,
         pending_consultation: None, consultation_available: true,
         autostart_writable: false,
@@ -916,11 +922,13 @@ mod tests {
             lines: EventLines::default(), events: Vec::new(),
             commands: CommandSession::new("0123456789abcdef0123456789abcdef".into()).unwrap(),
             preferences: PreferenceSession::default(), capability: PreferencesSnapshot::default(),
-            queued: None, pending: None, changed: false, ready: false,
+            queued: None, pending: None, changed: false, presentation_changed: false, ready: false,
             started: Instant::now(), closing: None, _bundle: bundle,
+            consultation: consultation::Session::default(), queued_consultation: None,
+            pending_consultation: None, consultation_available: true, autostart_writable: false,
         };
         (directory, Supervisor { executable, child: Some(child), next_ticket: 0,
-            error: None, open_failure: None })
+            error: None, open_failure: None, consultation_worker: None })
     }
     #[test]
     fn before_ready_exit_is_open_failure_but_ready_exit_and_explicit_close_are_not() {

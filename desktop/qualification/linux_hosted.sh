@@ -24,6 +24,9 @@ python3 -c 'import json,os; from pathlib import Path; p=Path(os.environ["MCW_B3_
   cargo clippy --all-targets --locked --features flutter-desktop -- -D warnings
   cargo test --lib --locked --features flutter-desktop frontends::desktop
   cargo test --lib --locked --features flutter-desktop settings::tests
+  cargo test --lib --locked --features flutter-desktop history::
+  cargo test --lib --locked --features flutter-desktop autostart::tests
+  cargo test --lib --locked --features flutter-desktop frontends::tray::unix::menu_tests::qualification_
   cargo build --locked --release --features flutter-desktop --bin mcw
   (cd desktop/flutter && flutter pub get --enforce-lockfile && flutter analyze --no-pub && flutter test --no-pub && flutter build linux --release --no-pub)
   cc desktop/qualification/linux_xwindow.c -O2 -Wall -Wextra -Werror -lX11 -o "$out/linux_xwindow"
