@@ -82,3 +82,17 @@ pub(super) fn inventory_work(
         );
     }
 }
+
+pub(super) fn module_work(
+    module_entries: usize,
+    decoded_names: usize,
+    decoded_utf16_units: usize,
+    snapshot_failed: bool,
+) {
+    if enabled() {
+        let snapshot_failures = usize::from(snapshot_failed);
+        eprintln!(
+            "{{\"event\":\"collector_work\",\"backend\":\"capture_modules\",\"snapshot_attempts\":1,\"snapshot_failures\":{snapshot_failures},\"module_entries\":{module_entries},\"decoded_names\":{decoded_names},\"decoded_utf16_units\":{decoded_utf16_units}}}"
+        );
+    }
+}

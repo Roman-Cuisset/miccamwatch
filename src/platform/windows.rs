@@ -1765,7 +1765,10 @@ fn get_signer_name(wide_path: &[u16]) -> Option<String> {
 }
 
 fn capture_modules_loaded(pid: u32) -> Vec<String> {
-    let modules = process_modules(pid);
+    retain_capture_pipeline(process_capture_modules(pid))
+}
+
+fn retain_capture_pipeline(modules: Vec<String>) -> Vec<String> {
     let has = |name: &str| {
         modules
             .iter()
@@ -1777,18 +1780,19 @@ fn capture_modules_loaded(pid: u32) -> Vec<String> {
 
     if directshow || media_foundation {
         modules
-            .into_iter()
-            .filter(|module| CAPTURE_MODULES.contains(&module.to_ascii_lowercase().as_str()))
-            .collect()
     } else {
         Vec::new()
     }
 }
 
-fn process_modules(pid: u32) -> Vec<String> {
+// Keep the fresh Toolhelp snapshot and enumerate every entry. Only four ASCII
+// basenames can contribute evidence; decoding all other names is wasted work.
+fn process_capture_modules(pid: u32) -> Vec<String> {
+    let _profile = profile::Span::new("module_scan");
     let Ok(snapshot) =
         (unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid) })
     else {
+        profile::module_work(0, 0, 0, true);
         return Vec::new();
     };
     let mut entry = MODULEENTRY32W {
@@ -1796,17 +1800,38 @@ fn process_modules(pid: u32) -> Vec<String> {
         ..Default::default()
     };
     let mut modules = Vec::new();
+    let mut module_entries = 0;
+    let mut decoded_utf16_units = 0;
 
     if unsafe { Module32FirstW(snapshot, &mut entry) }.is_ok() {
         loop {
-            modules.push(wide_array_string(&entry.szModule));
+            module_entries += 1;
+            if let Some(name) = capture_module_name(&entry.szModule) {
+                decoded_utf16_units += name.len();
+                modules.push(String::from_utf16_lossy(name));
+            }
             if unsafe { Module32NextW(snapshot, &mut entry) }.is_err() {
                 break;
             }
         }
     }
     let _ = unsafe { CloseHandle(snapshot) };
+    profile::module_work(module_entries, modules.len(), decoded_utf16_units, false);
     modules
+}
+
+fn capture_module_name(value: &[u16]) -> Option<&[u16]> {
+    let length = value.iter().position(|unit| *unit == 0).unwrap_or(value.len());
+    let name = &value[..length];
+    CAPTURE_MODULES
+        .iter()
+        .any(|expected| {
+            name.len() == expected.len()
+                && name.iter().zip(expected.bytes()).all(|(&unit, byte)| {
+                    unit <= 0x7f && (unit as u8).eq_ignore_ascii_case(&byte)
+                })
+        })
+        .then_some(name)
 }
 
 fn process_command_line(pid: u32) -> Option<String> {
@@ -2187,6 +2212,98 @@ pub fn play_chime() {
 mod tests {
     use super::*;
     use crate::config::ApplicationRule;
+
+    #[test]
+    fn capture_module_filter_matches_previous_pipeline_for_all_combinations() {
+        let names = [
+            "KSWDMCAP.AX",
+            "ksproxy.ax",
+            "MFCaptureEngine.dll",
+            "mfsensorgroup.dll",
+        ];
+        for mask in 0..(1 << names.len()) {
+            let mut rows: Vec<Vec<u16>> = [
+                "kernel32.dll",
+                "mfcaptureengine.dll.extra",
+                "prefixkswdmcap.ax",
+                "ksproxy.ax ",
+                "κsproxy.ax",
+            ]
+            .iter()
+            .map(|name| name.encode_utf16().collect())
+            .collect();
+            rows.push(vec![0xd800]);
+            for (index, name) in names.iter().enumerate() {
+                if mask & (1 << index) != 0 {
+                    // Preserve duplicates and original case/order as evidence.
+                    rows.push(name.encode_utf16().chain([0, 0xd800]).collect());
+                    rows.push(name.encode_utf16().collect());
+                }
+            }
+            for reverse in [false, true] {
+                if reverse {
+                    rows.reverse();
+                }
+                let original: Vec<String> =
+                    rows.iter().map(|row| wide_array_string(row)).collect();
+                let has = |name: &str| {
+                    original
+                        .iter()
+                        .any(|module| module.eq_ignore_ascii_case(name))
+                };
+                let expected: Vec<String> = if has("kswdmcap.ax")
+                    || (has("MFCaptureEngine.dll")
+                        && (has("mfsensorgroup.dll") || has("ksproxy.ax")))
+                {
+                    original
+                        .iter()
+                        .filter(|module| {
+                            CAPTURE_MODULES.contains(&module.to_ascii_lowercase().as_str())
+                        })
+                        .cloned()
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                let filtered = rows
+                    .iter()
+                    .filter_map(|row| capture_module_name(row).map(String::from_utf16_lossy))
+                    .collect();
+                assert_eq!(
+                    retain_capture_pipeline(filtered),
+                    expected,
+                    "mask={mask}, reverse={reverse}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn capture_module_filter_only_decodes_exact_ascii_basenames() {
+        let name: Vec<u16> = "MfCaptureEngine.DLL".encode_utf16().collect();
+        assert_eq!(capture_module_name(&name), Some(name.as_slice()));
+        let terminated: Vec<u16> = name.iter().copied().chain([0, 0xd800]).collect();
+        assert_eq!(capture_module_name(&terminated), Some(name.as_slice()));
+        let mut padded = [0u16; 256];
+        padded[..name.len()].copy_from_slice(&name);
+        assert_eq!(capture_module_name(&padded), Some(name.as_slice()));
+        let mut unterminated = vec![u16::from(b'x'); 256];
+        unterminated[..name.len()].copy_from_slice(&name);
+        for rejected in [
+            Vec::new(),
+            vec![0],
+            vec![0xd800],
+            unterminated,
+            "mfcaptureengine.dl".encode_utf16().collect(),
+            "mfcaptureengine.dll ".encode_utf16().collect(),
+            "mfcaptureengine.dllx".encode_utf16().collect(),
+            "mfcaptureengine.ＤＬＬ".encode_utf16().collect(),
+            r"C:\Windows\ksproxy.ax".encode_utf16().collect(),
+            "KSWDMCAP.AX".encode_utf16().collect(),
+        ] {
+            assert_eq!(capture_module_name(&rejected), None);
+        }
+    }
 
     fn signature(verified: bool) -> SignatureInfo {
         SignatureInfo {

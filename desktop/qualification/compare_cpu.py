@@ -14,6 +14,9 @@ modules and evidence. Everything else, including process instance IDs, signature
 policy decisions, timestamps and collector/protection details, remains significant.
 Equal boundary observations do not prove absence of changes between observations.
 No controlled capture-active, DLL-loading, permission or registry cases are run.
+Optional module_scan scopes and capture_modules work counters report fresh
+Toolhelp enumeration and exact UTF-16 decoding work; absent older-build counters
+are unavailable, never zero. They do not establish whole-process CPU savings.
 """
 
 import argparse
@@ -35,8 +38,10 @@ from windows import Host, U, sha, until, windows
 
 
 STAGES = ('snapshot', 'signature', 'process_inventory', 'sensor',
-          'microphone', 'camera_registry_modules', 'winverifytrust', 'signer')
+          'microphone', 'camera_registry_modules', 'winverifytrust', 'signer', 'module_scan')
 MEMORY = ('private_commit', 'rss', 'uss', 'shareable_rss', 'process_count')
+MODULE_WORK = ('snapshot_attempts', 'snapshot_failures', 'module_entries',
+               'decoded_names', 'decoded_utf16_units')
 NORMALIZATION = {
     'ignored_fields': ['top-level tool_version'],
     'unordered_arrays': ['accesses', 'collectors', 'accesses[].modules', 'accesses[].evidence'],
@@ -179,7 +184,9 @@ def pin_prefix(prefix, root):
         raise InvalidComparison('Both prefixes must be beneath the dedicated qualification root')
     manifest_path = prefix / 'qualification-manifest.json'
     manifest = strict_json(manifest_path.read_text(encoding='utf-8-sig'))
-    if (manifest.get('mode') not in ('read_only_development', 'controlled_development')
+    # Manifest mode describes capabilities, not the mode launched by ReadOnlyHost.
+    if (manifest.get('mode') not in ('read_only_development', 'controlled_development',
+                                     'settings_development')
             or manifest.get('feature') != 'flutter-desktop'):
         raise InvalidComparison('A flutter-desktop development manifest is required')
     files = {'engine_sha256': 'mcw-tray.exe', 'cli_sha256': 'mcw.exe',
@@ -239,10 +246,14 @@ class ReadOnlyHost(Host):
         self.identities[self.proc.pid] = self.parent.create_time()
         self.hwnd = until(lambda: windows({self.proc.pid}, 'MicCamWatchReadOnlyDevelopmentTray',
                                          by_class=True))[0][0]
+        observer = until(lambda: next(
+            (event for _, event in events(self) if event.get('event') == 'observer_started'
+             and event.get('pid') == self.proc.pid
+             and event.get('mode') == 'read_only_development'), None))
         until(lambda: any(event.get('event') == 'observer_tick' for _, event in events(self)))
         self.members()
         return {'startup_to_first_tick_ms': (time.perf_counter() - self.started) * 1000,
-                'pid': self.proc.pid, 'mode': 'read_only_development'}
+                'pid': self.proc.pid, 'mode': observer['mode'], 'observer_started': observer}
 
     def members(self):
         result = super().members()
@@ -317,6 +328,7 @@ def activity(host, start, end):
     duration = end - start
     ticks = []
     stages = {name: {'count': 0, 'cpu_100ns': 0, 'wall_ns': 0} for name in STAGES}
+    module_work = {'count': 0, **{name: 0 for name in MODULE_WORK}}
     malformed = []
     for row, event in events(host, start, end):
         if event.get('event') == 'observer_tick':
@@ -332,6 +344,19 @@ def activity(host, start, end):
             stages[stage]['count'] += 1
             for key in ('cpu_100ns', 'wall_ns'):
                 stages[stage][key] += event[key]
+        elif event.get('event') == 'collector_work' and event.get('backend') == 'capture_modules':
+            if (any(type(event.get(key)) is not int or event[key] < 0 for key in MODULE_WORK)
+                    or event['snapshot_attempts'] != 1
+                    or event['snapshot_failures'] not in (0, 1)
+                    or event['decoded_names'] > event['module_entries']
+                    or event['decoded_utf16_units'] < event['decoded_names']
+                    or (event['snapshot_failures'] and any(event[key] for key in
+                        ('module_entries', 'decoded_names', 'decoded_utf16_units')))):
+                malformed.append({'at': row['at'], 'event': event})
+                continue
+            module_work['count'] += 1
+            for key in MODULE_WORK:
+                module_work[key] += event[key]
     for stage in stages.values():
         stage['completion_events_per_second'] = stage['count'] / duration
         stage['cpu_seconds'] = stage['cpu_100ns'] / 1e7 if stage['count'] else None
@@ -347,11 +372,20 @@ def activity(host, start, end):
         elapsed = ticks[-1]['at'] - ticks[0]['at']
         if elapsed > 0:
             tick_frequency = (ticks[-1]['sequence'] - ticks[0]['sequence']) / elapsed
+    if module_work['count']:
+        module_work['utf16_decodes_avoided'] = module_work['module_entries'] - module_work['decoded_names']
+        module_work['accounting'] = (
+            'Fresh Toolhelp snapshots, all entries enumerated; only exact ASCII capture basenames '
+            'decoded. Avoided decode count is mechanism evidence, not a measured CPU saving. '
+            'Decoded candidates can still fail the unchanged pipeline-combination gate.')
+    else:
+        module_work = None
     return {
         'observer_tick_events': ticks, 'logged_tick_events_per_second': len(ticks) / duration,
         'collector_cycles_per_second_from_sparse_sequence': tick_frequency,
         'profile_available': any(stage['count'] for stage in stages.values()),
         'stages': stages, 'malformed_profile_events': malformed,
+        'capture_module_work': module_work,
         'accounting': 'Stages are inclusive and may nest. Never add stages together. snapshot CPU '
                       'is the instrumented outer scope, NOT necessarily whole-process CPU; '
                       'snapshot completion frequency is a separate cycle proxy. Receipt times '
