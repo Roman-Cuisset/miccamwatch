@@ -3,6 +3,9 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:miccamwatch_desktop/commands.dart';
+import 'package:miccamwatch_desktop/snapshot.dart' show Snapshot;
+
+import 'snapshot_test.dart' as snapshots show frame, encode;
 
 const sessionA = '0123456789abcdef0123456789abcdef';
 const sessionB = 'abcdef0123456789abcdef0123456789';
@@ -55,11 +58,31 @@ MicrophoneCommandClient makeClient(List<Map<String, dynamic>> sent, {
   return client;
 }
 
-Widget host(MicrophoneCommandClient client, {String locale = 'en'}) =>
+Snapshot commandSnapshot({
+  String platform = 'windows',
+  String locale = 'en',
+  String mode = 'controlled_development',
+  int sequence = 1,
+  Map<String, dynamic>? commandControls,
+}) {
+  final value = snapshots.frame(sequence: sequence);
+  value['locale'] = locale;
+  value['engine']['platform'] = platform;
+  value['engine']['mode'] = mode;
+  value['controls'] = commandControls ?? controls();
+  return Snapshot.decode(snapshots.encode(value));
+}
+
+Widget host(MicrophoneCommandClient client, {
+  String locale = 'en',
+  Snapshot? snapshot,
+}) =>
     MaterialApp(theme: ThemeData(useMaterial3: true), home: Scaffold(
       body: SingleChildScrollView(child: MicrophoneCommandPanel(
-        client: client, locale: locale)),
+        client: client, locale: locale,
+        snapshot: snapshot ?? commandSnapshot(locale: locale))),
     ));
+
 
 Finder actionButton(bool requested) => find.widgetWithText(
     requested ? FilledButton : OutlinedButton,
@@ -72,6 +95,58 @@ Future<void> confirmDialog(WidgetTester tester) async {
 }
 
 void main() {
+  testWidgets('retained capabilities cannot authorize an unqualified engine context',
+      (tester) async {
+    final sent = <Map<String, dynamic>>[];
+    final client = makeClient(sent);
+    client.update(controls(), 1, true);
+    expect(client.canEnable, isTrue);
+    expect(client.canRelease, isTrue);
+    for (final snapshot in <Snapshot?>[
+      null,
+      commandSnapshot(platform: 'linux'),
+      commandSnapshot(platform: 'macos'),
+    ]) {
+      await tester.pumpWidget(MaterialApp(home: Scaffold(
+        body: MicrophoneCommandPanel(client: client, locale: 'en', snapshot: snapshot))));
+      expect(tester.widget<FilledButton>(actionButton(true)).onPressed, isNull);
+      expect(tester.widget<OutlinedButton>(actionButton(false)).onPressed, isNull);
+      await tester.tap(actionButton(true));
+      await tester.tap(actionButton(false));
+      await tester.pump();
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(sent, isEmpty);
+    }
+  });
+
+  testWidgets('losing the engine context invalidates consent until a new confirmation',
+      (tester) async {
+    final sent = <Map<String, dynamic>>[];
+    final client = makeClient(sent);
+    client.update(controls(), 1, true);
+    await tester.pumpWidget(host(client));
+    await tester.tap(actionButton(true));
+    await tester.pumpAndSettle();
+    await tester.pumpWidget(host(client, snapshot: commandSnapshot(platform: 'linux')));
+    await tester.pump();
+    await confirmDialog(tester);
+    expect(sent, isEmpty);
+    expect(tester.widget<FilledButton>(actionButton(true)).onPressed, isNull);
+
+    await tester.pumpWidget(host(client));
+    await tester.pumpAndSettle();
+    expect(sent, isEmpty);
+    await tester.tap(actionButton(true));
+    await tester.pumpAndSettle();
+    expect(sent, isEmpty);
+    await confirmDialog(tester);
+    expect(sent, hasLength(1));
+    client.update(controls(requested: true, generation: 1,
+      command: result('succeeded')), 2, true);
+    await tester.pump();
+    expect(client.pending, isFalse);
+  });
+
   test('disconnected, invalid, unknown and read-only snapshots never send', () async {
     final sent = <Map<String, dynamic>>[];
     final client = makeClient(sent);

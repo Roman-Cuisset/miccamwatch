@@ -2,7 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
-import 'snapshot.dart' show protocolVersion;
+import 'snapshot.dart' show Snapshot, protocolVersion;
 
 /// Keep one client above navigation and call [update] for every snapshot and
 /// connection change. This controller never represents actual protection.
@@ -220,9 +220,15 @@ class _PendingCommand {
 
 /// The caller owns [client]; removing this widget never cancels or resends work.
 class MicrophoneCommandPanel extends StatefulWidget {
-  const MicrophoneCommandPanel({super.key, required this.client, required this.locale});
+  const MicrophoneCommandPanel({
+    super.key,
+    required this.client,
+    required this.locale,
+    required this.snapshot,
+  });
   final MicrophoneCommandClient client;
   final String locale;
+  final Snapshot? snapshot;
 
   @override
   State<MicrophoneCommandPanel> createState() => _MicrophoneCommandPanelState();
@@ -232,8 +238,10 @@ class _MicrophoneCommandPanelState extends State<MicrophoneCommandPanel> {
   bool _confirming = false;
   bool _confirmationChanged = false;
 
+  bool get _windowsEngine => widget.snapshot?.engine['platform'] == 'windows';
+
   Future<void> _confirm(bool requested) async {
-    if (_confirming) return;
+    if (_confirming || !_windowsEngine) return;
     final client = widget.client;
     final session = client.session;
     final generation = client.generation;
@@ -261,7 +269,7 @@ class _MicrophoneCommandPanelState extends State<MicrophoneCommandPanel> {
     if (!mounted) return;
     final changed = !identical(client, widget.client) ||
         client.session != session || client.generation != generation ||
-        client.currentRequested != currentRequested;
+        client.currentRequested != currentRequested || !_windowsEngine;
     setState(() {
       _confirming = false;
       _confirmationChanged = confirmed == true && changed;
@@ -278,12 +286,29 @@ class _MicrophoneCommandPanelState extends State<MicrophoneCommandPanel> {
       animation: widget.client,
       builder: (context, _) {
         final client = widget.client;
+        final snapshot = widget.snapshot;
+        final platform = snapshot?.engine['platform'];
+        final microphone = snapshot?.controls['microphone'] as Map<String, dynamic>?;
+        // Unix deliberately has no qualified Flutter hardware command lane.
+        // Only a matching native snapshot can distinguish that from missing
+        // command state; connection, pending and real failure feedback stay intact.
+        final unixUnavailable = (platform == 'linux' || platform == 'macos') &&
+            snapshot?.sequence == client.observedSequence &&
+            snapshot?.controls['session'] == client.session &&
+            microphone?['can_enable'] == false &&
+            microphone?['can_release'] == false &&
+            microphone?['current_requested'] == null &&
+            client.disabledReason == 'unavailable';
+        final hasReason = client.reason != null && client.reason!.isNotEmpty;
+        final disabledReason = unixUnavailable ? 'capability'
+            : client.disabledReason ?? (_windowsEngine ? null : 'capability');
         final state = client.state;
         final feedback = state == null ? null
             : labels[state == 'uncertain' && client.code == 'client_timeout'
                 ? 'timeout' : state];
         final warning = const ['failed', 'rejected', 'uncertain'].contains(state);
         return Container(
+          width: double.infinity,
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
             border: Border.all(color: colors.outlineVariant),
@@ -291,24 +316,26 @@ class _MicrophoneCommandPanelState extends State<MicrophoneCommandPanel> {
           ),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(labels['title'], style: theme.textTheme.titleSmall),
-            const SizedBox(height: 6),
-            Text(labels['limits'], style: theme.textTheme.bodySmall),
+            if (platform == 'windows') ...[
+              const SizedBox(height: 6),
+              Text(labels['limits'], style: theme.textTheme.bodySmall),
+            ],
             const SizedBox(height: 8),
             Wrap(spacing: 8, runSpacing: 6, children: [
               FilledButton.tonal(
-                onPressed: !_confirming && client.canEnable ? () => _confirm(true) : null,
+                onPressed: _windowsEngine && !_confirming && client.canEnable ? () => _confirm(true) : null,
                 child: Text(labels['mute']),
               ),
               OutlinedButton(
-                onPressed: !_confirming && client.canRelease ? () => _confirm(false) : null,
+                onPressed: _windowsEngine && !_confirming && client.canRelease ? () => _confirm(false) : null,
                 child: Text(labels['release']),
               ),
             ]),
-            if (client.disabledReason != null) ...[
+            if (disabledReason != null) ...[
               const SizedBox(height: 6),
-              Text(labels[client.disabledReason!], style: theme.textTheme.bodySmall),
+              Text(labels[disabledReason], style: theme.textTheme.bodySmall),
             ],
-            if (client.reason != null && client.reason!.isNotEmpty) ...[
+            if (hasReason) ...[
               const SizedBox(height: 6),
               Text(client.reason!, style: theme.textTheme.bodySmall),
             ],

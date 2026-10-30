@@ -70,6 +70,13 @@ Mute requires `sdk_mute_all_inputs`; explicit release requires `release_all_acti
 - `Future<void> request(bool requested)` after UI confirmation: records pending, sends envelope including protocol_version2 and exact nested shape. Pending timeout marks uncertain without auto-retry or assuming native work stopped. Read-only/disconnected/capability/pending gates fail safely. Errors are visible.
 - `MicrophoneCommandPanel({required MicrophoneCommandClient client, required String locale})` uses Material3/theme colors, compact explicit mute/release buttons, disabled explanation, human confirmation, accepted/pending/success/failure/uncertain feedback. Seven language labels; explain SDK mute != permission denial and release != restore-original-state. No new logo or animation/decorative dependency.
 
+B3 protocol4 update: the current panel also requires `Snapshot? snapshot` from the
+validated engine. Missing/Unix context cannot authorize the Windows command lane;
+losing that context while a confirmation is open invalidates consent. Unix shows
+its native capability reason, not Windows release-all semantics or an expected
+missing-Windows-snapshot pseudo-error. The historical protocol2 signature above
+is not a current caller contract.
+
 Parent owns all integration in existing files: DTO/version/parser, Windows transport/challenge/tickets, native worker/request/result dispatch, tray and isolated controlled-development observer, main.dart/session validation/freshness, CPU probes/docs/builds/smoke. New-module implementers must not edit existing files, build/lint/test/format mid-flight, or act on hardware.
 
 ## Qualification boundary

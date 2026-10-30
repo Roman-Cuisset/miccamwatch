@@ -2759,3 +2759,18 @@ Lots futurs **à approuver, aucun correctif appliqué** :
   Vérifications de confiance restent fraîches, coût résiduel important ; latence de capture contrôlée non mesurée faute d'action matérielle autorisée.
 - Historique de notifications TEST vidé puis relu0 ; seule la clé AUMID Qualification créée par la mission retirée après contrôle exact
   des2valeurs et absence de sous-clé. Identité MSI strictement identique ; catalogue Windows géré par l'OS non modifié.
+- Diagnostic AT-SPI établi en lecture seule : registre partagé Mint démarré sur un ancien affichage, échecs de cookie X11
+  «Invalid MIT-MAGIC-COOKIE-1 / Cannot open default display» concordant avec le diagnostic10:19.
+  Pas de mauvaise propriété transfer-full et pas de preuve d'un défaut de fenêtre Flutter ; ne pas réparer le registre utilisateur.
+- Nouveau fixture **de qualification seulement** : bus/registre AT-SPI officiels, adresse privée, EXTERNAL/UID et racine0700,
+  affichage déjà autorisé hérité ; vrai bus de session/SNI conservé. Deux processus possédés, journalisés, bornés et arrêtés en finally,
+  sans service d'activation ni enregistrement de session. Pas de lecture/log de cookie ni réglage global ; seules les applications
+  de qualification reçoivent l'adresse AT-SPI. Contrôleur par exercice pour éviter un cache libatspi traversant les thèmes.
+  Ce code est sauvegardé avant exécution ; succès réel du fixture et des préférences encore à établir.
+- Capture Mint a révélé un texte Windows «release all» inapproprié sur Unix et un pseudo-défaut attendu d'instantané Windows.
+  Contexte moteur validé maintenant passé au panneau ; commande Windows non proposée sans contexte Windows, confirmation invalidée
+  si ce contexte disparaît. Raisons natives Unix conservées, pas de nouveau contrôle matériel ; carte alignée sur toute la largeur.
+  Deux tests de transitions/consentement ajoutés, pas de tests permanents recopiant les paragraphes ou comptant des textes.
+  LSP Dart indisponible dans ce worktree ; références inventoriées et unique appel main.dart migré, analyse/tests/build en cours.
+- Contrôle Windows stable après les essais : binaires MSI, settings, fichiers de protection/verrous strictement identiques.
+  Historique enrichi pendant la session mais préfixe initial intégralement conservé ; aucune troncature/restauration forcée.

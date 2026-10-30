@@ -253,7 +253,7 @@ class _MicCamWatchAppState extends State<MicCamWatchApp> {
       ]);
     }),
     const SizedBox(height: 12),
-    MicrophoneCommandPanel(client: microphoneCommands, locale: snapshot?.locale ?? 'en'),
+    MicrophoneCommandPanel(client: microphoneCommands, locale: snapshot?.locale ?? 'en', snapshot: snapshot),
     const SizedBox(height: 18),
     Text(l['applications'], style: c.type(17, bold: true)),
     const SizedBox(height: 9),
