@@ -4,6 +4,9 @@
 Package: python3 linux.py package --engine .../mcw --desktop .../bundle --out NEW
 Run:     python3 linux.py run --prefix NEW [--tray] [--native]
 Measure: python3 linux.py qualify --prefix NEW --out NEW_EVIDENCE --xwindow HELPER
+With --preferences, own a separate AT-SPI bus/registry using this display's
+existing authorization. Keep the real session bus for SNI; never enable global
+accessibility or update the user's D-Bus activation environment.
 All output is PRIVATE; raw status/logs/screenshots can identify applications.
 """
 import argparse
@@ -12,6 +15,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import signal
 import platform
 import re
 import shutil
@@ -360,15 +364,68 @@ def run(args):
                     process.kill(); process.wait(timeout=10)
 
 
+def stop_owned_ui(pid, birth, executable):
+    """Bounded fallback for a previously generation-pinned owned descendant."""
+    try:
+        fd = os.pidfd_open(pid)
+    except ProcessLookupError:
+        return False
+    try:
+        def live():
+            try:
+                fields = Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()
+                if fields[19] != birth or fields[0] == 'Z':
+                    return False
+                if Path(f'/proc/{pid}/exe').resolve() != executable:
+                    raise RuntimeError('Refusing cleanup of changed owned UI executable')
+                return True
+            except FileNotFoundError:
+                return False
+        if not live():
+            return False
+        for signum in (signal.SIGTERM, signal.SIGKILL):
+            try:
+                signal.pidfd_send_signal(fd, signum)
+            except ProcessLookupError:
+                return True
+            end = time.monotonic()+5
+            while time.monotonic() < end:
+                if not live():
+                    return True
+                time.sleep(.1)
+        raise RuntimeError(f'Owned UI generation survived bounded cleanup: {pid}/{birth}')
+    finally:
+        os.close(fd)
+
+
 def qualify(args):
-    prefix = args.prefix.resolve()
     out = private_new(args.out)
-    result = {'complete': False, 'runtime': runtime_check(prefix), 'trials': [],
+    check = runtime_check(args.prefix.resolve())
+    if not args.preferences:
+        return _qualify(args, out, check)
+    import linux_accessibility
+    fixture_root, fixture_env = environment()
+    fixture = linux_accessibility.PrivateAccessibility(fixture_root, fixture_env)
+    try:
+        with fixture:
+            return _qualify(args, out, check, fixture)
+    finally:
+        save(out/'accessibility-fixture.json', fixture.evidence)
+
+
+def _qualify(args, out, check, accessibility=None):
+    prefix = args.prefix.resolve()
+    result = {'complete': False, 'runtime': check, 'trials': [],
               'preference_ui': 'not exercised unless --preferences is supplied',
               'sni': 'requested real registration' if args.tray else 'not requested; window-only is not SNI evidence'}
     save(out/'result.json', result)
+    if accessibility:
+        result['accessibility_fixture'] = str(accessibility.root/'accessibility-fixture.json')
     for theme in ('light','dark'):
         root, env = environment()
+        if accessibility:
+            accessibility.check()
+            env.update(accessibility.application_environment)
         process, env = launch(prefix, env, args.tray, False, theme)
         row = {'theme': theme, 'private_tree': str(root), 'cycles': []}
         result['trials'].append(row)
@@ -424,8 +481,18 @@ def qualify(args):
                     item['renderer'] = renderer(pid)
                     item['open'] = interval(process.pid,args.seconds)
                     if args.preferences:
-                        import linux_accessibility
-                        item['preferences'] = linux_accessibility.exercise(pid, root, out/f'preferences-{theme}.json')
+                        accessibility.check()
+                        preference_output = out/f'preferences-{theme}.json'
+                        subprocess.run(
+                            [sys.executable, '-B', str(Path(__file__).with_name('linux_accessibility.py')),
+                             '--pid', str(pid), '--start-ticks', generations[pid],
+                             '--owner-pid', str(process.pid),
+                             '--owner-start-ticks', str(row['closed']['before'][process.pid]['start_ticks']),
+                             '--executable', str(prefix/'desktop/miccamwatch_desktop'),
+                             '--root', str(root), '--output', str(preference_output)],
+                            env=env, check=True, capture_output=True, text=True, timeout=240)
+                        item['preferences'] = json.loads(preference_output.read_text())
+                        accessibility.check()
                     if args.captures:
                         if not window(pid,'capture',out/f'{theme}.ppm'):
                             raise RuntimeError('Owned capture failed; no desktop fallback permitted')
@@ -445,6 +512,17 @@ def qualify(args):
         finally:
             try:
                 if process.poll() is None:
+                    # Snapshot only descendants of this still-owned Popen
+                    # generation before shutdown can reparent a stuck UI.
+                    for child in tree(process.pid)[1:]:
+                        try:
+                            if Path(f'/proc/{child}/exe').resolve() == prefix/'desktop/miccamwatch_desktop':
+                                fields = Path(f'/proc/{child}/stat').read_text().rsplit(')', 1)[1].split()
+                                generations.setdefault(child, fields[19])
+                        except FileNotFoundError:
+                            pass
+                        except BaseException as error:
+                            row.setdefault('cleanup_discovery_errors', []).append(repr(error))
                     try:
                         row['stop_stdout'] = native_command(prefix,env,'tray','stop')
                         process.wait(timeout=30)
@@ -456,15 +534,18 @@ def qualify(args):
             reader.join(timeout=3)
             row['owner_returncode'] = process.poll()
             remaining = []
+            forced = []
             for child, birth in generations.items():
                 try:
-                    fields = Path(f'/proc/{child}/stat').read_text().rsplit(')',1)[1].split()
-                    if fields[19] == birth and fields[0] != 'Z':
-                        remaining.append(child)
-                except FileNotFoundError:
-                    pass
+                    if stop_owned_ui(child, birth, prefix/'desktop/miccamwatch_desktop'):
+                        forced.append({'pid': child, 'start_ticks': birth})
+                except BaseException as error:
+                    remaining.append(child)
+                    row.setdefault('ui_cleanup_errors', []).append(repr(error))
+            row['forced_owned_ui_cleanup'] = forced
             row['remaining_owned_ui'] = remaining
-            if row['owner_returncode'] != 0 or remaining or 'cleanup_error' in row:
+            if (row['owner_returncode'] != 0 or remaining or forced or
+                    'cleanup_error' in row or 'cleanup_discovery_errors' in row):
                 row['success'] = False
             save(out/f'owner-{theme}.json',events)
             save(out/'result.json',result)

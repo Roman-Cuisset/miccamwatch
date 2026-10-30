@@ -2,6 +2,8 @@
 """Disposable Ubuntu22.04 CI desktop, real XFCE SNI, no global input/hardware.
 Run under dbus-run-session -- xvfb-run. Never attach to a user's desktop bus.
 Keep the hosted runner HOME; isolate desktop state through private XDG dirs.
+Preference qualification owns a separate, explicitly stopped AT-SPI bus/registry;
+neither desktop accessibility policy nor the SNI session bus is replaced.
 """
 import argparse
 import json
@@ -32,10 +34,10 @@ def main():
     for key,name in [('XDG_CONFIG_HOME','config'),('XDG_DATA_HOME','data'),
                      ('XDG_CACHE_HOME','cache'),('XDG_STATE_HOME','state'),('XDG_RUNTIME_DIR','runtime')]:
         directory=out/name; directory.mkdir(mode=0o700); env[key]=str(directory)
-    env.update(GTK_MODULES='atk-bridge',LANG='C.UTF-8',LC_ALL='C.UTF-8')
+    env.update(LANG='C.UTF-8',LC_ALL='C.UTF-8')
     linux.command(['dbus-update-activation-environment','DISPLAY','XAUTHORITY','HOME',
                    'XDG_CONFIG_HOME','XDG_DATA_HOME','XDG_CACHE_HOME','XDG_STATE_HOME',
-                   'XDG_RUNTIME_DIR','GTK_MODULES'],env=env)
+                   'XDG_RUNTIME_DIR'],env=env)
     owned=[]; streams=[]
     evidence={'complete':False,'environment':'GitHub-hosted Ubuntu22.04 x64/Xvfb software-rendered desktop, not physical Mint/GPU/Wayland',
               'no_device_actions':True,'cases':[]}
