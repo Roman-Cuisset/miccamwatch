@@ -4,6 +4,7 @@ use super::{
     DesktopSnapshot, EventLines, UiEvent,
     commands::{CommandSession, CommandState, MicrophoneCapability},
     preferences::{PreferenceRequest, PreferenceSession, PreferencesSnapshot},
+    consultation,
 };
 use anyhow::{Context, Result, ensure};
 use std::{
@@ -363,6 +364,11 @@ struct Child {
     capability: PreferencesSnapshot,
     queued: Option<AuthorizedPreference>,
     pending: Option<(u64, u64)>,
+    consultation: consultation::Session,
+    queued_consultation: Option<(u64, consultation::Request)>,
+    pending_consultation: Option<(u64, u64)>,
+    consultation_available: bool,
+    autostart_writable: bool,
     changed: bool,
     ready: bool,
     started: Instant,
@@ -381,6 +387,8 @@ impl Child {
         snapshot.controls = self.commands.controls(disabled_microphone());
         self.capability = std::mem::take(&mut snapshot.preferences);
         snapshot.preferences = self.preferences.view(self.capability.clone());
+        self.autostart_writable = snapshot.engine.mode == "operational";
+        snapshot.consultation = self.consultation.view(self.consultation_available);
         Ok(Frame { sequence: snapshot.sequence, bytes: snapshot.encode()?, offset: 0 })
     }
     fn live_ready(&self, now: Instant) -> bool {
@@ -414,6 +422,20 @@ impl Child {
                     } else {
                         self.preferences.finish(request.id, CommandState::Rejected,
                             Some("unavailable"), Some("Preference ticket space exhausted".into()));
+                    }
+                }
+                self.changed = true;
+            }
+            UiEvent::ConsultationRequest { request, .. } => {
+                let ready = self.live_ready(now) && self.consultation_available;
+                if let Some(request) = self.consultation.admit(request, self.commands.session(),
+                    self.outbox.written, ready, false, self.autostart_writable) {
+                    if let Some(ticket) = next_ticket.checked_add(1) {
+                        *next_ticket = ticket;
+                        self.pending_consultation = Some((ticket, request.id));
+                        self.queued_consultation = Some((ticket, request));
+                    } else {
+                        self.consultation.finish(request.id, Err("Consultation tickets exhausted".into()));
                     }
                 }
                 self.changed = true;
@@ -472,6 +494,7 @@ pub struct Supervisor {
     next_ticket: u64,
     error: Option<String>,
     open_failure: Option<String>,
+    consultation_worker: Option<consultation::Worker>,
 }
 impl Supervisor {
     pub fn new() -> Result<Self> {
@@ -481,7 +504,8 @@ impl Supervisor {
         let executable = root.join("miccamwatch_desktop");
         #[cfg(target_os = "macos")]
         let executable = root.join("MicCamWatch.app/Contents/MacOS/MicCamWatch");
-        Ok(Self { executable, child: None, next_ticket: 0, error: None, open_failure: None })
+        Ok(Self { executable, child: None, next_ticket: 0, error: None, open_failure: None,
+            consultation_worker: None })
     }
     pub fn is_running(&self) -> bool { self.child.is_some() }
     pub fn open(&mut self, initial: DesktopSnapshot, theme: &str) -> Result<()> {
@@ -489,6 +513,7 @@ impl Supervisor {
         self.poll();
         if self.child.as_ref().is_some_and(|child| child.closing.is_some()) {
             self.child.take();
+            consultation::Worker::reset(&mut self.consultation_worker);
         }
         if let Some(child) = self.child.as_mut() {
             if child.ready {
@@ -513,8 +538,20 @@ impl Supervisor {
         Ok(())
     }
     pub fn poll(&mut self) {
+        if let Some(completion) = consultation::Worker::try_complete(&mut self.consultation_worker)
+            && let Some(child) = self.child.as_mut()
+            && let Some((ticket, id)) = child.pending_consultation
+            && ticket == completion.ticket
+        {
+            child.pending_consultation = None;
+            child.consultation.finish(id, completion.result);
+            child.changed = true;
+        }
         let now = Instant::now();
         let Some(child) = self.child.as_mut() else { return };
+        let available = consultation::Worker::available(&self.consultation_worker);
+        child.changed |= child.consultation_available != available;
+        child.consultation_available = available;
         let exited = match child.process.completion() {
             Ok(Some(status)) => {
                 let failure = format!("Flutter child exited before readiness: {status}");
@@ -538,8 +575,17 @@ impl Supervisor {
             self.error = Some(failure);
             child.begin_close(now);
         }
+        if let Some((ticket, request)) = child.queued_consultation.take() {
+            let id = request.id;
+            if let Err(error) = consultation::Worker::enqueue(&mut self.consultation_worker, ticket, request, child.autostart_writable) {
+                child.pending_consultation = None;
+                child.consultation.finish(id, Err(format!("{error:#}")));
+                child.changed = true;
+            }
+        }
         if exited || child.closing.is_some_and(|at| now.saturating_duration_since(at) >= CLOSE_GRACE) {
             self.child.take();
+            consultation::Worker::reset(&mut self.consultation_worker);
         }
     }
     pub fn close(&mut self) -> Result<()> {
@@ -616,6 +662,9 @@ fn spawn(path: &Path, initial: DesktopSnapshot, theme: &str) -> Result<Child> {
         process, input: Some(input), output, outbox: Outbox::default(), lines: EventLines::default(),
         commands, preferences: PreferenceSession::default(), capability: PreferencesSnapshot::default(),
         queued: None, pending: None, changed: false, ready: false, started: Instant::now(), closing: None,
+        consultation: consultation::Session::default(), queued_consultation: None,
+        pending_consultation: None, consultation_available: true,
+        autostart_writable: false,
         _bundle: bundle,
         events: Vec::with_capacity(POLL_EVENTS),
     };

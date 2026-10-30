@@ -5,7 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:miccamwatch_desktop/snapshot.dart';
 
 Map<String, dynamic> frame({int sequence = 1}) => {
-  'type': 'snapshot', 'protocol_version': 4, 'sequence': sequence,
+  'type': 'snapshot', 'protocol_version': 5, 'sequence': sequence,
   'observed_at': '2026-10-27T08:00:00Z', 'locale': 'en',
   'engine': {'version': '0.21.1', 'platform': 'windows',
     'mode': 'read_only_development', 'state': 'healthy', 'detail': null},
@@ -37,6 +37,7 @@ Map<String, dynamic> frame({int sequence = 1}) => {
       'history_recording_active': false},
     'reason': 'Native observation pending', 'command': null,
   },
+  'consultation': {'available': false, 'reason': 'Native consultation unavailable', 'result': null},
 };
 List<int> encode(Map<String, dynamic> value) => utf8.encode(jsonEncode(value));
 
@@ -93,7 +94,8 @@ void main() {
     final changes = <void Function(Map<String, dynamic>)>[
       (v) => v.remove('protection'),
       (v) => v['protocol_version'] = 3,
-      (v) => v['protocol_version'] = 4.0,
+      (v) => v['protocol_version'] = 4,
+      (v) => v['protocol_version'] = 5.0,
       (v) => v['type'] = 'command',
       (v) => v['sequence'] = '1',
       (v) => v['resources'][0]['activity'] = 'safe',
@@ -125,7 +127,7 @@ void main() {
     expect(() => Snapshot.decode(encode(longText)), throwsFormatException);
   });
 
-  test('protocol four carries exact pause state in the authenticated preference lane', () {
+  test('protocol five carries exact pause state in the authenticated preference lane', () {
     const nativeDeadline = '2026-10-30T10:30:00.123456789+00:00';
     final value = frame();
     value['controls']['session'] = '0123456789abcdef0123456789abcdef';

@@ -1353,6 +1353,9 @@ fn camera_accesses(
     }
 
     let mut candidate_runtime = HashMap::new();
+    // Reuse storage, not process facts: every candidate still gets a fresh
+    // OpenProcess/QueryFullProcessImageNameW before the unchanged module scan.
+    let mut process_path_buffer = Vec::new();
     for (application, apps) in &known_apps {
         let Some(pids) = processes.by_name.get(application.as_str()) else {
             continue;
@@ -1361,7 +1364,7 @@ fn camera_accesses(
             if accesses.iter().any(|access| access.pid == Some(pid)) {
                 continue;
             }
-            let Some(executable) = process_path(pid) else {
+            let Some(executable) = process_path_with_buffer(pid, &mut process_path_buffer) else {
                 continue;
             };
             if camera_app_for_process(apps, &executable).is_none() {
@@ -1906,21 +1909,33 @@ fn process_creation_time(pid: u32) -> Option<u64> {
 }
 
 fn process_path(pid: u32) -> Option<String> {
+    process_path_with_buffer(pid, &mut Vec::new())
+}
+
+fn process_path_with_buffer(pid: u32, buffer: &mut Vec<u16>) -> Option<String> {
     let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()? };
-    let mut buffer = vec![0u16; 32_768];
-    let mut size = buffer.len() as u32;
-    let result = unsafe {
+    let result = query_process_path(buffer, |buffer, size| unsafe {
         QueryFullProcessImageNameW(
             process,
             PROCESS_NAME_WIN32,
             PWSTR(buffer.as_mut_ptr()),
-            &mut size,
+            size,
         )
-        .ok()
-        .map(|_| String::from_utf16_lossy(&buffer[..size as usize]))
-    };
+        .is_ok()
+    });
     let _ = unsafe { CloseHandle(process) };
     result
+}
+
+fn query_process_path(
+    buffer: &mut Vec<u16>,
+    query: impl FnOnce(&mut [u16], &mut u32) -> bool,
+) -> Option<String> {
+    buffer.resize(32_768, 0);
+    // Reset the API's in/out length on every call. A failed query must never
+    // publish prior contents; success decodes only this query's returned units.
+    let mut size = buffer.len() as u32;
+    query(buffer, &mut size).then(|| String::from_utf16_lossy(&buffer[..size as usize]))
 }
 
 #[derive(Clone, Debug)]
@@ -2212,6 +2227,99 @@ pub fn play_chime() {
 mod tests {
     use super::*;
     use crate::config::ApplicationRule;
+
+    #[test]
+    fn camera_process_path_storage_requeries_replacements_and_failures() {
+        let trusted = r"C:\Program Files\Capture\capture.exe";
+        let replacement = r"C:\Downloads\capture.exe";
+        let apps = [
+            CameraApp {
+                executable: trusted.to_owned(),
+                permission: CameraPermission {
+                    consent: Some("Allow".to_owned()),
+                },
+                non_packaged: true,
+            },
+            CameraApp {
+                executable: replacement.to_owned(),
+                permission: CameraPermission {
+                    consent: Some("Deny".to_owned()),
+                },
+                non_packaged: true,
+            },
+        ];
+        let replies = [
+            (Some(trusted), Some("Allow")),
+            (None, None),
+            (Some(replacement), Some("Deny")),
+            (Some(trusted), Some("Allow")),
+        ];
+        let mut buffer = Vec::new();
+        let mut allocation = None;
+        let mut calls = 0;
+        let mut observations = Vec::new();
+        for (reply, expected_consent) in replies {
+            let observed = query_process_path(&mut buffer, |units, size| {
+                calls += 1;
+                assert_eq!(units.len(), 32_768);
+                assert_eq!(*size, 32_768, "reset even after a shorter result/failure");
+                if let Some(path) = reply {
+                    let path: Vec<u16> = path.encode_utf16().collect();
+                    units[..path.len()].copy_from_slice(&path);
+                    *size = path.len() as u32;
+                    true
+                } else {
+                    // Failed APIs may modify both the buffer and output length.
+                    units[0] = u16::from(b'X');
+                    *size = 1;
+                    false
+                }
+            });
+            assert_eq!(observed.as_deref(), reply);
+            assert_eq!(
+                observed
+                    .as_deref()
+                    .and_then(|path| camera_app_for_process(&apps, path))
+                    .and_then(|app| app.permission.consent.as_deref()),
+                expected_consent
+            );
+            let storage = (buffer.as_ptr(), buffer.capacity());
+            assert_eq!(*allocation.get_or_insert(storage), storage);
+            observations.push(observed);
+        }
+        assert_eq!(calls, replies.len(), "no result, including failure, is cached");
+        // Previously published owned paths cannot change when storage is reused.
+        assert_eq!(
+            observations.iter().map(Option::as_deref).collect::<Vec<_>>(),
+            replies.iter().map(|(path, _)| *path).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn process_path_storage_matches_fresh_decode_at_utf16_and_length_boundaries() {
+        let mut buffer = Vec::new();
+        let rows = [
+            vec![u16::from(b'x'); 32_768],
+            vec![u16::from(b'y'); 32_767],
+            r"C:\Apps\capture.exe".encode_utf16().collect(),
+            "C:\\Apps\\摄像头\u{10400}.exe".encode_utf16().collect(),
+            vec![0xd800, u16::from(b'a'), 0xdc00],
+            vec![u16::from(b'a'), 0, u16::from(b'b')],
+            Vec::new(),
+        ];
+        for row in rows {
+            // Poison the unused tail: only the current returned length counts,
+            // not a terminator or bytes left by a previous longer process path.
+            buffer.fill(0xd800);
+            let observed = query_process_path(&mut buffer, |units, size| {
+                assert_eq!(*size, 32_768);
+                units[..row.len()].copy_from_slice(&row);
+                *size = row.len() as u32;
+                true
+            });
+            assert_eq!(observed, Some(String::from_utf16_lossy(&row)));
+        }
+    }
 
     #[test]
     fn capture_module_filter_matches_previous_pipeline_for_all_combinations() {

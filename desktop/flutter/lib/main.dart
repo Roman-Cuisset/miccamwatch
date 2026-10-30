@@ -10,6 +10,9 @@ import 'commands.dart';
 import 'snapshot.dart' as wire;
 import 'preferences.dart';
 import 'preferences_model.dart';
+import 'consultation.dart';
+import 'consultation_model.dart';
+import 'consultation_panels.dart';
 
 final _started = Stopwatch()..start();
 Future<void> _output = Future<void>.value();
@@ -64,6 +67,18 @@ class Palette {
     fontWeight: bold ? FontWeight.w600 : FontWeight.w400);
 }
 
+enum AppPage {
+  overview, history, settings, diagnostics, about;
+
+  IconData get icon => switch (this) {
+    overview => Icons.dashboard_outlined,
+    history => Icons.history_outlined,
+    settings => Icons.tune_outlined,
+    diagnostics => Icons.monitor_heart_outlined,
+    about => Icons.info_outline,
+  };
+}
+
 class MicCamWatchApp extends StatefulWidget {
   const MicCamWatchApp({super.key, required this.dark});
   final bool dark;
@@ -76,11 +91,13 @@ class _MicCamWatchAppState extends State<MicCamWatchApp> {
   late final wire.SnapshotInput input;
   late final MicrophoneCommandClient microphoneCommands;
   late final PreferenceCommandClient preferenceCommands;
+  late final ConsultationClient consultation;
   late final Timer clock;
   late bool dark = widget.dark;
-  int page = 0;
+  AppPage page = AppPage.overview;
   bool ready = false;
   bool receivedTiming = false;
+  bool autostartVisited = false;
   bool closing = false;
   static const window = MethodChannel('miccamwatch/window');
 
@@ -89,6 +106,7 @@ class _MicCamWatchAppState extends State<MicCamWatchApp> {
     super.initState();
     microphoneCommands = MicrophoneCommandClient(send: sendCommand);
     preferenceCommands = PreferenceCommandClient(send: sendCommand);
+    consultation = ConsultationClient(send: sendCommand);
     session.addListener(_changed);
     clock = Timer.periodic(const Duration(seconds: 1), (_) => session.tick());
     input = wire.SnapshotInput(stdin, session, onSnapshot: () {
@@ -108,6 +126,11 @@ class _MicCamWatchAppState extends State<MicCamWatchApp> {
         session.snapshot?.preferences ?? const PreferenceView.unavailable(),
         session.snapshot?.controls['session'] as String? ?? '',
         session.sequence ?? 0, session.transportLive);
+    consultation.update(
+        session.snapshot?.consultation ?? const ConsultationView.unavailable(),
+        session.snapshot?.controls['session'] as String? ?? '',
+        session.sequence ?? 0, session.isLive,
+        operational: session.snapshot?.engine['mode'] == 'operational');
     setState(() {});
   }
   Future<void> _close() async {
@@ -128,6 +151,7 @@ class _MicCamWatchAppState extends State<MicCamWatchApp> {
     session.dispose();
     microphoneCommands.dispose();
     preferenceCommands.dispose();
+    consultation.dispose();
     super.dispose();
   }
 
@@ -141,6 +165,18 @@ class _MicCamWatchAppState extends State<MicCamWatchApp> {
       try { await window.invokeMethod<void>('setTheme', dark); }
       on PlatformException { /* Unsupported frame styling is non-fatal. */ }
       on MissingPluginException { /* Other runners keep their native frame. */ }
+    }
+  }
+
+  void _selectPage(AppPage destination) {
+    if (page == destination) return;
+    setState(() => page = destination);
+    if (destination == AppPage.history && consultation.canRequest) {
+      consultation.refreshHistory();
+    }
+    if (destination == AppPage.settings && !autostartVisited) {
+      autostartVisited = true;
+      if (consultation.canRequest) consultation.refreshAutostart();
     }
   }
 
@@ -158,7 +194,7 @@ class _MicCamWatchAppState extends State<MicCamWatchApp> {
         }
       });
     }
-    final titles = [l['overview'], l['settings'], l['diagnostics'], l['about']];
+    final titles = {for (final destination in AppPage.values) destination: l[destination.name]};
     return MaterialApp(
       title: 'MicCamWatch', debugShowCheckedModeBanner: false,
       themeAnimationDuration: Duration.zero,
@@ -166,40 +202,50 @@ class _MicCamWatchAppState extends State<MicCamWatchApp> {
         brightness: dark ? Brightness.dark : Brightness.light,
         fontFamily: Platform.isWindows ? 'Segoe UI' : null,
         scaffoldBackgroundColor: c.background,
+        cardColor: c.card, dividerColor: c.border,
         colorScheme: ColorScheme.fromSeed(seedColor: c.accent,
           brightness: dark ? Brightness.dark : Brightness.light),
         splashFactory: NoSplash.splashFactory,
         useMaterial3: true,
       ),
-      home: Scaffold(body: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        Container(width: 180, padding: const EdgeInsets.fromLTRB(12, 22, 12, 16),
+      home: Scaffold(body: LayoutBuilder(builder: (context, constraints) {
+        final compact = constraints.maxWidth < 680;
+        return Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Container(width: compact ? 76 : 180, padding: const EdgeInsets.fromLTRB(12, 22, 12, 16),
           decoration: BoxDecoration(color: c.card, border: Border(right: BorderSide(color: c.border))),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Padding(padding: const EdgeInsets.only(left: 8), child: Row(children: [
               Image.asset('assets/miccamwatch.png', width: 28, height: 28, excludeFromSemantics: true),
-              const SizedBox(width: 7),
-              Text('MicCamWatch', style: c.type(15, bold: true)),
+              if (!compact) ...[
+                const SizedBox(width: 7),
+                Text('MicCamWatch', style: c.type(15, bold: true)),
+              ],
             ])),
             const SizedBox(height: 26),
-            for (var i = 0; i < titles.length; i++) Padding(
+            for (final destination in AppPage.values) Padding(
               padding: const EdgeInsets.only(bottom: 6),
-              child: TextButton(
-                style: TextButton.styleFrom(alignment: Alignment.centerLeft,
-                  padding: const EdgeInsets.all(12),
-                  foregroundColor: page == i ? c.accent : c.secondary,
-                  backgroundColor: page == i ? c.tint : Colors.transparent,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
-                onPressed: () => setState(() => page = i),
-                child: Row(children: [
-                  Icon([Icons.dashboard_outlined, Icons.tune_outlined, Icons.monitor_heart_outlined, Icons.info_outline][i], size: 18),
-                  const SizedBox(width: 10), Expanded(child: Text(titles[i])),
-                ]))),
+              child: Tooltip(message: titles[destination]!, child: Semantics(
+                selected: page == destination,
+                child: TextButton(
+                  key: ValueKey('navigation.${destination.name}'),
+                  style: TextButton.styleFrom(alignment: compact ? Alignment.center : Alignment.centerLeft,
+                    padding: const EdgeInsets.all(12),
+                    foregroundColor: page == destination ? c.accent : c.secondary,
+                    backgroundColor: page == destination ? c.tint : Colors.transparent,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
+                  onPressed: () => _selectPage(destination),
+                  child: compact ? Icon(destination.icon, semanticLabel: titles[destination], size: 18)
+                    : Row(children: [
+                      Icon(destination.icon, size: 18),
+                      const SizedBox(width: 10), Expanded(child: Text(titles[destination]!)),
+                    ]))))),
             const Spacer(),
-            Text('Protocol ${wire.protocolVersion}', style: c.type(11, muted: true)),
+            if (!compact) Text('Protocol ${wire.protocolVersion}', style: c.type(11, muted: true)),
           ])),
-        Expanded(child: SingleChildScrollView(padding: const EdgeInsets.all(22),
+        Expanded(child: SingleChildScrollView(key: ValueKey(page), padding: const EdgeInsets.all(22),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Row(children: [Expanded(child: Text(titles[page], style: c.type(27, bold: true))),
+            Wrap(alignment: WrapAlignment.spaceBetween, crossAxisAlignment: WrapCrossAlignment.center,
+              spacing: 16, runSpacing: 8, children: [Text(titles[page]!, style: c.type(27, bold: true)),
               TextButton.icon(onPressed: _theme,
                 icon: Icon(dark ? Icons.light_mode_outlined : Icons.dark_mode_outlined, size: 18),
                 label: Text(l[dark ? 'light' : 'dark'])),
@@ -218,10 +264,21 @@ class _MicCamWatchAppState extends State<MicCamWatchApp> {
               if (snapshot?.engine['detail'] != null) Text(snapshot!.engine['detail'] as String, style: c.type(12, muted: true)),
             ])),
             const SizedBox(height: 14),
-            if (page == 0) ..._overview(c, l, snapshot),
-            if (page == 1) PreferencesPanel(client: preferenceCommands, locale: snapshot?.locale ?? 'en'),
-            if (page == 2) ..._diagnostics(c, l, snapshot),
-            if (page == 3) ..._about(c, l, snapshot),
+            if (page == AppPage.overview) ..._overview(c, l, snapshot),
+            if (page == AppPage.history) HistoryPanel(client: consultation, locale: snapshot?.locale ?? 'en'),
+            if (page == AppPage.settings) ...[
+              AutostartPanel(client: consultation, locale: snapshot?.locale ?? 'en'),
+              const SizedBox(height: 16),
+              PreferencesPanel(client: preferenceCommands, locale: snapshot?.locale ?? 'en'),
+            ],
+            if (page == AppPage.diagnostics) ...[
+              DetailedDiagnosticsPanel(client: consultation, locale: snapshot?.locale ?? 'en'),
+              const SizedBox(height: 20),
+              Text(l['reportLive'], style: c.type(20, bold: true)),
+              const SizedBox(height: 12),
+              ..._diagnostics(c, l, snapshot),
+            ],
+            if (page == AppPage.about) ..._about(c, l, snapshot),
             const SizedBox(height: 14),
             Text(l['limits'], style: c.type(12, muted: true)),
             const SizedBox(height: 12),
@@ -231,7 +288,7 @@ class _MicCamWatchAppState extends State<MicCamWatchApp> {
               if (snapshot != null) Text('${l['observedAt']}: ${snapshot.data['observed_at']} · #${snapshot.sequence}', style: c.type(11, muted: true)),
             ]),
           ]))),
-      ])),
+      ]); })),
     );
   }
 
@@ -323,8 +380,16 @@ class _MicCamWatchAppState extends State<MicCamWatchApp> {
           if (collector['detail'] != null) Text(collector['detail'] as String, style: c.type(12, muted: true)),
         ])),
     ])),
+    if (snapshot != null) ...[
+      const SizedBox(height: 12),
+      for (final resource in snapshot.resources) Padding(
+        padding: const EdgeInsets.only(bottom: 5), child: Text(
+          '${l[resource['resource'] as String]} · ${l['coverage']}: ${l[resource['coverage'] as String]} · '
+          '${l['confidence']}: ${l[resource['confidence'] as String? ?? 'unknown']}',
+          style: c.type(12, muted: true))),
+    ],
     const SizedBox(height: 16),
-    Text('${l['gaps']}: ${snapshot == null || snapshot.gaps.isEmpty ? '—' : snapshot.gaps.join(', ')}', style: c.type(13)),
+    Text('${l['gaps']}: ${snapshot == null || snapshot.gaps.isEmpty ? '—' : snapshot.gaps.map((name) => l[name]).join(', ')}', style: c.type(13)),
     const SizedBox(height: 16),
     Text(l['protection'], style: c.type(17, bold: true)),
     const SizedBox(height: 9),

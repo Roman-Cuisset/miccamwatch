@@ -3,6 +3,7 @@ use super::{
     DesktopSnapshot, EventLines, UiEvent,
     commands::{CommandSession, CommandState, MicrophoneCapability},
     preferences::{PreferenceRequest, PreferenceSession, PreferencesSnapshot},
+    consultation,
 };
 use anyhow::{Context, Result, ensure};
 use std::{
@@ -152,6 +153,11 @@ struct Child {
     preference_capability: PreferencesSnapshot,
     queued_preference: Option<AuthorizedPreference>,
     pending_preference_ticket: Option<(u64, u64)>,
+    consultation: consultation::Session,
+    queued_consultation: Option<(u64, consultation::Request)>,
+    pending_consultation: Option<(u64, u64)>,
+    consultation_available: bool,
+    autostart_writable: bool,
     controls_changed: bool,
     last_frame_at: Instant,
     // Pin all path components and the single-link executable for the child's lifetime.
@@ -163,6 +169,8 @@ impl Child {
         snapshot.controls = self.commands.controls(self.capability.clone());
         self.preference_capability = std::mem::take(&mut snapshot.preferences);
         snapshot.preferences = self.preferences.view(self.preference_capability.clone());
+        self.autostart_writable = snapshot.engine.mode == "operational";
+        snapshot.consultation = self.consultation.view(self.consultation_available);
         let frame = Frame {
             sequence: snapshot.sequence,
             bytes: snapshot.encode()?,
@@ -217,6 +225,7 @@ pub struct Supervisor {
     child: Option<Child>,
     reopen: Option<(DesktopSnapshot, &'static str)>,
     next_ticket: u64,
+    consultation_worker: Option<consultation::Worker>,
 }
 impl Supervisor {
     pub fn new() -> Result<Self> {
@@ -230,6 +239,7 @@ impl Supervisor {
             child: None,
             reopen: None,
             next_ticket: 0,
+            consultation_worker: None,
         })
     }
     pub fn is_running(&self) -> bool {
@@ -341,7 +351,19 @@ impl Supervisor {
         }
     }
     pub fn poll(&mut self) {
+        if let Some(completion) = consultation::Worker::try_complete(&mut self.consultation_worker)
+            && let Some(child) = self.child.as_mut()
+            && let Some((ticket, id)) = child.pending_consultation
+            && ticket == completion.ticket
+        {
+            child.pending_consultation = None;
+            child.consultation.finish(id, completion.result);
+            child.controls_changed = true;
+        }
         if let Some(child) = self.child.as_mut() {
+            let available = consultation::Worker::available(&self.consultation_worker);
+            child.controls_changed |= child.consultation_available != available;
+            child.consultation_available = available;
             for received in child.events.try_iter().take(EVENT_CAPACITY) {
                 let receipt_ms = received
                     .at
@@ -437,6 +459,32 @@ impl Supervisor {
                         }
                         child.controls_changed = true;
                     }
+                    UiEvent::ConsultationRequest { request, .. } => {
+                        let ready = child.ready && child.closing.is_none() && !child.exited()
+                            && !child.signals.disconnected.load(Ordering::Acquire)
+                            && child.last_frame_at.elapsed() <= Duration::from_secs(5)
+                            && child.consultation_available;
+                        if let Some(request) = child.consultation.admit(request, child.commands.session(),
+                            child.signals.written_sequence.load(Ordering::Acquire), ready,
+                            consultation::Worker::pending(&self.consultation_worker), child.autostart_writable) {
+                            if let Some(ticket) = self.next_ticket.checked_add(1) {
+                                self.next_ticket = ticket;
+                                child.pending_consultation = Some((ticket, request.id));
+                                child.queued_consultation = Some((ticket, request));
+                            } else {
+                                child.consultation.finish(request.id, Err("Consultation tickets exhausted".into()));
+                            }
+                        }
+                        child.controls_changed = true;
+                    }
+                }
+            }
+            if let Some((ticket, request)) = child.queued_consultation.take() {
+                let id = request.id;
+                if let Err(error) = consultation::Worker::enqueue(&mut self.consultation_worker, ticket, request, child.autostart_writable) {
+                    child.pending_consultation = None;
+                    child.consultation.finish(id, Err(format!("{error:#}")));
+                    child.controls_changed = true;
                 }
             }
             let rejected = child.signals.rejected.swap(0, Ordering::Relaxed);
@@ -469,6 +517,7 @@ impl Supervisor {
                     child.started.elapsed().as_millis()
                 );
                 self.child.take();
+                consultation::Worker::reset(&mut self.consultation_worker);
             }
         }
         if self.child.is_none()
@@ -809,6 +858,11 @@ fn spawn(path: &Path, mut initial: DesktopSnapshot, theme: &'static str) -> Resu
         preference_capability: PreferencesSnapshot::default(),
         queued_preference: None,
         pending_preference_ticket: None,
+        consultation: consultation::Session::default(),
+        queued_consultation: None,
+        pending_consultation: None,
+        consultation_available: true,
+        autostart_writable: false,
         controls_changed: false,
         last_frame_at: started,
         _bundle: bundle,

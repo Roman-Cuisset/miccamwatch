@@ -7,12 +7,13 @@ use std::io::{self, Write};
 
 pub mod commands;
 pub mod preferences;
+pub mod consultation;
 #[cfg(windows)]
 pub mod windows;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod unix;
 
-pub const PROTOCOL_VERSION: u8 = 4;
+pub const PROTOCOL_VERSION: u8 = 5;
 pub const MAX_FRAME_BYTES: usize = 262_144;
 pub const MAX_EVENT_BYTES: usize = 4096;
 const MAX_STRING_BYTES: usize = 1024;
@@ -37,6 +38,7 @@ pub struct DesktopSnapshot {
     pub truncated: bool,
     pub controls: commands::Controls,
     pub preferences: preferences::PreferencesSnapshot,
+    pub consultation: consultation::View,
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct Engine {
@@ -223,6 +225,7 @@ impl DesktopSnapshot {
             diagnostics: Vec::new(),
             controls: commands::Controls::default(),
             preferences: preferences::PreferencesSnapshot::default(),
+            consultation: consultation::View::default(),
             truncated,
         };
         if let Some(s) = source {
@@ -379,6 +382,11 @@ pub(crate) enum UiEvent {
         protocol_version: u8,
         request: preferences::PreferenceRequest,
     },
+    #[serde(rename = "consultation_request")]
+    ConsultationRequest {
+        protocol_version: u8,
+        request: consultation::Request,
+    },
 }
 #[derive(Debug, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -415,6 +423,9 @@ pub(crate) fn parse_event(line: &[u8]) -> Result<UiEvent> {
             protocol_version, ..
         }
         | UiEvent::PreferencesCommand {
+            protocol_version, ..
+        }
+        | UiEvent::ConsultationRequest {
             protocol_version, ..
         }
         | UiEvent::Command {
@@ -827,13 +838,14 @@ mod tests {
         for line in [
             r#"{"type":"mute","protocol_version":1}"#,
             r#"{"type":"ready","protocol_version":3,"sequence":1}"#,
+            r#"{"type":"ready","protocol_version":4,"sequence":1}"#,
             r#"{"type":"ready","protocol_version":1,"sequence":1,"command":"unmute"}"#,
             r#"{"type":"ready","protocol_version":1,"sequence":"1"}"#,
             r#"{"type":"timing","protocol_version":1,"stage":"shell","elapsed_ms":0}"#,
         ] {
             assert!(parse_event(line.as_bytes()).is_err());
         }
-        assert!(matches!(parse_event(br#"{"type":"ready","protocol_version":4,"sequence":1}"#),
+        assert!(matches!(parse_event(br#"{"type":"ready","protocol_version":5,"sequence":1}"#),
             Ok(UiEvent::Ready { sequence: 1, .. })));
     }
     #[test]
@@ -850,11 +862,11 @@ mod tests {
         };
         lines.feed(&vec![b'x'; MAX_EVENT_BYTES + 1], &mut feed);
         lines.feed(
-            b"{\"type\":\"ready\",\"protocol_version\":4,\"sequence\":1}\n",
+            b"{\"type\":\"ready\",\"protocol_version\":5,\"sequence\":1}\n",
             &mut feed,
         );
         lines.feed(
-            b"{\"type\":\"ready\",\"protocol_version\":4,\"sequence\":2}\n",
+            b"{\"type\":\"ready\",\"protocol_version\":5,\"sequence\":2}\n",
             &mut feed,
         );
         assert_eq!((accepted, rejected), (1, 1));
@@ -868,7 +880,7 @@ mod tests {
         assert_eq!(output.0.len(), MAX_FRAME_BYTES);
         let mut lines = EventLines::default();
         let mut results = Vec::new();
-        lines.feed(b"{\"type\":\"timing\",\"protocol_version\":4,", |e| {
+        lines.feed(b"{\"type\":\"timing\",\"protocol_version\":5,", |e| {
             results.push(e)
         });
         assert!(results.is_empty());

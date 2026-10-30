@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Hosted-only B3 bundle inspection and real read-only owned lifecycle smoke.
+"""Hosted-only bundle inspection and real read-only permanent-AppKit qualification.
 
 No device commands, preference writes, autostart, permission grants, synthetic
 Flutter snapshots, global input injection, or release/deploy operations. The
 normal sandboxed release and compile-time-instrumented runner are separate
-prefixes. Native/menu visual fixtures are labelled simulated by their harness.
+prefixes. Both run the real production AppKit helper in isolated development.
 """
 import argparse
 import hashlib
@@ -168,16 +168,53 @@ def diagnose_reopen(prefix, owner, child, proof, timeout=8):
     return record
 
 
-def smoke(prefix, proof, session, instrumented, bootstrap):
+def process_identity(pid, parent, expected):
+    """Read-only live identity; every signal is preceded by this owned relation."""
+    expected = str(Path(expected).resolve())
+    require((pid, expected) in descendants(parent), 'Owned process path/parent changed')
+    result = subprocess.run(['/bin/ps', '-p', str(pid), '-o', 'lstart=,pid=,ppid=,stat=,comm='],
+                            capture_output=True, text=True, check=True)
+    fields = result.stdout.strip().split(None, 8)
+    require(len(fields) == 9 and int(fields[5]) == pid and int(fields[6]) == parent
+            and fields[8] == expected and not fields[7].startswith('Z'), 'Process identity unavailable')
+    return dict(pid=pid, parent=parent, started=' '.join(fields[:5]), executable=expected)
+
+
+def helper_identity(pid, owner, temporary, proof):
+    matches = [(child, path) for child, path in descendants(owner)
+               if child == pid and path.endswith('/MicCamWatchHelper.app/Contents/MacOS/MicCamWatchHelper')]
+    require(len(matches) == 1, 'Ready native helper is not an actual owned production helper')
+    path = Path(matches[0][1])
+    require(path.is_absolute() and path.resolve() == path
+            and path.is_relative_to(temporary), 'Native helper escaped the private development TMPDIR')
+    root = path.parents[3]
+    require(root.parent == temporary and root.name.startswith('mcw-' + str(owner) + '-'),
+            'Unexpected native helper installation root')
+    for item in [root, path.parents[2], path.parents[1], path.parent, path]:
+        info = item.lstat()
+        require(not stat.S_ISLNK(info.st_mode) and info.st_uid == os.getuid()
+                and info.st_mode & 0o077 == 0, 'Native helper path is not owned/private')
+    require(stat.S_ISREG(path.lstat().st_mode) and path.lstat().st_nlink == 1,
+            'Native helper must be a private single-link executable')
+    command(['/usr/bin/codesign', '--verify', '--deep', '--strict', path.parents[2]], proof / 'native-helper-seal')
+    return dict(**process_identity(pid, owner, path), sha256=sha(path),
+                private_installation_root=str(root), protocol=4, registration='real-AppKit-ready')
+
+
+def smoke(prefix, proof, session, instrumented, bootstrap, cycles):
     proof.mkdir(parents=True)
-    receipt = dict(status='running', mode='real-Rust-read-only-development', session=session,
-                   capture=[], cases=[], instrumented=instrumented)
+    receipt = dict(status='running', mode='real-Rust-read-only-permanent-AppKit-development',
+                   architecture=platform.machine(), session=session, capture=[], cases=[],
+                   cycles=[], instrumented=instrumented, requested_cycles=cycles if instrumented else 0,
+                   ui_transport='Flutter supervisor', native_protocol=4)
     receipt['bootstrap_controls'] = bool(bootstrap)
     if bootstrap:
         receipt['scope'] = 'Controlled diagnostic reproduction, not unconditioned Intel qualification'
     save(proof / 'receipt.json', receipt)
     owner = None
     child = None
+    native = None
+    native_identity = None
     log = None
     reader = None
     timeline = []
@@ -188,13 +225,18 @@ def smoke(prefix, proof, session, instrumented, bootstrap):
         metadata = private_base.lstat()
         require(stat.S_ISDIR(metadata.st_mode) and metadata.st_uid == os.getuid()
                 and metadata.st_mode & 0o077 == 0, 'Unsafe private qualification base')
-        private_tree = Path(tempfile.mkdtemp(prefix='mac-b3-', dir=private_base))
+        private_tree = Path(tempfile.mkdtemp(prefix='mac-b4-', dir=private_base)).resolve()
         receipt['private_tree'] = str(private_tree)
-        config, data = private_tree / 'config', private_tree / 'data'
-        for path in (config, data):
+        config, data, temporary = (private_tree / name for name in ('config', 'data', 'tmp'))
+        for path in (config, data, temporary):
             path.mkdir(mode=0o700)
         env = dict(os.environ, XDG_CONFIG_HOME=str(config), XDG_DATA_HOME=str(data),
+                   TMPDIR=str(temporary) + '/', MCW_MACOS_QUALIFICATION_TRAY='1',
                    MCW_DESKTOP_QUALIFICATION='1' if instrumented else '0')
+        env.pop('MCW_LINUX_QUALIFICATION_TRAY', None)
+        env.pop('MCW_LINUX_QUALIFICATION_NATIVE', None)
+        receipt['development_paths'] = dict(config=str(config), data=str(data),
+                                            temporary=str(temporary), engine=str(prefix / 'mcw'))
         def controls(phase, synchronous=False):
             output = proof / ('bootstrap-' + phase)
             argv = ['python3', '-B', REPO / 'desktop/qualification/intel_bootstrap/controls.py',
@@ -238,6 +280,23 @@ def smoke(prefix, proof, session, instrumented, bootstrap):
             reader.start()
         def text():
             return log_path.read_text(errors='replace')
+        native_ready = wait_for(lambda: re.search(
+            r'MCW_MACOS_NATIVE event=ready owner=' + str(owner.pid) + r' pid=(\d+) protocol=4 mutations=disabled',
+            text()), 'Actual AppKit native host never became ready', timeout=20)
+        native = int(native_ready.group(1))
+        native_identity = helper_identity(native, owner.pid, temporary, proof)
+        receipt['native_host'] = native_identity
+        receipt['owner'] = dict(pid=owner.pid, executable=str(prefix / 'mcw'),
+                                sha256=sha(prefix / 'mcw'))
+        save(proof / 'receipt.json', receipt)
+        def native_still_ready():
+            require(owner.poll() is None, 'Rust owner exited while native host was required')
+            current = process_identity(native, owner.pid, native_identity['executable'])
+            require(all(current[key] == native_identity[key] for key in current),
+                    'Permanent AppKit helper identity changed')
+            require(sha(Path(current['executable'])) == native_identity['sha256'],
+                    'Live native helper executable changed')
+            return current
         def owned_child():
             require(owner.poll() is None, 'Rust owner exited before Flutter startup')
             children = [(pid, name) for pid, name in descendants(owner.pid) if name.endswith('/MicCamWatch')]
@@ -246,14 +305,27 @@ def smoke(prefix, proof, session, instrumented, bootstrap):
         child = wait_for(owned_child, 'No owned Flutter child')
         wait_for(lambda: re.search(r'desktop event=ready .*pid=' + str(child) + r'\b.*sequence=[1-9]\d*', text()),
                  'No positive-sequence Ready received by real Rust owner')
+        expected_flutter = prefix / 'desktop/MicCamWatch.app/Contents/MacOS/MicCamWatch'
+        receipt['initial_ui_child'] = process_identity(child, owner.pid, expected_flutter)
+        native_still_ready()
         receipt['cases'].append(dict(case='sandbox-inherited-stdio-positive-snapshot', status='passed',
                                      owner=owner.pid, child=child))
         if instrumented:
+            def probe_registration(phase):
+                native_still_ready()
+                marker = 'qualification registration ready pid=' + str(native) + ' protocol=4 visible=true'
+                before = text().count(marker)
+                os.kill(native, signal.SIGUSR1)
+                wait_for(lambda: text().count(marker) > before,
+                         'Actual AppKit menu registration unavailable during ' + phase, timeout=10)
+                return dict(phase=phase, native_pid=native, protocol=4, visible=True,
+                            method='owned native signal; live NSStatusItem.isVisible/button check; no UI open')
+            receipt['native_registration_initial'] = probe_registration('initial')
             def state():
                 rows = [json.loads(line.split(' ', 1)[1]) for line in text().splitlines()
                         if line.startswith('MCW_QUALIFICATION_STATE ')]
                 return rows[-1] if rows else None
-            visible = wait_for(lambda: (row if (row := state()) and row['visible'] else None),
+            visible = wait_for(lambda: (row if (row := state()) and row['pid'] == child and row['visible'] else None),
                                'Owned NSWindow never became visible')
             require(visible['title'] == 'MicCamWatch' and visible['width'] >= 780, 'Wrong native window')
             if session['screen_capture_previously_authorized']:
@@ -272,49 +344,88 @@ def smoke(prefix, proof, session, instrumented, bootstrap):
                 require(peer.returncode == 0, 'Native singleton activation failed')
                 wait_for(lambda: text().count('MCW_QUALIFICATION_ACTIVATED pid=' + str(child) + ' ') > before,
                          'Owned native SIGUSR1 activation was not handled')
-                wait_for(lambda: (row := state()) and row['key'] and row['visible'],
+                wait_for(lambda: (row := state()) and row['pid'] == child and row['key'] and row['visible'],
                          'Owned native activation did not produce a visible key window')
                 require(owned_child() == child, 'Activation replaced or duplicated owned child')
             receipt['cases'].append(dict(case='native-singleton-activation-three-times', status='passed', child=child))
-            os.kill(child, signal.SIGUSR2)
-            wait_for(lambda: not alive(child), 'NSWindow close left Flutter engine resident')
-            if bootstrap:
-                controls('after-close')
-            time.sleep(2)
-            require(owned_child() is None, 'Ready-window close automatically reopened Flutter')
-            receipt['cases'].append(dict(case='normal-owned-window-close-no-resident-engine', status='passed'))
-            command(argv, proof / 'reopen', env=env)
-            child = wait_for(owned_child, 'Native activation failed to reopen Flutter')
-            receipt['reopened_child_pid'] = child
-            save(proof / 'receipt.json', receipt)
-            reopen_started = time.monotonic()
-            diagnosed = False
-            late_diagnosed = False
-            def reopened_ready():
-                nonlocal diagnosed, late_diagnosed
-                ready = re.search(r'desktop event=ready .*pid=' + str(child) + r'\b.*sequence=[1-9]\d*', text())
-                if not ready and not diagnosed and time.monotonic() - reopen_started >= 1.5:
-                    diagnosed = True
-                    if bootstrap:
-                        controls('reopen-stalled')
-                    receipt['reopen_diagnostic'] = diagnose_reopen(prefix, owner, child, proof)
-                    save(proof / 'receipt.json', receipt)
-                if bootstrap and not ready and not late_diagnosed and time.monotonic() - reopen_started >= 10:
-                    late_diagnosed = True
-                    late = proof / 'reopen-late'
-                    late.mkdir()
-                    receipt['reopen_late_diagnostic'] = diagnose_reopen(prefix, owner, child, late, timeout=3)
-                    save(proof / 'receipt.json', receipt)
-                return ready
-            wait_for(reopened_ready, 'Reopened child did not establish IPC')
-            receipt['cases'].append(dict(case='reopen-new-owned-child', status='passed', child=child))
+            for cycle in range(cycles):
+                before_close = process_identity(child, owner.pid, expected_flutter)
+                native_before = native_still_ready()
+                require(owned_child() == child, 'Owned Flutter child changed before normal close')
+                os.kill(child, signal.SIGUSR2)
+                wait_for(lambda: not alive(child), 'NSWindow close left Flutter engine resident')
+                if bootstrap:
+                    controls('after-close-' + str(cycle))
+                time.sleep(2)
+                require(owned_child() is None, 'Ready-window close automatically reopened Flutter')
+                native_after_close = native_still_ready()
+                dispatch_before = text().count('action=Status protocol=4')
+                registration_after_close = probe_registration('after-close-' + str(cycle + 1))
+                require(owned_child() is None, 'Native registration probe opened a Flutter engine')
+                registration_before = text().count('qualification registration ready pid=' + str(native))
+                command(argv, proof / ('reopen-' + str(cycle)), env=env)
+                child = wait_for(owned_child, 'Native activation failed to reopen Flutter')
+                receipt['reopened_child_pid'] = child
+                reopen_started = time.monotonic()
+                diagnosed = False
+                def reopened_ready():
+                    nonlocal diagnosed
+                    ready = re.search(r'desktop event=ready .*pid=' + str(child)
+                                      + r'\b.*sequence=[1-9]\d*', text())
+                    if not ready and not diagnosed and time.monotonic() - reopen_started >= 1.5:
+                        diagnosed = True
+                        if bootstrap:
+                            controls('reopen-stalled-' + str(cycle))
+                        diagnostic = proof / ('reopen-diagnostic-' + str(cycle))
+                        diagnostic.mkdir()
+                        receipt['reopen_diagnostic'] = diagnose_reopen(prefix, owner, child, diagnostic)
+                        save(proof / 'receipt.json', receipt)
+                    return ready
+                # Product deadline is still15s; the harness allowance observes
+                # timeout/teardown and never promotes a late/no-Ready child.
+                wait_for(reopened_ready, 'Reopened child did not establish IPC')
+                require(text().count('action=Status protocol=4') > dispatch_before,
+                        'Reopen bypassed native Status dispatch to the same supervisor')
+                require(text().count('qualification registration ready pid=' + str(native)) > registration_before,
+                        'Actual native menu registration was not ready on reopen')
+                after_open = process_identity(child, owner.pid, expected_flutter)
+                require(after_open != before_close, 'Reopen did not create a disposable new Flutter child')
+                reopened_window = wait_for(lambda: (row if (row := state()) and row['pid'] == child
+                                                    and row['visible'] and not row['miniaturized'] else None),
+                                           'New owned Flutter window never became visible')
+                require(reopened_window['title'] == 'MicCamWatch' and reopened_window['width'] >= 780,
+                        'Reopened owned window has the wrong native identity/geometry')
+                receipt['cycles'].append(dict(cycle=cycle + 1, status='passed',
+                    closed_ui=before_close, reopened_ui=after_open, native_before=native_before,
+                    native_after_close=native_after_close, native_after_reopen=native_still_ready(),
+                    reopened_window=reopened_window,
+                    registration_after_close=registration_after_close,
+                    close='owned NSWindow.performClose; Flutter engine exited',
+                    reopen='authenticated singleton -> actual AppKit show -> native Status -> same supervisor'))
+                save(proof / 'receipt.json', receipt)
+            receipt['cases'].append(dict(case='repeated-disposable-Flutter-permanent-native-host',
+                                         status='passed', count=cycles))
+            native_still_ready()
+            os.kill(native, signal.SIGUSR2)
+            require(owner.wait(timeout=15) == 0, 'Native menu Exit did not stop the owned Rust host cleanly')
+            wait_for(lambda: not alive(child) and not alive(native),
+                     'Native Exit left an owned native/Flutter helper running', timeout=10)
+            require(re.search(r'MCW_MACOS_NATIVE event=dispatch .*pid=' + str(native)
+                              + r' action=Exit protocol=4', text()), 'Native menu Exit was not dispatched')
+            require(re.search(r'MCW_MACOS_NATIVE event=stopped .*pid=' + str(native)
+                              + r' protocol=4', text()), 'Native helper did not acknowledge clean shutdown')
+            receipt['cases'].append(dict(case='native-menu-Exit-owned-clean-teardown', status='passed',
+                stimulus='owned native SIGUSR2 probe dispatches the real enabled menu target/action; no physical click claim'))
         else:
             receipt['cases'].append(dict(case='window-close-activation-capture', status='not-executed',
                 reason='Uninstrumented exact release: performed in separately identified instrumented prefix'))
-        owner.kill()
-        owner.wait(timeout=10)
-        wait_for(lambda: not alive(child), 'Independent native monitor left orphan after owner death', timeout=10)
-        receipt['cases'].append(dict(case='owner-death-with-open-child', status='passed'))
+        if not instrumented:
+            native_still_ready()
+            owner.kill()
+            owner.wait(timeout=10)
+            wait_for(lambda: not alive(child) and not alive(native),
+                     'Owned native/Flutter helper remained after owner death', timeout=10)
+            receipt['cases'].append(dict(case='owner-death-with-open-native-and-Flutter-children', status='passed'))
         receipt['status'] = 'passed'
     except Exception as error:
         receipt.update(status='failed', error=str(error))
@@ -327,6 +438,8 @@ def smoke(prefix, proof, session, instrumented, bootstrap):
             # Never signal a possibly recycled orphan PID. The independently
             # armed native monitor owns shutdown; disposal owns failed-run residue.
             receipt['cleanup'] = 'Child still observed after owner cleanup; no PID-only orphan kill attempted'
+        if native is not None and alive(native):
+            receipt['native_cleanup'] = 'Native PID still observed after owner cleanup; no recycled-orphan PID kill attempted'
         for phase, job, stream in control_jobs:
             try:
                 code = job.wait(timeout=15)
@@ -351,6 +464,7 @@ def main():
     parser.add_argument('--proof', type=Path, required=True)
     parser.add_argument('--release-app', type=Path, required=True)
     parser.add_argument('--instrumented-app', type=Path, required=True)
+    parser.add_argument('--cycles', type=int, default=3, help='Normal close/reopen cycles with one permanent native host')
     parser.add_argument('--intel-bootstrap-controls', action='store_true',
                         help='Observational diagnostic reproduction only; not an unconditioned qualification pass')
     args = parser.parse_args()
@@ -361,6 +475,7 @@ def main():
     proof.mkdir(parents=True, exist_ok=True)
     require(not args.intel_bootstrap_controls or platform.machine() == 'x86_64',
             'Intel bootstrap controls require a hosted Intel runner')
+    require(2 <= args.cycles <= 10, 'Native host qualification requires2..10 close/reopen cycles')
     prefixes = []
     for name, app in (('release', args.release_app), ('instrumented', args.instrumented_app)):
         prefixes.append(prepare_prefix(proof / (name + '-prefix'), app.resolve()))
@@ -386,7 +501,7 @@ def main():
         bootstrap = (helper, appkit)
     for prefix, instrumented in zip(prefixes, (False, True)):
         smoke(prefix, proof / ('instrumented-runtime' if instrumented else 'release-runtime'),
-              session, instrumented, bootstrap if instrumented else None)
+              session, instrumented, bootstrap if instrumented else None, args.cycles)
     # Real production AppKit declarations/NSMenu/status item; simulated data,
     # not Flutter/hardware evidence. Harness itself preserves capture provenance.
     command(['python3', '-B', REPO / 'installer/tests/native_macos_menu.py',
@@ -395,7 +510,7 @@ def main():
     save(proof / 'graphical-receipt.json', dict(
         status='diagnostic-condition-passed' if bootstrap else 'passed', session=session,
         flutter='real Rust owner; real snapshots; sandbox unchanged; separate build identities',
-        native_menu='production AppKit with explicitly simulated input data',
+        native_menu='actual permanent production AppKit helper in both development runtimes; separate simulated-input visual fixture explicitly labelled',
         native_menu_capture='whole-display capture disabled; owned-view cache fixtures only',
         exclusions=['physical capture', 'hardware controls', 'TCC consent', 'Developer ID', 'notarization',
                     'installer/update/uninstall', 'suspended-entire-process parent death']))

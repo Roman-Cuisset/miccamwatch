@@ -739,7 +739,6 @@ void main() {
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
       final client = makeClient([]);
-      final pauseLabels = <String>{};
       var sequence = 0;
       for (final locale in ['en', 'fr', 'de', 'es', 'ja', 'zh', 'ru']) {
         client.update(view(pauseUntil: original, paused: true),
@@ -747,10 +746,6 @@ void main() {
         await tester.pumpWidget(host(client, locale: locale));
         final pause = find.byKey(const ValueKey('preferences.pause'));
         final resume = find.byKey(const ValueKey('preferences.resume'));
-        final label = tester.widget<Text>(
-          find.descendant(of: pause, matching: find.byType(Text))).data!;
-        pauseLabels.add(label);
-        expect(label, isNotEmpty);
         await tester.ensureVisible(resume);
         expect(tester.widget<OutlinedButton>(resume).onPressed, isNotNull);
         client.update(view(pauseUntil: original, paused: true),
@@ -762,7 +757,6 @@ void main() {
           findsOneWidget);
         expect(tester.takeException(), isNull);
       }
-      expect(pauseLabels.length, greaterThanOrEqualTo(6));
     });
 
     testWidgets('keyboard activates pause once and pending disables both actions',

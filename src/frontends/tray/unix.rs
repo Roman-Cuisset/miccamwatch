@@ -1985,11 +1985,21 @@ fn development_paths() -> Result<Vec<File>> {
 
 /// Build the real native presentation without probing control capabilities or
 /// autostart. Qualification is a separate observer, never an operational owner.
-#[cfg(all(feature = "flutter-desktop", target_os = "linux"))]
+#[cfg(feature = "flutter-desktop")]
 fn qualification_view(lang: Language, snapshot: Option<&Snapshot>, writable: bool) -> View {
     let text = words(lang);
     let loaded = Settings::load();
     let settings = loaded.as_ref().cloned().unwrap_or_default();
+    // AppKit protocol4 requires the four profile choices even when disabled.
+    // Construct them here, not through make_view (which probes control/autostart).
+    let mut profile = entry("profile", text.profile, false);
+    profile.children = Some([
+        "profile_balanced", "profile_private", "profile_meeting", "profile_development",
+    ].into_iter().enumerate().map(|(index, action)| {
+        let mut choice = entry(action, text.profiles[index], false);
+        choice.checked = Some(index == profile_index(settings.profile));
+        choice
+    }).collect());
     let (summary, visual) = snapshot.map_or_else(
         || ("Isolated qualification — native observation unavailable".to_owned(), "partial"),
         |snapshot| observation_status(snapshot, lang),
@@ -2004,7 +2014,7 @@ fn qualification_view(lang: Language, snapshot: Option<&Snapshot>, writable: boo
             entry("mic", text.unavailable, false),
             entry("camera", text.unavailable, false),
             entry("pause", text.pause, false),
-            entry("profile", text.profile, false),
+            profile,
             entry("autostart", text.unavailable, false),
             entry("exit", text.exit, true),
         ],
@@ -2036,6 +2046,18 @@ fn qualification_view(lang: Language, snapshot: Option<&Snapshot>, writable: boo
     view
 }
 
+/// Qualification admits presentation and owned shutdown only, regardless of
+/// which disabled action an untrusted/misbehaving native peer sends.
+#[cfg(feature = "flutter-desktop")]
+fn dispatch_qualification_action(command: Command, open: &mut bool, stop: &AtomicBool) -> bool {
+    match command {
+        Command::Status => *open = true,
+        Command::Exit => stop.store(true, Ordering::Release),
+        _ => return false,
+    }
+    true
+}
+
 #[cfg(feature = "flutter-desktop")]
 fn run_flutter_development(lang: Language, initial_window: bool, theme: &str, writable: bool) -> Result<()> {
     ensure!(matches!(theme, "system" | "light" | "dark"), "unsupported desktop theme");
@@ -2045,8 +2067,8 @@ fn run_flutter_development(lang: Language, initial_window: bool, theme: &str, wr
     // Linux SO_PEERPIDFD/image verification. The isolated XDG roots own this namespace.
     let Some(lifecycle) = Lifecycle::acquire_for_launch(initial_window, false)? else { return Ok(()) };
     let mut frontend = FlutterFrontend::new(lang, writable, writable, false);
-    // Opt-in because WSLg/stock GNOME may have no actual StatusNotifierWatcher.
-    // Never fake registration or silently equate window-only mode with SNI proof.
+    // Opt-in genuine native registration; never label window-only mode as tray
+    // proof. The Mac host uses the same pinned helper/input as operational mode.
     #[cfg(target_os = "linux")]
     let (mut native, native_actions) = {
         let (sender, actions) = mpsc::sync_channel(32);
@@ -2056,6 +2078,21 @@ fn run_flutter_development(lang: Language, initial_window: bool, theme: &str, wr
             let host = DesktopHost::start(sender, lifecycle.ready.clone(),
                 qualification_view(lang, None, writable))?;
             eprintln!("MicCamWatch qualification: actual SNI registration succeeded; device/autostart actions disabled");
+            Some(host)
+        } else { None };
+        (host, actions)
+    };
+    #[cfg(target_os = "macos")]
+    let (mut native, native_actions) = {
+        let (sender, actions) = mpsc::sync_channel(32);
+        let host = if std::env::var_os("MCW_MACOS_QUALIFICATION_TRAY").as_deref()
+            == Some(std::ffi::OsStr::new("1"))
+        {
+            ensure!(!writable, "Mac native qualification requires read-only development");
+            let host = DesktopHost::start(sender, lifecycle.ready.clone(),
+                qualification_view(lang, None, writable), lifecycle.window_input.clone())?;
+            eprintln!("MCW_MACOS_NATIVE event=ready owner={} pid={} protocol=4 mutations=disabled",
+                std::process::id(), host.child.id());
             Some(host)
         } else { None };
         (host, actions)
@@ -2125,18 +2162,20 @@ fn run_flutter_development(lang: Language, initial_window: bool, theme: &str, wr
         let mut open = initial_window;
         lifecycle.ready.store(true, Ordering::Release);
         while !lifecycle.stop.load(Ordering::Acquire) {
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             if let Some(host) = native.as_mut() {
                 host.check()?;
+                #[cfg(target_os = "linux")]
                 if let Some(error) = host.take_window_error() {
                     eprintln!("MicCamWatch qualification native window: {error}");
                 }
                 while let Ok(command) = native_actions.try_recv() {
-                    match command {
-                        Command::Status => open = true,
-                        Command::Exit => lifecycle.stop.store(true, Ordering::Release),
-                        _ => eprintln!("MicCamWatch qualification: rejected native mutation"),
+                    if !dispatch_qualification_action(command, &mut open, &lifecycle.stop) {
+                        eprintln!("MicCamWatch qualification: rejected native mutation");
                     }
+                    #[cfg(target_os = "macos")]
+                    eprintln!("MCW_MACOS_NATIVE event=dispatch owner={} pid={} action={command:?} protocol=4",
+                        std::process::id(), host.child.id());
                 }
             }
             frontend.refresh()?;
@@ -2151,7 +2190,18 @@ fn run_flutter_development(lang: Language, initial_window: bool, theme: &str, wr
                 #[cfg(target_os = "macos")]
                 bail!("development Flutter desktop failed before ready: {error}");
             }
-            open |= lifecycle.open_requested.swap(false, Ordering::AcqRel);
+            let requested = lifecycle.open_requested.swap(false, Ordering::AcqRel);
+            #[cfg(target_os = "linux")]
+            { open |= requested; }
+            #[cfg(target_os = "macos")]
+            if requested {
+                if let Some(host) = native.as_mut() {
+                    // Exercise the same native Open handler as menu-bar status,
+                    // then consume its Status event in this supervisor loop.
+                    host.check()?;
+                    host.show_window()?;
+                } else { open = true; }
+            }
             if open {
                 open = false;
                 #[cfg(target_os = "linux")]
@@ -2168,6 +2218,10 @@ fn run_flutter_development(lang: Language, initial_window: bool, theme: &str, wr
                 frontend.open(theme)?;
             }
             if let Some(reading) = pending.lock().unwrap_or_else(|e| e.into_inner()).take() {
+                #[cfg(target_os = "macos")]
+                if let Some(host) = native.as_mut() {
+                    host.update(qualification_view(lang, reading.snapshot.as_ref().ok(), writable))?;
+                }
                 #[cfg(target_os = "linux")]
                 if let Some(host) = native.as_mut() {
                     host.observe(reading.snapshot.as_ref().ok());
@@ -2183,8 +2237,13 @@ fn run_flutter_development(lang: Language, initial_window: bool, theme: &str, wr
     })();
     lifecycle.ready.store(false, Ordering::Release);
     frontend.finish();
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     if let Some(host) = native.as_mut() { host.shutdown()?; }
+    #[cfg(target_os = "macos")]
+    if let Some(host) = native.as_ref() {
+        eprintln!("MCW_MACOS_NATIVE event=stopped owner={} pid={} protocol=4",
+            std::process::id(), host.child.id());
+    }
     let outcome = outcome.and(observer.stop_and_join());
     lifecycle.clean_shutdown.store(outcome.is_ok(), Ordering::Release);
     outcome
@@ -3208,7 +3267,7 @@ mod menu_tests {
         true
     }
 
-    #[cfg(all(feature = "flutter-desktop", target_os = "linux"))]
+    #[cfg(feature = "flutter-desktop")]
     #[test]
     fn qualification_native_view_has_no_mutating_actions() {
         let test = "frontends::tray::unix::menu_tests::qualification_native_view_has_no_mutating_actions";
@@ -3221,11 +3280,43 @@ mod menu_tests {
             assert_eq!(view.protection.camera, "unknown");
             for item in &view.items {
                 assert_eq!(item.enabled, matches!(item.action, "status" | "exit"));
-                assert!(item.children.is_none());
+                if item.action == "profile" {
+                    let choices = item.children.as_ref().unwrap();
+                    assert_eq!(choices.len(), 4);
+                    assert!(choices.iter().all(|choice| !choice.enabled && choice.checked.is_some()
+                        && choice.children.is_none()));
+                } else { assert!(item.children.is_none()); }
             }
         }
         let home = PathBuf::from(std::env::var_os("HOME").unwrap());
         assert!(!home.join(".config/autostart").exists());
+    }
+
+    #[cfg(feature = "flutter-desktop")]
+    #[test]
+    fn qualification_dispatch_rejects_every_native_mutation() {
+        let mut open = false;
+        let stop = AtomicBool::new(false);
+        let mutations = [
+            Command::Mic, Command::Camera, Command::Pause, Command::ProfileBalanced,
+            Command::ProfilePrivate, Command::ProfileMeeting, Command::ProfileDevelopment,
+            Command::NotificationsEnable, Command::NotificationsDisable, Command::SoundEnable,
+            Command::SoundDisable, Command::HistoryEnable, Command::HistoryDisable, Command::Autostart,
+            #[cfg(target_os = "macos")]
+            Command::CameraInspect,
+        ];
+        for command in mutations {
+            assert!(!dispatch_qualification_action(command, &mut open, &stop));
+            assert!(!open);
+            assert!(!stop.load(Ordering::Acquire));
+        }
+        assert!(dispatch_qualification_action(Command::Status, &mut open, &stop));
+        assert!(open);
+        assert!(!stop.load(Ordering::Acquire));
+        open = false;
+        assert!(dispatch_qualification_action(Command::Exit, &mut open, &stop));
+        assert!(!open);
+        assert!(stop.load(Ordering::Acquire));
     }
 
     fn held_startup_lease() -> (PathBuf, File) {

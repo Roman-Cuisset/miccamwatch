@@ -103,6 +103,10 @@ jobs:
             2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/rust-desktop-tests.log"
           cargo test --lib --locked --features flutter-desktop settings::tests \
             2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/rust-settings-tests.log"
+          cargo test --lib --locked --features flutter-desktop history:: \
+            2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/rust-history-tests.log"
+          cargo test --lib --locked --features flutter-desktop autostart::tests \
+            2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/rust-autostart-tests.log"
       - name: Build real native engine with development parser and unchanged AppKit fallback
         if: ${{ !inputs.runtime-replay }}
         run: |
@@ -335,3 +339,68 @@ jobs:
             ${{ env.MCW_LINUX_OUTPUT }}/replay/artifact.json
             ${{ runner.temp }}/mcw-flutter-linux-setup/*.log
             ${{ runner.temp }}/mcw-flutter-linux-setup/*.json
+
+  linux-arm64-native:
+    name: Ubuntu 24.04 ARM64 official-source Flutter build and ELF audit
+    if: ${{ !inputs.intel-only && !inputs.runtime-replay }}
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    env:
+      CARGO_TERM_COLOR: never
+      FLUTTER_SUPPRESS_ANALYTICS: "true"
+      DART_SUPPRESS_ANALYTICS: "true"
+      CI: "true"
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Require disposable native host and prepare only its build dependencies
+        run: |
+          set -euo pipefail
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$(uname -m)" = aarch64
+          test "$(id -u)" != 0
+          test "$(. /etc/os-release; printf '%s' "$ID:$VERSION_ID")" = ubuntu:24.04
+          mkdir -m 700 "$RUNNER_TEMP/mcw-flutter-arm-setup"
+          mkdir -p "$HOME/mcw-qualification"
+          printf 'MCW_ARM_SDK=%s/mcw-qualification/b4-arm-sdk-%s-%s\n' "$HOME" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" >> "$GITHUB_ENV"
+          printf 'MCW_ARM_OUTPUT=%s/mcw-qualification/b4-arm-%s-%s\n' "$HOME" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" >> "$GITHUB_ENV"
+          sudo apt-get update 2>&1 | tee "$RUNNER_TEMP/mcw-flutter-arm-setup/apt-update.log"
+          sudo apt-get install -y --no-install-recommends \
+            git curl unzip xz-utils zip clang cmake ninja-build pkg-config \
+            libgtk-3-dev liblzma-dev libstdc++-14-dev libpipewire-0.3-dev \
+            libclang-dev python3 binutils libx11-dev \
+            2>&1 | tee "$RUNNER_TEMP/mcw-flutter-arm-setup/apt-install.log"
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: 1.98.1
+          components: clippy
+      - name: Bootstrap exact official Flutter source with native upstream ARM64 artifacts
+        run: |
+          set -euo pipefail
+          python3 -B desktop/qualification/linux_b4_arm_bootstrap.py --out "$MCW_ARM_SDK"
+      - name: Compile and test native Rust and Flutter and audit the actual ARM64 bundle
+        run: |
+          set -euo pipefail
+          python3 -B desktop/qualification/linux_b4_arm.py \
+            --sdk "$MCW_ARM_SDK/flutter" --out "$MCW_ARM_OUTPUT"
+      - name: Preserve provenance logs native ELFs and qualification-only package
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: flutter-linux-arm64-native-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 14
+          include-hidden-files: true
+          path: |
+            ${{ env.MCW_ARM_SDK }}/*.json
+            ${{ env.MCW_ARM_SDK }}/*.log
+            ${{ env.MCW_ARM_OUTPUT }}/*.json
+            ${{ env.MCW_ARM_OUTPUT }}/*.log
+            ${{ env.MCW_ARM_OUTPUT }}/*.SHA256SUMS
+            ${{ env.MCW_ARM_OUTPUT }}/*.tar.gz
+            ${{ env.MCW_ARM_OUTPUT }}/bundle/**
+            ${{ runner.temp }}/mcw-flutter-arm-setup/*.log

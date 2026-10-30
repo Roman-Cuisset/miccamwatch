@@ -102,6 +102,10 @@ pub fn enable() -> Result<()> {
 fn enable_for_version(version: &str) -> Result<()> {
     let current = std::env::current_exe()?;
     let _lock = lock_installation(&current)?;
+    enable_locked(version, &current)
+}
+
+fn enable_locked(version: &str, current: &Path) -> Result<()> {
     let executable = tray_executable(version)?;
     let desired = launch_command(&executable);
     let existing = registered_task()?;
@@ -215,6 +219,10 @@ fn refresh_commands(
 pub fn disable() -> Result<()> {
     let current = std::env::current_exe()?;
     let _lock = lock_installation(&current)?;
+    disable_locked(&current)
+}
+
+fn disable_locked(current: &Path) -> Result<()> {
     if registered_task()?
         .as_ref()
         .is_some_and(|task| task.enabled && task.owned_by(&current))
@@ -227,6 +235,22 @@ pub fn disable() -> Result<()> {
         remove_run_value()?;
     }
     Ok(())
+}
+
+/// Compare and confirm this installation's registration under the same lock
+/// used by CLI, tray, updater and uninstall. Never adopts another installation.
+pub fn set_if_expected(expected: bool, requested: bool) -> Result<bool> {
+    let current = std::env::current_exe()?;
+    let _lock = lock_installation(&current)?;
+    let observed = state()? == AutostartState::Enabled;
+    if observed != expected { bail!("autostart changed since observation; unchanged"); }
+    if requested != observed {
+        if requested { enable_locked(env!("CARGO_PKG_VERSION"), &current)?; }
+        else { disable_locked(&current)?; }
+    }
+    let confirmed = state()? == AutostartState::Enabled;
+    if confirmed != requested { bail!("autostart readback did not confirm requested state"); }
+    Ok(confirmed)
 }
 
 pub(crate) struct UninstallRegistration {

@@ -2845,3 +2845,33 @@ Lots futurs **à approuver, aucun correctif appliqué** :
   Mint stable strictement préservé. Main73369ab, tag06d800b→3d74686,8worktrees et stash conservés. Aucun changement site/README,
   aucune release/déploiement ni push sur main/branche de travail. Seule la branche CI explicitement autorisée a été poussée.
   Arrêt après sauvegarde documentaire ; attendre validation B3 avant migration des protections/installations ou publication.
+
+## 2026-10-30 — Tranche B4 en cours : consultation réelle, autostart et hôte macOS permanent
+
+- Reprise vérifiée sur `14ae566`, branche `work/flutter-hybrid-0211` propre ; main73369ab, tag stable,8worktrees et stash préservés.
+  État initial et empreintes du MSI/settings/protections archivés dans
+  `%LOCALAPPDATA%\MicCamWatchQualification\flutter-b4-20261030-202725`.
+- Contrat Flutter IPC5 sans shim4 : nouvelle voie de consultation authentifiée, bornée et indépendante des commandes micro/préférences.
+  Le protocole du helper AppKit reste4. Historique lu depuis les vrais JSONL schema3, pagination par curseur opaque,
+  fichiers ouverts bornés, verrou court, résultats incomplets explicites ; aucun historique reconstruit à partir des snapshots.
+- Flutter : écrans Historique/Diagnostics et carte démarrage automatique, sept langues, thèmes communs, confirmations et états périmés.
+  Autostart : contrôle natif du mode opérationnel, comparaison de l'état observé, verrou existant et relecture effective.
+  **Revue en cours : l'ownership Unix doit être renforcé pour la portée « cette installation » avant toute qualification de cette écriture.**
+  Aucun autostart quotidien ni périphérique modifié.
+- macOS : qualification préparée avec le vrai DesktopHost AppKit permanent et le même superviseur Flutter entre les fermetures.
+  Actions sensibles désactivées ; menu/NSStatusItem réellement interrogés ; sondes possédées, pas de clic physique revendiqué.
+  Les nouveaux builds et cycles Intel/Apple Silicon n'ont pas encore été exécutés à ce checkpoint.
+- Mint : inventaire en lecture seule du vrai PC ; session utilisateur XRDP/X11 `:10`, llvmpipe et accélération=false.
+  GPU Intel i915 présent, mais nœuds de rendu non accessibles à cet utilisateur ; siège local=greeter LightDM, pas de session utilisateur autorisée.
+  Ne changer ni groupes, pilotes, permissions ni login. Aucun résultat accéléré revendiqué.
+- ARM64 : pas d'archive SDK Linux ARM64 officielle3.47.8 ; bootstrap depuis la révision Git Flutter officielle exacte et artefacts
+  Dart/GTK AArch64 officiels préparé sur runner `ubuntu-24.04-arm` jetable. Empreintes mesurées distinctes d'une signature ou SHA upstream inexistant.
+  Build Flutter/Rust, suites et audit ELF prévus ; aucune nouvelle qualification ARM64 exécutée à ce checkpoint.
+- CPU Windows : réutilisation d'un seul tampon de chemin UTF16 par passe caméra, sans cache de confiance ni changement de fréquence.
+  Gain non encore mesuré ; signatures et identités restent relues. Ne pas annoncer d'amélioration avant comparatif apparié.
+- Premières vérifications B4 : `cargo check --all-targets --locked --features windows-tray,flutter-desktop` réussi après correction
+  de l'import de Policy ; `flutter analyze --no-pub` sans erreur ; parse des quatre scripts Python et YAML CI réussi.
+  Suites, builds release, nouvelles captures et mesures encore à exécuter. Checkpoint volontairement WIP, pas validation finale.
+- Reprise : résoudre l'ownership autostart Unix ; terminer les suites/clippy/builds locaux ; pousser seulement le ref CI déjà autorisé
+  avec `[CF-Pages-Skip] [skip ci]` et dispatch manuel frais (pas replay B3), analyser les reçus Mac/Linux/ARM, puis gestes/captures Windows/Mint.
+  Aucun push de la branche de travail/main, tag, release, déploiement ou remplacement du stable autorisé.

@@ -213,6 +213,10 @@ impl UninstallRegistration {
 
 pub fn state() -> Result<AutostartState> {
     let store = Store::open()?;
+    state_in(&store)
+}
+
+fn state_in(store: &Store) -> Result<AutostartState> {
     let registration = store.snapshot()?.registration;
     #[cfg(target_os = "macos")]
     {
@@ -422,6 +426,10 @@ fn enable_in(store: &Store, version: &str, activate: bool) -> Result<()> {
 
 pub fn disable() -> Result<()> {
     let store = Store::open()?;
+    disable_in(&store)
+}
+
+fn disable_in(store: &Store) -> Result<()> {
     let RegistrationSnapshot {
         bytes,
         record,
@@ -475,6 +483,21 @@ pub fn disable() -> Result<()> {
     #[cfg(target_os = "linux")]
     let _ = registration;
     Ok(())
+}
+
+/// Keep the existing ownership receipt, target and state lock across comparison,
+/// native mutation/rollback and actual readback. No privilege escalation.
+pub fn set_if_expected(expected: bool, requested: bool) -> Result<bool> {
+    let store = Store::open()?;
+    let observed = state_in(&store)? == AutostartState::Enabled;
+    if observed != expected { bail!("autostart changed since observation; unchanged"); }
+    if requested != observed {
+        if requested { enable_in(&store, env!("CARGO_PKG_VERSION"), true)?; }
+        else { disable_in(&store)?; }
+    }
+    let confirmed = state_in(&store)? == AutostartState::Enabled;
+    if confirmed != requested { bail!("autostart readback did not confirm requested state"); }
+    Ok(confirmed)
 }
 
 fn registration_bytes(entry: &Registration) -> Result<Vec<u8>> {

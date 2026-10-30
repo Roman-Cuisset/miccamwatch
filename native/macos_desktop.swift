@@ -939,6 +939,7 @@ final class DesktopMenu: NSObject {
     private let words: DesktopWords
     private let version: String
     private let textWidth: CGFloat
+    let qualificationBridge: Bool
 
     init(frame: DesktopFrame, consultation: DesktopConsultation) {
         self.consultation = consultation
@@ -946,6 +947,15 @@ final class DesktopMenu: NSObject {
         self.words = words
         version = frame.version!
         let summary = frame.summary!, entries = frame.items!, protection = frame.protection!
+        // Opt-in isolated development only. An operational frame cannot opt in
+        // merely by inheriting the environment variable. Wire protocol stays4.
+        qualificationBridge = ProcessInfo.processInfo.environment["MCW_MACOS_QUALIFICATION_TRAY"] == "1"
+            && entries.first?.label == "MicCamWatch — isolated qualification"
+            && frame.preferences?.writable == false
+            && entries.allSatisfy { entry in
+                (["status", "exit"].contains(entry.action) || !entry.enabled)
+                    && (entry.children?.allSatisfy { !$0.enabled } ?? true)
+            }
         textWidth = min(340, max(80, (NSScreen.main?.visibleFrame.width ?? 400) - 60))
         func flag(_ value: Bool?) -> String { value.map { $0 ? words.yes : words.no } ?? words.noRequest }
         let mic: String
@@ -1070,7 +1080,19 @@ final class DesktopMenu: NSObject {
         return alert
     }
 
-    @objc private func showConsultation(_ sender: Any?) { consultation.show() }
+    @objc private func showConsultation(_ sender: Any?) {
+        if qualificationBridge {
+            desktopEmit(DesktopEvent(kind: "action", action: "status"))
+        } else { consultation.show() }
+    }
+    func qualificationExit() {
+        guard qualificationBridge,
+              let index = menu.items.firstIndex(where: { ($0.representedObject as? String) == "exit" }),
+              menu.items[index].isEnabled else { return }
+        // Owned hosted probe only: dispatch the real menu item's target/action,
+        // not a substitute shutdown path or global mouse/keyboard injection.
+        menu.performActionForItem(at: index)
+    }
     @objc private func showAbout(_ sender: Any?) {
         NSApp.activate(ignoringOtherApps: true)
         aboutAlert().runModal()
@@ -1089,6 +1111,8 @@ private final class DesktopDelegate: NSObject, NSApplicationDelegate {
     private var stopping = false
     private var initialized = false
     private var pendingClick: DispatchWorkItem?
+    private var qualificationExitSource: DispatchSourceSignal?
+    private var qualificationRegistrationSource: DispatchSourceSignal?
     func applicationDidFinishLaunching(_ notification: Notification) {
         desktopDiagnostic("didFinishLaunching policy=\(desktopPolicyName(NSApp.activationPolicy()))")
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -1168,13 +1192,38 @@ private final class DesktopDelegate: NSObject, NSApplicationDelegate {
         menuContent = content
         if !initialized {
             initialized = true
+            if content.qualificationBridge,
+               ProcessInfo.processInfo.environment["MCW_DESKTOP_QUALIFICATION"] == "1" {
+                signal(SIGUSR2, SIG_IGN)
+                let source = DispatchSource.makeSignalSource(signal: SIGUSR2, queue: .main)
+                source.setEventHandler { [weak self] in self?.menuContent?.qualificationExit() }
+                qualificationExitSource = source
+                source.resume()
+                signal(SIGUSR1, SIG_IGN)
+                let registration = DispatchSource.makeSignalSource(signal: SIGUSR1, queue: .main)
+                registration.setEventHandler { [weak self] in _ = self?.qualificationRegistrationReady() }
+                qualificationRegistrationSource = registration
+                registration.resume()
+            }
             desktopEmit(DesktopEvent(kind: "ready", protocol: 4))
         }
+    }
+    private func qualificationRegistrationReady() -> Bool {
+        guard initialized, !stopping, menuContent?.qualificationBridge == true else { return false }
+        guard let item = item, item.isVisible, item.button != nil else {
+            desktopEmit(DesktopEvent(kind: "error", error: "qualification status registration lost"))
+            return false
+        }
+        desktopDiagnostic("qualification registration ready pid=\(getpid()) protocol=4 visible=\(item.isVisible)")
+        return true
     }
     private func showConsultation() {
         guard initialized, !stopping else { return }
         trackingMenu?.cancelTracking()
-        consultation.show()
+        if menuContent?.qualificationBridge == true {
+            guard qualificationRegistrationReady() else { return }
+            desktopEmit(DesktopEvent(kind: "action", action: "status"))
+        } else { consultation.show() }
     }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         showConsultation()
@@ -1209,6 +1258,8 @@ private final class DesktopDelegate: NSObject, NSApplicationDelegate {
     private func stop() {
         guard !stopping else { return }
         stopping = true
+        qualificationExitSource?.cancel()
+        qualificationRegistrationSource?.cancel()
         pendingClick?.cancel()
         trackingMenu?.cancelTracking()
         NSApp.abortModal()
