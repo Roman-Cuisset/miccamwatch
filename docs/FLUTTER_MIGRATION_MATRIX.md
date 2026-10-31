@@ -1,12 +1,34 @@
-# Native feature migration inventory — stages A, B1, B2 and B3
+# Native feature migration inventory — stages A, B1, B2, B3 and B4
 
 Source baseline: `b5cf391c1905cbc391c47220f1347c55ba8e24cc`, 27 October 2026. Inspection only; runtime qualification is recorded separately. This inventory preserves every native/public CLI capability and its actual limitations.
 
-The inventory priorities mean **A = microphone**, **B = presentation/preferences**, **C = sensitive operations**; the owner's cross-platform and visual-finalization gates remain separate. Camera/lock/maintenance actions still require their command-specific gates. Current B3 runtime uses strict protocol4; protocol3 is not a downgrade path. [B1 protocol3 evidence](FLUTTER_PREFERENCES_B1.md) and [protocol2 stage-A history](FLUTTER_COMMANDS_STAGE_A.md) remain historical records, not current compatibility contracts.
+The inventory priorities mean **A = microphone**, **B = presentation/preferences**, **C = sensitive operations**; cross-platform and visual-finalization gates remain separate. Camera/lock/maintenance actions still require their command-specific gates. Current B4 uses strict Flutter protocol5, without a protocol4 downgrade path; the separate native AppKit helper retains protocol4. [B4 qualification](FLUTTER_B4_QUALIFICATION.md), [B1 protocol3 evidence](FLUTTER_PREFERENCES_B1.md) and [protocol2 stage-A history](FLUTTER_COMMANDS_STAGE_A.md) distinguish current contracts from historical evidence.
 
 Stage A implementation update: Windows now has explicit desired-state microphone commands through the existing Rust worker, private protocol2 admission and native readback. Real mute/release, UI process exit, retained native guard and reopening without duplicate UI have been exercised. Other controls/platforms remain gated; this inventory's source references and “inspection only” evidence describe the pinned baseline, not the later runtime qualification. Sidebar/Windows branding now uses official assets; macOS/Linux Flutter packaging identity remains unqualified. See the current stage A results in the ROADMAP.
 
-## Current B3 checkpoint — 30 October 2026
+## Current B4 development checkpoint — 30 October 2026
+
+This is not a public0.21.1 release, complete parity or approval to remove GTK/AppKit.
+Source d7f778a contains the shared Windows/Linux x64 feature slice; later qualification-only fixes
+do not invalidate the already built x64 payloads. Runtime results below are intentionally narrower than implemented code.
+
+| Function / platform | Implemented or verified so far | Remaining gate |
+|---|---|---|
+| Recorded history | New native schema3 JSONL browser, bounded pages/snapshots and opaque single-use cursors. Common Flutter Refresh/Load more, original timestamps, application/resource/activity/confidence, partial/error/stale states. Eleven Windows reader tests passed; Ubuntu suites/build/hosted runtime passed. | Real new-screen GUI qualification is in progress. No synthetic production records, destructive clear or export API. Pinned CLI inventory below still has only path/clear. |
+| Detailed diagnostics | On-demand bounded passive native doctor, separate from live collector snapshot. Temporary monitor's default policy omitted; observer profile remains authoritative. Common translated UI. | Genuine GUI/native response and captures in progress. Native technical details are not promises of protection. |
+| Installation startup | Native operational-only CAS, explicit confirmation, same lock/ownership/rollback/readback. Foreign Unix registrations/journals preserved, including missing target. Common Flutter status/card and strict session/stale/unknown/write gates. | Host writes forbidden in development qualification. Actual read-only status and private filesystem CAS do not qualify installed Windows/macOS startup writes. |
+| IPC and lifecycle | Strict protocol5, independent bounded consultation lane; read queries/completions do not advance Unix observer cadence. Windows50desktop/IPC tests passed, including malformed operations. | New actual GUI/lifecycle scenarios in progress; authentication, timeout, ownership and restoration unchanged. |
+| Linux x64 | Fresh CI41120973121 on d7f778a passed native checks, Flutter tests/release, full package/ELF hashes and hosted SNI/runtime. Green products retained for Mint, not rebuilt for Mac/ARM preparation fixes. | Real Mint B4 smoke/captures pending. Authorized desktop is XRDP/X11/llvmpipe; no accelerated session or Wayland claim. |
+| macOS Intel / Apple Silicon | Actual permanent AppKit DesktopHost qualification, native protocol4, sensitive actions disabled. First CI stopped before release builds on a Linux-only qualification-view field; cfg fixed. | Fresh builds/tests and representative reopen cycles pending. B3 Intel failure remains open; no physical/manual Mac gate. |
+| Linux ARM64 | Native Ubuntu24.04 runner, exact official Flutter Git/engine/native Dart/GTK. First CI verified source/Dart digest, then rejected archive-level license metadata; corrected extractor unpacks only the validated SDK subtree. | Actual full Flutter/Rust build, tests, AArch64 ELF/package verification pending. No invented upstream ARM SDK archive/SHA256; no runtime/GPU/physical SBC claim. |
+| Windows CPU | Lazy reusable UTF16 path buffer per camera pass, all signatures/generation/module checks fresh; optimized private release built. | First paired experiment interrupted mid-round; no gain claimed. Complete matched comparison and separate profiling required. No device-active latency experiment authorized. |
+| Common UI / identity | Official logos/navigation/themes retained; new framing in seven languages. Local analysis passed,88Flutter cases plus corrected targeted keyboard fixture passed. | Fresh CI full suites, actual screenshots and visual review being collected. Widgets are not seven native visual reviews. |
+
+Still absent: camera/lock/maintenance flows, Unix microphone commands and persisted language/theme APIs.
+Windows explicit microphone release semantics remain unchanged; B4 does not invoke hardware commands.
+Autostart code and read-only presentation are not a claimed host-startup write success.
+
+## Historical B3 checkpoint — 30 October 2026
 
 This is development qualification, not a public0.21.1 release or complete parity.
 The detailed native inventory below preserves its pinned source baseline;

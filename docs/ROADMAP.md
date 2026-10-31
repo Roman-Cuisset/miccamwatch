@@ -2894,3 +2894,29 @@ Lots futurs **à approuver, aucun correctif appliqué** :
 - Reprise après interruption : aucun processus B4/benchmark encore actif. Comparatif CPU arrêté avant fin du premier tour ;
   données partielles et empreinte conservées séparément, pas de gain ni comparaison complète revendiqués.
   Prochain run CI limité aux trois cibles échouées ; bundle x64 déjà vert conservé, pas de reconstruction inutile.
+
+## 2026-10-31 — B4 : reprise des preuves et correction des contrôleurs
+
+- Reprise réelle sur `f480963`, après `79b35db` et `d7f778a` ; seul le document de bilan encore non suivi a été sauvegardé avec le correctif CI.
+  Comparatif CPU interrompu la veille : trois intervalles individuels conservés, aucun tour apparié complet ; ne pas les assembler à une autre charge.
+- Run `41186590122` : les deux Mac compilent Rust/Flutter release et passent leurs suites ; le script shell s'arrête avant le runtime
+  sur `extra[@]: unbound variable` (Bash macOS). Remplacement par les paramètres positionnels `"$@"`, sans changer les délais.
+  Produits malheureusement non archivés avant cet appel ; nouvelle sauvegarde tar des deux apps et du moteur ajoutée **avant** toute qualification,
+  pour éviter de perdre à nouveau des produits construits. Ces builds doivent être reconstruits une fois car aucun payload récupérable n'existe dans leurs artefacts.
+- ARM64 : l'archive officielle contrôlée par MD5 contient un vrai `frontend_server_aot.dart.snapshot` ELF x86-64 (EM62),
+  alors que gen_snapshot/flutter_tester/impellerc et les bibliothèques sont AArch64. Défaut correspondant à Flutter#156309, encore ouvert.
+  Le SDK Dart ARM officiel du même moteur contient le composant AArch64 attendu (EM183) ; règle amont : copie depuis le SDK Dart.
+  Assemblage explicite du composant **cible officiel**, avec SHA256 des deux composants figés, archive Dart intégralement vérifiée sur runner,
+  relecture et audit de tous les ELF natifs maintenus. Aucun compilateur x64 accepté/exécuté, aucune source Flutter modifiée ni SDK tiers.
+  Ceci reste à exécuter : ne pas annoncer le build ARM réussi avant résultat.
+- Windows : les deux premiers arrêts étaient des défauts de préparation/contrôleur, pas une preuve d'échec du frontend :
+  répertoire natif `APPDATA/MicCamWatch` manquant dans le préfixe privé, puis alias PowerShell5 `[ulong]` invalide (`[UInt64]` utilisé).
+  Démarrage/Ready réels ensuite acquis ; MSAA visait le HWND conteneur au lieu de son unique enfant direct FLUTTERVIEW.
+  Contrôleur lié maintenant au bon enfant possédé, PID/FILETIME/parent/classe contrôlés ; WGC/fermeture restent sur le HWND principal.
+  Aucun lecteur d'écran global, permission, délai ou garde produit modifié ; chaque échec et arrêt propre sont conservés.
+- Mint : premier run B4 confirme sons/pause/reprise/refus/restauration, autostart lu désactivé en développement, vraie page Historique
+  (deux événements existants) et capture possédée. Échec ultérieur d'oracle Diagnostics : inspecteur lisait Name mais pas AT-SPI Text
+  des SelectableText. Lecture Text bornée ajoutée au seul contrôleur privé, avec les mêmes identités et libérations GLib.
+  Stable, préférences, historique, groupes et permissions intacts ; zéro processus de qualification résiduel.
+- Inspection du vrai log Windows : émetteur C++ de timing encore en protocole3 ; migré vers5 comme Rust/Dart.
+  Cette correction est native Windows uniquement ; protocole du helper AppKit4 inchangé.

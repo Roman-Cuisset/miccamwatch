@@ -21,6 +21,7 @@ import os
 from pathlib import Path, PurePosixPath
 import platform
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -194,6 +195,37 @@ def main():
         receipt['flutter'] = version
         # Pinned upstream cache.dart validates official GCS MD5 for engine ZIPs.
         run([flutter, 'precache', '--linux'], out / 'flutter-precache.log', env=env)
+        # Upstream flutter/flutter#156309: this exact engine archive copies the
+        # x64 host Dart frontend into linux-arm64. Its own BUILD.gn copies this
+        # component from a Dart SDK. Assemble the intended target SDK component,
+        # not an emulated compiler or an unchecked third-party replacement.
+        frontend = cache / 'artifacts/engine/linux-arm64/frontend_server_aot.dart.snapshot'
+        target_frontend = cache / 'dart-sdk/bin/snapshots/frontend_server_aot.dart.snapshot'
+        if (frontend.is_symlink() or target_frontend.is_symlink()
+                or not frontend.is_file() or not target_frontend.is_file()):
+            raise RuntimeError('Expected owned official frontend components are not regular files')
+        original_sha = b3.sha(frontend)
+        target_sha = b3.sha(target_frontend)
+        if original_sha != '0c484223020a7aad5874e1ef3bdcc43c9d0b36a1402f223d538ee2d4cc0b847a':
+            raise RuntimeError('Pinned upstream host-frontend component differs; no assembly performed')
+        if target_sha != '07988b418436f0dc8e839626a27d8fd03abeb18a566ad27b332dd1ee8d4b3a75':
+            raise RuntimeError('Pinned official target Dart frontend differs; no assembly performed')
+        target_header = capture(['readelf', '-hW', target_frontend], env=env)
+        if 'ELF64' not in target_header or not re.search(r'Machine:\s+AArch64', target_header):
+            raise RuntimeError('Official target Dart frontend is not native ARM64')
+        shutil.copyfile(target_frontend, frontend)
+        if b3.sha(frontend) != target_sha:
+            raise RuntimeError('Target frontend assembly readback mismatch')
+        receipt['official_target_frontend_assembly'] = {
+            'upstream_issue': 'https://github.com/flutter/flutter/issues/156309',
+            'copy_rule': 'https://github.com/flutter/engine/blob/main/flutter_frontend_server/BUILD.gn',
+            'cache_path': str(frontend.relative_to(sdk)),
+            'original_engine_component_sha256': original_sha,
+            'source': str(target_frontend.relative_to(sdk)),
+            'source_archive': receipt['dart_archive'],
+            'native_component_sha256': target_sha, 'native_elf_header': target_header,
+            'limit': 'Explicit official-target component assembly; not an unmodified prebuilt ARM SDK, emulation, or upstream attestation'}
+        save(out / 'bootstrap-receipt.json', receipt)
         native_elf = []
         for path in sorted((cache / 'artifacts/engine').rglob('*')):
             if not path.is_file() or path.is_symlink():

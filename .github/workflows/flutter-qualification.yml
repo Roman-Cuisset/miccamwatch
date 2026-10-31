@@ -15,6 +15,9 @@ on:
       skip-linux-x64:
         type: boolean
         default: false
+      skip-linux-arm64:
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       runtime-replay:
@@ -24,6 +27,9 @@ on:
         type: boolean
         default: false
       skip-linux-x64:
+        type: boolean
+        default: false
+      skip-linux-arm64:
         type: boolean
         default: false
 
@@ -143,18 +149,33 @@ jobs:
             SWIFT_ACTIVE_COMPILATION_CONDITIONS=MCW_QUALIFICATION \
             CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual build \
             2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/instrumented-build.log"
+      - name: Preserve complete built products before any graphical qualification
+        if: ${{ !inputs.runtime-replay }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/mcw-flutter-macos"
+          test -x target/release/mcw
+          test -d "$root/release/MicCamWatch.app"
+          test -d "$root/instrumented/MicCamWatch.app"
+          mkdir -m 700 "$root/built-products"
+          cp target/release/mcw "$root/built-products/mcw"
+          /usr/bin/ditto "$root/release/MicCamWatch.app" "$root/built-products/release/MicCamWatch.app"
+          /usr/bin/ditto "$root/instrumented/MicCamWatch.app" "$root/built-products/instrumented/MicCamWatch.app"
+          printf '%s\n' "$GITHUB_SHA" > "$root/built-products/source-commit.txt"
+          tar -C "$root" -czf "$root/built-products.tar.gz" built-products
+          shasum -a256 "$root/built-products.tar.gz" > "$root/built-products.SHA256SUMS"
       - name: Inspect bundle seals architectures ACLs and run owned Aqua smoke when available
         run: |
           set -euo pipefail
-          extra=()
+          set --
           if [[ "${{ inputs.intel-only }}" == "true" ]]; then
-            extra+=(--intel-bootstrap-controls)
+            set -- --intel-bootstrap-controls
           fi
           python3 -B desktop/qualification/macos.py \
             --proof "$RUNNER_TEMP/mcw-flutter-macos/evidence" \
             --release-app "${MCW_FROZEN_RELEASE_APP:-$RUNNER_TEMP/mcw-flutter-macos/release/MicCamWatch.app}" \
             --instrumented-app "${MCW_FROZEN_INSTRUMENTED_APP:-$RUNNER_TEMP/mcw-flutter-macos/instrumented/MicCamWatch.app}" \
-            "${extra[@]}" \
+            "$@" \
             2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/qualification.log"
       - name: Summarize observed graphical status (never infer from a successful build)
         if: always()
@@ -198,6 +219,8 @@ jobs:
             ${{ runner.temp }}/mcw-flutter-macos/*.json
             ${{ runner.temp }}/mcw-flutter-macos/evidence-native.tar.gz
             ${{ runner.temp }}/mcw-flutter-macos/evidence-native.SHA256SUMS
+            ${{ runner.temp }}/mcw-flutter-macos/built-products.tar.gz
+            ${{ runner.temp }}/mcw-flutter-macos/built-products.SHA256SUMS
             ${{ runner.temp }}/mcw-flutter-macos/replay/artifact.json
 
   linux-x64-baseline:
@@ -350,7 +373,7 @@ jobs:
 
   linux-arm64-native:
     name: Ubuntu 24.04 ARM64 official-source Flutter build and ELF audit
-    if: ${{ !inputs.intel-only && !inputs.runtime-replay }}
+    if: ${{ !inputs.intel-only && !inputs.runtime-replay && !inputs.skip-linux-arm64 }}
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 60
     env:

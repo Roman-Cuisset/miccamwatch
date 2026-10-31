@@ -31,6 +31,10 @@ on:
         description: Preserve already qualified Linux x64 products when only failed macOS and ARM64 targets need correction
         type: boolean
         default: false
+      flutter-skip-linux-arm64:
+        description: Skip a separately diagnosed upstream ARM64 toolchain blocker without converting it into success
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       native-only:
@@ -54,6 +58,7 @@ jobs:
       runtime-replay: ${{ inputs.flutter-runtime-replay || false }}
       intel-only: ${{ inputs.flutter-intel-only || false }}
       skip-linux-x64: ${{ inputs.flutter-skip-linux-x64 || false }}
+      skip-linux-arm64: ${{ inputs.flutter-skip-linux-arm64 || false }}
 
   windows:
     if: ${{ !inputs.native-only && inputs.native-platform != 'flutter' }}
