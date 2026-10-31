@@ -18,6 +18,9 @@ on:
       skip-linux-arm64:
         type: boolean
         default: false
+      native-gates-only:
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       runtime-replay:
@@ -32,12 +35,16 @@ on:
       skip-linux-arm64:
         type: boolean
         default: false
+      native-gates-only:
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 jobs:
   macos:
+    if: ${{ !inputs.native-gates-only }}
     name: macOS 15 ${{ matrix.architecture }} owned qualification
     permissions:
       contents: read
@@ -119,7 +126,7 @@ jobs:
             2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/rust-history-tests.log"
           cargo test --lib --locked --features flutter-desktop autostart::tests \
             2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/rust-autostart-tests.log"
-          cargo test --lib --locked --features flutter-desktop frontends::tray::unix::menu_tests::qualification_ \
+          cargo test --lib --locked --features flutter-desktop frontends::tray::menu_tests::qualification_ \
             2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/rust-native-qualification-gates.log"
       - name: Build real native engine with development parser and unchanged AppKit fallback
         if: ${{ !inputs.runtime-replay }}
@@ -225,7 +232,7 @@ jobs:
 
   linux-x64-baseline:
     name: Ubuntu 22.04 x64 Mint-baseline development bundle
-    if: ${{ !inputs.intel-only && !inputs.skip-linux-x64 }}
+    if: ${{ !inputs.native-gates-only && !inputs.intel-only && !inputs.skip-linux-x64 }}
     permissions:
       contents: read
       actions: read
@@ -373,7 +380,7 @@ jobs:
 
   linux-arm64-native:
     name: Ubuntu 24.04 ARM64 official-source Flutter build and ELF audit
-    if: ${{ !inputs.intel-only && !inputs.runtime-replay && !inputs.skip-linux-arm64 }}
+    if: ${{ !inputs.native-gates-only && !inputs.intel-only && !inputs.runtime-replay && !inputs.skip-linux-arm64 }}
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 60
     env:
@@ -435,3 +442,79 @@ jobs:
             ${{ env.MCW_ARM_OUTPUT }}/*.tar.gz
             ${{ env.MCW_ARM_OUTPUT }}/bundle/**
             ${{ runner.temp }}/mcw-flutter-arm-setup/*.log
+
+  native-qualification-gates:
+    name: Native guard tests ${{ matrix.family }} ${{ matrix.architecture }} (no Flutter rebuild)
+    if: ${{ inputs.native-gates-only }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {runner: macos-15-intel, family: macos, architecture: x86_64}
+          - {runner: macos-15, family: macos, architecture: arm64}
+          - {runner: ubuntu-22.04, family: linux, architecture: x86_64}
+          - {runner: ubuntu-24.04-arm, family: linux, architecture: aarch64}
+    env:
+      CARGO_TERM_COLOR: never
+      MACOSX_DEPLOYMENT_TARGET: "15.0"
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Require disposable matching native host
+        run: |
+          set -euo pipefail
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$(uname -m)" = "${{ matrix.architecture }}"
+          test "$(id -u)" != 0
+          mkdir -m 700 "$RUNNER_TEMP/mcw-native-guards"
+          printf '%s\n' "$GITHUB_SHA" > "$RUNNER_TEMP/mcw-native-guards/source.txt"
+      - name: Prepare only disposable Linux Rust build dependencies
+        if: matrix.family == 'linux'
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang pkg-config libclang-dev libpipewire-0.3-dev libgtk-3-dev
+      - name: Require pinned Xcode for native helper
+        if: matrix.family == 'macos'
+        env:
+          DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+        run: |
+          set -euo pipefail
+          test "$(/usr/bin/xcodebuild -version)" = $'Xcode 26.3\nBuild version 17C529'
+          test "$(/usr/bin/xcrun --show-sdk-version)" = 26.2
+          printf 'DEVELOPER_DIR=%s\n' "$DEVELOPER_DIR" >> "$GITHUB_ENV"
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: 1.98.1
+      - name: Require both exact tests then execute their real isolated bodies
+        run: |
+          set -euo pipefail
+          proof="$RUNNER_TEMP/mcw-native-guards"
+          cargo test --lib --locked --features flutter-desktop frontends::tray::menu_tests::qualification_ -- --list \
+            2>&1 | tee "$proof/selected-tests.log"
+          python3 - "$proof/selected-tests.log" <<'PY'
+          import pathlib, sys
+          prefix = 'frontends::tray::menu_tests::'
+          expected = {prefix + name for name in (
+              'qualification_native_view_has_no_mutating_actions',
+              'qualification_dispatch_rejects_every_native_mutation')}
+          selected = {line[:-6] for line in pathlib.Path(sys.argv[1]).read_text().splitlines() if line.endswith(': test')}
+          if selected != expected:
+              raise SystemExit(f'Exact native guard test selection mismatch: {selected!r}')
+          PY
+          cargo test --lib --locked --features flutter-desktop frontends::tray::menu_tests::qualification_ -- --test-threads=1 --nocapture \
+            2>&1 | tee "$proof/executed-tests.log"
+      - name: Preserve native guard selection and execution evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: flutter-native-guards-${{ matrix.family }}-${{ matrix.architecture }}-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 14
+          path: ${{ runner.temp }}/mcw-native-guards/

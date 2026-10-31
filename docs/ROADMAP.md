@@ -2937,3 +2937,19 @@ Lots futurs **à approuver, aucun correctif appliqué** :
 - Build Windows release du correctif C++ de timing5 réussi ; avertissement MSBuild Temp conservé.
  Prochaines étapes : cycles Windows ciblés sans réessayer les captures déjà acquises, comparatif CPU complet au calme,
  analyse des reçus du run `41188772673` macOS/ARM64, puis bilan B4 et matrice. Aucun changement d'installation stable.
+- CI `41188772673` sur7e47596 : Mac Intel et Apple Silicon passent avec le véritable DesktopHost AppKit permanent.
+ Sur chaque architecture : IPC release et arrêt des enfants à la mort du propriétaire ; dans le préfixe instrumenté distinct,
+ trois fermetures/réouvertures via l'action Status native, même helper/NSStatusItem visible entre les cycles, singleton et Exit propres.
+ Captures Flutter réelles examinées, bundles/seals/architectures archivés ; aucune qualification matérielle/TCC, notarisation ou installation annoncée.
+ L'échec B3 du propriétaire sans menu bar permanent n'est plus reproduit par cette architecture représentative ;
+ cela n'établit pas la cause universelle du blocage WindowServer ni le succès de toutes les configurations macOS.
+- ARM64 : bootstrap officiel assemblé, Rust/Flutter release et suites réussis sur Ubuntu24.04 ARM64 ;89tests Flutter,
+ 57desktop,12historique,9autostart et5settings Rust. Audit ELF AArch64/package réussi. Ni exécution du bureau Flutter ARM,
+ ni GPU, ni Raspberry Pi/SBC physique qualifiés. Artefacts des trois cibles téléchargés une seule fois et SHA256 GitHub vérifiés.
+- Vérification approfondie des logs : le filtre `frontends::tray::unix::menu_tests::qualification_` sélectionnait **zéro test**.
+ Le module est aliasé `frontends::tray` ; filtre et fixture exacte corrigés, garde imposant un vrai test enfant ajoutée.
+ Ces gardes natives ne sont donc pas comptées comme passées par le run vert. Nouveau mode CI Rust ciblé quatre Unix,
+ sans reconstruire les bundles Flutter ; résultat encore attendu à ce checkpoint. Sélection vide explicitement refusée.
+- Windows : parcours réel clair/sombre et deux réouvertures en rafale par thème terminés sans erreur ;
+ lecture Historique après chaque nouveau processus, observation Rust maintenue sans Flutter, copie JSONL inchangée.
+ Reçu volontairement `exercised_with_unverified_accessibility`, pas succès inventé de l'oracle autostart.

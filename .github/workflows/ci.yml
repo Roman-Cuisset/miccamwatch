@@ -35,6 +35,10 @@ on:
         description: Skip a separately diagnosed upstream ARM64 toolchain blocker without converting it into success
         type: boolean
         default: false
+      flutter-native-gates-only:
+        description: Run only exact Unix native qualification guard tests; preserve existing Flutter products
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       native-only:
@@ -59,6 +63,7 @@ jobs:
       intel-only: ${{ inputs.flutter-intel-only || false }}
       skip-linux-x64: ${{ inputs.flutter-skip-linux-x64 || false }}
       skip-linux-arm64: ${{ inputs.flutter-skip-linux-arm64 || false }}
+      native-gates-only: ${{ inputs.flutter-native-gates-only || false }}
 
   windows:
     if: ${{ !inputs.native-only && inputs.native-platform != 'flutter' }}

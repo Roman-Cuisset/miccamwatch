@@ -3261,6 +3261,11 @@ mod menu_tests {
             .output()
             .unwrap();
         assert!(
+            String::from_utf8_lossy(&output.stdout).contains("running 1 test"),
+            "isolated menu fixture {test} must execute exactly one selected test: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        assert!(
             output.status.success(),
             "isolated menu fixture {test} failed: {}\n{}",
             String::from_utf8_lossy(&output.stdout),
@@ -3272,7 +3277,7 @@ mod menu_tests {
     #[cfg(feature = "flutter-desktop")]
     #[test]
     fn qualification_native_view_has_no_mutating_actions() {
-        let test = "frontends::tray::unix::menu_tests::qualification_native_view_has_no_mutating_actions";
+        let test = "frontends::tray::menu_tests::qualification_native_view_has_no_mutating_actions";
         if run_isolated_menu_fixture(test) { return; }
         for writable in [false, true] {
             let view = qualification_view(Language::En, None, writable);
