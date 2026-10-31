@@ -86,6 +86,8 @@ jobs:
         run: cargo install cargo-audit --locked && cargo audit
       - run: cargo build --release --locked --features windows-tray
         id: windows_release
+      - name: Audit distributed Windows executables for non-system DLL dependencies
+        run: python -B installer/tests/windows_distribution_imports.py target/release/mcw.exe target/release/mcw-tray.exe
       - name: Verify tray restart releases captured updater streams
         run: cargo test --lib --locked --features windows-tray updater::process::tests::native_restart_releases_captured_streams_while_successor_lives -- --ignored --exact --test-threads=1 --nocapture
       - name: Exercise real Windows top buttons and responsive layout

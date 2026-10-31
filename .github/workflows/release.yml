@@ -108,6 +108,8 @@ jobs:
           $cli = Join-Path $smoke 'mcw.exe'
           $tray = Join-Path $smoke 'mcw-tray.exe'
           if ((& $cli --version) -ne "mcw $version") { throw 'ZIP version mismatch' }
+          $trayVersion = & $tray --version
+          if ($LASTEXITCODE -ne 0 -or $trayVersion -ne "mcw-tray $version") { throw 'Tray version query failed' }
           Start-Process -FilePath $tray
           Start-Sleep -Seconds 2
           try {
@@ -126,6 +128,13 @@ jobs:
             $uninstall = Start-Process msiexec.exe -ArgumentList @('/x', $msi, '/qn', '/norestart') -Wait -PassThru
             if ($uninstall.ExitCode -ne 0) { throw "MSI uninstall failed: $($uninstall.ExitCode)" }
           }
+      - name: Audit packaged Windows executables for non-system DLL dependencies
+        shell: pwsh
+        run: |
+          python -B installer/tests/windows_distribution_imports.py `
+            target/release/mcw.exe target/release/mcw-tray.exe `
+            --zip miccamwatch-windows-x86_64.zip --msi miccamwatch-windows-x86_64.msi
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged executables require a non-system DLL (for example VCRUNTIME140.dll)' }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-windows

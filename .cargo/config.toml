@@ -1,0 +1,14 @@
+# Link the MSVC C runtime statically for the Windows x64 executables we ship.
+#
+# Rationale: rustc's default MSVC target links VCRUNTIME140.dll dynamically.
+# That DLL is not part of Windows (only the Universal CRT is); it comes from the
+# Visual C++ Redistributable. On a clean image without that redistributable the
+# loader aborts before main() with 0xC0000135 STATUS_DLL_NOT_FOUND, which is what
+# winget validation reported for mcw.exe and mcw-tray.exe.
+#
+# Scoped to the Windows MSVC target only: Linux and macOS builds are unchanged.
+# The installed runtime is verified against the real binaries by
+# installer/tests/windows_distribution_imports.py in CI, so this setting is not
+# trusted on its own.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
