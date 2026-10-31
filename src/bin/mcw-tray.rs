@@ -7,6 +7,8 @@ use miccamwatch::{
     i18n::Language,
     settings::{self, Settings},
 };
+use std::ffi::OsString;
+use std::io::Write;
 use std::process::ExitCode;
 use windows::{
     Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW},
@@ -24,6 +26,10 @@ fn main() -> ExitCode {
 }
 
 fn run() -> Result<()> {
+    if version_requested(std::env::args_os().skip(1)) {
+        print_version();
+        return Ok(());
+    }
     // A default/native build must refuse this flag before any operational
     // singleton, settings or protection path. Old stable binaries lack this gate.
     #[cfg(not(feature = "flutter-desktop"))]
@@ -99,6 +105,21 @@ fn run() -> Result<()> {
     tray::run_tray(policy, lang, settings, false, initial_window)
 }
 
+/// A packaging or support query: prints the version and returns without reading
+/// settings, touching the operational singleton, starting the observer or
+/// opening a window.
+fn version_requested(arguments: impl IntoIterator<Item = OsString>) -> bool {
+    arguments
+        .into_iter()
+        .any(|argument| matches!(argument.to_str(), Some("--version" | "-V")))
+}
+
+fn print_version() {
+    // Windows-subsystem executable: it can run without an attached console, so a
+    // missing standard handle must not turn a query into a panic.
+    let _ = writeln!(std::io::stdout(), "mcw-tray {}", env!("CARGO_PKG_VERSION"));
+}
+
 fn show_error(message: &str) {
     let title = wide("MicCamWatch");
     let message = wide(message);
@@ -114,4 +135,33 @@ fn show_error(message: &str) {
 
 fn wide(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(Some(0)).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::version_requested;
+    use std::ffi::OsString;
+
+    fn requested(arguments: &[&str]) -> bool {
+        version_requested(arguments.iter().map(OsString::from))
+    }
+
+    #[test]
+    fn version_flags_are_recognised() {
+        assert!(requested(&["--version"]));
+        assert!(requested(&["-V"]));
+    }
+
+    #[test]
+    fn version_wins_over_other_arguments() {
+        assert!(requested(&["--open", "--version"]));
+        assert!(requested(&["--version", "--open"]));
+    }
+
+    #[test]
+    fn normal_launches_are_unaffected() {
+        assert!(!requested(&[]));
+        assert!(!requested(&["--open"]));
+        assert!(!requested(&["--unknown"]));
+    }
 }
