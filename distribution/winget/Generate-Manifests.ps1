@@ -1,25 +1,45 @@
 param(
     [Parameter(Mandatory = $true)][string]$Version,
-    [Parameter(Mandatory = $true)][ValidatePattern('^[0-9a-fA-F]{64}$')][string]$InstallerSha256
+    [Parameter(Mandatory = $true)][ValidatePattern('^[0-9a-fA-F]{64}$')][string]$InstallerSha256,
+    [ValidatePattern('^\d+\.\d+\.\d+$')][string]$ManifestVersion = '1.28.0',
+    # Where to write manifests/r/RomanCuisset/MicCamWatch/<version>/. Defaults to
+    # this script's directory; pass a scratch directory to validate a draft
+    # without touching the manifests committed to this repository.
+    [string]$OutputRoot = $PSScriptRoot,
+    # Pass this for releases whose executables still import VCRUNTIME140.dll
+    # (0.21.0 and every earlier release). Releases built with the static CRT must
+    # NOT declare it, so a missing runtime can never be silently assumed.
+    [switch]$RuntimeDependency
 )
 
 $ErrorActionPreference = 'Stop'
 $identifier = 'RomanCuisset.MicCamWatch'
 $baseUrl = "https://github.com/Roman-Cuisset/miccamwatch/releases/download/v$Version"
-$output = Join-Path $PSScriptRoot "manifests/r/RomanCuisset/MicCamWatch/$Version"
+$output = Join-Path $OutputRoot "manifests/r/RomanCuisset/MicCamWatch/$Version"
 New-Item -ItemType Directory -Force -Path $output | Out-Null
 
+$dependencies = ''
+if ($RuntimeDependency) {
+    $dependencies = @"
+
+Dependencies:
+  PackageDependencies:
+    - PackageIdentifier: Microsoft.VCRedist.2015+.x64
+      MinimumVersion: 14.0.0.0
+"@
+}
+
 @"
-# yaml-language-server: `$schema=https://aka.ms/winget-manifest.version.1.9.0.schema.json
+# yaml-language-server: `$schema=https://aka.ms/winget-manifest.version.$ManifestVersion.schema.json
 PackageIdentifier: $identifier
 PackageVersion: $Version
 DefaultLocale: en-US
 ManifestType: version
-ManifestVersion: 1.9.0
+ManifestVersion: $ManifestVersion
 "@ | Set-Content -Encoding utf8 (Join-Path $output "$identifier.yaml")
 
 @"
-# yaml-language-server: `$schema=https://aka.ms/winget-manifest.installer.1.9.0.schema.json
+# yaml-language-server: `$schema=https://aka.ms/winget-manifest.installer.$ManifestVersion.schema.json
 PackageIdentifier: $identifier
 PackageVersion: $Version
 InstallerLocale: en-US
@@ -36,12 +56,13 @@ Installers:
   - Architecture: x64
     InstallerUrl: $baseUrl/miccamwatch-windows-x86_64.msi
     InstallerSha256: $($InstallerSha256.ToUpperInvariant())
+$dependencies
 ManifestType: installer
-ManifestVersion: 1.9.0
+ManifestVersion: $ManifestVersion
 "@ | Set-Content -Encoding utf8 (Join-Path $output "$identifier.installer.yaml")
 
 @"
-# yaml-language-server: `$schema=https://aka.ms/winget-manifest.defaultLocale.1.9.0.schema.json
+# yaml-language-server: `$schema=https://aka.ms/winget-manifest.defaultLocale.$ManifestVersion.schema.json
 PackageIdentifier: $identifier
 PackageVersion: $Version
 PackageLocale: en-US
@@ -62,7 +83,7 @@ Tags:
   - windows
 ReleaseNotesUrl: https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v$Version
 ManifestType: defaultLocale
-ManifestVersion: 1.9.0
+ManifestVersion: $ManifestVersion
 "@ | Set-Content -Encoding utf8 (Join-Path $output "$identifier.locale.en-US.yaml")
 
 Write-Output $output
