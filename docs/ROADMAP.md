@@ -2920,3 +2920,20 @@ Lots futurs **à approuver, aucun correctif appliqué** :
   Stable, préférences, historique, groupes et permissions intacts ; zéro processus de qualification résiduel.
 - Inspection du vrai log Windows : émetteur C++ de timing encore en protocole3 ; migré vers5 comme Rust/Dart.
   Cette correction est native Windows uniquement ; protocole du helper AppKit4 inchangé.
+
+- Qualification Mint B4 complète le31octobre : préfixe privé `mint-b4-20261031-093523-88f7f9ae`,
+ 12cycles clair/sombre réussis, vrais événements historiques et rafraîchissement, Doctor natif détaillé,
+ autostart relu uniquement, préférences/refus/restauration et SNI réels. Stable strictement préservé,
+ aucun processus de qualification restant ; archive de preuves téléchargée et SHA256 vérifié.
+ Le sampler accepte maintenant ESRCH pendant la lecture mémoire d'un processus déjà disparu,
+ comme l'absence de fichier déjà gérée : métrique explicitement indisponible, jamais processus vivant inventé.
+ Le contrôleur corrigé est épinglé séparément ; bundle produit et ancien contrôleur archivés restent identiques.
+- Captures réelles Historique/Diagnostics Windows et Mint, clair et sombre, examinées : même identité,
+ textes lisibles, limites de couverture explicites. Windows :30→60→30 événements relus conformes aux vrais JSONL.
+ Limite de l'oracle d'accessibilité Windows : MSAA ne publie pas ici l'indisponibilité du bouton autostart ;
+ UIA expose seulement FLUTTERVIEW, pas ses boutons. État désactivé **non vérifié par ces fournisseurs**,
+ et aucune action d'écriture invoquée. Tests Dart et barrières Rust séparés ne valent pas validation d'un lecteur d'écran.
+ Un essai WGC ultérieur a refusé un corps noir ; reçu conservé sans fallback, sans invalider les captures antérieures acquises.
+- Build Windows release du correctif C++ de timing5 réussi ; avertissement MSBuild Temp conservé.
+ Prochaines étapes : cycles Windows ciblés sans réessayer les captures déjà acquises, comparatif CPU complet au calme,
+ analyse des reçus du run `41188772673` macOS/ARM64, puis bilan B4 et matrice. Aucun changement d'installation stable.

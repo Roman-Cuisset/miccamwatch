@@ -238,7 +238,7 @@ def sample(pid):
         try:
             text = (root/filename).read_text()
             values[filename] = {k:int(v)*1024 for k,v in re.findall(r'^(VmRSS|RssAnon|RssFile|RssShmem|Pss|Private_Clean|Private_Dirty):\s+(\d+) kB', text, re.M)}
-        except (FileNotFoundError, PermissionError) as error:
+        except (FileNotFoundError, ProcessLookupError, PermissionError) as error:
             values[filename] = {'unavailable': str(error)}
     return values
 
