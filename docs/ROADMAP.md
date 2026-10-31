@@ -2953,3 +2953,45 @@ Lots futurs **à approuver, aucun correctif appliqué** :
 - Windows : parcours réel clair/sombre et deux réouvertures en rafale par thème terminés sans erreur ;
  lecture Historique après chaque nouveau processus, observation Rust maintenue sans Flutter, copie JSONL inchangée.
  Reçu volontairement `exercised_with_unverified_accessibility`, pas succès inventé de l'oracle autostart.
+
+## 2026-10-31 — Fin de tranche B4 : résultats et point de reprise
+
+- Résultats et limites détaillés : `docs/FLUTTER_B4_QUALIFICATION.md` ; matrice actualisée.
+  Historique réel paginé et Doctor détaillé utilisables dans Flutter Windows/Mint, autostart relu sans écriture hôte.
+  Consultation IPC5 bornée, curseurs et refus stricts ; helper natif AppKit4 conservé.
+- CI complémentaire `41191181077`, source `5a797f2` : les deux gardes natives sont réellement sélectionnées et exécutées
+  sur macOS Intel/ARM et Linux x64/ARM. Les quatre reçus et SHA256 d'artefacts sont vérifiés ; aucun bundle Flutter reconstruit.
+  Le précédent résultat à zéro test reste consigné comme non exécuté, pas transformé en succès.
+- Comparatif Windows complet : deux tours AB/BA de60secondes par état, observations frontières équivalentes.
+  CPU fermé3,333→3,177%, ouvert7,894→8,155% d'un cœur logique ; **pas de gain CPU général démontré**.
+  Le tampon UTF16 réutilisé évite des allocations sans cache de confiance ni changement de cadence.
+  Profil séparé30secondes :56/57snapshots, cadence comparable1,88–1,90/s ; aucun événement de signature/WinVerifyTrust/module-scan
+  dans cette charge inactive. Leur coût actuel et la latence de détection en capture active restent non mesurés.
+  Ne pas comparer ces chiffres à ceux d'anciennes charges pour annoncer un gain fictif.
+- Windows : Rust seul environ18,00Mio RSS, avec Flutter135,23Mio sur la vue d'ensemble du comparatif ;
+  protocole prêt623/541ms, fin du processus343/366ms sur ses deux propriétaires. Disponibilité IPC, pas premier pixel.
+  Le parcours de consultation distinct confirme quatre réouvertures en rafale, lectures réelles et absence de Flutter après fermeture.
+- Mint :12cycles réels clair/sombre, SNI et préférences/refus/restauration réussis. Après consultation, Rust seul11,96–12,00Mio RSS ;
+  ouvert316,61–329,54Mio, PSS285,31–298,29Mio sous llvmpipe. Première fenêtre mappée environ5,1s, réouvertures médianes1,06–1,14s.
+  Mesures CPU Linux sur5secondes, bornes inférieures incluant seulement les enfants observés ; aucun résultat GPU accéléré revendiqué.
+- Mac Intel/ARM : builds/suites/seals et véritables cycles automatisés acquis sur le DesktopHost AppKit permanent.
+  Trois réouvertures par architecture dans le préfixe instrumenté distinct ; IPC/arrêt propriétaire sur le vrai release.
+  Captures Flutter claires examinées ; panneaux B4/macOS, thème sombre Flutter natif, TCC et matériel non vérifiés.
+  Aucun Mac physique manuel requis. Repli AppKit conservé.
+- ARM64 : build et tests natifs Ubuntu24.04, quatre ELF AArch64 et les15payloads du bundle vérifiés individuellement ;
+  archive `d89a9e940b82ba5d27d3943194c83d0eaa551829218c840f61a929659597d900`.
+  Ni runtime graphique/SNI ARM, ni GPU, ni SBC physique, ni compatibilité Mint21/Ubuntu22.04 annoncés.
+- Préservation finale : MSI, préférences et autostart MicCamWatch identiques ; préfixe complet de l'historique initial conservé.
+  **Deux journaux natifs de protection diffèrent du reçu initial du30octobre** ; leurs contenus/horodatages actuels sont sauvegardés,
+  sans retour forcé à l'ancien état. Attribution des écritures non enregistrée ; ne pas l'inventer.
+  Garde microphone existante issue du MSI encore active, tray quotidien absent à l'inventaire final ; aucune commande de libération/redémarrage envoyée.
+  Un verrou propriétaire actif refuse la lecture : pas de contournement/UAC. Zéro processus B4 restant.
+  Main/origin73369ab, tag06d800b→3d74686,8worktrees et stash conservés. Seul le ref CI autorisé a été poussé.
+- Preuves privées et contrôleurs reproductibles : `%LOCALAPPDATA%\MicCamWatchQualification\flutter-b4-20261030-202725`,
+  index `B4-EVIDENCE-INDEX.json` avec empreintes. Les vrais historiques/diagnostics contiennent des informations locales ;
+  aucune publication brute de ces preuves sans revue de confidentialité.
+- Reprise après validation propriétaire : compléter l'accessibilité native Windows des contrôles désactivés ;
+  automatiser panneaux/commandes sûres et thème sombre Flutter macOS ; qualifier Linux dans une session accélérée déjà autorisée ;
+  poursuivre runtime ARM et parité caméra/lock/maintenance selon leurs contrats et restaurations.
+  Les écritures autostart d'une installation réelle et tout contrôle matériel nécessitent une qualification isolée adaptée.
+  Ne pas supprimer GTK/AppKit, modifier le MSI quotidien, pousser main/work, publier0.21.1 ou déployer le site sans nouvel accord.
