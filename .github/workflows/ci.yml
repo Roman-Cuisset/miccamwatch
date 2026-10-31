@@ -27,6 +27,10 @@ on:
         description: Target only the unresolved Intel runtime and enable observational bootstrap controls
         type: boolean
         default: false
+      flutter-skip-linux-x64:
+        description: Preserve already qualified Linux x64 products when only failed macOS and ARM64 targets need correction
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       native-only:
@@ -49,6 +53,7 @@ jobs:
     with:
       runtime-replay: ${{ inputs.flutter-runtime-replay || false }}
       intel-only: ${{ inputs.flutter-intel-only || false }}
+      skip-linux-x64: ${{ inputs.flutter-skip-linux-x64 || false }}
 
   windows:
     if: ${{ !inputs.native-only && inputs.native-platform != 'flutter' }}

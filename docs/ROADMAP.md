@@ -2885,3 +2885,12 @@ Lots futurs **à approuver, aucun correctif appliqué** :
   Flutter :88cas réussis lors de la suite initiale ; échec de fixture clavier (timer de requête non terminé), puis cas ciblé corrigé réussi.
   Analyse et build Windows release réussis ; avertissement MSBuild sur le worktree sous Temp conservé, pas masqué.
   Formatage limité aux nouveaux modules B4. Aucun test physique ni changement de protections/autostart utilisateur.
+- CI fraîche `41120973121` sur `d7f778a` : Ubuntu22.04 x64 réussi (build/suites/package et runtime hébergé).
+  Les deux Mac échouent avant build release sur un champ `details_label` réservé à Linux dans la nouvelle vue de qualification ;
+  champ maintenant gardé par son cfg Linux, sans modifier les interfaces opérationnelles.
+  ARM64 : source/Dart officiels et MD5 vérifiés, puis garde trop étroit refusant la licence à la racine du ZIP.
+  Extraction désormais limitée au seul sous-arbre `dart-sdk/*` ; métadonnées conservées dans le ZIP original, jamais déversées dans le cache.
+  Sonde privée : métadonnées légitimes acceptées ; chemins absolus, traversées, séparateurs ambigus, NUL et liens symboliques refusés.
+- Reprise après interruption : aucun processus B4/benchmark encore actif. Comparatif CPU arrêté avant fin du premier tour ;
+  données partielles et empreinte conservées séparément, pas de gain ni comparaison complète revendiqués.
+  Prochain run CI limité aux trois cibles échouées ; bundle x64 déjà vert conservé, pas de reconstruction inutile.

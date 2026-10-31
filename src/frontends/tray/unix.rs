@@ -2041,6 +2041,7 @@ fn qualification_view(lang: Language, snapshot: Option<&Snapshot>, writable: boo
             Ok(_) if writable => "Qualification only: preferences in Flutter; native mutations and all device/autostart commands disabled.".into(),
             Ok(_) => "Read-only qualification: all mutations disabled.".into(),
         }),
+        #[cfg(target_os = "linux")]
         details_label: text.details,
     };
     bound_desktop_view(&mut view);

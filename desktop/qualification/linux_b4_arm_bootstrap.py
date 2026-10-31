@@ -75,6 +75,26 @@ def check_hash_header(response, expected):
         raise RuntimeError('Official GCS MD5 differs from observed pinned engine artifact')
 
 
+def validate_dart_archive(archive):
+    """Only the SDK subtree is extracted; archive-level metadata stays in ZIP."""
+    ignored = []
+    has_dart = False
+    with zipfile.ZipFile(archive) as source:
+        for info in source.infolist():
+            name = info.orig_filename
+            path = PurePosixPath(name)
+            if (path.is_absolute() or '..' in path.parts or not path.parts
+                    or '\0' in name or '\\' in name or stat.S_ISLNK(info.external_attr >> 16)):
+                raise RuntimeError(f'Unsafe Dart archive member: {name}')
+            if path.parts[0] != 'dart-sdk':
+                ignored.append(name)
+            elif name == 'dart-sdk/bin/dart' and not info.is_dir():
+                has_dart = True
+    if not has_dart:
+        raise RuntimeError('Official archive lacks dart-sdk/bin/dart')
+    return ignored
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--out', type=Path, required=True)
@@ -149,16 +169,13 @@ def main():
                                    'verified_gcs_md5_base64': base64.b64encode(md5.digest()).decode('ascii'),
                                    'digest_limit': 'SHA256 measured here; MD5 supplied by official GCS, not a signature'}
         save(out / 'bootstrap-receipt.json', receipt)
-        # Preserve official executable modes via unzip. Inspect member paths first;
-        # no absolute/traversal/symlink member may escape our new checkout/cache.
-        with zipfile.ZipFile(archive) as source:
-            for info in source.infolist():
-                path = PurePosixPath(info.filename)
-                if path.is_absolute() or '..' in path.parts or not path.parts or path.parts[0] != 'dart-sdk' or stat.S_ISLNK(info.external_attr >> 16):
-                    raise RuntimeError(f'Unsafe Dart archive member: {info.filename}')
+        # Preserve executable modes, but extract only the verified SDK subtree.
+        # Official archive-level metadata (including its license) remains in the
+        # original retained ZIP, never unpacked into the Flutter cache.
+        receipt['unextracted_archive_metadata'] = validate_dart_archive(archive)
         cache = sdk / 'bin/cache'
         cache.mkdir(mode=0o700, exist_ok=True)
-        run(['unzip', '-q', archive, '-d', cache], out / 'dart-extract.log', env=env)
+        run(['unzip', '-q', archive, 'dart-sdk/*', '-d', cache], out / 'dart-extract.log', env=env)
         dart = cache / 'dart-sdk/bin/dart'
         header = capture(['readelf', '-hW', dart], env=env)
         if 'ELF64' not in header or not re.search(r'Machine:\s+AArch64', header) or not os.access(dart, os.X_OK):

@@ -12,12 +12,18 @@ on:
       intel-only:
         type: boolean
         default: false
+      skip-linux-x64:
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       runtime-replay:
         type: boolean
         default: false
       intel-only:
+        type: boolean
+        default: false
+      skip-linux-x64:
         type: boolean
         default: false
 
@@ -196,7 +202,7 @@ jobs:
 
   linux-x64-baseline:
     name: Ubuntu 22.04 x64 Mint-baseline development bundle
-    if: ${{ !inputs.intel-only }}
+    if: ${{ !inputs.intel-only && !inputs.skip-linux-x64 }}
     permissions:
       contents: read
       actions: read
