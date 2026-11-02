@@ -3243,3 +3243,13 @@ Lots futurs **à approuver, aucun correctif appliqué** :
 - Rejeu actualisé sur les produits B5 réellement livrés (ARM90d69b4, Intel a7f562d),
   pins par artefact/source/run/SHA, modes readonly/settings distincts, contrôles
   d'ascendance/diff et sceaux inchangés. Pas de rebuild Rust/Flutter pour ce diagnostic.
+
+- Diagnostic41460549455 : les deux replays ont restauré exactement les produits
+  attendus ; nouveau helper Swift compilé sans erreur sur les deux architectures,
+  mais abort `CGS_REQUIRE_INIT (did_initialize)` avant la capture. Il s'agit du
+  helper de diagnostic async sans `NSApplication`, pas d'une erreur de compilation
+  ou d'une preuve de régression du frontend. Initialisation AppKit background-only
+  ajoutée avant la lecture du grant CG ; aucun prompt/permission changé.
+- Vérification finale stable en lecture seule : exécutables MSI, réglages,
+  intentions micro/caméra, processus et autostart identiques aux empreintes B5
+  initiales. Aucun processus de qualification Windows restant.
