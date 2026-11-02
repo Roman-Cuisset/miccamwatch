@@ -16,10 +16,10 @@ import zipfile
 
 REPOSITORY = 'Roman-Cuisset/miccamwatch'
 PINS = {
-    ('macos', 'arm64'): dict(run=41422733643,
-        source='90d69b4738f76485e40f1002125de1d46c6254c3', artifact=13130913060,
-        zip_sha256='e61a484236911212ecf49d5b850b37814f423d790ff1021336fb53b70de22de7',
-        native_sha256='3fc50d9b24edef1464293114a32c9217c5dbeaff126f0b66a25e099d8e27e5ca'),
+    ('macos', 'arm64'): dict(run=41471689681,
+        source='01aae74e4430faed0564372c23819af0e2c858f6', artifact=13156323629,
+        zip_sha256='97f10902532ade49a0118a79831f9f4963089b55a0ecf08ac346d6ebba97aba0',
+        native_sha256='dcfd3b27f428e7d4c45029a4253ee74a657dc008ef8c77ab96331c1c8394d4e4'),
     ('macos', 'x86_64'): dict(run=41454270155,
         source='a7f562d5c0c1bdc491668336ac45dedbb2c38bcd', artifact=13148645788,
         zip_sha256='193baf06b757277f0cc6553404152d92ea1491b2a97ff63ca9d04864b55231b2',
@@ -114,6 +114,10 @@ def main():
     allowed_exact = {'.github/workflows/ci.yml', '.github/workflows/flutter-qualification.yml',
                      '.github/workflows/flutter-windows-qualification.yml',
                      'installer/tests/native_macos_menu.py'}
+    if args.platform == 'linux':
+        # This Apple-only plist cannot affect the frozen Linux native/Dart payload.
+        # Do not exempt it for a Mac replay: the renderer is product configuration.
+        allowed_exact.add('desktop/flutter/macos/Runner/Info.plist')
     changed = [row['filename'] for row in comparison['files']]
     require(all(name in allowed_exact or name.startswith(('desktop/qualification/', 'docs/'))
                 for name in changed), 'Product source changed since frozen build; rebuild required')

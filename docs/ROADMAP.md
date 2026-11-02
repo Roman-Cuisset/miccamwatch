@@ -3281,3 +3281,21 @@ Lots futurs **à approuver, aucun correctif appliqué** :
 - Nouveau filtre CI Apple Silicon strict, mutuellement exclusif du filtre Intel,
   pour éviter de reconstruire les autres plateformes déjà qualifiées.
   Revalider l'option à chaque mise à jour du SDK : Flutter annonce son retrait futur.
+
+### B5 — Correction visuelle Apple Silicon établie
+
+- CI41471689681, source `01aae74e4430faed0564372c23819af0e2c858f6`, réussie :
+  nouveaux builds normaux/instrumentés et suites, sceaux et sandbox identiques,
+  puis huit scénarios,32preuves réelles et24réouvertures avec le même hôte AppKit.
+  Les huit PNG ScreenCaptureKit ont été examinés, y compris sept langues sombres :
+  textes latins maintenant lisibles, sans les glyphes corrompus du renderer par défaut.
+  Le contrôle agit sur le renderer Mac, pas sur la logique de surveillance.
+- Artefact13156323629 : ZIP `97f10902532ade49a0118a79831f9f4963089b55a0ecf08ac346d6ebba97aba0`,
+  TAR `dcfd3b27f428e7d4c45029a4253ee74a657dc008ef8c77ab96331c1c8394d4e4`.
+  Pin ARM du replay actualisé vers ces vrais produits ; aucune re-signature des
+  anciens artefacts. Le plist Mac reste un changement produit pour tout replay Mac,
+  et est seulement sans effet sur les produits Linux figés.
+- Nouveau bundle Windows normal :42170620octets (40.217Mio),15fichiers hors manifeste
+  de qualification, dont28346108octets pour le frontend. Pas un MSI Flutter final.
+- Prochaine opération ciblée : build/qualification Intel avec ce renderer corrigé,
+  sans relancer Windows/Linux/ARM déjà vérifiés ; aucune prétention de test physique.
