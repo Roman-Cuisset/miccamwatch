@@ -13,6 +13,7 @@ import 'preferences_model.dart';
 import 'consultation.dart';
 import 'consultation_model.dart';
 import 'consultation_panels.dart';
+import 'ui_qualification.dart';
 
 final _started = Stopwatch()..start();
 Future<void> _output = Future<void>.value();
@@ -93,6 +94,7 @@ class _MicCamWatchAppState extends State<MicCamWatchApp> {
   late final PreferenceCommandClient preferenceCommands;
   late final ConsultationClient consultation;
   late final Timer clock;
+  UiQualification? qualification;
   late bool dark = widget.dark;
   AppPage page = AppPage.overview;
   bool ready = false;
@@ -116,6 +118,23 @@ class _MicCamWatchAppState extends State<MicCamWatchApp> {
       }
     }, onDone: _close);
     WidgetsBinding.instance.addPostFrameCallback((_) => _frameTheme());
+    if (UiQualification.enabled) {
+      qualification = UiQualification(
+        queries: consultation, preferences: preferenceCommands,
+        live: () => ready && session.transportLive, closing: () => closing || !mounted,
+        describe: () => {
+          'locale': session.snapshot?.locale,
+          'platform': session.snapshot?.engine['platform'],
+          'mode': session.snapshot?.engine['mode'],
+          'sequence': session.sequence,
+          'observation_fresh': session.isLive,
+          'transport_live': session.transportLive,
+          'page': page.name,
+          'theme': dark ? 'dark' : 'light',
+        },
+      );
+      unawaited(qualification!.run());
+    }
   }
 
   void _changed() {
@@ -126,10 +145,12 @@ class _MicCamWatchAppState extends State<MicCamWatchApp> {
         session.snapshot?.preferences ?? const PreferenceView.unavailable(),
         session.snapshot?.controls['session'] as String? ?? '',
         session.sequence ?? 0, session.transportLive);
+    // Collector freshness controls observation claims, not the authenticated
+    // history/diagnostic/startup channel. Rust still authorizes every request.
     consultation.update(
         session.snapshot?.consultation ?? const ConsultationView.unavailable(),
         session.snapshot?.controls['session'] as String? ?? '',
-        session.sequence ?? 0, session.isLive,
+        session.sequence ?? 0, session.transportLive,
         operational: session.snapshot?.engine['mode'] == 'operational');
     setState(() {});
   }
@@ -145,6 +166,7 @@ class _MicCamWatchAppState extends State<MicCamWatchApp> {
 
   @override
   void dispose() {
+    qualification?.dispose();
     clock.cancel();
     input.close();
     session.removeListener(_changed);
@@ -186,9 +208,11 @@ class _MicCamWatchAppState extends State<MicCamWatchApp> {
     final snapshot = session.snapshot;
     final l = Labels(snapshot?.locale ?? 'en');
     final sequence = snapshot?.sequence;
-    if (!ready && session.isLive && sequence != null && sequence > 0) {
+    // Ready acknowledges a rendered, validated frame, not collector freshness.
+    // An old observation must remain visibly unknown, not prevent UI startup.
+    if (!ready && session.transportLive && sequence != null && sequence > 0) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!ready && mounted && session.isLive && session.sequence == sequence) {
+        if (!ready && mounted && session.transportLive && session.sequence == sequence) {
           ready = true;
           emit({'type': 'ready', 'sequence': sequence});
         }
@@ -225,6 +249,7 @@ class _MicCamWatchAppState extends State<MicCamWatchApp> {
             for (final destination in AppPage.values) Padding(
               padding: const EdgeInsets.only(bottom: 6),
               child: Tooltip(message: titles[destination]!, child: Semantics(
+                identifier: 'navigation.${destination.name}',
                 selected: page == destination,
                 child: TextButton(
                   key: ValueKey('navigation.${destination.name}'),

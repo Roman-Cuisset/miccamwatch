@@ -226,14 +226,16 @@ class PreferencesPanel extends StatelessWidget {
           children: [Text(title, style: theme.textTheme.titleSmall), ...children],
         )),
       );
-      Widget toggle(PreferenceKey key, String title, bool value) => SwitchListTile(
+      Widget toggle(PreferenceKey key, String title, bool value) => Semantics(
+        identifier: 'preferences.${key.name}', enabled: client.canChange(key),
+        child: SwitchListTile(
         contentPadding: EdgeInsets.zero,
         dense: true,
         title: Text(labels[title]),
         value: value,
         onChanged: client.canChange(key)
             ? (value) => client.request(key, value) : null,
-      );
+      ));
       return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         if (gate != null) note(labels[gate]),
         if (view?.reason case final String reason when reason.isNotEmpty)

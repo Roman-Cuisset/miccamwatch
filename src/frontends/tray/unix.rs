@@ -2090,7 +2090,6 @@ fn run_flutter_development(lang: Language, initial_window: bool, theme: &str, wr
         let host = if std::env::var_os("MCW_MACOS_QUALIFICATION_TRAY").as_deref()
             == Some(std::ffi::OsStr::new("1"))
         {
-            ensure!(!writable, "Mac native qualification requires read-only development");
             let host = DesktopHost::start(sender, lifecycle.ready.clone(),
                 qualification_view(lang, None, writable), lifecycle.window_input.clone())?;
             eprintln!("MCW_MACOS_NATIVE event=ready owner={} pid={} protocol=4 mutations=disabled",

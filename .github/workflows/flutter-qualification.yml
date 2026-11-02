@@ -148,6 +148,8 @@ jobs:
         working-directory: desktop/flutter
         run: |
           set -euo pipefail
+          flutter build macos --release --no-pub --dart-define=MCW_UI_QUALIFICATION=consultation \
+            2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/instrumented-dart-build.log"
           /usr/bin/xcodebuild -workspace macos/Runner.xcworkspace -scheme Runner \
             -configuration Release -destination "platform=macOS,arch=$EXPECTED_ARCH" \
             -derivedDataPath "$RUNNER_TEMP/mcw-flutter-macos/derived" \
@@ -175,8 +177,11 @@ jobs:
         run: |
           set -euo pipefail
           set --
+          if [[ "${{ inputs.runtime-replay }}" != "true" ]]; then
+            set -- --ui-panels
+          fi
           if [[ "${{ inputs.intel-only }}" == "true" ]]; then
-            set -- --intel-bootstrap-controls
+            set -- "$@" --intel-bootstrap-controls
           fi
           python3 -B desktop/qualification/macos.py \
             --proof "$RUNNER_TEMP/mcw-flutter-macos/evidence" \

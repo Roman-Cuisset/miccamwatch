@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Hosted-only bundle inspection and real read-only permanent-AppKit qualification.
+"""Hosted-only bundle inspection and genuine permanent-AppKit qualification.
 
-No device commands, preference writes, autostart, permission grants, synthetic
-Flutter snapshots, global input injection, or release/deploy operations. The
-normal sandboxed release and compile-time-instrumented runner are separate
-prefixes. Both run the real production AppKit helper in isolated development.
+Normal release stays read-only; a separately instrumented settings-development
+prefix may change and restore private preferences through the actual Flutter UI.
+No device/autostart commands, permission grants, fake Flutter snapshots, global
+input injection, release/deploy operations or sandbox relaxation.
 """
 import argparse
 import hashlib
@@ -53,7 +53,7 @@ def command(argv, log, *, check=True, timeout=120, env=None):
     return result
 
 
-def prepare_prefix(root, app):
+def prepare_prefix(root, app, mode):
     root.mkdir(mode=0o700)
     desktop = root / 'desktop'
     desktop.mkdir(mode=0o700)
@@ -71,7 +71,7 @@ def prepare_prefix(root, app):
         elif path.is_file():
             files.append(dict(path=str(path.relative_to(root)), sha256=sha(path), bytes=path.stat().st_size))
     save(root / 'qualification-manifest.json', dict(feature='flutter-desktop',
-        mode='read_only_development', architecture=platform.machine(), files=files))
+        mode=mode, architecture=platform.machine(), files=files))
     return root
 
 
@@ -201,12 +201,17 @@ def helper_identity(pid, owner, temporary, proof):
                 private_installation_root=str(root), protocol=4, registration='real-AppKit-ready')
 
 
-def smoke(prefix, proof, session, instrumented, bootstrap, cycles):
+def smoke(prefix, proof, session, instrumented, bootstrap, cycles, *,
+          ui_panels=False, locale='en', theme='light'):
     proof.mkdir(parents=True)
-    receipt = dict(status='running', mode='real-Rust-read-only-permanent-AppKit-development',
+    require(not ui_panels or instrumented, 'UI proof needs the distinct instrumented build')
+    receipt = dict(status='running',
+                   mode='real-Rust-settings-permanent-AppKit-development' if ui_panels
+                        else 'real-Rust-read-only-permanent-AppKit-development',
                    architecture=platform.machine(), session=session, capture=[], cases=[],
                    cycles=[], instrumented=instrumented, requested_cycles=cycles if instrumented else 0,
-                   ui_transport='Flutter supervisor', native_protocol=4)
+                   ui_transport='Flutter supervisor', native_protocol=4, locale=locale, theme=theme,
+                   ui_proofs=[])
     receipt['bootstrap_controls'] = bool(bootstrap)
     if bootstrap:
         receipt['scope'] = 'Controlled diagnostic reproduction, not unconditioned Intel qualification'
@@ -225,7 +230,7 @@ def smoke(prefix, proof, session, instrumented, bootstrap, cycles):
         metadata = private_base.lstat()
         require(stat.S_ISDIR(metadata.st_mode) and metadata.st_uid == os.getuid()
                 and metadata.st_mode & 0o077 == 0, 'Unsafe private qualification base')
-        private_tree = Path(tempfile.mkdtemp(prefix='mac-b4-', dir=private_base)).resolve()
+        private_tree = Path(tempfile.mkdtemp(prefix='mac-b5-', dir=private_base)).resolve()
         receipt['private_tree'] = str(private_tree)
         config, data, temporary = (private_tree / name for name in ('config', 'data', 'tmp'))
         for path in (config, data, temporary):
@@ -233,6 +238,10 @@ def smoke(prefix, proof, session, instrumented, bootstrap, cycles):
         env = dict(os.environ, XDG_CONFIG_HOME=str(config), XDG_DATA_HOME=str(data),
                    TMPDIR=str(temporary) + '/', MCW_MACOS_QUALIFICATION_TRAY='1',
                    MCW_DESKTOP_QUALIFICATION='1' if instrumented else '0')
+        if ui_panels:
+            # Native language detection reads this process-local value; no
+            # defaults write, language override in Flutter or system locale change.
+            env['LC_ALL'] = locale + '_XX.UTF-8'
         env.pop('MCW_LINUX_QUALIFICATION_TRAY', None)
         env.pop('MCW_LINUX_QUALIFICATION_NATIVE', None)
         receipt['development_paths'] = dict(config=str(config), data=str(data),
@@ -266,7 +275,8 @@ def smoke(prefix, proof, session, instrumented, bootstrap, cycles):
             controls('before-open', synchronous=True)
         log_path = proof / 'owner.log'
         log = log_path.open('wb')
-        argv = [str(prefix / 'mcw'), '--read-only-development', '--open', '--desktop-theme', 'light']
+        argv = [str(prefix / 'mcw'), '--settings-development' if ui_panels else '--read-only-development',
+                '--open', '--desktop-theme', theme]
         owner = subprocess.Popen(argv, stdout=subprocess.PIPE if bootstrap else log,
                                  stderr=subprocess.STDOUT, env=env, cwd=prefix)
         if bootstrap:
@@ -280,6 +290,29 @@ def smoke(prefix, proof, session, instrumented, bootstrap, cycles):
             reader.start()
         def text():
             return log_path.read_text(errors='replace')
+        def panel_proof(pid):
+            def received():
+                for line in text().splitlines():
+                    if line.startswith('MCW_FLUTTER_UI_PROOF '):
+                        value = json.loads(line.split(' ', 1)[1])
+                        if value.get('pid') == pid:
+                            return value
+                return None
+            # Several separate bounded native operations, not an extension of
+            # the product's Ready/IPC deadlines or a retry after a failed command.
+            value = wait_for(received, 'Instrumented real-panel scenario did not finish', timeout=45)
+            require(value.get('status') == 'passed', 'Flutter panel proof failed: ' + json.dumps(value))
+            require(value.get('locale') == locale and value.get('theme') == theme
+                    and value.get('platform') == 'macos' and value.get('mode') == 'settings_development'
+                    and value.get('page') == 'diagnostics' and not value.get('framework_errors'),
+                    'Wrong real panel/native language/theme/context')
+            required = {'real-native-history-query-and-refresh', 'development-startup-mutation-disabled',
+                        'notification-preference-changed-and-restored-by-Rust',
+                        'about-rendered', 'real-native-diagnostics-rendered'}
+            require(required <= set(value.get('cases', [])), 'Incomplete real UI proof')
+            receipt['ui_proofs'].append(value)
+            save(proof / 'receipt.json', receipt)
+            return value
         native_ready = wait_for(lambda: re.search(
             r'MCW_MACOS_NATIVE event=ready owner=' + str(owner.pid) + r' pid=(\d+) protocol=4 mutations=disabled',
             text()), 'Actual AppKit native host never became ready', timeout=20)
@@ -310,6 +343,8 @@ def smoke(prefix, proof, session, instrumented, bootstrap, cycles):
         native_still_ready()
         receipt['cases'].append(dict(case='sandbox-inherited-stdio-positive-snapshot', status='passed',
                                      owner=owner.pid, child=child))
+        if ui_panels:
+            panel_proof(child)
         if instrumented:
             def probe_registration(phase):
                 native_still_ready()
@@ -395,6 +430,8 @@ def smoke(prefix, proof, session, instrumented, bootstrap, cycles):
                                            'New owned Flutter window never became visible')
                 require(reopened_window['title'] == 'MicCamWatch' and reopened_window['width'] >= 780,
                         'Reopened owned window has the wrong native identity/geometry')
+                if ui_panels:
+                    panel_proof(child)
                 receipt['cycles'].append(dict(cycle=cycle + 1, status='passed',
                     closed_ui=before_close, reopened_ui=after_open, native_before=native_before,
                     native_after_close=native_after_close, native_after_reopen=native_still_ready(),
@@ -465,6 +502,8 @@ def main():
     parser.add_argument('--release-app', type=Path, required=True)
     parser.add_argument('--instrumented-app', type=Path, required=True)
     parser.add_argument('--cycles', type=int, default=3, help='Normal close/reopen cycles with one permanent native host')
+    parser.add_argument('--ui-panels', action='store_true',
+                        help='Require instrumented real panels/private preference writes, both themes and seven native languages')
     parser.add_argument('--intel-bootstrap-controls', action='store_true',
                         help='Observational diagnostic reproduction only; not an unconditioned qualification pass')
     args = parser.parse_args()
@@ -478,7 +517,8 @@ def main():
     require(2 <= args.cycles <= 10, 'Native host qualification requires2..10 close/reopen cycles')
     prefixes = []
     for name, app in (('release', args.release_app), ('instrumented', args.instrumented_app)):
-        prefixes.append(prepare_prefix(proof / (name + '-prefix'), app.resolve()))
+        mode = 'settings_development' if name == 'instrumented' and args.ui_panels else 'read_only_development'
+        prefixes.append(prepare_prefix(proof / (name + '-prefix'), app.resolve(), mode))
     for name, prefix in zip(('release', 'instrumented'), prefixes):
         inspect(prefix, proof / (name + '-inspection'))
     helper = proof / 'session-probe'
@@ -499,9 +539,14 @@ def main():
                  REPO / 'desktop/qualification/intel_bootstrap/appkit_bootstrap.swift', '-o', appkit],
                 proof / 'appkit-probe-build')
         bootstrap = (helper, appkit)
-    for prefix, instrumented in zip(prefixes, (False, True)):
-        smoke(prefix, proof / ('instrumented-runtime' if instrumented else 'release-runtime'),
-              session, instrumented, bootstrap if instrumented else None, args.cycles)
+    smoke(prefixes[0], proof / 'release-runtime', session, False, None, args.cycles)
+    if args.ui_panels:
+        for locale in ('en', 'fr', 'de', 'es', 'ja', 'zh', 'ru'):
+            for theme in (('light', 'dark') if locale == 'en' else ('dark',)):
+                smoke(prefixes[1], proof / ('instrumented-' + locale + '-' + theme), session,
+                      True, bootstrap, args.cycles, ui_panels=True, locale=locale, theme=theme)
+    else:
+        smoke(prefixes[1], proof / 'instrumented-runtime', session, True, bootstrap, args.cycles)
     # Real production AppKit declarations/NSMenu/status item; simulated data,
     # not Flutter/hardware evidence. Harness itself preserves capture provenance.
     command(['python3', '-B', REPO / 'installer/tests/native_macos_menu.py',
@@ -510,6 +555,8 @@ def main():
     save(proof / 'graphical-receipt.json', dict(
         status='diagnostic-condition-passed' if bootstrap else 'passed', session=session,
         flutter='real Rust owner; real snapshots; sandbox unchanged; separate build identities',
+        ui_panels=('real rendered semantic actions; native history/doctor/private preference readback; seven languages and both themes'
+                   if args.ui_panels else 'not executed by this run'),
         native_menu='actual permanent production AppKit helper in both development runtimes; separate simulated-input visual fixture explicitly labelled',
         native_menu_capture='whole-display capture disabled; owned-view cache fixtures only',
         exclusions=['physical capture', 'hardware controls', 'TCC consent', 'Developer ID', 'notarization',

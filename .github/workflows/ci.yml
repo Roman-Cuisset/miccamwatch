@@ -19,6 +19,7 @@ on:
           - macos
           - windows
           - flutter
+          - flutter-windows
       flutter-runtime-replay:
         description: With native-platform=flutter, replay pinned CI41037181504 products without rebuilding them
         type: boolean
@@ -65,8 +66,14 @@ jobs:
       skip-linux-arm64: ${{ inputs.flutter-skip-linux-arm64 || false }}
       native-gates-only: ${{ inputs.flutter-native-gates-only || false }}
 
+  flutter-windows-qualification:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.native-platform == 'flutter-windows' }}
+    uses: ./.github/workflows/flutter-windows-qualification.yml
+    permissions:
+      contents: read
+
   windows:
-    if: ${{ !inputs.native-only && inputs.native-platform != 'flutter' }}
+    if: ${{ !inputs.native-only && inputs.native-platform != 'flutter' && inputs.native-platform != 'flutter-windows' }}
     runs-on: windows-latest
     permissions:
       contents: read
@@ -218,7 +225,7 @@ jobs:
           path: ${{ runner.temp }}/windows-application-proof
 
   portable:
-    if: ${{ inputs.native-platform != 'windows' && inputs.native-platform != 'flutter' }}
+    if: ${{ inputs.native-platform != 'windows' && inputs.native-platform != 'flutter' && inputs.native-platform != 'flutter-windows' }}
     strategy:
       fail-fast: false
       matrix:

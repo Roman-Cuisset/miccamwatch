@@ -26,14 +26,15 @@ class HistoryPanel extends StatelessWidget {
               const SizedBox(height: 12),
               Align(
                 alignment: Alignment.centerLeft,
-                child: OutlinedButton.icon(
+                child: Semantics(identifier: 'history.refresh', enabled: client.canRequest,
+                  child: OutlinedButton.icon(
                   key: const ValueKey('history.refresh'),
                   onPressed: client.canRequest
                       ? () => client.refreshHistory()
                       : null,
                   icon: const Icon(Icons.refresh, size: 18),
                   label: Text(l['queryRefresh']),
-                ),
+                )),
               ),
               _Availability(client: client, labels: l),
               _Status(status: client.historyStatus, labels: l, name: 'history'),
@@ -188,14 +189,15 @@ class DetailedDiagnosticsPanel extends StatelessWidget {
               const SizedBox(height: 12),
               Align(
                 alignment: Alignment.centerLeft,
-                child: OutlinedButton.icon(
+                child: Semantics(identifier: 'diagnostics.run', enabled: client.canRequest,
+                  child: OutlinedButton.icon(
                   key: const ValueKey('diagnostics.run'),
                   onPressed: client.canRequest
                       ? () => client.refreshDiagnostics()
                       : null,
                   icon: const Icon(Icons.fact_check_outlined, size: 18),
                   label: Text(l[report == null ? 'reportRun' : 'queryRefresh']),
-                ),
+                )),
               ),
               _Availability(client: client, labels: l),
               _Status(
@@ -341,11 +343,11 @@ class _AutostartPanelState extends State<AutostartPanel> {
             onPressed: () => Navigator.pop(context, false),
             child: Text(l['autostartCancel']),
           ),
-          FilledButton(
+          Semantics(identifier: 'autostart.confirm', child: FilledButton(
             key: const ValueKey('autostart.confirm'),
             onPressed: () => Navigator.pop(context, true),
             child: Text(l['autostartConfirm']),
-          ),
+          )),
         ],
       ),
     );
@@ -404,15 +406,18 @@ class _AutostartPanelState extends State<AutostartPanel> {
             spacing: 8,
             runSpacing: 8,
             children: [
-              OutlinedButton.icon(
+              Semantics(identifier: 'autostart.refresh', enabled: client.canRequest && !_confirming,
+                child: OutlinedButton.icon(
                 key: const ValueKey('autostart.refresh'),
                 onPressed: client.canRequest && !_confirming
                     ? () => client.refreshAutostart()
                     : null,
                 icon: const Icon(Icons.refresh, size: 18),
                 label: Text(l['queryRefresh']),
-              ),
-              OutlinedButton.icon(
+              )),
+              Semantics(identifier: 'autostart.change',
+                enabled: client.canSetAutostart && !_confirming, button: true,
+                child: OutlinedButton.icon(
                 key: const ValueKey('autostart.change'),
                 onPressed: client.canSetAutostart && !_confirming
                     ? _confirm
@@ -425,7 +430,7 @@ class _AutostartPanelState extends State<AutostartPanel> {
                       ? 'autostartDisable'
                       : 'autostartEnable'],
                 ),
-              ),
+              )),
             ],
           ),
           _Availability(client: client, labels: l),

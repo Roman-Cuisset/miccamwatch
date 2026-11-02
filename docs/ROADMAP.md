@@ -3102,3 +3102,38 @@ Lots futurs **à approuver, aucun correctif appliqué** :
   accès en écriture refusé sur son seul verrou privé, et StartupApproved désactivé.
   Ces écritures sont interdites localement et **pas encore exécutées** ; la CI B5
   nécessite toujours une autorisation fraîche avant tout push.
+
+### B5 — Six cycles de panneaux Windows réussis, préparation CI isolée
+
+- Après correction, six cycles complets de la même interface Flutter/AOT et du vrai
+  Rust B5 passent : trois clair, trois sombre. Historique et actualisation réels,
+  écriture autostart réellement indisponible en développement, notifications modifiées
+  puis restaurées via Rust, À propos et doctor natif ; aucune erreur Flutter/layout.
+  Valeurs privées des préférences inchangées, native ticks après chaque fermeture,
+  tous les processus possédés réellement terminés. Captures WGC limitées à la fenêtre
+  possédée, PID/génération/chemin vérifiés ; deux images effectivement examinées.
+- Régression mise en évidence : les requêtes de consultation étaient invalidées
+  quand l'observation devenait périmée malgré un IPC valide. Elles suivent désormais
+  `transportLive`, comme les préférences, et non `isLive`. Le deuxième cycle clair
+  final confirme réellement `observation_fresh=false` et `transport_live=true` avec
+  consultation réussie ; les cartes d'observation continuent à afficher l'inconnu.
+- Ready acquitte la première frame validée/rendue avec IPC vivant, même si le
+  collecteur est périmé ; aucune garantie de capture/protection ajoutée, aucun délai
+  produit augmenté. Un essai pendant compilation avait initialisé Flutter en13,2s
+  et échoué ; conservé comme échec sous contention, pas réutilisé comme benchmark.
+- Suite complète après COM :269tests Rust réussis,6ignorés ; releases natif/hybride
+  et analyse Flutter réussies. Dernier hybride CLI9934336octets, tray3890176octets ;
+  runner376320octets et moteur officiel21289472octets. Les quatre PE réels passent
+  la garde CRT/bundle. Les packages MSI/ZIP précédents sont des fixtures **natives** ;
+  ils ne prouvent pas encore un installateur Flutter complet.
+- Préparation macOS : builds normaux distincts de l'AOT de qualification, panneaux
+  réels et préférences privées,8scénarios par architecture (anglais clair/sombre puis
+  six autres langues en sombre), trois fermetures/réouvertures par hôte AppKit permanent.
+  Helper natif toujours non mutateur ; aucun test manuel sur Mac physique prévu.
+- Nouveau workflow Windows réutilisable, déclenché uniquement par dispatch CI dédié :
+  CRT natif/hybride, exactitude MSI/ZIP par extraction `/a`, UI normale et instrumentée,
+  autostart opérationnel uniquement sur runner GitHub jetable/WinSta0 sans installation
+  ni enregistrement existant. Aucun test mutateur autostart exécuté sur ce PC.
+- Prochaine autorisation à demander : seul ref `ci/flutter-b5-20261102`, tip marqué
+  `[CF-Pages-Skip] [skip ci]`, puis dispatch Windows et Unix (deux Mac/Linux x64/ARM64).
+  Work/main, tag, release et site hors périmètre ; aucun push B5 effectué à ce point.

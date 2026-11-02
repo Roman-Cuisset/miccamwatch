@@ -1,0 +1,130 @@
+name: Windows hybrid qualification (no release)
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 80
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      CARGO_TERM_COLOR: never
+      FLUTTER_SUPPRESS_ANALYTICS: 'true'
+      CI: 'true'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: 1.98.1
+          components: clippy
+      - name: Require disposable host and create private evidence
+        run: |
+          if ($env:RUNNER_ENVIRONMENT -ne 'github-hosted') { throw 'Disposable hosted runner required' }
+          $root = Join-Path $env:LOCALAPPDATA 'MicCamWatchQualification/flutter-b5-ci'
+          New-Item -ItemType Directory -Path $root -ErrorAction Stop | Out-Null
+          "MCW_B5_PROOF=$root" >> $env:GITHUB_ENV
+          $env:GITHUB_SHA | Set-Content (Join-Path $root 'source-commit.txt')
+          rustc -Vv | Set-Content (Join-Path $root 'rust-version.txt')
+      - name: Install exact hash-verified official Flutter Windows SDK
+        run: |
+          $manifest = Invoke-RestMethod 'https://storage.googleapis.com/flutter_infra_release/releases/releases_windows.json'
+          $record = @($manifest.releases | Where-Object { $_.version -eq '3.47.8' -and $_.channel -eq 'stable' -and $_.dart_sdk_arch -eq 'x64' })
+          $sha = '11e19ea3409808fe3b3765ea8149640c299e58cce6eda7c9f38fc1b4a193eb6e'
+          if ($record.Count -ne 1 -or $record[0].hash -ne '737ba8f885dc774b53b442759999a312c9461e4e' -or $record[0].sha256 -ne $sha -or $record[0].archive -ne 'stable/windows/flutter_windows_3.47.8-stable.zip') { throw 'Official SDK metadata drift' }
+          $archive = Join-Path $env:RUNNER_TEMP 'mcw-flutter-sdk.zip'
+          Invoke-WebRequest 'https://storage.googleapis.com/flutter_infra_release/releases/stable/windows/flutter_windows_3.47.8-stable.zip' -OutFile $archive
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $sha) { throw 'SDK checksum mismatch' }
+          $tools = Join-Path $env:RUNNER_TEMP 'mcw-flutter-tools'
+          New-Item -ItemType Directory -Path $tools | Out-Null
+          tar -xf $archive -C $tools
+          if ($LASTEXITCODE -ne 0) { throw 'Verified SDK extraction failed' }
+          (Join-Path $tools 'flutter/bin') >> $env:GITHUB_PATH
+          $record[0] | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $env:MCW_B5_PROOF 'sdk-source.json')
+      - name: Require matching framework engine and Dart
+        run: |
+          $info = flutter --version --machine | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $info.frameworkRevision -ne '737ba8f885dc774b53b442759999a312c9461e4e' -or $info.engineRevision -ne 'cf636b1dfb818dd6a3ff16e390e93b1a036969c8' -or $info.dartSdkVersion.Split(' ')[0] -ne '3.13.7') { throw 'Unexpected SDK toolchain' }
+          $info | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $env:MCW_B5_PROOF 'flutter-version.json')
+      - name: Check Rust and actual native release imports
+        run: |
+          cargo clippy --all-targets --locked --features windows-tray,flutter-desktop -- -D warnings
+          if ($LASTEXITCODE -ne 0) { throw 'Strict Rust Clippy failed' }
+          cargo test --lib --bins --locked --features windows-tray,flutter-desktop
+          if ($LASTEXITCODE -ne 0) { throw 'Rust tests failed' }
+          cargo build --release --locked --features windows-tray
+          if ($LASTEXITCODE -ne 0) { throw 'Native release failed' }
+          python -B installer/tests/test_windows_distribution_imports.py -v
+          if ($LASTEXITCODE -ne 0) { throw 'Import audit regressions failed' }
+          python -B installer/tests/windows_distribution_imports.py target/release/mcw.exe target/release/mcw-tray.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Native PE imports failed' }
+          $native = Join-Path $env:MCW_B5_PROOF 'native'
+          New-Item -ItemType Directory -Path $native | Out-Null
+          Copy-Item target/release/mcw.exe,target/release/mcw-tray.exe $native
+      - name: Build and administratively extract exact native MSI and ZIP (no install)
+        run: |
+          dotnet tool restore
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned WiX restore failed' }
+          $native = Join-Path $env:MCW_B5_PROOF 'native'
+          $version = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages[0].version
+          $msi = Join-Path $env:MCW_B5_PROOF 'native-fixture.msi'
+          $zip = Join-Path $env:MCW_B5_PROOF 'native-fixture.zip'
+          dotnet wix build installer/miccamwatch.wxs -d Version=$version -d "Executable=$native/mcw.exe" -d "TrayExecutable=$native/mcw-tray.exe" -o $msi
+          if ($LASTEXITCODE -ne 0) { throw 'Private native MSI build failed' }
+          $receipt = & "$native/mcw.exe" __portable-receipt
+          if ($LASTEXITCODE -ne 0) { throw 'Portable receipt failed' }
+          [IO.File]::WriteAllText((Join-Path $native '.miccamwatch-portable.json'), $receipt, [Text.UTF8Encoding]::new($false))
+          Compress-Archive -Path "$native/mcw.exe","$native/mcw-tray.exe","$native/.miccamwatch-portable.json",README.md,LICENSE -DestinationPath $zip
+          python -B installer/tests/windows_distribution_imports.py "$native/mcw.exe" "$native/mcw-tray.exe" --msi $msi --zip $zip
+          if ($LASTEXITCODE -ne 0) { throw 'MSI/ZIP exact-build dependency gate failed' }
+      - name: Build hybrid Rust and normal Flutter release
+        run: |
+          cargo build --release --locked --features windows-tray,flutter-desktop
+          if ($LASTEXITCODE -ne 0) { throw 'Hybrid Rust release failed' }
+          Push-Location desktop/flutter
+          try {
+            flutter pub get --enforce-lockfile
+            if ($LASTEXITCODE -ne 0) { throw 'Locked Flutter dependencies failed' }
+            flutter analyze --no-pub
+            if ($LASTEXITCODE -ne 0) { throw 'Flutter analyze failed' }
+            flutter test --no-pub
+            if ($LASTEXITCODE -ne 0) { throw 'Flutter tests failed' }
+            flutter build windows --release --no-pub
+            if ($LASTEXITCODE -ne 0) { throw 'Normal Flutter release failed' }
+            Copy-Item -Recurse build/windows/x64/runner/Release (Join-Path $env:MCW_B5_PROOF 'normal-bundle')
+          } finally { Pop-Location }
+          python -B installer/tests/windows_distribution_imports.py target/release/mcw.exe target/release/mcw-tray.exe --flutter-bundle "$env:MCW_B5_PROOF/normal-bundle"
+          if ($LASTEXITCODE -ne 0) { throw 'Complete hybrid dependency gate failed' }
+      - name: Build distinct semantic proof UI and qualify isolated lifecycle
+        run: |
+          Push-Location desktop/flutter
+          try {
+            flutter build windows --release --no-pub --dart-define=MCW_UI_QUALIFICATION=consultation
+            if ($LASTEXITCODE -ne 0) { throw 'Instrumented consultation build failed' }
+            Copy-Item -Recurse build/windows/x64/runner/Release (Join-Path $env:MCW_B5_PROOF 'consultation-bundle')
+            flutter build windows --release --no-pub --dart-define=MCW_UI_QUALIFICATION=startup
+            if ($LASTEXITCODE -ne 0) { throw 'Instrumented startup build failed' }
+            Copy-Item -Recurse build/windows/x64/runner/Release (Join-Path $env:MCW_B5_PROOF 'startup-bundle')
+          } finally { Pop-Location }
+          $venv = Join-Path $env:RUNNER_TEMP 'mcw-b5-python'
+          python -m venv $venv
+          $python = Join-Path $venv 'Scripts/python.exe'
+          & $python -m pip install psutil==7.2.2 Pillow==12.2.0
+          if ($LASTEXITCODE -ne 0) { throw 'Qualification dependencies failed' }
+          & $python -B desktop/qualification/windows_b5.py --engine-directory target/release --release-bundle "$env:MCW_B5_PROOF/normal-bundle" --instrumented-bundle "$env:MCW_B5_PROOF/consultation-bundle" --startup-bundle "$env:MCW_B5_PROOF/startup-bundle" --proof "$env:MCW_B5_PROOF/runtime" --startup-ci
+          if ($LASTEXITCODE -ne 0) { throw 'Real interactive qualification failed; retain exact evidence, not a no-desktop pass' }
+      - name: Preserve only qualification evidence, never publish a release
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: flutter-b5-windows-evidence
+          retention-days: 14
+          if-no-files-found: warn
+          path: ${{ env.MCW_B5_PROOF }}/
