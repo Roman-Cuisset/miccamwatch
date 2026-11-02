@@ -3299,3 +3299,77 @@ Lots futurs **à approuver, aucun correctif appliqué** :
   de qualification, dont28346108octets pour le frontend. Pas un MSI Flutter final.
 - Prochaine opération ciblée : build/qualification Intel avec ce renderer corrigé,
   sans relancer Windows/Linux/ARM déjà vérifiés ; aucune prétention de test physique.
+
+## 2026-11-02 — B5 terminée : qualification et point de reprise
+
+### Résultats définitifs
+
+- **Intel41476279179 réussi**, source `c75fbd870212a387aac3fd49957ce2f1f8bf20aa` :
+  compilation Rust/Flutter, suites, sceaux/architectures/sandbox et huit scénarios
+  graphiques réels sans bootstrap conditionnant l'essai.32preuves/24réouvertures ;
+  trois activations singleton par scénario, Status/Exit du vrai hôte AppKit,
+  restauration des préférences privées et absence de résidu possédé vérifiées.
+  Les sept captures sombres et la claire ont été examinées : textes lisibles.
+- Artefact Intel13158772655 : ZIP
+  `6cda83b9946e99d8f954c5623743c05b4f9d3dd258af7b8c76de96f8391fbdc0`,
+  TAR `6863268305246ce9f79e16653451cbedea2af765842193c2215484c42b283cf3`.
+  Les deux pins Mac pointent désormais vers les vrais produits Skia qualifiés.
+  Les variantes normales exactes ARM/Intel ont aussi passé IPC et disparition des
+  enfants natifs/Flutter à la mort du propriétaire. Aucun nouveau grant TCC.
+- **Windows41424009387 réussi** : CRT statique natif/hybride, audit réel PE et
+  MSI/ZIP natifs, versions sans effet de bord, tests/suites et autostart en compte
+  hébergé jetable. Token administrateur sur WinSta0 ; pas une validation compte
+  standard ou Windows vierge. Les six vrais cycles de panneaux locaux confirment
+  consultations/historique/diagnostics, préférences et poursuite Rust après sortie.
+- **Linux41422733643** : jobs x64 et ARM64 individuellement réussis, malgré le
+  statut global annulé de l'ancien run à cause du job Intel. Mint22.2 B5 réel
+  également réussi (six cycles, vrai SNI, commandes/préférences/erreurs/restauration).
+  Renderer llvmpipe confirmé ; pas de mesure GPU accélérée ni de bureau ARM physique.
+- Derniers totaux Windows locaux :269tests Rust réussis,6ignorés ; Clippy strict
+  natif/hybride et89tests Flutter/analyse réussis ;9tests du garde PE réussis.
+  Les mesures Windows/Mint et leur protocole sont consignés ci-dessus :
+  **aucun gain CPU général revendiqué**, pas de cache de confiance ou cadence réduite.
+- Installation quotidienne auditée sans correction : tray MSI0.21.0 présent,
+  aucune garde micro autonome observée, intention micro non demandée à cet instant.
+  Empreintes exécutables/réglages/intentions, identité du processus et autostart
+  identiques avant/après. Ce constat ne certifie pas l'état physique SDK des entrées.
+- Routage : principal `openai-codex/gpt-6.1-sol`/Codex OAuth. AGENTS/RULES présents
+  et lus ; héritage/défauts/rôles/fallbacks de délégation insuffisamment démontrables.
+  **Zéro sous-agent**, aucun autre modèle/fournisseur ou paramètre global modifié.
+
+### Sauvegarde et limites
+
+- Branche locale `work/flutter-hybrid-0211` conservée. Seule la branche CI
+  `ci/flutter-b5-20261102` a été poussée après l'autorisation ciblée ; main/tag stable,
+  neuf worktrees, stash et branche CRT séparée préservés. Aucun nouveau tag/release,
+  remplacement du MSI, contrôle matériel ou déploiement de site.
+- Preuves privées durables :
+  `%LOCALAPPDATA%\MicCamWatchQualification\flutter-b5-20261102-080321`,
+  index `B5-EVIDENCE-INDEX.json`, archives originales et SHA vérifiés, captures
+  Windows/Mint/Mac, reçus de cycles/restauration et profils CPU distincts.
+- Non qualifié : Windows sans runtime VC préinstallé, soumission winget publique,
+  MSI Flutter complet et cycle installé/mise à jour/désinstallation, autostart Unix
+  opérationnel écrit depuis Flutter, fonctions matérielles/TCC, accessibilité
+  native externe et toutes les combinaisons DPI, GPU Mint ou bureau ARM physique.
+  **Aucun test manuel sur Mac physique n'est une condition de reprise.**
+
+### Instructions de reprise après validation utilisateur
+
+1. Relire cette section et `FLUTTER_MIGRATION_MATRIX.md` ; ne pas recommencer
+   les builds/tests/panneaux réussis si leurs composants n'ont pas changé.
+2. Garder le retour Skia Mac avec le SDK épinglé ; le requalifier à tout changement
+   d'engine. Les anciens artefacts par défaut restent des preuves d'échec, pas les
+   nouveaux pins. Ne pas modifier/re-signer les produits déjà archivés.
+3. Reprendre la parité restante explicitement : caméra/lock/maintenance, commandes
+   micro Unix, API persistantes langue/thème, mise à jour et packaging hybride.
+   Distinguer toujours observation, demande, sourdine et protection confirmée.
+4. Avant toute refonte de la libération micro manuelle, faire valider le contrat
+   durable par endpoint et les tests crash/CAS/original/externe décrits plus haut ;
+   B5 conserve l'effet actuel explicite d'unmute, pas une restauration individuelle.
+5. CPU : repartir du comparatif accepté `cpu-b4-b5-matched-2`, pas du premier essai
+   invalidé. WinVerifyTrust reste dominant ; ne pas recycler un verdict à partir
+   des seules dates/tailles. La latence de détection active n'a pas été mesurée.
+6. Mint : n'inventer aucune accélération ; un essai GPU nécessite une session
+   autorisée réellement accélérée, pas un changement de droits/driver silencieux.
+7. Attendre l'accord utilisateur avant la tranche suivante, toute installation,
+   publication, fusion ou modification des protections quotidiennes.

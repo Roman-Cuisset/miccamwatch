@@ -1,5 +1,5 @@
 """Hosted-only runtime replay of immutable, individually pinned B5 products.
-Product and harness provenance stay separate, including the failed Intel runtime.
+Product and harness provenance stay separate; both Mac pins retain the verified Skia configuration.
 No product build, installation, re-signing, permission grant or fallback download.
 """
 import argparse
@@ -20,10 +20,10 @@ PINS = {
         source='01aae74e4430faed0564372c23819af0e2c858f6', artifact=13156323629,
         zip_sha256='97f10902532ade49a0118a79831f9f4963089b55a0ecf08ac346d6ebba97aba0',
         native_sha256='dcfd3b27f428e7d4c45029a4253ee74a657dc008ef8c77ab96331c1c8394d4e4'),
-    ('macos', 'x86_64'): dict(run=41454270155,
-        source='a7f562d5c0c1bdc491668336ac45dedbb2c38bcd', artifact=13148645788,
-        zip_sha256='193baf06b757277f0cc6553404152d92ea1491b2a97ff63ca9d04864b55231b2',
-        native_sha256='60facbfa9ee5454811c3040d04ce63fa6d4a856f74cd2585e8145ffcd150f13c'),
+    ('macos', 'x86_64'): dict(run=41476279179,
+        source='c75fbd870212a387aac3fd49957ce2f1f8bf20aa', artifact=13158772655,
+        zip_sha256='6cda83b9946e99d8f954c5623743c05b4f9d3dd258af7b8c76de96f8391fbdc0',
+        native_sha256='6863268305246ce9f79e16653451cbedea2af765842193c2215484c42b283cf3'),
     ('linux', 'x86_64'): dict(run=41422733643,
         source='90d69b4738f76485e40f1002125de1d46c6254c3', artifact=13130543571,
         zip_sha256='eadf89691b1c4a6992014d8e383b59026bcd9ec3626a708e46e01201237edffc',
