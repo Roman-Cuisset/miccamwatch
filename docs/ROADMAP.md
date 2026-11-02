@@ -3152,3 +3152,39 @@ Lots futurs **à approuver, aucun correctif appliqué** :
   requis ; aucune extraction permissive ni suppression des contrôles. Étape PowerShell
   exacte exécutée localement avec succès. Relance Windows sur le seul ref CI autorisé ;
   le run Unix initial demeure indépendant et n'est pas recommencé.
+
+### B5 — Preuves CI récupérées après interruption
+
+- Windows41424009387 réussi, source `91be31a`. ZIP d'artefact vérifié contre le
+  digest GitHub `28574a4bfc9c9b88866e1c71ccaeabaf0145a37e90b3afb7d793a2234d309b60`.
+  Reçus réels vérifiés : activation, nouvel owner puis désactivation, Run étranger
+  conservé, accès en écriture refusé, StartupApproved désactivé respecté ; chaque
+  Flutter possédé termine et les préférences privées restent identiques.
+  **WinSta0, jeton administrateur : aucune qualification sous compte standard revendiquée.**
+  Aucun installateur installé, aucune protection matérielle modifiée.
+- Unix41422733643, source `90d69b4` : Linux x64, Linux ARM64 et Apple Silicon réussis ;
+  leurs trois ZIP d'artefacts/digests GitHub et les archives internes Mac vérifiés.
+  Apple Silicon : huit scénarios,32 preuves de panneaux réels,24 réouvertures avec
+  hôtes AppKit permanents, sept langues et anglais clair/sombre. Ce n'est ni une
+  validation TCC/périphérique, ni une signature Developer ID/notarisation.
+- Intel : builds Rust/Flutter normal/instrumenté et suites réussis, première étape
+  graphique échouée après21s. Puis étape de synthèse non terminée ; annotation
+  GitHub confirme la limite globale50min, pas une annulation par concurrence.
+  Journaux individuels refusés404 et aucun artefact Intel final livré. Cause exacte
+  du premier échec non établie : **ne pas annoncer Intel qualifié**.
+- Durcissement du contrôleur CI uniquement : téléverser les produits figés avant
+  tout test graphique, borner runtime/synthèse/archivage, supprimer l'interpréteur
+  Python inutile de la synthèse. Séparer ciblage Intel des sondes bootstrap :
+  une relance ciblée ordinaire ne doit pas devenir implicitement un essai conditionné.
+  YAML et synthèse shell exécutée localement avec le vrai reçu Apple Silicon validés.
+  Ne pas augmenter les délais produit ; conserver les trois cibles déjà réussies.
+  Les produits Intel non livrés imposent un rebuild ciblé, pas celui des cinq cibles.
+- Comparatif CPU initial rejeté : une caméra réelle passe ready→active avec changement
+  de confiance/périphérique/preuve pendant la dernière borne. Aucune action matérielle
+  effectuée, aucun résultat partiel promu en gain. Comparatif strict relancé dans un
+  nouveau répertoire, sans ignorer la différence. Contrôleur `ReadOnlyHost` aligné sur
+  le suivi FILETIME du parent ; aucun changement de surveillance/signature/cadence.
+- Nouveaux packages natifs du dernier build local vérifiés par extraction `/a` :
+  MSI4534272octets SHA256 `8bfee2c6785ff66ac17b45d247fc429aa0a9c37abefabe06f6f234b82ebe31ca` ;
+  ZIP5768732octets SHA256 `60ee359dc86ca4b7d45f31b038de948f699e7e5bcc207464230f2581e2eb43a4`.
+  Ce sont des fixtures natives privées, pas une release ou un MSI Flutter complet.

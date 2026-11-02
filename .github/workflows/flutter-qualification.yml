@@ -12,6 +12,9 @@ on:
       intel-only:
         type: boolean
         default: false
+      intel-bootstrap-controls:
+        type: boolean
+        default: false
       skip-linux-x64:
         type: boolean
         default: false
@@ -27,6 +30,9 @@ on:
         type: boolean
         default: false
       intel-only:
+        type: boolean
+        default: false
+      intel-bootstrap-controls:
         type: boolean
         default: false
       skip-linux-x64:
@@ -173,14 +179,27 @@ jobs:
           printf '%s\n' "$GITHUB_SHA" > "$root/built-products/source-commit.txt"
           tar -C "$root" -czf "$root/built-products.tar.gz" built-products
           shasum -a256 "$root/built-products.tar.gz" > "$root/built-products.SHA256SUMS"
+      - name: Upload frozen build proof before any graphical process can fail
+        if: ${{ !inputs.runtime-replay }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: flutter-macos-${{ matrix.architecture }}-${{ github.sha }}-built-products
+          retention-days: 14
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/mcw-flutter-macos/built-products.tar.gz
+            ${{ runner.temp }}/mcw-flutter-macos/built-products.SHA256SUMS
+            ${{ runner.temp }}/mcw-flutter-macos/environment.log
+            ${{ runner.temp }}/mcw-flutter-macos/sdk-pin.json
       - name: Inspect bundle seals architectures ACLs and run owned Aqua smoke when available
+        timeout-minutes: 10
         run: |
           set -euo pipefail
           set --
           if [[ "${{ inputs.runtime-replay }}" != "true" ]]; then
             set -- --ui-panels
           fi
-          if [[ "${{ inputs.intel-only }}" == "true" ]]; then
+          if [[ "${{ inputs.intel-bootstrap-controls }}" == "true" ]]; then
             set -- "$@" --intel-bootstrap-controls
           fi
           python3 -B desktop/qualification/macos.py \
@@ -191,17 +210,22 @@ jobs:
             2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/qualification.log"
       - name: Summarize observed graphical status (never infer from a successful build)
         if: always()
+        timeout-minutes: 1
         run: |
-          python3 - <<'PY'
-          import json, os, pathlib
-          root = pathlib.Path(os.environ['RUNNER_TEMP']) / 'mcw-flutter-macos'
-          receipt = root / 'evidence/graphical-receipt.json'
-          value = json.loads(receipt.read_text()) if receipt.exists() else {'status': 'not-completed', 'reason': 'See preserved build/runtime logs; no graphical success claimed'}
-          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as out:
-              out.write('## macOS ' + os.environ['EXPECTED_ARCH'] + ' qualification\n\n```json\n' + json.dumps(value, indent=2) + '\n```\n\nNo release, deploy, physical capture, Developer ID or notarization claim.\n')
-          PY
+          set -euo pipefail
+          receipt="$RUNNER_TEMP/mcw-flutter-macos/evidence/graphical-receipt.json"
+          {
+            printf '## macOS %s qualification\n\n```json\n' "$EXPECTED_ARCH"
+            if [[ -f "$receipt" ]]; then
+              cat "$receipt"
+            else
+              printf '{"status":"not-completed","reason":"See preserved runtime logs; no graphical success claimed"}\n'
+            fi
+            printf '\n```\n\nNo release, deploy, physical capture, Developer ID or notarization claim.\n'
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Preserve Unix modes and symlinks and verify restored bundle seals
         if: always()
+        timeout-minutes: 3
         run: |
           set -euo pipefail
           root="$RUNNER_TEMP/mcw-flutter-macos"
@@ -220,6 +244,7 @@ jobs:
           fi
       - name: Preserve exact qualification logs captures and development payload identities
         if: always()
+        timeout-minutes: 5
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: flutter-macos-${{ matrix.architecture }}-${{ github.sha }}${{ inputs.runtime-replay && '-runtime-replay' || '' }}
