@@ -1,4 +1,4 @@
-# Native feature migration inventory — stages A, B1, B2, B3 and B4
+# Native feature migration inventory — stages A, B1, B2, B3, B4 and B5
 
 Source baseline: `b5cf391c1905cbc391c47220f1347c55ba8e24cc`, 27 October 2026. Inspection only; runtime qualification is recorded separately. This inventory preserves every native/public CLI capability and its actual limitations.
 
@@ -6,7 +6,42 @@ The inventory priorities mean **A = microphone**, **B = presentation/preferences
 
 Stage A implementation update: Windows now has explicit desired-state microphone commands through the existing Rust worker, private protocol2 admission and native readback. Real mute/release, UI process exit, retained native guard and reopening without duplicate UI have been exercised. Other controls/platforms remain gated; this inventory's source references and “inspection only” evidence describe the pinned baseline, not the later runtime qualification. Sidebar/Windows branding now uses official assets; macOS/Linux Flutter packaging identity remains unqualified. See the current stage A results in the ROADMAP.
 
-## Current B4 development checkpoint — 31 October 2026
+## B5 integration checkpoint — 2 November 2026
+
+Work in progress on `work/flutter-hybrid-0211`; not a release or approval to replace the stable installation.
+
+| Area | Confirmed in B5 so far | Still not established |
+|---|---|---|
+| Windows distribution runtime | All three CRT commits integrated with hybrid/development/version gates preserved. Actual native Rust release and static C++ Flutter runner/official engine passed the strengthened ordinary/delay PE import audit. Native MSI administrative extraction and ZIP payloads matched the exact first B5 build. | Final post-integration packages/CI, clean Windows and public winget validation are separate gates. Published0.21.0 assets are unchanged and still have their original dependency. |
+| Windows startup inspection | Native local Task Scheduler COM replaces the old “any schtasks failure means absent” behavior. Only file-not-found is absent; access/service/other errors remain unknown. Five selected Rust tests, strict Clippy, native release, actual passive query and version commands passed. | Real activation/deactivation/restart and refusal fixtures are prepared for a disposable hosted runner only; no daily-machine registration has been changed. |
+| Rendered consultation | Real release/AOT semantic callbacks exercised history/refresh, disabled development startup, notification preference round-trip, About and native diagnostics in two successful Windows light cycles. Normal release passed three close/reopens and owner shutdown. | Third panel cycle exposed freshness/connection invalidation; the targeted separation and stale-frame startup corrections still require complete repeat qualification. No external MSAA/UIA or seven-language native visual pass is claimed. |
+| Hybrid lifecycle | Native stderr is now outside the authenticated command pipe. Exact process generation/kernel exit checks prove owned teardown, including after a failed panel run. | Full new light/dark, macOS/ARM and installed-package lifecycle qualification remains separate. Flutter is not intentionally retained after close. |
+| macOS / Linux | Shared UI and permanent native host retained; real-panel/seven-language/dark macOS qualification prepared. Fresh Mint diagnostics still report XRDP/X11 llvmpipe without hardware acceleration. | No B5 remote run, accelerated Mint measurement, ARM desktop/device execution, TCC or physical-device test is claimed. No physical/manual Mac gate is planned. |
+
+### Microphone release is not owned-original restoration
+
+Source inspection, not a new device test: Windows manual release calls
+`windows_protection::Owner::apply` → `GuardEndpoints::explicit_release` →
+`protection_pass(..., false)`. It explicitly unmutes supported current inputs,
+including inputs muted before the request. The existing Flutter warning and
+confirmation describe that effect; it must not be relabelled “restore previous states”.
+
+The separate automatic-lock journal in `windows_mute.rs` skips already-muted
+inputs and restores only retained original values whose endpoint generation,
+revision and applied readback are still owned; external/manual changes relinquish
+ownership, while real read/write failures retain unresolved originals. B5 does not
+merge or weaken these different contracts.
+
+A change to manual restoration would require a separately reviewed durable
+per-endpoint ownership/original-state contract, crash/restart and arrival handling,
+generation/CAS/readback tests, preservation of external intent and explicit resolution
+of “unmute now” versus “restore originals”. No such redesign or hardware mutation is
+included in this tranche.
+
+## Historical B4 development checkpoint — 31 October 2026
+
+Covers the already-qualified B4 products, not later unqualified B5 changes.
+
 
 This is not a public0.21.1 release, complete parity or approval to remove GTK/AppKit.
 Source d7f778a contains the shared Windows/Linux x64 feature slice;7e47596 adds the native timing/provisioning fixes.

@@ -3078,3 +3078,27 @@ Lots futurs **à approuver, aucun correctif appliqué** :
   scénarios autostart mutateurs réservés à un runner jetable, jamais à ce Windows quotidien.
 - Contrôleurs Windows/macOS étendus et workflows préparés localement. Aucun nouveau run B5,
   aucun push, aucune modification des protections ou de l'installation stable.
+
+### B5 — Requête d'autostart native, états inconnus et restauration
+
+- Cause inspectée : `registered_task` assimilait tout code non nul de schtasks à
+  une absence. Remplacement Windows uniquement par `ITaskService` local/current-user,
+  `GetFolder`/`GetTask`/`Xml`, sans identifiants, élévation ou mutation implicite.
+  Seul HRESULT Win32 FILE_NOT_FOUND devient None ; accès refusé, RPC et autres erreurs
+  restent des erreurs/états inconnus. Le XML reste UTF16 entre les API natives ;
+  le décodeur de sortie console et son ancien test sont supprimés.
+- Appelants revus par LSP : état, opt-in, contrôle après création, refresh, opt-out
+  et désinstallation conservent leurs verrous/propriétés/CAS. Runtime COM existant
+  conservé et correctement possédé ; aucun verdict de confiance mis en cache.
+- Cinq tests ciblés d'autostart et Clippy strict réussis. Nouveau build release natif :
+  CLI9475072octets, tray3360256octets ; audits PE et deux versions immédiates réussis.
+  La vraie requête passive depuis le préfixe privé quitte1/disabled, sans stderr :
+  cela concerne cette installation de qualification, pas l'entrée Run MSI quotidienne.
+- Matrice actualisée avec l'état B5 encore incomplet et l'analyse des sourdines :
+  libération manuelle Windows = unmute explicite, pas restauration des valeurs antérieures.
+  Journal automatique distinct, déjà conservateur envers les entrées pré-sourdines,
+  générations et changements externes. Aucune refonte profonde ni action matérielle.
+- Contrôleur CI préparé pour activation, nouvel owner, désactivation, Run étranger,
+  accès en écriture refusé sur son seul verrou privé, et StartupApproved désactivé.
+  Ces écritures sont interdites localement et **pas encore exécutées** ; la CI B5
+  nécessite toujours une autorisation fraîche avant tout push.

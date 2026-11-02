@@ -10,6 +10,7 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
 };
+use windows::Win32::System::TaskScheduler::IRegisteredTask;
 use winreg::{RegKey, enums::HKEY_CURRENT_USER};
 
 const TASK_NAME: &str = "MicCamWatch Tray";
@@ -254,7 +255,9 @@ pub fn set_if_expected(expected: bool, requested: bool) -> Result<bool> {
         else { disable_locked(&current)?; }
     }
     let confirmed = state()? == AutostartState::Enabled;
-    if confirmed != requested { bail!("autostart readback did not confirm requested state"); }
+    if confirmed != requested {
+        bail!("autostart readback did not confirm requested state");
+    }
     Ok(confirmed)
 }
 
@@ -340,39 +343,62 @@ impl TaskRegistration {
 }
 
 fn registered_task() -> Result<Option<TaskRegistration>> {
-    let output = schtasks(&["/Query", "/TN", TASK_NAME, "/XML"])?;
-    if !output.status.success() {
-        return Ok(None);
-    }
-    parse_task(&decode_task_xml(&output.stdout)?, &current_user_sid()?).map(Some)
-}
-
-fn decode_task_xml(bytes: &[u8]) -> Result<String> {
-    if bytes.starts_with(&[0xff, 0xfe]) || (bytes.len() > 1 && bytes[1] == 0) {
-        let bytes = bytes.strip_prefix(&[0xff, 0xfe]).unwrap_or(bytes);
-        if !bytes.len().is_multiple_of(2) {
-            bail!("Task Scheduler returned truncated UTF-16 XML");
-        }
-        return String::from_utf16(
-            &bytes
-                .as_chunks::<2>()
-                .0
-                .iter()
-                .map(|part| u16::from_le_bytes(*part))
-                .collect::<Vec<_>>(),
-        )
-        .context("Task Scheduler returned invalid UTF-16 XML");
-    }
-    String::from_utf8(bytes.to_vec()).context("Task Scheduler returned invalid XML encoding")
-}
-
-fn parse_task(xml: &str, caller_sid: &str) -> Result<TaskRegistration> {
     use windows::{
-        Data::Xml::Dom::XmlDocument,
-        Win32::System::Com::{
-            COINIT_MULTITHREADED, CoIncrementMTAUsage, CoInitializeEx, CoUninitialize,
+        Win32::System::{
+            Com::{CLSCTX_INPROC_SERVER, CoCreateInstance},
+            TaskScheduler::{ITaskService, TaskScheduler},
+            Variant::VARIANT,
         },
-        core::HSTRING,
+        core::{BSTR, HSTRING},
+    };
+    let _runtime = task_com_runtime()?;
+    let service: ITaskService =
+        unsafe { CoCreateInstance(&TaskScheduler, None, CLSCTX_INPROC_SERVER) }
+            .context("cannot open Task Scheduler; startup task status is unknown")?;
+    let empty = VARIANT::default();
+    unsafe { service.Connect(&empty, &empty, &empty, &empty) }
+        .context("cannot connect to local Task Scheduler as the current user")?;
+    let folder = unsafe { service.GetFolder(&BSTR::from("\\")) }
+        .context("cannot read the root Task Scheduler folder")?;
+    let Some(task) = optional_registered_task(unsafe { folder.GetTask(&BSTR::from(TASK_NAME)) })?
+    else {
+        return Ok(None);
+    };
+    let xml = unsafe { task.Xml() }.context("cannot read the registered startup task XML")?;
+    parse_task(&HSTRING::from_wide(&xml), &current_user_sid()?).map(Some)
+}
+
+fn optional_registered_task(
+    result: windows::core::Result<IRegisteredTask>,
+) -> Result<Option<IRegisteredTask>> {
+    match result {
+        Ok(task) => Ok(Some(task)),
+        Err(error)
+            if error.code()
+                == windows::core::HRESULT::from_win32(
+                    windows::Win32::Foundation::ERROR_FILE_NOT_FOUND.0,
+                ) =>
+        {
+            Ok(None)
+        }
+        Err(error) => Err(error).context("cannot query startup task; its status is unknown"),
+    }
+}
+
+struct TaskComRuntime(bool);
+
+impl Drop for TaskComRuntime {
+    fn drop(&mut self) {
+        if self.0 {
+            unsafe { windows::Win32::System::Com::CoUninitialize() };
+        }
+    }
+}
+
+fn task_com_runtime() -> Result<TaskComRuntime> {
+    use windows::Win32::{
+        Foundation::RPC_E_CHANGED_MODE,
+        System::Com::{COINIT_MULTITHREADED, CoIncrementMTAUsage, CoInitializeEx},
     };
     // windows-core caches agile activation factories for the whole process.
     // A short-lived COM guard alone leaves that cache dangling after the last
@@ -386,19 +412,18 @@ fn parse_task(xml: &str, caller_sid: &str) -> Result<TaskRegistration> {
         bail!("cannot initialize task XML runtime: {error}");
     }
     let initialized = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
-    struct ComGuard(bool);
-    impl Drop for ComGuard {
-        fn drop(&mut self) {
-            if self.0 {
-                unsafe {
-                    CoUninitialize();
-                }
-            }
-        }
+    if initialized.is_err() && initialized != RPC_E_CHANGED_MODE {
+        initialized
+            .ok()
+            .context("cannot initialize the current thread's task COM runtime")?;
     }
-    let _guard = ComGuard(initialized.is_ok());
+    Ok(TaskComRuntime(initialized.is_ok()))
+}
+
+fn parse_task(xml: &windows::core::HSTRING, caller_sid: &str) -> Result<TaskRegistration> {
+    use windows::{Data::Xml::Dom::XmlDocument, core::HSTRING};
     let document = XmlDocument::new()?;
-    document.LoadXml(&HSTRING::from(xml))?;
+    document.LoadXml(xml)?;
     let text = |xpath: &str| -> Result<String> {
         let nodes = document.SelectNodes(&HSTRING::from(xpath))?;
         if nodes.Length()? == 0 {
@@ -744,6 +769,8 @@ mod tests {
 
     #[test]
     fn task_xml_preserves_disabled_and_unmanaged_ownership() -> Result<()> {
+        use windows::core::HSTRING;
+        let _runtime = task_com_runtime()?;
         let xml = r#"<Task xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
           <Triggers><LogonTrigger><Enabled>true</Enabled></LogonTrigger></Triggers>
           <Principals><Principal><UserId>S-1-5-21-123</UserId><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
@@ -751,26 +778,26 @@ mod tests {
           <Actions><Exec><Command>C:\Users\alice\.cargo\bin\mcw-tray.exe</Command></Exec></Actions>
         </Task>"#;
         let current = Path::new(r"C:\Users\alice\.cargo\bin\mcw.exe");
-        let task = parse_task(xml, "S-1-5-21-123")?;
+        let task = parse_task(&HSTRING::from(xml), "S-1-5-21-123")?;
         assert!(task.enabled && task.owned_by(current));
-        assert!(!parse_task(xml, "S-1-5-21-999")?.owned_by(current));
+        assert!(!parse_task(&HSTRING::from(xml), "S-1-5-21-999")?.owned_by(current));
         assert!(
             !parse_task(
-                &xml.replace("<Enabled>true</Enabled>", "<Enabled>false</Enabled>"),
+                &HSTRING::from(xml.replace("<Enabled>true</Enabled>", "<Enabled>false</Enabled>")),
                 "S-1-5-21-123"
             )?
             .enabled
         );
         assert!(
             !parse_task(
-                &xml.replace("LeastPrivilege", "HighestAvailable"),
+                &HSTRING::from(xml.replace("LeastPrivilege", "HighestAvailable")),
                 "S-1-5-21-123"
             )?
             .owned_by(current)
         );
         assert!(
             !parse_task(
-                &xml.replace("</Exec>", "</Exec><ComHandler/>"),
+                &HSTRING::from(xml.replace("</Exec>", "</Exec><ComHandler/>")),
                 "S-1-5-21-123"
             )?
             .owned_by(current)
@@ -779,14 +806,19 @@ mod tests {
     }
 
     #[test]
-    fn scheduler_xml_utf16_decodes_without_locale_assumptions() -> Result<()> {
-        let xml = "<?xml version=\"1.0\"?><Task/>";
-        let mut bytes = vec![0xff, 0xfe];
-        for word in xml.encode_utf16() {
-            bytes.extend_from_slice(&word.to_le_bytes());
+    fn scheduler_lookup_never_treats_access_or_service_failures_as_absence() -> Result<()> {
+        use windows::core::{Error, HRESULT};
+        assert!(
+            optional_registered_task(Err(Error::from_hresult(HRESULT::from_win32(2))))?.is_none()
+        );
+        for code in [
+            HRESULT::from_win32(5),
+            HRESULT::from_win32(1722),
+            HRESULT(0x80004005_u32 as i32),
+        ] {
+            let error = optional_registered_task(Err(Error::from_hresult(code))).unwrap_err();
+            assert_eq!(error.downcast_ref::<Error>().unwrap().code(), code);
         }
-        assert_eq!(decode_task_xml(&bytes)?, xml);
-        assert_eq!(decode_task_xml(xml.as_bytes())?, xml);
         Ok(())
     }
 
