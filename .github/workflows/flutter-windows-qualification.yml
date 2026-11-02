@@ -50,9 +50,18 @@ jobs:
           $record[0] | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $env:MCW_B5_PROOF 'sdk-source.json')
       - name: Require matching framework engine and Dart
         run: |
-          $info = flutter --version --machine | ConvertFrom-Json
-          if ($LASTEXITCODE -ne 0 -or $info.frameworkRevision -ne '737ba8f885dc774b53b442759999a312c9461e4e' -or $info.engineRevision -ne 'cf636b1dfb818dd6a3ff16e390e93b1a036969c8' -or $info.dartSdkVersion.Split(' ')[0] -ne '3.13.7') { throw 'Unexpected SDK toolchain' }
+          (Get-Command flutter).Source | Set-Content (Join-Path $env:MCW_B5_PROOF 'flutter-command.txt')
+          # A freshly extracted SDK bootstraps pub/tool caches on stdout. Finish
+          # that real initialization before requesting strict machine JSON.
+          flutter --version *> (Join-Path $env:MCW_B5_PROOF 'flutter-bootstrap.log')
+          if ($LASTEXITCODE -ne 0) { throw 'Verified Flutter SDK bootstrap failed' }
+          $raw = flutter --version --machine
+          $code = $LASTEXITCODE
+          $raw | Set-Content (Join-Path $env:MCW_B5_PROOF 'flutter-version.raw.json')
+          if ($code -ne 0) { throw 'Flutter machine version command failed' }
+          $info = ($raw -join "`n") | ConvertFrom-Json
           $info | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $env:MCW_B5_PROOF 'flutter-version.json')
+          if ($info.frameworkRevision -ne '737ba8f885dc774b53b442759999a312c9461e4e' -or $info.engineRevision -ne 'cf636b1dfb818dd6a3ff16e390e93b1a036969c8' -or $info.dartSdkVersion.Split(' ')[0] -ne '3.13.7') { throw 'Unexpected SDK toolchain' }
       - name: Check Rust and actual native release imports
         run: |
           cargo clippy --all-targets --locked --features windows-tray,flutter-desktop -- -D warnings

@@ -3137,3 +3137,18 @@ Lots futurs **à approuver, aucun correctif appliqué** :
 - Prochaine autorisation à demander : seul ref `ci/flutter-b5-20261102`, tip marqué
   `[CF-Pages-Skip] [skip ci]`, puis dispatch Windows et Unix (deux Mac/Linux x64/ARM64).
   Work/main, tag, release et site hors périmètre ; aucun push B5 effectué à ce point.
+
+### B5 — CI autorisée, premier préflight Windows diagnostiqué
+
+- Autorisation explicite reçue pour le seul ref `ci/flutter-b5-20261102` et les
+  qualifications Windows/Unix. Source initiale `90d69b4738f76485e40f1002125de1d46c6254c3`.
+  Runs Windows41422726881 et Unix41422733643 ; aucun push work/main, tag, release ou site.
+- Windows41422726881 échoue **avant tout build/test MicCamWatch** : première invocation
+  du SDK officiel extrait écrit `Running pub upgrade` sur stdout avant le JSON ;
+  ConvertFrom-Json refuse correctement ces bytes. SHA256 de l'archive vérifié,
+  aucun écart de framework/moteur démontré. Journaux conservés.
+- Correction limitée à la préparation : bootstrap explicite avec journal, puis requête
+  machine séparée, JSON brut conservé avant validation. Exact même framework/moteur/Dart
+  requis ; aucune extraction permissive ni suppression des contrôles. Étape PowerShell
+  exacte exécutée localement avec succès. Relance Windows sur le seul ref CI autorisé ;
+  le run Unix initial demeure indépendant et n'est pas recommencé.
