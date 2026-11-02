@@ -2,14 +2,15 @@
 
 ## Why the Windows executables link the CRT statically
 
-`mcw.exe` and `mcw-tray.exe` used to import `VCRUNTIME140.dll`. That DLL is not
-part of Windows (only the Universal CRT, `ucrtbase.dll` and the `api-ms-win-crt-*`
-API sets are). It ships with the Visual C++ Redistributable, so a clean Windows
-image loads neither executable and fails in the loader, before `main()`, with
-`0xC0000135 STATUS_DLL_NOT_FOUND`.
+The inspected published **0.13.4 and 0.21.0** `mcw.exe` and `mcw-tray.exe`
+import `VCRUNTIME140.dll`. This DLL is supplied by the Visual C++ Redistributable,
+not the Windows inbox Universal CRT. Its absence prevents process startup with
+`0xC0000135 STATUS_DLL_NOT_FOUND`, before `main()`.
 
-That is what winget validation reported for MicCamWatch 0.13.4, and the same
-defect was present in the published 0.21.0 assets.
+The winget maintainer reported that status for0.13.4. The imports and a controlled
+missing-DLL reproduction support this explanation; no loader trace from the
+maintainer's machine identifies the exact missing module. Do not generalize this
+inspection to every historical or future release.
 
 `.cargo/config.toml` now sets, for the Windows x64 MSVC target only:
 
@@ -19,10 +20,16 @@ rustflags = ["-C", "target-feature=+crt-static"]
 ```
 
 The setting alone is not trusted. `installer/tests/windows_distribution_imports.py`
-parses the import tables of the executables that are actually built and packaged
-and fails the build when a dynamic CRT/C++ runtime DLL or any unknown non-system
-DLL appears. CI runs it on the release binaries, and the release workflow runs it
-again over the ZIP contents and the MSI payload.
+examines real PE ordinary and delay imports, rejects unexpected CRT families and
+unreviewed dependencies, and checks ZIP/MSI executables against the exact build bytes.
+The OS baseline is explicit: a DLL's presence in a developer's System32 proves nothing.
+The native Windows CI and release package workflow run this gate.
+
+Flutter is a **separate C++ build**: its B4 runner still imported `MSVCP140.dll`,
+`VCRUNTIME140.dll` and `VCRUNTIME140_1.dll`. Its Windows CMake runtime is now static
+as well; the official Flutter engine is unchanged. Use `--flutter-bundle <Release>`
+to audit the runner, engine and any other PE in the actual bundle, not just Rust.
+The Dart AOT `data/app.so` is ELF, not a PE DLL import table.
 
 ## winget submission strategy
 
@@ -35,21 +42,22 @@ Two honest options:
 
 | Release | Executable runtime | Manifest treatment |
 |---|---|---|
-| ≤ 0.21.0 (already published) | dynamic `VCRUNTIME140.dll` | must declare `Microsoft.VCRedist.2015+.x64`; never claim a static CRT |
-| ≥ 0.21.1 (after this fix) | static CRT, no redistributable needed | no `Dependencies` entry; verified by the import audit |
+| Published0.13.4 /0.21.0, inspected | dynamic `VCRUNTIME140.dll` | needs an appropriate runtime dependency or a new corrected release; never claim these assets were rebuilt |
+| A future corrected release | determined from its actual complete payload | omit the redistributable only after all shipped components pass the import gate and applicable runtime checks |
 
 Do **not** point a new manifest at the published 0.21.0 assets and omit the
 dependency: those binaries still need the redistributable.
 
 ### After the corrected release is published
 
-1. Confirm the shipped executables are clean:
-   `python -B installer/tests/windows_distribution_imports.py <mcw.exe> <mcw-tray.exe>`
-2. Generate the manifests with the real version and the real MSI SHA-256
-   (from `SHA256SUMS` published with the release):
-   `pwsh distribution/winget/Generate-Manifests.ps1 -Version <version> -InstallerSha256 <sha256>`
-   Add `-RuntimeDependency` only for a release whose binaries still import
-   `VCRUNTIME140.dll`.
+1. Audit the actual released Rust binaries, ZIP and MSI, and the Flutter bundle
+   if distributed. Retain hashes and runtime evidence for that exact commit.
+2. Generate manifests using only the **published** version and real MSI SHA-256:
+   `pwsh distribution/winget/Generate-Manifests.ps1 -Version <version> -InstallerSha256 <sha256>`.
+   The generator formats supplied metadata; it does not prove publication or hash authenticity.
+   For a payload that still needs VC++, supply `-RuntimeDependency` **and**
+   `-RuntimeMinimumVersion <verified-package-version>`. No universal14.0 floor is asserted;
+   justify a supported runtime at least as recent as the relevant build toolset.
 3. Validate locally: `winget validate --manifest <generated directory>`.
 4. Copy the directory to
    `manifests/r/RomanCuisset/MicCamWatch/<version>/` in a winget-pkgs fork and
@@ -73,18 +81,19 @@ winget's post-install validation runs the installed executables and reports
   the observer or opening a window. That gives packagers, installers and support
   scripts a side-effect-free readiness query for the resident component.
 
-`mcw.exe` without arguments prints help and exits `2`; that is the documented CLI
-behaviour and is intentionally unchanged. If validation ever flags it, the fix is
-to declare the executable argument to the winget maintainers rather than to
-change the CLI's exit status.
+`mcw.exe` without arguments prints help and exits `2`; that CLI behaviour is unchanged.
+If flagged, provide the executable and safe `--version` arguments to the winget
+maintainers for their validation mechanism. This is not an invented manifest
+validation-arguments field or a guarantee of public winget acceptance.
 
 ## Remaining risks
 
-- Windows **N** editions do not include Media Foundation. The executables import
-  `mfplat.dll` and `mfsensorgroup.dll` and would fail there; the Media Feature
-  Pack is required. This is unrelated to the CRT and is not covered by the
-  redistributable dependency.
+- The native binaries import Media Foundation DLLs. Windows N without the
+  appropriate Media Feature Pack, or other configurations missing those OS features,
+  needs separate qualification. A clean-OS launch is not established by an import
+  allowlist, and a VC++ dependency does not supply Media Foundation.
 - A resident tray may be reported as "still running" by tooling that expects a
   process to exit. Use `--version` for a terminating check.
-- Static CRT applies to Rust code only. A future C/C++ component built with `/MD`
-  would reintroduce a runtime dependency; the CI audit catches it.
+- Cargo's CRT setting does not configure the separate Flutter CMake build.
+  Rust native dependencies and future plugins must also be checked in the actual
+  payload; runtime-loaded DLLs and OS symbol availability remain outside an import-table audit.

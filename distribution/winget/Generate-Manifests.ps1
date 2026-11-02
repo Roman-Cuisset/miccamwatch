@@ -1,18 +1,23 @@
 param(
-    [Parameter(Mandatory = $true)][string]$Version,
+    [Parameter(Mandatory = $true)][ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version,
     [Parameter(Mandatory = $true)][ValidatePattern('^[0-9a-fA-F]{64}$')][string]$InstallerSha256,
     [ValidatePattern('^\d+\.\d+\.\d+$')][string]$ManifestVersion = '1.28.0',
     # Where to write manifests/r/RomanCuisset/MicCamWatch/<version>/. Defaults to
     # this script's directory; pass a scratch directory to validate a draft
     # without touching the manifests committed to this repository.
     [string]$OutputRoot = $PSScriptRoot,
-    # Pass this for releases whose executables still import VCRUNTIME140.dll
-    # (0.21.0 and every earlier release). Releases built with the static CRT must
-    # NOT declare it, so a missing runtime can never be silently assumed.
-    [switch]$RuntimeDependency
+    # Base this decision on all real payloads, not a presumed version cutoff.
+    [switch]$RuntimeDependency,
+    [ValidatePattern('^\d+(?:\.\d+){1,3}$')][string]$RuntimeMinimumVersion
 )
 
 $ErrorActionPreference = 'Stop'
+if ($RuntimeDependency -and [string]::IsNullOrWhiteSpace($RuntimeMinimumVersion)) {
+    throw 'RuntimeDependency requires an explicitly verified RuntimeMinimumVersion; no universal runtime floor is assumed.'
+}
+if (-not $RuntimeDependency -and $RuntimeMinimumVersion) {
+    throw 'RuntimeMinimumVersion requires RuntimeDependency.'
+}
 $identifier = 'RomanCuisset.MicCamWatch'
 $baseUrl = "https://github.com/Roman-Cuisset/miccamwatch/releases/download/v$Version"
 $output = Join-Path $OutputRoot "manifests/r/RomanCuisset/MicCamWatch/$Version"
@@ -25,7 +30,7 @@ if ($RuntimeDependency) {
 Dependencies:
   PackageDependencies:
     - PackageIdentifier: Microsoft.VCRedist.2015+.x64
-      MinimumVersion: 14.0.0.0
+      MinimumVersion: $RuntimeMinimumVersion
 "@
 }
 

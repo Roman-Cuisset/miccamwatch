@@ -2995,3 +2995,53 @@ Lots futurs **à approuver, aucun correctif appliqué** :
   poursuivre runtime ARM et parité caméra/lock/maintenance selon leurs contrats et restaurations.
   Les écritures autostart d'une installation réelle et tout contrôle matériel nécessitent une qualification isolée adaptée.
   Ne pas supprimer GTK/AppKit, modifier le MSI quotidien, pousser main/work, publier0.21.1 ou déployer le site sans nouvel accord.
+
+## 2026-11-02 — Début B5 : audit stable et intégration CRT
+
+- Reprise réelle sur `34d5578`, worktree Flutter propre. Main/origin `73369ab`, tag stable `06d800b`→`3d74686`,
+  neuf worktrees et stash `a373866` conservés ; branche CRT `2451088` propre et inchangée.
+- `AGENTS.md` et `RULES.md` globaux lus explicitement, identiques. Modèle principal annoncé par le runtime :
+  `openai-codex/gpt-6.1-sol`. Réglages de tâches sans override, sélection par appel désactivée ;
+  absence de preuve du routage résolu de chaque agent/fallback : **aucun sous-agent utilisé**,
+  aucun paramètre global modifié et aucun appel auxiliaire à un modèle non vérifié.
+- Audit Windows strictement passif : un tray du MSI actif, une seule entrée Run vers ce tray ;
+  exécutables MSI et préférences identiques aux empreintes B4. Aucune garde microphone séparée observée.
+  Intention enregistrée génération34 : `requested=false`, `release_pending=false`.
+  Cela ne constitue pas une mesure de l'état physique ou SDK du microphone. Aucun redémarrage, arrêt, réglage,
+  autorisation ni contrôle matériel envoyé ; aucune attribution rétroactive du changement d'intention.
+- Commits DeepSeek repris dans l'ordre : `889f7e8`→`718aea6`, `6bc365c`→`2048747`, `2451088`→`8a4e4c8`.
+  Seul conflit dans le préambule du tray : version interrogée d'abord, puis toutes les barrières et modes Flutter
+  conservés. Ces commits d'intégration ne sont pas encore une qualification B5.
+- Inspection PE du véritable frontend B4 : le runner C++ importe aussi `MSVCP140`, `VCRUNTIME140` et
+  `VCRUNTIME140_1`. Le CRT statique Rust seul ne corrige pas le bundle hybride. Runtime CMake statique
+  Windows préparé ; moteur Flutter officiel inchangé. Build et audit du résultat encore à exécuter.
+- Reproduction privée d'une faiblesse de l'auditeur préparé : une DLL tierce existant dans son répertoire
+  de recherche est étiquetée « composant Windows ». Corriger cette classification avant de faire confiance à la garde.
+- Preuves privées : `%LOCALAPPDATA%\MicCamWatchQualification\flutter-b5-20261102-080321`.
+  Aucun push autorisé pour B5 ; préparer puis demander le périmètre CI avant tout envoi.
+
+### B5 — Premier point sauvegardé : binaires et packages Windows
+
+- Build release Rust natif `windows-tray` réussi avec CRT statique. Copies privées :
+  `mcw.exe`9470976octets, `mcw-tray.exe`3358208octets. Les cinq requêtes réelles de version,
+  dont `--version` combiné aux options de développement/ouverture, quittent0 sans accès aux
+  répertoires de préférences volontairement inutilisables ; version de développement Cargo encore0.21.0.
+- Build release Flutter Windows réussi avec runtime C++ statique ; runner376320octets,
+  moteur officiel21289472octets inchangé. Audit des quatre vrais PE Rust/runner/moteur réussi.
+  L'AOT Dart Windows est réellement un ELF64 little-endian EM62, pas un PE ; identité conservée séparément.
+- Garde durcie : imports ordinaires/différés, familles CRT complètes, liste OS explicite plutôt que
+  présence dans System32, PE bornés et refus des dépendances inconnues. Mode bundle vérifiant aussi
+  le moteur Flutter ; archives devant contenir exactement les deux exécutables correspondant aux bytes du build.
+  Neuf tests de régression réussis ; les véritables anciens binaires dynamiques sont effectivement refusés par la CLI.
+- MSI WiX5.0.2 construit et ZIP produit en privé avec reçu portable réel. Extraction administrative `/a`
+  seulement, **aucune installation/désinstallation**. Six copies natives (build/ZIP/MSI) vérifiées conformes
+  et sans CRT dynamique ; aucun remplacement d'asset public.
+- Documentation winget corrigée : observations limitées aux versions inspectées, statut du mainteneur
+  sans trace DLL distante, distinction Rust/CMake, limites Media Foundation et LoadLibrary.
+  Le générateur exige désormais un plancher de runtime explicitement justifié si cette dépendance est demandée ;
+  absence de plancher effectivement refusée avant création de fichiers. Aucun manifeste futur ni SHA inventé.
+- Vérification distante B4 : runs41188772673 et41191181077 toujours réussis, sources conformes aux reçus.
+  Aucune nouvelle CI B5 exécutée ; Clippy/suite/build Rust hybride locaux encore en cours à ce checkpoint.
+- Mint : session c3 X11 `:10`, renderer GLX llvmpipe LLVM20.1.2, `Accelerated: no`.
+  « direct rendering: Yes » ne prouve pas une accélération matérielle. Siège0 toujours greeter LightDM,
+  utilisateur de qualification sans accès au groupe render ; aucune configuration, permission ou session modifiée.

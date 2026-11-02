@@ -88,6 +88,8 @@ jobs:
         id: windows_release
       - name: Audit distributed Windows executables for non-system DLL dependencies
         run: python -B installer/tests/windows_distribution_imports.py target/release/mcw.exe target/release/mcw-tray.exe
+      - name: Verify dependency audit refusal and package-integrity regressions
+        run: python -B installer/tests/test_windows_distribution_imports.py -v
       - name: Verify tray restart releases captured updater streams
         run: cargo test --lib --locked --features windows-tray updater::process::tests::native_restart_releases_captured_streams_while_successor_lives -- --ignored --exact --test-threads=1 --nocapture
       - name: Exercise real Windows top buttons and responsive layout
