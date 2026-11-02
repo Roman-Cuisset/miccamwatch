@@ -3253,3 +3253,9 @@ Lots futurs **à approuver, aucun correctif appliqué** :
 - Vérification finale stable en lecture seule : exécutables MSI, réglages,
   intentions micro/caméra, processus et autostart identiques aux empreintes B5
   initiales. Aucun processus de qualification Windows restant.
+- Rejeu41461416119 : compilation et restitution des deux produits toujours bonnes,
+  mais `setActivationPolicy(.prohibited)` retourne false pour le helper CLI et
+  notre garde arrête le diagnostic avant capture ; ce retour ne prouve pas l'échec
+  du frontend. Remplacement par l'ordre du probe Aqua existant, déjà exécuté :
+  `NSScreen.screens` avant `CGPreflightScreenCaptureAccess`, sans changer la policy,
+  créer une fenêtre ou demander une autorisation. Les deux échecs restent conservés.

@@ -16,12 +16,11 @@ struct OwnedWindowCapture {
                   let pid = Int32(args[2]), pid > 0 else {
                 throw Failure("Expected WINDOW_ID PID EXPECTED_EXECUTABLE NEW_PNG")
             }
-            // A command-line async main has no NSApplication yet. Initialize
-            // AppKit before querying CGS; otherwise the capture helper aborts
-            // in CGS_REQUIRE_INIT before it can inspect the existing grant.
-            let captureApp = NSApplication.shared
-            guard captureApp.setActivationPolicy(.prohibited) else {
-                throw Failure("Unable to initialize background-only capture application")
+            // Reuse the passive Aqua probe's working initialization order.
+            // Enumerating screens initializes CGS before the permission query;
+            // this creates no window and changes no application activation policy.
+            guard !NSScreen.screens.isEmpty else {
+                throw Failure("No Aqua screen available for the owned-window capture")
             }
             guard CGPreflightScreenCaptureAccess() else {
                 throw Failure("No preexisting Screen Recording authorization; no prompt attempted")
