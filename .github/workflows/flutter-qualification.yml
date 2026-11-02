@@ -96,7 +96,7 @@ jobs:
         with:
           toolchain: 1.98.1
           components: clippy
-      - name: Restore pinned CI4 products and retain original build provenance
+      - name: Restore exact pinned B5 products and retain each original build provenance
         if: ${{ inputs.runtime-replay }}
         env:
           GH_TOKEN: ${{ github.token }}
@@ -195,10 +195,7 @@ jobs:
         timeout-minutes: 10
         run: |
           set -euo pipefail
-          set --
-          if [[ "${{ inputs.runtime-replay }}" != "true" ]]; then
-            set -- --ui-panels
-          fi
+          set -- --ui-panels
           if [[ "${{ inputs.intel-bootstrap-controls }}" == "true" ]]; then
             set -- "$@" --intel-bootstrap-controls
           fi
@@ -360,7 +357,7 @@ jobs:
           set -euo pipefail
           bash desktop/qualification/linux_hosted.sh "$MCW_LINUX_OUTPUT" \
             2>&1 | tee "$RUNNER_TEMP/mcw-flutter-linux-setup/build.log"
-      - name: Restore pinned CI4 baseline products without recompilation
+      - name: Restore exact pinned B5 baseline products without recompilation
         if: ${{ inputs.runtime-replay }}
         env:
           GH_TOKEN: ${{ github.token }}

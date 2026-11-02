@@ -21,7 +21,7 @@ on:
           - flutter
           - flutter-windows
       flutter-runtime-replay:
-        description: With native-platform=flutter, replay pinned CI41037181504 products without rebuilding them
+        description: With native-platform=flutter, replay audited B5 Mac or Linux x64 products without rebuilding; each artifact retains its exact source
         type: boolean
         default: false
       flutter-intel-only:

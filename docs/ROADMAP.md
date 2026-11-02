@@ -3188,3 +3188,58 @@ Lots futurs **à approuver, aucun correctif appliqué** :
   MSI4534272octets SHA256 `8bfee2c6785ff66ac17b45d247fc429aa0a9c37abefabe06f6f234b82ebe31ca` ;
   ZIP5768732octets SHA256 `60ee359dc86ca4b7d45f31b038de948f699e7e5bcc207464230f2581e2eb43a4`.
   Ce sont des fixtures natives privées, pas une release ou un MSI Flutter complet.
+
+### B5 — Mesures contrôlées, Mint réel et diagnostic de capture Mac
+
+- Comparatif Windows propre terminé : deux paires AB/BA,60s par état, snapshots
+  sémantiquement identiques aux bornes, deux processus caméra-capables ready/low,
+  pas un scénario de capture active provoqué. Tous les processus possédés terminés.
+  CPU normalisé à un cœur logique ; RSS cumulé pouvant compter des pages partagées.
+
+  | État Windows | B4 CPU % | B5 CPU % | B4 RSS Mio | B5 RSS Mio |
+  |---|---:|---:|---:|---:|
+  | Flutter fermé |36.983|35.910|20.187|20.210|
+  | Flutter ouvert |32.562|34.157|138.133|136.504|
+
+  **Aucun gain CPU général démontré** : les deux deltas ouverts sont défavorables.
+  B5 privé engagé4.60/121.77Mio fermé/ouvert ; protocole Ready médian246ms sur deux
+  lancements avec caches ordinaires, pas un temps disque-froid ou une latence de détection.
+- Profil séparé explicite15s, non mélangé au benchmark :9snapshots,18vérifications
+  de signatures dans chaque variante ; WinVerifyTrust représente33.16% d'un cœur
+  dans B5, contre37.43% pour le scope snapshot inclusif. Scopes imbriqués, ne pas les
+  additionner.344énumérations Toolhelp fraîches ; aucune vérification supprimée.
+  Pas de cache de verdict ni de changement de cadence : identité/taille/date seules
+  ne capturent pas le magasin de confiance, révocation, catalogue et politique.
+- Mint22.2 : nouveau bundle CI90d69b4, vrai SNI, préférences/erreurs/restauration,
+  historique/diagnostics et six cycles (trois par thème) réussis. Sortie Flutter
+  complète, aucune terminaison forcée, données/processus quotidiens et SHA des
+  produits identiques avant/après. Renderer Flutter réellement llvmpipe ; nœuds i915
+  non accessibles, siège local toujours greeter ; aucune modification système/GPU.
+
+  | Mint XRDP/X11 logiciel | Clair | Sombre |
+  |---|---:|---:|
+  | RSS fermé après cycles, Mio |10.773|10.484|
+  | RSS ouvert Rust + Flutter, Mio |324.723|324.785|
+  | PSS ouvert, Mio |295.474|295.497|
+  | CPU fermé, % d'un cœur |1.699|1.500|
+  | CPU ouvert, % d'un cœur |23.321|24.142|
+  | Premier mapping visible, ms |5675|4832|
+  | Mapping médian des réouvertures, ms |1081|1032|
+  | Sortie processus médiane, ms |186|226|
+
+  Intervalles10s et enfants éphémères omis : CPU descriptif/plancher, pas un résultat
+  GPU accéléré. Deux échecs de préparation conservés : modes0775 du nouveau répertoire
+  extrait et bit exécutable du helper perdu par ZIP/SCP Windows. Corrigés seulement
+  sur les nouvelles copies possédées et hash-vérifiées ; aucun garde affaibli.
+- Intel41454270155 : normal sandbox/IPC et premier scénario de panneaux réels passent ;
+  échec ensuite sur l'activation SIGUSR1 après capture legacy. Produits/journaux
+  désormais sauvegardés et digests vérifiés. La relation causale avec la capture
+  reste à tester ; ne pas réécrire le moteur ou augmenter les délais pour la masquer.
+- Revue des PNG Apple Silicon : certains textes latins présentent des artefacts ;
+  succès des interactions ≠ qualité visuelle prouvée. Diagnostic préparé avec
+  ScreenCaptureKit, filtre strict sur la fenêtre/PID/exécutable possédé, autorisation
+  Screen Recording préexistante seulement, sans prompt ni capture d'écran entier.
+  Nouveau helper de qualification Swift encore non compilé/exécuté à ce checkpoint.
+- Rejeu actualisé sur les produits B5 réellement livrés (ARM90d69b4, Intel a7f562d),
+  pins par artefact/source/run/SHA, modes readonly/settings distincts, contrôles
+  d'ascendance/diff et sceaux inchangés. Pas de rebuild Rust/Flutter pour ce diagnostic.

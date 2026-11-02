@@ -202,7 +202,7 @@ def helper_identity(pid, owner, temporary, proof):
 
 
 def smoke(prefix, proof, session, instrumented, bootstrap, cycles, *,
-          ui_panels=False, locale='en', theme='light'):
+          capture_helper, ui_panels=False, locale='en', theme='light'):
     proof.mkdir(parents=True)
     require(not ui_panels or instrumented, 'UI proof needs the distinct instrumented build')
     receipt = dict(status='running',
@@ -364,13 +364,16 @@ def smoke(prefix, proof, session, instrumented, bootstrap, cycles, *,
                                'Owned NSWindow never became visible')
             require(visible['title'] == 'MicCamWatch' and visible['width'] >= 780, 'Wrong native window')
             if session['screen_capture_previously_authorized']:
-                capture = proof / 'owned-window.png'
-                result = command(['/usr/sbin/screencapture', '-x', '-o', '-l', str(visible['window']), capture],
-                                 proof / 'capture', check=False)
-                captured = result.returncode == 0 and capture.is_file()
-                receipt['capture'].append(dict(status='captured' if captured else 'failed',
-                    method='screencapture-owned-window-id', window=visible['window']))
-                require(captured, 'Authorized owned-window capture failed; see capture logs')
+                modern = proof / 'owned-window-sck.png'
+                result = command([capture_helper, str(visible['window']), str(child),
+                                  prefix / 'desktop/MicCamWatch.app/Contents/MacOS/MicCamWatch', modern],
+                                 proof / 'capture-sck', timeout=30)
+                capture_proof = json.loads(result.stdout)
+                require(capture_proof['pid'] == child and capture_proof['window'] == visible['window']
+                        and capture_proof['preexisting_screen_recording'] and modern.is_file(),
+                        'Modern capture identity or prior authorization mismatch')
+                receipt['capture'].append(dict(status='captured', method=capture_proof['method'],
+                    window=visible['window'], sha256=sha(modern)))
             else:
                 receipt['capture'].append(dict(status='not-executed', reason='No preexisting Screen Recording authorization; no prompt/grant attempted'))
             for index in range(3):
@@ -532,6 +535,11 @@ def main():
             reason='Runner has no on-console Aqua screen; no runtime/menu/window/IPC success claimed'))
         print('::warning::macOS graphical qualification NOT EXECUTED: no Aqua session')
         return
+    capture_helper = proof / 'owned-window-capture'
+    command(['xcrun', 'swiftc', '-parse-as-library', '-target',
+             platform.machine() + '-apple-macosx15.0',
+             REPO / 'desktop/qualification/macos_window_capture.swift', '-o', capture_helper],
+            proof / 'capture-helper-build')
     bootstrap = None
     if args.intel_bootstrap_controls:
         appkit = proof / 'appkit-probe'
@@ -539,14 +547,17 @@ def main():
                  REPO / 'desktop/qualification/intel_bootstrap/appkit_bootstrap.swift', '-o', appkit],
                 proof / 'appkit-probe-build')
         bootstrap = (helper, appkit)
-    smoke(prefixes[0], proof / 'release-runtime', session, False, None, args.cycles)
+    smoke(prefixes[0], proof / 'release-runtime', session, False, None, args.cycles,
+          capture_helper=capture_helper)
     if args.ui_panels:
         for locale in ('en', 'fr', 'de', 'es', 'ja', 'zh', 'ru'):
             for theme in (('light', 'dark') if locale == 'en' else ('dark',)):
                 smoke(prefixes[1], proof / ('instrumented-' + locale + '-' + theme), session,
-                      True, bootstrap, args.cycles, ui_panels=True, locale=locale, theme=theme)
+                      True, bootstrap, args.cycles, capture_helper=capture_helper,
+                      ui_panels=True, locale=locale, theme=theme)
     else:
-        smoke(prefixes[1], proof / 'instrumented-runtime', session, True, bootstrap, args.cycles)
+        smoke(prefixes[1], proof / 'instrumented-runtime', session, True, bootstrap, args.cycles,
+              capture_helper=capture_helper)
     # Real production AppKit declarations/NSMenu/status item; simulated data,
     # not Flutter/hardware evidence. Harness itself preserves capture provenance.
     command(['python3', '-B', REPO / 'installer/tests/native_macos_menu.py',
