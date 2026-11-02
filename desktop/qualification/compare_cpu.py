@@ -228,6 +228,7 @@ class ReadOnlyHost(Host):
         self.theme = 'light'
         self.lines = []
         self.known = set()
+        self.births = {}
         self.identities = {}
         self.proc = self.parent = self.reader = self.hwnd = None
         self.started = time.perf_counter()
