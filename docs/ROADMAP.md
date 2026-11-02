@@ -3045,3 +3045,36 @@ Lots futurs **à approuver, aucun correctif appliqué** :
 - Mint : session c3 X11 `:10`, renderer GLX llvmpipe LLVM20.1.2, `Accelerated: no`.
   « direct rendering: Yes » ne prouve pas une accélération matérielle. Siège0 toujours greeter LightDM,
   utilisateur de qualification sans accès au groupe render ; aucune configuration, permission ou session modifiée.
+
+### B5 — Point sauvegardé : canal IPC Windows et essais réels
+
+- Builds Rust natif et hybride release réussis ; Clippy strict hybride et suite :
+  265 tests bibliothèque, 1 CLI, 3 tray réussis, 6 ignorés. Analyse Flutter propre,
+  89 tests réussis et build AOT instrumenté de consultation effectué.
+  Ces résultats précèdent la nouvelle requête COM d'autostart décrite ci-dessous.
+- Essais réels sur WinSta0/Default, données et binaires uniquement sous le répertoire
+  privé B5 : trois cycles de la version non instrumentée en clair réussis,
+  puis deux cycles complets des panneaux réels réussis. Historique/rafraîchissement,
+  autostart de développement effectivement désactivé, préférence notifications modifiée
+  puis relue et restaurée par Rust, À propos et diagnostics natifs affichés.
+  Le troisième cycle des panneaux reste en échec : historique devenu incertain ;
+  **la qualification complète n'est pas annoncée réussie**.
+- Défaut réel corrigé et reproduit avant/après : stderr du frontend Windows partageait
+  stdout avec le protocole typé, provoquant `output_rejected` sur les diagnostics.
+  Désormais stderr utilise une poignée diagnostique explicitement dupliquée ou NUL,
+  séparée des deux pipes IPC ; authentification, validation et limites inchangées.
+  Les preuves graphiques sont réellement reçues après correction ; aucun contournement
+  du parseur et aucun thread graphique résident ajouté.
+- Contrôleur Windows : fin vérifiée par poignée/génération FILETIME et état noyau,
+  non par simple existence du PID. Arrêts propres réels et absence de processus propres
+  résiduels confirmés, y compris après l'échec des panneaux. Aucun processus quotidien arrêté.
+- Le pilote instrumenté utilise les callbacks sémantiques réellement rendus, pas des clics
+  globaux ; la sonde Flutter montre que l'action tappable peut être sous le nœud identifié.
+  Cette instrumentation release/AOT est désactivée dans le build normal ; elle ne remplace
+  pas une qualification d'accessibilité MSAA/UIA externe.
+- Travaux suivants encore non qualifiés : séparer fraîcheur des collecteurs et connexion
+  du canal de consultation ; remplacer l'assimilation de tous les échecs `schtasks /Query`
+  à une absence par une requête COM locale distinguant absence et refus/erreur ;
+  scénarios autostart mutateurs réservés à un runner jetable, jamais à ce Windows quotidien.
+- Contrôleurs Windows/macOS étendus et workflows préparés localement. Aucun nouveau run B5,
+  aucun push, aucune modification des protections ou de l'installation stable.

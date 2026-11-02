@@ -26,8 +26,8 @@ use std::{
 use windows::{
     Win32::{
         Foundation::{
-            HANDLE, HANDLE_FLAG_INHERIT, HANDLE_FLAGS, HWND, LPARAM, SetHandleInformation,
-            WAIT_OBJECT_0, WPARAM,
+            DUPLICATE_SAME_ACCESS, DuplicateHandle, HANDLE, HANDLE_FLAG_INHERIT, HANDLE_FLAGS,
+            HWND, LPARAM, SetHandleInformation, WAIT_OBJECT_0, WPARAM,
         },
         Security::{
             Cryptography::{BCRYPT_USE_SYSTEM_PREFERRED_RNG, BCryptGenRandom},
@@ -35,6 +35,7 @@ use windows::{
         },
         Storage::FileSystem::{BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle},
         System::{
+            Console::{GetStdHandle, STD_ERROR_HANDLE},
             JobObjects::{
                 AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
                 JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
@@ -43,7 +44,7 @@ use windows::{
             Pipes::CreatePipe,
             Threading::{
                 CREATE_SUSPENDED, CreateProcessW, DeleteProcThreadAttributeList,
-                EXTENDED_STARTUPINFO_PRESENT, InitializeProcThreadAttributeList,
+                EXTENDED_STARTUPINFO_PRESENT, GetCurrentProcess, InitializeProcThreadAttributeList,
                 LPPROC_THREAD_ATTRIBUTE_LIST, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
                 PROCESS_INFORMATION, PROCESS_NAME_WIN32, QueryFullProcessImageNameW, ResumeThread,
                 STARTF_USESTDHANDLES, STARTUPINFOEXW, TerminateProcess, UpdateProcThreadAttribute,
@@ -758,6 +759,35 @@ fn pipe() -> Result<(OwnedHandle, OwnedHandle)> {
     unsafe { CreatePipe(&mut read, &mut write, Some(&security), 0) }?;
     Ok(unsafe { (own(read), own(write)) })
 }
+fn diagnostic_stderr() -> Result<OwnedHandle> {
+    // Never merge native/rendering diagnostics with the authenticated JSON lane.
+    // A GUI launch without a console has no stderr; use the Windows null device.
+    // Duplicate only this deliberate sink and include it in the explicit handle
+    // list, not all inheritable handles belonging to the Rust owner.
+    let fallback;
+    let source = match unsafe { GetStdHandle(STD_ERROR_HANDLE) } {
+        Ok(handle) if !handle.is_invalid() => handle,
+        _ => {
+            fallback = OpenOptions::new().write(true).open(r"\\.\NUL")?;
+            handle(&fallback)
+        }
+    };
+    let mut duplicate = HANDLE::default();
+    unsafe {
+        DuplicateHandle(
+            GetCurrentProcess(),
+            source,
+            GetCurrentProcess(),
+            &mut duplicate,
+            0,
+            true,
+            DUPLICATE_SAME_ACCESS,
+        )
+    }
+    .context("prepare desktop diagnostics handle")?;
+    Ok(unsafe { own(duplicate) })
+}
+
 fn spawn(path: &Path, mut initial: DesktopSnapshot, theme: &'static str) -> Result<Child> {
     let started = Instant::now();
     eprintln!("desktop event=open_requested endpoint=parent elapsed_ms=0");
@@ -776,6 +806,7 @@ fn spawn(path: &Path, mut initial: DesktopSnapshot, theme: &'static str) -> Resu
     }?;
     let (child_stdin, parent_stdin) = pipe()?;
     let (parent_stdout, child_stdout) = pipe()?;
+    let child_stderr = diagnostic_stderr()?;
     unsafe {
         SetHandleInformation(
             handle(&parent_stdin),
@@ -788,14 +819,18 @@ fn spawn(path: &Path, mut initial: DesktopSnapshot, theme: &'static str) -> Resu
             HANDLE_FLAGS(0),
         )?;
     }
-    let inherited = [handle(&child_stdin), handle(&child_stdout)];
+    let inherited = [
+        handle(&child_stdin),
+        handle(&child_stdout),
+        handle(&child_stderr),
+    ];
     let attributes = Attributes::new(&inherited)?;
     let mut startup = STARTUPINFOEXW::default();
     startup.StartupInfo.cb = size_of::<STARTUPINFOEXW>() as u32;
     startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
     startup.StartupInfo.hStdInput = handle(&child_stdin);
     startup.StartupInfo.hStdOutput = handle(&child_stdout);
-    startup.StartupInfo.hStdError = handle(&child_stdout);
+    startup.StartupInfo.hStdError = handle(&child_stderr);
     startup.lpAttributeList = attributes.pointer;
     let application = wide(path.as_os_str());
     // Theme is an allowlisted presentation value, never an executable/endpoint argument.
@@ -836,6 +871,7 @@ fn spawn(path: &Path, mut initial: DesktopSnapshot, theme: &'static str) -> Resu
     bundle.verify_process(&process_handle)?;
     drop(child_stdin);
     drop(child_stdout);
+    drop(child_stderr);
     drop(attributes);
     let mailbox = Arc::new(Mailbox::default());
     let signals = Arc::new(Signals::default());

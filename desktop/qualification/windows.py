@@ -27,6 +27,43 @@ from PIL import Image
 
 U = C.WinDLL('user32', use_last_error=True)
 G = C.WinDLL('gdi32')
+K = C.WinDLL('kernel32', use_last_error=True)
+K.OpenProcess.argtypes, K.OpenProcess.restype = [W.DWORD, W.BOOL, W.DWORD], W.HANDLE
+K.CloseHandle.argtypes = [W.HANDLE]
+K.WaitForSingleObject.argtypes, K.WaitForSingleObject.restype = [W.HANDLE, W.DWORD], W.DWORD
+K.GetProcessTimes.argtypes = [W.HANDLE, C.POINTER(W.FILETIME), C.POINTER(W.FILETIME),
+                              C.POINTER(W.FILETIME), C.POINTER(W.FILETIME)]
+K.GetSystemDirectoryW.argtypes = [W.LPWSTR, W.UINT]
+_system_directory = C.create_unicode_buffer(32768)
+if not K.GetSystemDirectoryW(_system_directory, len(_system_directory)):
+    raise C.WinError(C.get_last_error())
+SYSTEM_QUERY = (Path(_system_directory.value) / 'schtasks.exe').resolve()
+
+
+def kernel_process_state(pid):
+    """Retain exact generation and kernel exit status, not PID existence."""
+    handle = K.OpenProcess(0x00100000 | 0x1000, False, pid)
+    if not handle:
+        if C.get_last_error() == 87:
+            return None
+        raise C.WinError(C.get_last_error())
+    try:
+        created, exited, kernel, user = (W.FILETIME() for _ in range(4))
+        if not K.GetProcessTimes(handle, C.byref(created), C.byref(exited),
+                                 C.byref(kernel), C.byref(user)):
+            raise C.WinError(C.get_last_error())
+        state = K.WaitForSingleObject(handle, 0)
+        if state not in (0, 258):
+            raise C.WinError(C.get_last_error())
+        return dict(birth=(created.dwHighDateTime << 32) | created.dwLowDateTime,
+                    exited=state == 0)
+    finally:
+        K.CloseHandle(handle)
+
+
+def same_process_alive(pid, birth):
+    value = kernel_process_state(pid)
+    return value is not None and value['birth'] == birth and not value['exited']
 CALLBACK = C.WINFUNCTYPE(W.BOOL, W.HWND, W.LPARAM)
 U.EnumWindows.argtypes = [CALLBACK, W.LPARAM]
 U.GetWindowThreadProcessId.argtypes = [W.HWND, C.POINTER(W.DWORD)]
@@ -188,6 +225,7 @@ class Host:
             stdout=subprocess.PIPE,stderr=subprocess.STDOUT,encoding='utf-8',errors='replace',
             creationflags=subprocess.CREATE_NO_WINDOW,cwd=self.prefix,env=environment)
         self.parent=psutil.Process(self.proc.pid);self.known={self.proc.pid}
+        self.births = {self.proc.pid: kernel_process_state(self.proc.pid)['birth']}
         self.reader=threading.Thread(target=self._read,daemon=True);self.reader.start()
         self.hwnd=None
         try:
@@ -222,11 +260,17 @@ class Host:
                 if p.status()==psutil.STATUS_ZOMBIE:continue
                 path=Path(p.exe()).resolve()
                 owner=self.controlled and path==self.cli.resolve() and p.cmdline()[1:]==['__microphone-guard']
-                if path not in [self.exe.resolve(),self.ui.resolve()] and not owner:
+                query = (path == SYSTEM_QUERY and p.ppid() == self.proc.pid
+                         and p.cmdline()[1:] == ['/Query', '/TN', 'MicCamWatch Tray', '/XML'])
+                if path not in [self.exe.resolve(),self.ui.resolve()] and not (owner or query):
                     raise RuntimeError(f'Unexpected observer descendant: {path}; no name-based cleanup permitted')
-                if self.settings_development and p.pid!=self.proc.pid and (
-                        path!=self.ui.resolve() or p.ppid()!=self.proc.pid):
-                    raise RuntimeError(f'Unexpected settings descendant: {path}; only the directly owned UI is permitted')
+                if self.settings_development and p.pid!=self.proc.pid and not (
+                        p.ppid()==self.proc.pid and (path==self.ui.resolve() or query)):
+                    raise RuntimeError(f'Unexpected settings descendant: {path}; only owned UI or exact passive startup query permitted')
+                state = kernel_process_state(p.pid)
+                if state is None or state['exited']:
+                    continue
+                self.births[p.pid] = state['birth']
                 self.known.add(p.pid);result.append(p)
             except psutil.NoSuchProcess:pass
         return result
@@ -300,8 +344,10 @@ class Host:
             U.PostMessageW(self.hwnd,0x10,0,0)
             self.proc.wait(timeout=35)
         self.reader.join(timeout=3)
-        until(lambda:all(not psutil.pid_exists(pid) for pid in self.known),timeout=10)
-        return {'code':self.proc.returncode,'owned_pids':sorted(self.known),'all_exited':True,'events':self.lines}
+        until(lambda:all(not same_process_alive(pid, birth)
+                         for pid, birth in self.births.items()),timeout=10)
+        return {'code':self.proc.returncode,'owned_pids':sorted(self.known),
+                'births':self.births,'all_exited':True,'events':self.lines}
 
 
 def main():
