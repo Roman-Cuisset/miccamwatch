@@ -28,6 +28,10 @@ on:
         description: Target only Intel; bootstrap diagnostic controls remain separately opt-in
         type: boolean
         default: false
+      flutter-arm-only:
+        description: Target only Apple Silicon without rerunning an unavailable Intel host
+        type: boolean
+        default: false
       flutter-intel-bootstrap-controls:
         description: Add observational Intel bootstrap probes; results are controlled diagnostics, not unconditioned qualification
         type: boolean
@@ -66,6 +70,7 @@ jobs:
     with:
       runtime-replay: ${{ inputs.flutter-runtime-replay || false }}
       intel-only: ${{ inputs.flutter-intel-only || false }}
+      arm-only: ${{ inputs.flutter-arm-only || false }}
       intel-bootstrap-controls: ${{ inputs.flutter-intel-bootstrap-controls || false }}
       skip-linux-x64: ${{ inputs.flutter-skip-linux-x64 || false }}
       skip-linux-arm64: ${{ inputs.flutter-skip-linux-arm64 || false }}

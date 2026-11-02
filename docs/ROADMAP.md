@@ -3259,3 +3259,25 @@ Lots futurs **à approuver, aucun correctif appliqué** :
   du frontend. Remplacement par l'ordre du probe Aqua existant, déjà exécuté :
   `NSScreen.screens` avant `CGPreflightScreenCaptureAccess`, sans changer la policy,
   créer une fenêtre ou demander une autorisation. Les deux échecs restent conservés.
+
+### B5 — Défaut visuel Mac reproduit et essai Skia ciblé
+
+- Rejeu41462562178, produits figés : Apple Silicon réussit les huit scénarios,
+  32preuves de panneaux et24réouvertures ; les huit captures ScreenCaptureKit
+  proviennent exclusivement des fenêtres possédées, sans nouveau grant.
+  ZIP `58473764cc2a68663b641f9f824f5acae2e99216688eb4539759f45705acec67`,
+  TAR `c936e6c36c09713ff9630d7603e268b227bcaeff0230da4ce324ff78f28b6dc6`.
+- Les défauts de glyphes latins sont identiques avec ScreenCaptureKit et l'ancien
+  screencapture : le nouveau chemin ne les résout pas. L'interface est donc
+  sémantiquement testée, mais ne doit pas être déclarée visuellement qualifiée.
+- Intel : annotation GitHub exacte «The hosted runner lost communication with
+  the server» ; aucun artefact final reçu, pas de succès graphique extrapolé.
+  Le dernier Intel exploitable reste41454270155 et son activation SIGUSR1 échouée.
+- Flutter3.47 documente le retour Skia par `FLTEnableImpeller=false` dans Info.plist :
+  https://docs.flutter.dev/perf/impeller#macos. Essai Mac uniquement de cette option
+  officiellement supportée ; pas de modification du thème, de Rust, des permissions,
+  de la sandbox ou des renderers Windows/Linux. Ce n'est pas encore une correction
+  validée : un nouveau build/capture Apple Silicon doit établir le résultat.
+- Nouveau filtre CI Apple Silicon strict, mutuellement exclusif du filtre Intel,
+  pour éviter de reconstruire les autres plateformes déjà qualifiées.
+  Revalider l'option à chaque mise à jour du SDK : Flutter annonce son retrait futur.
