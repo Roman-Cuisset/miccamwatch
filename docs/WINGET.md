@@ -1,5 +1,7 @@
 # Windows distribution, Visual C++ runtime and winget
 
+Current decision,4November2026: the next public release is **v0.22.0**, with no intermediate0.21.1. Follow the gated [publication and winget plan](RELEASE_0.22.0_PLAN.md); no future asset URL/hash or public submission is authorized by this guide.
+
 ## Why the Windows executables link the CRT statically
 
 The inspected published **0.13.4 and 0.21.0** `mcw.exe` and `mcw-tray.exe`
@@ -33,10 +35,10 @@ The Dart AOT `data/app.so` is ELF, not a PE DLL import table.
 
 ## winget submission strategy
 
-The open PR [#441153](https://github.com/microsoft/winget-pkgs/pull/441153) targets
-0.13.4, which is several releases behind and shares the runtime defect. Do not
-publish that version; a corrected submission should match a release users should
-actually install.
+PR [#441153](https://github.com/microsoft/winget-pkgs/pull/441153) was **merged on3November2026** for0.13.4; the package already exists as **RomanCuisset.MicCamWatch**.
+That immutable old MSI still has the inspected dynamic-runtime dependency. The next
+submission must update the same package to the verified public0.22.0 release,
+not create another identifier or claim the0.13.4/0.21.0 files were corrected.
 
 Two honest options:
 
@@ -61,10 +63,10 @@ dependency: those binaries still need the redistributable.
 3. Validate locally: `winget validate --manifest <generated directory>`.
 4. Copy the directory to
    `manifests/r/RomanCuisset/MicCamWatch/<version>/` in a winget-pkgs fork and
-   open a pull request. Never edit the GitHub release assets of a published
-   version; publish a new version instead.
-5. If PR #441153 is still open, close it in favour of the current version — with
-   the repository owner's explicit approval.
+   open an **update** pull request only after the repository owner's explicit approval.
+   Never edit published GitHub release assets; publish a new version instead.
+5. Follow Microsoft's checks and then verify the indexed version and actual
+   upgrade availability. A submitted or merged PR alone is not proof of index availability.
 
 `ManifestVersion` defaults to `1.28.0`. Raise it when winget-pkgs deprecates that
 schema; the generator takes it as a parameter.

@@ -3373,3 +3373,73 @@ Lots futurs **à approuver, aucun correctif appliqué** :
    autorisée réellement accélérée, pas un changement de droits/driver silencieux.
 7. Attendre l'accord utilisateur avant la tranche suivante, toute installation,
    publication, fusion ou modification des protections quotidiennes.
+
+## 2026-11-04 — v0.22.0, étape1/6 : audit de parité et planification
+
+- **Décision propriétaire : seule prochaine version publique = v0.22.0 hybride
+  Rust/Flutter ; pas de0.21.1 intermédiaire.** La candidate locale
+  `release/0.21.1-candidate` à `f4d68ae` est conservée comme preuve/outillage,
+  mais son périmètre natif et ses reports automatiques vers0.21.2 ne sont plus
+  le plan de publication. Aucun historique précédent supprimé.
+- Reprise vérifiée : main/origin `73369ab`, B5 `b6f820b`, branche CRT `2451088`,
+  tag `06d800b`→`3d74686`, stash `a373866`. Branche documentaire isolée
+  `docs/v022-parity-plan` créée sur B5, worktree `mcw-v022-stage1-20261104`.
+  **Aucun code, version produit, site, protection ou installation changé.**
+- Attention environnement : dix worktrees enregistrés au départ, dont cinq
+  signalés prunable sans entrée Git utilisable ; `work/github-visibility`
+  contient215 suppressions non indexées. État préexistant consigné, origine
+  non établie. Ne pas prune/reset/restore ces répertoires. Les refs restent
+  présentes ; les éventuels anciens fichiers non suivis ne sont pas certifiés.
+- [Audit exhaustif0.22 et matrice](V0.22.0_PARITY_AUDIT.md) : source publique
+  v0.21.0 et code B5, disponibilités W/L/M, Rust/IPC/Flutter, tests existants et
+  manquants, risques/travail/acceptation par fonction, priorités P0/P1/P2.
+  Les anciens documents de migration sont conservés avec renvoi normatif.
+- [Plan définitif des étapes2–6](RELEASE_0.22.0_PLAN.md) : dépendances,
+  fichiers/contrats, gates, risques, rollback, protocole CPU/RAM et séparation
+  Sol/DeepSeek en sessions principales indépendantes autorisées.
+- Principaux manques : micro Unix désactivé volontairement dans le bridge,
+  caméra/lock/maintenance non migrés, besoins avancés CLI/TUI à exposer sans
+  shell, durées notifications/copie diagnostics/langues, identité/version et
+  packaging installé hybride. L'accès à une fenêtre native de secours n'est
+  **pas** une parité Flutter terminée.
+- Restauration : Windows release manuel = unmute explicite des entrées actives,
+  pas restitution individuelle ; originaux lock Windows retenus dans la garde,
+  token/pending persistés mais pas les valeurs par endpoint après perte de
+  cette garde. Code conservateur refuse le restore aveugle. Journaux Unix et
+  politique d'intention externe restent distincts. Aucun changement matériel.
+- Distribution : WXS encore deux EXEs natifs, updater/reçus pair-only et garde
+  d'archives exactement deux EXEs ne qualifient pas le troisième runner et ses
+  ressources. ARM Flutter B5 construit sous Ubuntu24.04 ne prouve pas le
+  plancher glibc2.35/22.04 de la release native ; résolution explicite exigée.
+- CRT retrouvé : blobs .cargo, auditeur PE durci, neuf tests et générateur winget
+  identiques B5/RC ; préambule version B5 conserve les modes hybrides. Ne pas
+  recherry-pick les correctifs initiaux ni rétrograder l'auditeur. Aucun asset
+  public0.21.0 ou manifeste winget0.13.4 prétendu corrigé.
+- `docs/WINGET.md` actualisé : PR441153 fusionnée le3novembre, même identifiant
+  RomanCuisset.MicCamWatch ; prochaine mise à jour seulement après publication
+  GitHub0.22 vérifiée, sans URL/SHA inventé ni fermeture de l'ancienne PR fusionnée.
+- Preuves B5 recontrôlées par API : Windows41424009387 réussi ; jobs Linux
+  x64/ARM64 de41422733643 réussis malgré run global annulé ; Mac ARM41471689681
+  et Intel41476279179 réussis, chacun avec son vrai SHA. Évidences et bundle
+  normal privés relus et hash-vérifiés. Pas une nouvelle CI0.22.
+- Smoke inerte réel : aide/version CLI stable, quatre PE du bundle B5 audités
+  (Rust/runner/moteur), versions B5 immédiates avec chemins settings invalides.
+  Aucun build/suite/GUI/mutation de protection relancé pour cet audit.
+- CPU : protocole comparatif réelle0.21 vs futur0.22 préparé, pas exécuté.
+  WinVerifyTrust et les scénarios Active restent à mesurer ; Mint llvmpipe
+  n'est pas accéléré. Objectif historique15MB inchangé. `watch --no-kill`
+  Windows peut reprendre une garde demandée ; pas une sonde passive à lancer
+  sur la machine quotidienne. Les chemins privés ne suffisent pas à isoler
+  l'ancien singleton/ressource système.
+- Routage : principal Sol/Codex OAuth, zéro sous-agent faute de preuve effective.
+  Un premier find a révélé25tentatives externes OpenRouter toutes échouées402,
+  0token ; outil exclu aussitôt et incident signalé. Aucun réglage global changé,
+  aucun autre outil à modèle auxiliaire utilisé ensuite.
+- Preuves privées d'étape1 :
+  `%LOCALAPPDATA%\MicCamWatchQualification\audit-022-stage1-20261104-124241`.
+  Rapport public agrégé seulement ; journaux de chemins/processus privés à ne
+  pas publier sans revue.
+- **Point d'arrêt : ÉTAPE1/6 terminée, aucune RC0.22 proposée.** Étape2
+  recommandée avec GPT-6.1 Sol/Codex OAuth/xhigh après nouvel accord.
+  Les P0/P1 doivent être complets avant proposition de RC ; pas de push, main,
+  tag, release, winget, déploiement ou contrôle matériel autorisé ici.

@@ -1,6 +1,6 @@
 # 0.21.1 hybrid desktop — first functional read-only slice
 
-Historical read-only/protocol1 design and measurements, preserved for the pinned first-slice commits. The current development branch uses **protocol3**: [B1 preferences contract/results](FLUTTER_PREFERENCES_B1.md), [protocol2 microphone stage-A history](FLUTTER_COMMANDS_STAGE_A.md), and [current migration matrix](FLUTTER_MIGRATION_MATRIX.md). Old examples are not the current wire schema and their measurements must not be relabelled as current interactive results.
+Historical read-only/protocol1 design and measurements, preserved for the pinned first-slice commits. B5 uses strict **protocol5**, not the earlier protocol3. The next public version is **0.22.0**, with no intermediate0.21.1 release: see the [current parity audit](V0.22.0_PARITY_AUDIT.md) and [six-stage plan](RELEASE_0.22.0_PLAN.md). [B1 protocol3 evidence](FLUTTER_PREFERENCES_B1.md), [protocol2 stage-A history](FLUTTER_COMMANDS_STAGE_A.md), and the [historical migration matrix](FLUTTER_MIGRATION_MATRIX.md) retain their original scopes. Old examples are not the current wire schema and their measurements must not be relabelled as current interactive results.
 
 Decision27October2026: retain hybrid Rust/tray + disposable Flutter presentation. No repeat of comparative study; source experiment/ui-native-flutter-20261027 at b8e1d7f. Integration worktree mcw-flutter-hybrid-0211, branch work/flutter-hybrid-0211, base main73369ab. No push/tag/release/install or existing MSI modification authorized.
 

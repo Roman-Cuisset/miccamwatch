@@ -1,5 +1,7 @@
 # Native feature migration inventory — stages A, B1, B2, B3, B4 and B5
 
+> **Décision du4novembre2026 : prochaine release v0.22.0, aucune0.21.1 intermédiaire.** La matrice normative P0/P1/P2 est désormais l'[audit0.22](V0.22.0_PARITY_AUDIT.md), avec son [plan en six étapes](RELEASE_0.22.0_PLAN.md). Les sections ci-dessous conservent les contrats, priorités et preuves historiques A–B5 ; leurs formulations « current » anciennes ne remplacent pas le code B5/protocole5 ni les nouveaux critères d'acceptation.
+
 Source baseline: `b5cf391c1905cbc391c47220f1347c55ba8e24cc`, 27 October 2026. Inspection only; runtime qualification is recorded separately. This inventory preserves every native/public CLI capability and its actual limitations.
 
 The inventory priorities mean **A = microphone**, **B = presentation/preferences**, **C = sensitive operations**; cross-platform and visual-finalization gates remain separate. Camera/lock/maintenance actions still require their command-specific gates. Current B4 uses strict Flutter protocol5, without a protocol4 downgrade path; the separate native AppKit helper retains protocol4. [B4 qualification](FLUTTER_B4_QUALIFICATION.md), [B1 protocol3 evidence](FLUTTER_PREFERENCES_B1.md) and [protocol2 stage-A history](FLUTTER_COMMANDS_STAGE_A.md) distinguish current contracts from historical evidence.
