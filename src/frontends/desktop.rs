@@ -8,17 +8,38 @@ use std::io::{self, Write};
 pub mod commands;
 pub mod preferences;
 pub mod consultation;
+pub mod tools;
 #[cfg(windows)]
 pub mod windows;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod unix;
 
-pub const PROTOCOL_VERSION: u8 = 5;
+pub const PROTOCOL_VERSION: u8 = 6;
 pub const MAX_FRAME_BYTES: usize = 262_144;
 pub const MAX_EVENT_BYTES: usize = 4096;
 const MAX_STRING_BYTES: usize = 1024;
 const MAX_ACCESSES: usize = 128;
 const MAX_ITEMS: usize = 64;
+
+/// OS CSPRNG only: private session and confirmation secrets have no weak fallback.
+pub(super) fn new_private_token() -> Result<String> {
+    let mut bytes = [0u8; 16];
+    #[cfg(windows)]
+    unsafe {
+        use ::windows::Win32::Security::Cryptography::{BCryptGenRandom, BCRYPT_USE_SYSTEM_PREFERRED_RNG};
+        BCryptGenRandom(None, &mut bytes, BCRYPT_USE_SYSTEM_PREFERRED_RNG).ok()?;
+    }
+    #[cfg(unix)]
+    {
+        use std::{io::Read as _, os::unix::fs::OpenOptionsExt as _};
+        std::fs::OpenOptions::new().read(true).custom_flags(libc::O_CLOEXEC)
+            .open("/dev/urandom")?.read_exact(&mut bytes)?;
+    }
+    let mut token = String::with_capacity(32);
+    use std::fmt::Write as _;
+    for byte in bytes { write!(&mut token, "{byte:02x}")?; }
+    Ok(token)
+}
 
 #[derive(Clone, Debug, Serialize)]
 pub struct DesktopSnapshot {

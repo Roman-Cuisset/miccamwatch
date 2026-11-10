@@ -30,7 +30,6 @@ use windows::{
             HWND, LPARAM, SetHandleInformation, WAIT_OBJECT_0, WPARAM,
         },
         Security::{
-            Cryptography::{BCRYPT_USE_SYSTEM_PREFERRED_RNG, BCryptGenRandom},
             SECURITY_ATTRIBUTES,
         },
         Storage::FileSystem::{BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle},
@@ -210,14 +209,7 @@ pub struct AuthorizedPreference {
 }
 
 fn new_command_session() -> Result<CommandSession> {
-    let mut random = [0u8; 16];
-    unsafe { BCryptGenRandom(None, &mut random, BCRYPT_USE_SYSTEM_PREFERRED_RNG) }.ok()?;
-    let mut token = String::with_capacity(32);
-    use std::fmt::Write as _;
-    for byte in random {
-        write!(&mut token, "{byte:02x}")?;
-    }
-    CommandSession::new(token)
+    CommandSession::new(super::new_private_token()?)
 }
 
 /// No pipes, threads, job, file reservations or child exist until `open`.
@@ -227,6 +219,8 @@ pub struct Supervisor {
     reopen: Option<(DesktopSnapshot, &'static str)>,
     next_ticket: u64,
     consultation_worker: Option<consultation::Worker>,
+    context: super::tools::Context,
+    observed_pending: bool,
 }
 impl Supervisor {
     pub fn new() -> Result<Self> {
@@ -241,7 +235,16 @@ impl Supervisor {
             reopen: None,
             next_ticket: 0,
             consultation_worker: None,
+            context: super::tools::Context::default(),
+            observed_pending: false,
         })
+    }
+    pub fn configure_policy(&mut self, policy: std::sync::Arc<crate::config::Policy>, explicit: bool) {
+        self.context.policy = Some(policy);
+        self.context.explicit_policy = explicit;
+    }
+    pub fn has_pending_work(&self) -> bool {
+        consultation::Worker::pending(&self.consultation_worker)
     }
     pub fn is_running(&self) -> bool {
         self.child.as_ref().is_some_and(|child| !child.exited())
@@ -329,9 +332,11 @@ impl Supervisor {
     }
 
     pub fn take_controls_changed(&mut self) -> bool {
-        self.child
-            .as_mut()
-            .is_some_and(|child| std::mem::take(&mut child.controls_changed))
+        let pending = consultation::Worker::pending(&self.consultation_worker);
+        let completed = std::mem::replace(&mut self.observed_pending, pending) && !pending;
+        let child_changed = self.child.as_mut()
+            .is_some_and(|child| std::mem::take(&mut child.controls_changed));
+        completed || child_changed
     }
     pub fn complete(
         &mut self,
@@ -481,8 +486,12 @@ impl Supervisor {
                 }
             }
             if let Some((ticket, request)) = child.queued_consultation.take() {
+                let mut context = self.context.clone();
+                context.operational = child.autostart_writable;
+                context.data_writable = child.preference_capability.writable;
+                context.applied_profile = child.preference_capability.applied_profile;
                 let id = request.id;
-                if let Err(error) = consultation::Worker::enqueue(&mut self.consultation_worker, ticket, request, child.autostart_writable) {
+                if let Err(error) = consultation::Worker::enqueue(&mut self.consultation_worker, ticket, request, child.autostart_writable, context) {
                     child.pending_consultation = None;
                     child.consultation.finish(id, Err(format!("{error:#}")));
                     child.controls_changed = true;

@@ -1,5 +1,5 @@
-//! On-demand consultation and one explicitly confirmed native startup command.
-//! Never runs on collector/pipe threads; no device, permission or install mutation.
+//! On-demand consultation and explicitly confirmed, native-owned operations.
+//! Work never runs on collector/pipe threads; UI closure cannot cancel accepted work.
 use super::commands::{
     CommandEnvelope, CommandState, authorize_envelope, deserialize_request_id, deserialize_sequence,
 };
@@ -22,6 +22,7 @@ pub enum Operation {
         expected_enabled: bool,
         confirmation: String,
     },
+    Tools { request: super::tools::Request },
 }
 impl Operation {
     fn name(&self) -> &'static str {
@@ -30,9 +31,11 @@ impl Operation {
             Self::Diagnostics {} => "diagnostics",
             Self::AutostartStatus {} => "autostart_status",
             Self::SetAutostart { .. } => "set_autostart",
+            Self::Tools { .. } => "tools",
         }
     }
     fn validate(&self) -> Result<()> {
+        if let Self::Tools { request } = self { request.validate()?; }
         if let Self::History { cursor, limit } = self {
             ensure!((1..=50).contains(limit), "History page limit must be1..50");
             ensure!(
@@ -121,6 +124,7 @@ pub struct Response {
     pub history: Option<HistoryPage>,
     pub diagnostics: Option<Diagnostics>,
     pub autostart: Option<Autostart>,
+    pub tools: Option<super::tools::Report>,
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct View {
@@ -185,20 +189,24 @@ impl Session {
                     history: None,
                     diagnostics: None,
                     autostart: None,
+                    tools: None,
                 });
             }
             return None;
         }
-        if matches!(request.operation, Operation::SetAutostart { .. }) && !autostart_writable {
+        let operational_only = matches!(&request.operation, Operation::SetAutostart { .. })
+            || matches!(&request.operation, Operation::Tools { request } if request.needs_operational());
+        if operational_only && !autostart_writable {
             self.result = Some(Response {
                 id: request.id,
                 state: CommandState::Rejected,
                 code: Some("read_only".into()),
-                detail: Some("Development startup changes are disabled".into()),
+                detail: Some("Device, process and startup changes are disabled in development mode".into()),
                 operation: request.operation.name(),
                 history: None,
                 diagnostics: None,
                 autostart: None,
+                tools: None,
             });
             return None;
         }
@@ -212,6 +220,7 @@ impl Session {
             history: None,
             diagnostics: None,
             autostart: None,
+            tools: None,
         });
         Some(request)
     }
@@ -238,6 +247,10 @@ impl Session {
                 response.state = CommandState::Succeeded;
                 response.autostart = Some(status);
             }
+            Ok(Payload::Tools(report)) => {
+                response.state = CommandState::Succeeded;
+                response.tools = Some(report);
+            }
             Err(error) => {
                 response.state = CommandState::Failed;
                 response.code = Some("consultation_failed".into());
@@ -260,6 +273,7 @@ pub enum Payload {
     History(HistoryPage),
     Diagnostics(Diagnostics),
     Autostart(Autostart),
+    Tools(super::tools::Report),
 }
 pub struct Completion {
     pub ticket: u64,
@@ -270,6 +284,7 @@ struct Query {
     session: String,
     operation: Operation,
     autostart_writable: bool,
+    context: super::tools::Context,
 }
 enum Work {
     Query(Query),
@@ -293,15 +308,18 @@ impl Worker {
             .spawn(move || {
                 let mut browser = HistoryBrowser::default();
                 let mut session = String::new();
+                let mut tools = super::tools::Session::default();
                 while let Ok(work) = work.recv() {
                     let Work::Query(query) = work else {
                         browser = HistoryBrowser::default();
                         session.clear();
+                        tools.reset();
                         continue;
                     };
                     if session != query.session {
                         browser = HistoryBrowser::default();
                         session = query.session;
+                        tools.reset();
                     }
                     let result = match query.operation {
                         Operation::History { cursor, limit } => {
@@ -312,6 +330,12 @@ impl Worker {
                         | Operation::SetAutostart { .. }) => {
                             autostart(operation, query.autostart_writable).map(Payload::Autostart)
                         }
+                        Operation::Tools { request } => tools.execute(request, &query.context).map(|report| {
+                            if report.data.get("cleared").and_then(serde_json::Value::as_bool) == Some(true) {
+                                browser = HistoryBrowser::default();
+                            }
+                            Payload::Tools(report)
+                        }),
                     }
                     .map_err(|error| bounded(format!("{error:#}"), 1024));
                     if completed
@@ -347,6 +371,7 @@ impl Worker {
         ticket: u64,
         request: Request,
         autostart_writable: bool,
+        context: super::tools::Context,
     ) -> Result<()> {
         if owner.is_none() {
             *owner = Some(Self::start()?);
@@ -364,6 +389,7 @@ impl Worker {
                 session: request.session,
                 operation: request.operation,
                 autostart_writable,
+                context,
             }))
             .context("Native consultation queue unavailable")?;
         worker.pending = Some(ticket);
@@ -489,6 +515,21 @@ fn diagnostics() -> Result<Diagnostics> {
 mod tests {
     use super::*;
     const SESSION: &str = "00112233445566778899aabbccddeeff";
+    #[test]
+    fn authenticated_development_sessions_cannot_dispatch_device_or_process_changes() {
+        for control in [super::super::tools::Control::CameraBlock, super::super::tools::Control::Terminate { pid: 12345 }] {
+            let mut lane = Session::default();
+            let request = Request { operation: Operation::Tools {
+                request: super::super::tools::Request::Prepare { control }
+            }, ..request(1) };
+            assert!(lane.admit(request, SESSION, 1, true, false, false).is_none());
+            let result = lane.view(true).result.unwrap();
+            assert_eq!(result.state, CommandState::Rejected);
+            assert_eq!(result.code.as_deref(), Some("read_only"));
+            assert!(result.tools.is_none());
+            assert!(lane.pending.is_none());
+        }
+    }
     fn request(id: u64) -> Request {
         Request {
             session: SESSION.into(),

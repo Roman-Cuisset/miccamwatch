@@ -1783,6 +1783,7 @@ struct FlutterFrontend {
     operational: bool,
     applied_profile: Option<PrivacyProfile>,
     lang: Language,
+    policy: Option<Arc<Policy>>,
 }
 #[cfg(feature = "flutter-desktop")]
 impl FlutterFrontend {
@@ -1791,6 +1792,7 @@ impl FlutterFrontend {
             ui: None, worker: None, sequence: 1, writable, profile_writable, operational,
             applied_profile: None, lang,
             current: None,
+            policy: (!operational).then(|| Arc::new(Policy::default())),
         }
     }
     fn attached(&self) -> bool {
@@ -1837,6 +1839,9 @@ impl FlutterFrontend {
         if self.ui.is_none() {
             self.ui = Some(crate::frontends::desktop::unix::Supervisor::new()?);
         }
+        if let (Some(ui), Some(policy)) = (self.ui.as_mut(), self.policy.as_ref()) {
+            ui.configure_policy(Arc::clone(policy), !self.profile_writable);
+        }
         let frame = self.frame();
         self.ui.as_mut().expect("initialized UI").open(frame, theme)
     }
@@ -1879,10 +1884,14 @@ impl FlutterFrontend {
     fn take_open_failure(&mut self) -> Option<String> {
         self.ui.as_mut().and_then(crate::frontends::desktop::unix::Supervisor::take_open_failure)
     }
+    fn has_pending_work(&self) -> bool {
+        self.worker.as_ref().is_some_and(crate::frontends::desktop::preferences::PreferenceWorker::is_pending)
+            || self.ui.as_ref().is_some_and(|ui| ui.has_pending_work())
+    }
     fn finish(&mut self) {
         if let Some(ui) = self.ui.as_mut() { let _ = ui.close(); }
         // Persistence admitted by this process is not cancelled by a close or stop.
-        while self.worker.as_ref().is_some_and(crate::frontends::desktop::preferences::PreferenceWorker::is_pending) {
+        while self.has_pending_work() {
             let _ = self.refresh();
             thread::sleep(Duration::from_millis(20));
         }
@@ -2264,6 +2273,8 @@ pub fn run_tray(
     };
     #[cfg(feature = "flutter-desktop")]
     let mut flutter = FlutterFrontend::new(lang, true, !explicit_policy, true);
+    #[cfg(feature = "flutter-desktop")]
+    { flutter.policy = Some(Arc::new(policy.clone())); }
     let (sender, actions) = mpsc::sync_channel(32);
     let mut inspection = CameraInspectionWorker::default();
     #[cfg(target_os = "macos")]
@@ -2337,6 +2348,9 @@ pub fn run_tray(
     let outcome = (|| -> Result<()> {
         loop {
             if lifecycle.stop.load(Ordering::Acquire) {
+                #[cfg(feature = "flutter-desktop")]
+                if !flutter.has_pending_work() { break; }
+                #[cfg(not(feature = "flutter-desktop"))]
                 break;
             }
             host.check()?;
@@ -2559,7 +2573,15 @@ pub fn run_tray(
                 }
             }
             match actions.recv_timeout(Duration::from_millis(100)) {
-                Ok(Command::Exit) => break,
+                Ok(Command::Exit) => {
+                    #[cfg(feature = "flutter-desktop")]
+                    if flutter.has_pending_work() {
+                        feedback = Some("Finish the accepted native operation before exiting; nothing was cancelled.".into());
+                        next_poll = Instant::now();
+                        continue;
+                    }
+                    break;
+                }
                 Ok(command) => {
                     if matches!(command, Command::Status) {
                         #[cfg(feature = "flutter-desktop")]

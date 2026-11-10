@@ -4,7 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:miccamwatch_desktop/consultation.dart';
 import 'package:miccamwatch_desktop/consultation_model.dart';
 import 'package:miccamwatch_desktop/consultation_panels.dart';
-import 'package:miccamwatch_desktop/snapshot.dart' show Snapshot;
+import 'package:miccamwatch_desktop/snapshot.dart' show Snapshot, protocolVersion;
 
 import 'consultation_test.dart' as fixtures;
 import 'snapshot_test.dart' as snapshots show frame, encode;
@@ -227,7 +227,7 @@ void main() {
     await client.setAutostart(true, expectedEnabled: false);
     expect(sent.last, {
       'type': 'consultation_request',
-      'protocol_version': 5,
+      'protocol_version': protocolVersion,
       'request': {
         'session': fixtures.sessionA,
         'id': 4,

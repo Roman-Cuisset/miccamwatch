@@ -22,10 +22,38 @@ const assessmentProfiles = ['private', 'meeting', 'development', 'balanced'];
 bool isPreferenceValue(PreferenceKey key, Object? value) => switch (key) {
   PreferenceKey.profile =>
     value is String && assessmentProfiles.contains(value),
-  PreferenceKey.notificationPause =>
-    value == 'pause_30_minutes' || value == 'resume',
+  PreferenceKey.notificationPause => value is PauseDirective,
   _ => value is bool,
 };
+
+/// A bounded duration, not a timestamp supplied by the presentation clock.
+class PauseDirective {
+  const PauseDirective._(this.minutes);
+  const PauseDirective.resume() : minutes = null;
+  factory PauseDirective.pause(int minutes) {
+    if (minutes < 1 || minutes > 10080) throw RangeError.range(minutes, 1, 10080, 'minutes');
+    return PauseDirective._(minutes);
+  }
+  final int? minutes;
+  Map<String, dynamic> toJson() => minutes == null
+      ? {'kind': 'resume'} : {'kind': 'pause', 'minutes': minutes};
+  factory PauseDirective.fromJson(Object? value) {
+    if (value is! Map<String, dynamic>) throw const FormatException('Invalid pause action');
+    if (value['kind'] == 'resume') {
+      _object(value, const ['kind']); return const PauseDirective.resume();
+    }
+    _object(value, const ['kind', 'minutes']);
+    final minutes = value['minutes'];
+    if (value['kind'] != 'pause' || minutes is! int || minutes < 1 || minutes > 10080) {
+      throw const FormatException('Invalid native pause duration');
+    }
+    return PauseDirective.pause(minutes);
+  }
+  @override
+  bool operator ==(Object other) => other is PauseDirective && other.minutes == minutes;
+  @override
+  int get hashCode => minutes.hashCode;
+}
 
 /// Immutable native state; construction validates the entire wire object.
 class PreferenceView {
@@ -181,7 +209,9 @@ class PreferenceOutcome {
         (key) => key.wireName == result['key']);
     if (keys.isEmpty) throw const FormatException('Unknown preference key');
     final key = keys.single;
-    if (!isPreferenceValue(key, result['value'])) {
+    final requested = key == PreferenceKey.notificationPause
+        ? PauseDirective.fromJson(result['value']) : result['value'];
+    if (!isPreferenceValue(key, requested)) {
       throw const FormatException('Invalid preference command value');
     }
     final state = result['state'];
@@ -190,7 +220,7 @@ class PreferenceOutcome {
     ].contains(state)) {
       throw const FormatException('Unknown preference command state');
     }
-    return PreferenceOutcome._(id, key, result['value'] as Object, state,
+    return PreferenceOutcome._(id, key, requested as Object, state,
       _nullableText(result['code'], 64),
       _nullableText(result['detail'], 1024));
   }

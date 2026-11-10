@@ -302,6 +302,8 @@ struct TrayAppState {
     desktop_observation: Option<DesktopObservation>,
     #[cfg(feature = "flutter-desktop")]
     desktop_sequence: u64,
+    #[cfg(feature = "flutter-desktop")]
+    desktop_policy: Arc<crate::config::Policy>,
     overview: windows_desktop::Overview,
     settings_error: Option<String>,
     mute_state: MicrophoneMuteState,
@@ -592,6 +594,8 @@ pub fn run_tray(
     let (camera_requests, camera_results) = start_camera_worker(Arc::clone(&hwnd_cell));
     let microphone_worker =
         microphone_worker::Worker::start(policy.clone(), Arc::clone(&hwnd_cell));
+    #[cfg(feature = "flutter-desktop")]
+    let desktop_policy = Arc::new(policy.clone());
     let refreshes = start_refresh_worker(
         Arc::clone(&hwnd_cell),
         Arc::clone(&workers_alive),
@@ -635,6 +639,8 @@ pub fn run_tray(
         desktop_observation: None,
         #[cfg(feature = "flutter-desktop")]
         desktop_sequence: 0,
+        #[cfg(feature = "flutter-desktop")]
+        desktop_policy,
         overview: windows_desktop::Overview::default(),
         settings_error: None,
         settings,
@@ -912,6 +918,10 @@ fn request_safe_close(hwnd: HWND) -> usize {
         .as_ref()
         .is_some_and(crate::frontends::desktop::preferences::PreferenceWorker::is_pending)
     {
+        return UPDATE_BUSY;
+    }
+    #[cfg(feature = "flutter-desktop")]
+    if state.flutter.as_ref().is_some_and(|ui| ui.has_pending_work()) {
         return UPDATE_BUSY;
     }
     let mut activity = state.restore_activity.lock();
@@ -2140,6 +2150,7 @@ fn open_flutter_desktop(hwnd: HWND) -> bool {
             }
         },
     };
+    supervisor.configure_policy(Arc::clone(&state.desktop_policy), state.explicit_policy);
     // Window activation may synchronously send messages; no tray state reference
     // is used across the native call.
     let opened = supervisor.open(frame, "light");
@@ -2264,6 +2275,12 @@ fn refresh_desktop(hwnd: HWND) {
                     Some("busy"),
                     Some("Native microphone queue unavailable; command not applied".into()),
                 );
+            }
+        }
+        if changed {
+            match Settings::load() {
+                Ok(settings) => s.settings = settings,
+                Err(error) => s.settings_error = Some(format!("Native settings readback: {error:#}")),
             }
         }
         if changed || command.is_some() || preference_submitted || preference_completed {

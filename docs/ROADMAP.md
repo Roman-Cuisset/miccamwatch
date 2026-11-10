@@ -3443,3 +3443,48 @@ Lots futurs **à approuver, aucun correctif appliqué** :
   recommandée avec GPT-6.1 Sol/Codex OAuth/xhigh après nouvel accord.
   Les P0/P1 doivent être complets avant proposition de RC ; pas de push, main,
   tag, release, winget, déploiement ou contrôle matériel autorisé ici.
+
+## 2026-11-10 — v0.22.0, étape 2/6 : sauvegarde de la parité Flutter en cours
+
+- Base vérifiée `e3af148` (B5 et documents d'étape 1), branche isolée
+  `work/flutter-hybrid-0220`, worktree `C:\Users\stcui\Documents\mcw-flutter-0220`.
+  Aucune fusion/push, aucun changement de main, des autres worktrees ou du MSI.
+- Nouveau canal typé `tools` dans le protocole Flutter/Rust **6** : requêtes
+  authentifiées et bornées, préparation native puis confirmation à usage unique
+  (30 s ; 3 s pour une terminaison), observation avant l'effet et relecture après.
+  Le jeton provient du CSPRNG système, jamais d'un PRNG de présentation.
+- Réutilisation des backends Unix microphone et caméra, inspection macOS,
+  préférences de verrouillage avec comparaison sous verrou du stockage, inventaire,
+  détails d'application, politique/validation de fichier bornée et chemins.
+  La terminaison conserve l'instance native et refuse les processus MCW ; le
+  résultat distingue requête de terminaison acceptée et sortie effectivement vérifiée.
+- **Blocage P0 volontaire : caméra Windows non activée dans ce nouveau worker.**
+  Elle doit rejoindre le coordinateur natif caméra (générations, lock/restore,
+  opérations manuelles). Un appel direct concurrent affaiblirait son contrat.
+  Les contrôles natifs sont conservés ; un bouton désactivé n'est pas une parité.
+- La fermeture Flutter ne restaure aucun périphérique. Les sorties normales du
+  propriétaire attendent les opérations admises, y compris lorsque l'UI a disparu.
+  Aucun journal d'originaux ni contrat de libération microphone Windows réécrit.
+- UI commune : page Contrôles, effacement confirmé de l'historique réel,
+  copie du rapport natif, durées de pause 1–10080 minutes avec horloge Rust,
+  paragraphes À propos traduits en sept langues. Versions source alignées sur
+  0.22.0 ; ce n'est ni une release ni un remplacement du frontend de production.
+- Les opérations de mise à jour/removal du bundle hybride ne sont pas inventées :
+  la consultation expose leur indisponibilité ; le vrai transactionnel reste à traiter.
+- Première analyse Flutter passée. Suite initiale : 96 réussites, un échec du
+  nouveau test de corrélation ; cause démontrée : typage perdu dans une Map
+  imbriquée de requête locale, pas une autorisation Rust manquante. Correction par
+  conservation du contrôle typé ; les **8 tests tools repassent**. Les 89 tests
+  existants avaient réussi ; aucun assouplissement du décodeur.
+- Le premier cargo check du bridge avait réussi sans la feature `windows-tray` :
+  cela ne qualifie pas le tray complet. Le résultat du job Rust/features complètes
+  a été perdu lors de l'interruption du processus OMP ; il reste à obtenir.
+- Preuves : `%LOCALAPPDATA%\MicCamWatchQualification\v022-stage2-20261110-093726`.
+  Journaux Flutter conservés, y compris l'échec initial ; pas de preuve fraîche
+  macOS/ARM64. WSL accessible, mais outils Rust/Flutter non trouvés dans son PATH.
+- **Point de reprise immédiat :** qualifier Rust avec `windows-tray,flutter-desktop`,
+  examiner les erreurs réelles, puis lancer la qualification graphique Windows
+  dans un préfixe privé. Actualiser ensuite la matrice des 44 familles et le plan.
+  Ne pas déclarer l'étape 2 terminée : contrôles P0 et maintenance restent incomplets.
+- Routage : travail sans sous-agent, faute de preuve de routage effectif
+  modèle/fournisseur. Aucun réglage global OMP changé.

@@ -1,7 +1,7 @@
 name: miccamwatch_desktop
 description: On-demand MicCamWatch desktop with strictly typed Rust commands.
 publish_to: none
-version: 0.21.1+1
+version: 0.22.0+1
 
 environment:
   sdk: '>=3.13.0 <4.0.0'

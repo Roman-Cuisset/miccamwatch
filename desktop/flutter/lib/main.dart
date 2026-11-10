@@ -14,6 +14,7 @@ import 'consultation.dart';
 import 'consultation_model.dart';
 import 'consultation_panels.dart';
 import 'ui_qualification.dart';
+import 'tools_panels.dart';
 
 final _started = Stopwatch()..start();
 Future<void> _output = Future<void>.value();
@@ -69,10 +70,11 @@ class Palette {
 }
 
 enum AppPage {
-  overview, history, settings, diagnostics, about;
+  overview, controls, history, settings, diagnostics, about;
 
   IconData get icon => switch (this) {
     overview => Icons.dashboard_outlined,
+    controls => Icons.shield_outlined,
     history => Icons.history_outlined,
     settings => Icons.tune_outlined,
     diagnostics => Icons.monitor_heart_outlined,
@@ -290,6 +292,8 @@ class _MicCamWatchAppState extends State<MicCamWatchApp> {
             ])),
             const SizedBox(height: 14),
             if (page == AppPage.overview) ..._overview(c, l, snapshot),
+            if (page == AppPage.controls) NativeToolsPanel(client: consultation,
+              locale: snapshot?.locale ?? 'en', accesses: snapshot?.accesses ?? const []),
             if (page == AppPage.history) HistoryPanel(client: consultation, locale: snapshot?.locale ?? 'en'),
             if (page == AppPage.settings) ...[
               AutostartPanel(client: consultation, locale: snapshot?.locale ?? 'en'),
@@ -335,7 +339,8 @@ class _MicCamWatchAppState extends State<MicCamWatchApp> {
       ]);
     }),
     const SizedBox(height: 12),
-    MicrophoneCommandPanel(client: microphoneCommands, locale: snapshot?.locale ?? 'en', snapshot: snapshot),
+    if (snapshot?.engine['platform'] == 'windows')
+      MicrophoneCommandPanel(client: microphoneCommands, locale: snapshot?.locale ?? 'en', snapshot: snapshot),
     const SizedBox(height: 18),
     Text(l['applications'], style: c.type(17, bold: true)),
     const SizedBox(height: 9),
@@ -433,18 +438,14 @@ class _MicCamWatchAppState extends State<MicCamWatchApp> {
 
   List<Widget> _about(Palette c, Labels l, wire.Snapshot? snapshot) => [
     _panel(c, Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Text('MicCamWatch · 0.21.1 development', style: c.type(18, bold: true)),
+      Text('MicCamWatch · ${snapshot?.engine['version'] ?? '—'} · ${l['development']}', style: c.type(18, bold: true)),
       const SizedBox(height: 12),
       Text(l['hybrid'], style: c.type(14, bold: true)),
       const SizedBox(height: 8),
-      Text('Rust owns collection, protection, permissions, preferences, history and the tray. '
-        'This disposable Flutter window displays snapshots and submits typed requests over private inherited pipes. '
-        'Only Rust applies microphone commands and merges permitted preference changes. '
-        'Closing the window does not release protection. Other controls remain available in the native interfaces.',
-        style: c.type(14, muted: true)),
+      Text(l['aboutArchitecture'], style: c.type(14, muted: true)),
       const SizedBox(height: 12),
-      Text('Protocol ${wire.protocolVersion} · Typed Rust commands · No direct hardware access', style: c.type(12, muted: true)),
-      if (snapshot != null) Text('Engine ${snapshot.engine['version']} · mode: ${snapshot.engine['mode']}', style: c.type(12, muted: true)),
+      Text('IPC ${wire.protocolVersion} · ${l['aboutBoundary']}', style: c.type(12, muted: true)),
+      if (snapshot != null) Text('${l['reportVersion']}: ${snapshot.engine['version']} · ${snapshot.engine['mode']}', style: c.type(12, muted: true)),
     ])),
   ];
 }

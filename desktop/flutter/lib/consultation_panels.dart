@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'consultation.dart';
 import 'consultation_model.dart';
 import 'labels.dart';
+import 'tools_panels.dart';
 
 class HistoryPanel extends StatelessWidget {
   const HistoryPanel({super.key, required this.client, required this.locale});
@@ -36,6 +37,12 @@ class HistoryPanel extends StatelessWidget {
                   label: Text(l['queryRefresh']),
                 )),
               ),
+              const SizedBox(height: 8),
+              Align(alignment: Alignment.centerLeft, child: OutlinedButton.icon(
+                key: const ValueKey('history.clear'),
+                onPressed: client.canRequest ? () => clearRecordedHistory(context, client, l) : null,
+                icon: const Icon(Icons.delete_outline, size: 18),
+                label: Text(l['clearHistory']))),
               _Availability(client: client, labels: l),
               _Status(status: client.historyStatus, labels: l, name: 'history'),
             ],
@@ -199,6 +206,11 @@ class DetailedDiagnosticsPanel extends StatelessWidget {
                   label: Text(l[report == null ? 'reportRun' : 'queryRefresh']),
                 )),
               ),
+              const SizedBox(height: 8),
+              Align(alignment: Alignment.centerLeft, child: OutlinedButton.icon(
+                key: const ValueKey('diagnostics.copy'),
+                onPressed: report != null ? () => copyNativeDiagnostics(context, client, l) : null,
+                icon: const Icon(Icons.copy_outlined, size: 18), label: Text(l['copyDiagnostics']))),
               _Availability(client: client, labels: l),
               _Status(
                 status: client.diagnosticsStatus,

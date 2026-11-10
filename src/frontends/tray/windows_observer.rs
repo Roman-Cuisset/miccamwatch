@@ -146,6 +146,7 @@ impl Observer {
             .preference_worker
             .as_ref()
             .is_some_and(crate::frontends::desktop::preferences::PreferenceWorker::is_pending)
+            && !self.ui.as_ref().is_some_and(|ui| ui.has_pending_work())
             && (!self.controlled
                 || (self.pending_microphone == 0
                     && (!self.control_used
@@ -209,7 +210,9 @@ impl Observer {
         self.refresh()?;
         let frame = self.frame();
         if self.ui.is_none() {
-            self.ui = Some(Supervisor::new()?);
+            let mut ui = Supervisor::new()?;
+            ui.configure_policy(Arc::new(Policy::default()), false);
+            self.ui = Some(ui);
         }
         self.ui
             .as_mut()

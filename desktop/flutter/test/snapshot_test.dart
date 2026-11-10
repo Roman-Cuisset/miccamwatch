@@ -3,9 +3,10 @@ import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:miccamwatch_desktop/snapshot.dart';
+import 'package:miccamwatch_desktop/preferences_model.dart' show PauseDirective;
 
 Map<String, dynamic> frame({int sequence = 1}) => {
-  'type': 'snapshot', 'protocol_version': 5, 'sequence': sequence,
+  'type': 'snapshot', 'protocol_version': protocolVersion, 'sequence': sequence,
   'observed_at': '2026-10-27T08:00:00Z', 'locale': 'en',
   'engine': {'version': '0.21.1', 'platform': 'windows',
     'mode': 'read_only_development', 'state': 'healthy', 'detail': null},
@@ -95,7 +96,7 @@ void main() {
       (v) => v.remove('protection'),
       (v) => v['protocol_version'] = 3,
       (v) => v['protocol_version'] = 4,
-      (v) => v['protocol_version'] = 5.0,
+      (v) => v['protocol_version'] = protocolVersion.toDouble(),
       (v) => v['type'] = 'command',
       (v) => v['sequence'] = '1',
       (v) => v['resources'][0]['activity'] = 'safe',
@@ -147,14 +148,14 @@ void main() {
       },
       'reason': null,
       'command': {
-        'id': 1, 'key': 'notification_pause', 'value': 'pause_30_minutes',
+        'id': 1, 'key': 'notification_pause', 'value': {'kind': 'pause', 'minutes': 30},
         'state': 'succeeded', 'code': null, 'detail': null,
       },
     };
     final snapshot = Snapshot.decode(encode(value));
     expect(snapshot.preferences.values!.pauseNotificationsUntil, nativeDeadline);
     expect(snapshot.preferences.values!.notificationsPaused, isTrue);
-    expect(snapshot.preferences.command!.value, 'pause_30_minutes');
+    expect(snapshot.preferences.command!.value, PauseDirective.pause(30));
     value['controls']['session'] = '';
     expect(() => Snapshot.decode(encode(value)), throwsFormatException);
   });

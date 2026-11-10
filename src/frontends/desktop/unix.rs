@@ -496,6 +496,8 @@ pub struct Supervisor {
     error: Option<String>,
     open_failure: Option<String>,
     consultation_worker: Option<consultation::Worker>,
+    context: super::tools::Context,
+    observed_pending: bool,
 }
 impl Supervisor {
     pub fn new() -> Result<Self> {
@@ -506,7 +508,14 @@ impl Supervisor {
         #[cfg(target_os = "macos")]
         let executable = root.join("MicCamWatch.app/Contents/MacOS/MicCamWatch");
         Ok(Self { executable, child: None, next_ticket: 0, error: None, open_failure: None,
-            consultation_worker: None })
+            consultation_worker: None, context: super::tools::Context::default(), observed_pending: false })
+    }
+    pub fn configure_policy(&mut self, policy: std::sync::Arc<crate::config::Policy>, explicit: bool) {
+        self.context.policy = Some(policy);
+        self.context.explicit_policy = explicit;
+    }
+    pub fn has_pending_work(&self) -> bool {
+        consultation::Worker::pending(&self.consultation_worker)
     }
     pub fn is_running(&self) -> bool { self.child.is_some() }
     pub fn open(&mut self, initial: DesktopSnapshot, theme: &str) -> Result<()> {
@@ -578,8 +587,12 @@ impl Supervisor {
             child.begin_close(now);
         }
         if let Some((ticket, request)) = child.queued_consultation.take() {
+            let mut context = self.context.clone();
+            context.operational = child.autostart_writable;
+            context.data_writable = child.capability.writable;
+            context.applied_profile = child.capability.applied_profile;
             let id = request.id;
-            if let Err(error) = consultation::Worker::enqueue(&mut self.consultation_worker, ticket, request, child.autostart_writable) {
+            if let Err(error) = consultation::Worker::enqueue(&mut self.consultation_worker, ticket, request, child.autostart_writable, context) {
                 child.pending_consultation = None;
                 child.consultation.finish(id, Err(format!("{error:#}")));
                 child.presentation_changed = true;
@@ -596,7 +609,10 @@ impl Supervisor {
     }
     pub fn take_preference(&mut self) -> Option<AuthorizedPreference> { self.child.as_mut()?.queued.take() }
     pub fn take_controls_changed(&mut self) -> bool {
-        self.child.as_mut().is_some_and(|child| std::mem::take(&mut child.changed))
+        let pending = consultation::Worker::pending(&self.consultation_worker);
+        let completed = std::mem::replace(&mut self.observed_pending, pending) && !pending;
+        let changed = self.child.as_mut().is_some_and(|child| std::mem::take(&mut child.changed));
+        completed || changed
     }
     pub fn take_presentation_changed(&mut self) -> bool {
         self.child.as_mut().is_some_and(|child| std::mem::take(&mut child.presentation_changed))
@@ -622,13 +638,7 @@ fn nonblocking(pipe: &impl AsRawFd) -> Result<()> {
     Ok(())
 }
 fn challenge() -> Result<String> {
-    let mut bytes = [0u8; 16];
-    // Both supported Unix kernels provide the OS CSPRNG here; no fallback PRNG.
-    OpenOptions::new().read(true).custom_flags(libc::O_CLOEXEC).open("/dev/urandom")?.read_exact(&mut bytes)?;
-    let mut token = String::with_capacity(32);
-    use std::fmt::Write as _;
-    for byte in bytes { write!(&mut token, "{byte:02x}")?; }
-    Ok(token)
+    super::new_private_token()
 }
 fn spawn(path: &Path, initial: DesktopSnapshot, theme: &str) -> Result<Child> {
     let bundle = Bundle::open(path)?;

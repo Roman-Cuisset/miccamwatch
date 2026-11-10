@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import 'consultation_model.dart';
+import 'tools_model.dart';
 import 'snapshot.dart' show protocolVersion;
 
 enum QueryState {
@@ -53,6 +54,10 @@ class ConsultationClient extends ChangeNotifier {
   final historyStatus = QueryStatus();
   final diagnosticsStatus = QueryStatus();
   final autostartStatus = QueryStatus();
+  final toolsStatus = QueryStatus();
+  NativeReport? toolsReport;
+  bool toolsStale = false;
+  bool get operational => _operational;
   AutostartView? autostart;
   bool autostartStale = false;
   String get session => _session;
@@ -94,6 +99,7 @@ class ConsultationClient extends ChangeNotifier {
     ConsultationOperation.diagnostics => diagnosticsStatus,
     ConsultationOperation.autostartStatus ||
     ConsultationOperation.setAutostart => autostartStatus,
+    ConsultationOperation.tools => toolsStatus,
   };
 
   void _markPrevious(ConsultationOperation operation) {
@@ -106,6 +112,8 @@ class ConsultationClient extends ChangeNotifier {
       case ConsultationOperation.autostartStatus ||
           ConsultationOperation.setAutostart:
         autostartStale = autostart != null;
+      case ConsultationOperation.tools:
+        toolsStale = toolsReport != null;
     }
   }
 
@@ -113,6 +121,7 @@ class ConsultationClient extends ChangeNotifier {
     final ticket = _ticket;
     if (ticket != null) {
       ticket.timer?.cancel();
+      _failTools(ticket, 'queryDisconnected');
       final status = _status(ticket.operation);
       if (status.busy) {
         status.state = QueryState.uncertain;
@@ -125,6 +134,7 @@ class ConsultationClient extends ChangeNotifier {
     if (historyLoaded) historyStale = true;
     if (report != null) diagnosticsStale = true;
     if (autostart != null) autostartStale = true;
+    if (toolsReport != null) toolsStale = true;
   }
 
   void update(
@@ -157,6 +167,7 @@ class ConsultationClient extends ChangeNotifier {
       historyStatus._reset();
       diagnosticsStatus._reset();
       autostartStatus._reset();
+      toolsStatus._reset();
     }
     _live = true;
     _sequence = sequence;
@@ -221,6 +232,30 @@ class ConsultationClient extends ChangeNotifier {
           } else if (ticket.operation == ConsultationOperation.diagnostics) {
             report = result.diagnostics!;
             diagnosticsStale = false;
+          } else if (ticket.operation == ConsultationOperation.tools) {
+            final native = result.tools!;
+            if ((ticket.tools?.action == 'prepare' || ticket.tools?.action == 'commit')
+                && native.control != ticket.tools?.control) {
+              status.state = QueryState.failed;
+              status.localIssue = 'queryNativeMismatch';
+              _failTools(ticket, 'queryNativeMismatch');
+            } else {
+              toolsReport = native;
+              toolsStale = false;
+              if (native.outcome == 'not_confirmed') {
+                status.state = QueryState.uncertain;
+                status.detail = native.error;
+              }
+              if (ticket.tools?.action == 'clear_history' && native.data?['cleared'] == true) {
+                _entries = const [];
+                _historyIssues = const [];
+                _cursor = null;
+                _usedCursors.clear();
+                historyLoaded = false;
+                historyStale = true;
+              }
+              if (!(ticket.completion?.isCompleted ?? true)) ticket.completion!.complete(native);
+            }
           } else if (ticket.operation == ConsultationOperation.setAutostart &&
               result.autostart!.enabled != ticket.requested) {
             status.state = QueryState.failed;
@@ -232,6 +267,7 @@ class ConsultationClient extends ChangeNotifier {
           }
         } else {
           _markPrevious(ticket.operation);
+          _failTools(ticket, result.detail ?? result.code ?? result.state.name);
         }
         // An uncertain result can still be resolved by a later native completion.
         if (result.state != ConsultationState.uncertain) _ticket = null;
@@ -248,6 +284,18 @@ class ConsultationClient extends ChangeNotifier {
   }
 
   Future<void> refreshDiagnostics() => _request(const DiagnosticsQuery());
+  Future<NativeReport> requestTools(ToolsRequest request) {
+    if (!canRequest) return Future.error(StateError(disabledReason ?? 'queryUnavailable'));
+    final completion = Completer<NativeReport>();
+    unawaited(_request(ToolsQuery(request), completion: completion));
+    return completion.future;
+  }
+
+  void _failTools(_Query ticket, String reason) {
+    if (!(ticket.completion?.isCompleted ?? true)) {
+      ticket.completion!.completeError(StateError(reason));
+    }
+  }
   Future<void> refreshAutostart() => _request(const AutostartStatusQuery());
   Future<void> setAutostart(
     bool requested, {
@@ -262,13 +310,17 @@ class ConsultationClient extends ChangeNotifier {
     );
   }
 
-  Future<void> _request(ConsultationQuery query) async {
+  Future<void> _request(ConsultationQuery query, {Completer<NativeReport>? completion}) async {
     final operation = query.kind;
     final cursor = query is HistoryQuery ? query.cursor : null;
     final limit = query is HistoryQuery ? query.limit : 30;
-    if (!canRequest) return;
+    if (!canRequest) {
+      completion?.completeError(StateError(disabledReason ?? 'queryUnavailable'));
+      return;
+    }
     // Superseding an uncertain request intentionally retires its late response.
     _ticket?.timer?.cancel();
+    if (_ticket case final previous?) _failTools(previous, 'querySuperseded');
     final ticket = _Query(
       _nextId++,
       operation,
@@ -276,6 +328,7 @@ class ConsultationClient extends ChangeNotifier {
       cursor,
       limit,
       query is SetAutostartQuery ? query.requested : null,
+      tools: query is ToolsQuery ? query.request : null, completion: completion,
     );
     _ticket = ticket;
     final status = _status(operation);
@@ -305,6 +358,7 @@ class ConsultationClient extends ChangeNotifier {
       status.state = QueryState.uncertain;
       status.localIssue = 'queryTimeout';
       _markPrevious(operation);
+      _failTools(ticket, 'queryTimeout');
       notifyListeners();
     });
     notifyListeners();
@@ -316,6 +370,7 @@ class ConsultationClient extends ChangeNotifier {
       status.state = QueryState.uncertain;
       status.localIssue = 'querySendFailed';
       _markPrevious(operation);
+      _failTools(ticket, 'querySendFailed');
       notifyListeners();
     }
   }
@@ -324,6 +379,7 @@ class ConsultationClient extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     _ticket?.timer?.cancel();
+    if (_ticket case final ticket?) _failTools(ticket, 'queryDisconnected');
     super.dispose();
   }
 }
@@ -335,13 +391,17 @@ class _Query {
     this.sequence,
     this.cursor,
     this.limit,
-    this.requested,
-  );
+    this.requested, {
+    this.tools,
+    this.completion,
+  });
   final int id;
   final ConsultationOperation operation;
   final int sequence;
   final String? cursor;
   final int limit;
   final bool? requested;
+  final ToolsRequest? tools;
+  final Completer<NativeReport>? completion;
   Timer? timer;
 }

@@ -158,7 +158,7 @@ class PreferenceCommandClient extends ChangeNotifier {
         'action': 'set_preference',
         'observed_sequence': _observedSequence,
         'key': key.wireName,
-        'value': value,
+        'value': value is PauseDirective ? value.toJson() : value,
         'expected_value': expected,
       },
     };
@@ -267,16 +267,21 @@ class PreferencesPanel extends StatelessWidget {
                 onPressed: values.notificationsEnabled &&
                     client.canChange(PreferenceKey.notificationPause)
                     ? () => client.request(
-                        PreferenceKey.notificationPause, 'pause_30_minutes')
+                        PreferenceKey.notificationPause, PauseDirective.pause(30))
                     : null,
                 icon: const Icon(Icons.pause_circle_outline, size: 18),
                 label: Text(labels['pause30Minutes']),
               ),
               OutlinedButton.icon(
+                key: const ValueKey('preferences.customPause'),
+                onPressed: values.notificationsEnabled && client.canChange(PreferenceKey.notificationPause)
+                    ? () => _customPause(context, labels) : null,
+                icon: const Icon(Icons.schedule, size: 18), label: Text(labels['pauseCustom'])),
+              OutlinedButton.icon(
                 key: const ValueKey('preferences.resume'),
                 onPressed: values.pauseNotificationsUntil != null &&
                     client.canChange(PreferenceKey.notificationPause)
-                    ? () => client.request(PreferenceKey.notificationPause, 'resume')
+                    ? () => client.request(PreferenceKey.notificationPause, const PauseDirective.resume())
                     : null,
                 icon: const Icon(Icons.play_circle_outline, size: 18),
                 label: Text(labels['resumeNotifications']),
@@ -349,6 +354,35 @@ class PreferencesPanel extends StatelessWidget {
       ]);
     });
   }
+
+  Future<void> _customPause(BuildContext context, _PreferenceLabels labels) async {
+    final session = client.session;
+    final previous = client.view?.values?.pauseNotificationsUntil;
+    var input = '30';
+    final form = GlobalKey<FormState>();
+    final minutes = await showDialog<int>(context: context, builder: (context) => AlertDialog(
+      title: Text(labels['pauseCustom']),
+      content: Form(key: form, child: TextFormField(
+        key: const ValueKey('preferences.pauseMinutes'), initialValue: input,
+        onChanged: (value) => input = value, autofocus: true,
+        keyboardType: TextInputType.number, decoration: InputDecoration(labelText: labels['pauseMinutes']),
+        validator: (value) {
+          final number = int.tryParse(value ?? '');
+          return number != null && number >= 1 && number <= 10080 ? null : labels['pauseRange'];
+        })),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: Text(labels['cancel'])),
+        FilledButton(onPressed: () {
+          if (form.currentState!.validate()) Navigator.pop(context, int.parse(input));
+        }, child: Text(labels['confirm'])),
+      ]));
+    if (!context.mounted || minutes == null) return;
+    if (session != client.session || previous != client.view?.values?.pauseNotificationsUntil) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(labels['pauseChanged'])));
+      return;
+    }
+    await client.request(PreferenceKey.notificationPause, PauseDirective.pause(minutes));
+  }
 }
 
 class _PreferenceLabels {
@@ -359,6 +393,12 @@ class _PreferenceLabels {
 }
 
 const _labels = <String, List<String>>{
+  'pauseCustom': ['Other duration…', 'Autre durée…', 'Andere Dauer…', 'Otra duración…', '別の期間…', '其他时长…', 'Другой срок…'],
+  'pauseMinutes': ['Minutes', 'Minutes', 'Minuten', 'Minutos', '分', '分钟', 'Минуты'],
+  'pauseRange': ['Enter 1–10080 minutes.', 'Saisissez 1 à 10080 minutes.', '1–10080 Minuten eingeben.', 'Introduzca 1–10080 minutos.', '1〜10080 分を入力してください。', '请输入1至10080分钟。', 'Введите от 1 до 10080 минут.'],
+  'pauseChanged': ['Pause context changed. Read the new state and try again.', 'Le contexte de pause a changé. Relisez l’état et réessayez.', 'Pausenkontext geändert. Neuen Zustand prüfen und erneut versuchen.', 'Cambió la pausa. Consulte el estado nuevo e inténtelo de nuevo.', '一時停止の状況が変わりました。新しい状態を確認して再試行してください。', '暂停状态已更改。请读取新状态后重试。', 'Состояние паузы изменилось. Проверьте новое состояние и повторите.'],
+  'cancel': ['Cancel', 'Annuler', 'Abbrechen', 'Cancelar', 'キャンセル', '取消', 'Отмена'],
+  'confirm': ['Confirm', 'Confirmer', 'Bestätigen', 'Confirmar', '確認', '确认', 'Подтвердить'],
   'capture': ['Capture alerts', 'Alertes de capture', 'Aufnahmehinweise', 'Avisos de captura', 'キャプチャ通知', '采集提醒', 'Оповещения о захвате'],
   'notifications': ['Capture notifications', 'Notifications de capture', 'Aufnahmebenachrichtigungen', 'Notificaciones de captura', 'キャプチャの通知', '采集通知', 'Уведомления о захвате'],
   'pause30Minutes': ['Pause 30 min', 'Pause 30 min', '30 Min. pausieren', 'Pausar 30 min', '30 分間一時停止', '暂停 30 分钟', 'Пауза на 30 мин'],

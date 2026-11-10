@@ -59,8 +59,12 @@ impl Policy {
         };
         let contents = fs::read_to_string(path)
             .with_context(|| format!("failed to read policy {}", path.display()))?;
-        let policy: Self = toml::from_str(&contents)
-            .with_context(|| format!("invalid policy {}", path.display()))?;
+        Self::from_toml(&contents)
+            .with_context(|| format!("invalid policy {}", path.display()))
+    }
+
+    pub(crate) fn from_toml(contents: &str) -> Result<Self> {
+        let policy: Self = toml::from_str(contents)?;
         policy.validate()?;
         Ok(policy)
     }

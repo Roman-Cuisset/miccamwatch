@@ -7,7 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:miccamwatch_desktop/consultation.dart';
 import 'package:miccamwatch_desktop/consultation_model.dart';
 import 'package:miccamwatch_desktop/consultation_panels.dart';
-import 'package:miccamwatch_desktop/snapshot.dart' show Snapshot;
+import 'package:miccamwatch_desktop/snapshot.dart' show Snapshot, protocolVersion;
 
 import 'snapshot_test.dart' as snapshots show frame, encode;
 
@@ -61,6 +61,7 @@ Map<String, dynamic> result({
   Map<String, dynamic>? history,
   Map<String, dynamic>? diagnostics,
   Map<String, dynamic>? autostart,
+  Map<String, dynamic>? tools,
   String? code,
   String? detail,
 }) => {
@@ -80,6 +81,7 @@ Map<String, dynamic> result({
           ['autostart_status', 'set_autostart'].contains(operation)
       ? autostart
       : null,
+  'tools': state == 'succeeded' && operation == 'tools' ? tools : null,
 };
 Map<String, dynamic> viewJson({
   bool available = true,
@@ -369,7 +371,7 @@ void main() {
       await client.refreshHistory();
       expect(sent.single, {
         'type': 'consultation_request',
-        'protocol_version': 5,
+        'protocol_version': protocolVersion,
         'request': {
           'session': sessionA,
           'id': 1,

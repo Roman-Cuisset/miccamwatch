@@ -1,10 +1,12 @@
 import 'dart:convert';
+import 'tools_model.dart';
 
 enum ConsultationOperation {
   history('history'),
   diagnostics('diagnostics'),
   autostartStatus('autostart_status'),
-  setAutostart('set_autostart');
+  setAutostart('set_autostart'),
+  tools('tools');
 
   const ConsultationOperation(this.wireName);
   final String wireName;
@@ -74,6 +76,15 @@ class SetAutostartQuery extends ConsultationQuery {
   };
 }
 
+class ToolsQuery extends ConsultationQuery {
+  const ToolsQuery(this.request);
+  final ToolsRequest request;
+  @override
+  ConsultationOperation get kind => ConsultationOperation.tools;
+  @override
+  Map<String, dynamic> toJson() => {'kind': kind.wireName, 'request': request.toJson()};
+}
+
 class ConsultationRequest {
   ConsultationRequest({
     required this.session,
@@ -130,6 +141,7 @@ class ConsultationResult {
     this.history,
     this.diagnostics,
     this.autostart,
+    this.tools,
   );
   final int id;
   final ConsultationState state;
@@ -139,6 +151,7 @@ class ConsultationResult {
   final HistoryPage? history;
   final DetailedDiagnostics? diagnostics;
   final AutostartView? autostart;
+  final NativeReport? tools;
 
   factory ConsultationResult.fromJson(dynamic value) {
     final map = _object(value, [
@@ -150,6 +163,7 @@ class ConsultationResult {
       'history',
       'diagnostics',
       'autostart',
+      'tools',
     ]);
     final id = _integer(map['id'], minimum: 1, maximum: 0xffffffff);
     final state = _enumeration(map['state'], ConsultationState.values);
@@ -164,18 +178,20 @@ class ConsultationResult {
         ConsultationOperation.diagnostics => 'diagnostics',
         ConsultationOperation.autostartStatus ||
         ConsultationOperation.setAutostart => 'autostart',
+        ConsultationOperation.tools => 'tools',
       };
       if (map[payload] == null ||
           [
             'history',
             'diagnostics',
             'autostart',
+            'tools',
           ].any((key) => key != payload && map[key] != null)) {
         _invalid('Successful consultation lacks its exclusive payload');
       }
     } else if (map['history'] != null ||
         map['diagnostics'] != null ||
-        map['autostart'] != null) {
+        map['autostart'] != null || map['tools'] != null) {
       _invalid('Non-successful consultation carries data');
     }
     return ConsultationResult._(
@@ -194,6 +210,7 @@ class ConsultationResult {
               map['autostart'],
               requireKnown: operation == ConsultationOperation.setAutostart,
             ),
+      map['tools'] == null ? null : NativeReport.fromJson(map['tools']),
     );
   }
 }
