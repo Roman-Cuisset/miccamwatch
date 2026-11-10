@@ -171,4 +171,38 @@ void main() {
       client.dispose();
     }
   });
+
+  testWidgets('one process using several devices has one unambiguous details action', (tester) async {
+    final client = ConsultationClient(send: (_) async {});
+    await tester.pumpWidget(MaterialApp(home: Scaffold(body: SingleChildScrollView(
+      child: NativeToolsPanel(client: client, locale: 'en', accesses: const [
+        {'pid': 12345, 'application': 'Observed application', 'resource': 'microphone', 'device': 'input-one'},
+        {'pid': 12345, 'application': 'Observed application', 'resource': 'microphone', 'device': 'input-two'},
+        {'pid': 12345, 'application': 'Observed application', 'resource': 'camera', 'device': 'camera-one'},
+      ])))));
+    expect(find.byKey(const ValueKey('tools.application.12345')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+    client.dispose();
+  });
+
+  testWidgets('a retained device readback cannot authorize controls in a replacement session', (tester) async {
+    late ConsultationClient client;
+    client = ConsultationClient(send: (message) async {
+      complete(client, report(state: nativeState()), id: message['request']['id'] as int);
+    });
+    client.update(fixtures.view(), fixtures.sessionA, 1, true, operational: true);
+    await tester.pumpWidget(MaterialApp(home: Scaffold(body: SingleChildScrollView(
+      child: NativeToolsPanel(client: client, locale: 'en', accesses: const [])))));
+    await tester.pump();
+    await tester.pump();
+    final mute = find.byKey(const ValueKey('tools.microphone_mute'));
+    expect(tester.widget<OutlinedButton>(mute).onPressed, isNotNull);
+    client.update(fixtures.view(), fixtures.sessionB, 1, true, operational: true);
+    await tester.pump();
+    expect(tester.widget<OutlinedButton>(mute).onPressed, isNull);
+    expect(tester.widget<SwitchListTile>(find.byKey(const ValueKey('tools.lock_microphone'))).onChanged, isNull);
+    await tester.pumpWidget(const SizedBox());
+    client.dispose();
+  });
 }

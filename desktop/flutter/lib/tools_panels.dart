@@ -17,6 +17,7 @@ class NativeToolsPanel extends StatefulWidget {
 }
 class _NativeToolsPanelState extends State<NativeToolsPanel> {
   NativeState? native;
+  String? nativeSession;
   Map<String, dynamic>? data;
   String? section;
   String? issue;
@@ -41,6 +42,7 @@ class _NativeToolsPanelState extends State<NativeToolsPanel> {
       final result = await client.requestTools(request);
       if (mounted) setState(() {
         native = result.state ?? native;
+        if (result.state != null) nativeSession = client.session;
         if (request.action != 'prepare' && request.action != 'commit') {
           data = result.data; section = request.action;
         }
@@ -97,20 +99,28 @@ class _NativeToolsPanelState extends State<NativeToolsPanel> {
     builder: (context, _) {
       final state = native;
       final enabled = client.canRequest && !dialogOpen;
-      Widget action(String key, IconData icon, VoidCallback? invoke) => OutlinedButton.icon(
-        key: ValueKey('tools.$key'), onPressed: invoke, icon: Icon(icon, size: 18), label: Text(l[key]));
+      final controlsEnabled = enabled && client.operational && nativeSession == client.session;
+      final applications = <int, String>{};
+      for (final access in widget.accesses) {
+        final pid = access['pid'];
+        if (pid is int && pid > 1) applications.putIfAbsent(pid, () => access['application'] as String);
+      }
+      Widget action(String key, IconData icon, VoidCallback? invoke) => Semantics(
+        identifier: 'tools.$key', enabled: invoke != null, child: OutlinedButton.icon(
+          key: ValueKey('tools.$key'), onPressed: invoke, icon: Icon(icon, size: 18), label: Text(l[key])));
       Widget controlled(String kind, IconData icon, bool available) => action(kind, icon,
-        enabled && client.operational && available ? () => _apply(NativeControl.action(kind)) : null);
-      Widget lock(String label, String field, bool supported) => SwitchListTile(
+        controlsEnabled && available ? () => _apply(NativeControl.action(kind)) : null);
+      Widget lock(String label, String field, bool supported) => Semantics(
+        identifier: 'tools.$field', enabled: controlsEnabled && supported, child: SwitchListTile(
         key: ValueKey('tools.$field'), contentPadding: EdgeInsets.zero, dense: true,
         title: Text(l[label]), value: state!.flag(field),
-        onChanged: enabled && client.operational && supported ? (value) {
+        onChanged: controlsEnabled && supported ? (value) {
           _apply(NativeControl.lock(
             microphone: field == 'lock_microphone' ? value : state.flag('lock_microphone'),
             camera: field == 'lock_camera' ? value : state.flag('lock_camera'),
             restore: field == 'restore_on_unlock' ? value : state.flag('restore_on_unlock')));
         } : null,
-      );
+      ));
       return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         _ToolCard(title: l['nativeControls'], children: [
           Text(l['nativeOnDemand']), const SizedBox(height: 10),
@@ -153,11 +163,10 @@ class _NativeToolsPanelState extends State<NativeToolsPanel> {
         _ToolCard(title: l['devicesAndApplications'], children: [
           Wrap(spacing: 8, runSpacing: 8, children: [
             action('deviceInventory', Icons.devices_other, enabled ? () => _query(const ToolsRequest.devices()) : null),
-            for (final access in widget.accesses.take(16))
-              if (access['pid'] is int && (access['pid'] as int) > 1)
-                OutlinedButton(key: ValueKey('tools.application.${access['pid']}.${access['resource']}'),
-                  onPressed: enabled ? () => _query(ToolsRequest.application(access['pid'] as int)) : null,
-                  child: Text('${access['application']} · PID ${access['pid']}')),
+            for (final application in applications.entries.take(16))
+              OutlinedButton(key: ValueKey('tools.application.${application.key}'),
+                onPressed: enabled ? () => _query(ToolsRequest.application(application.key)) : null,
+                child: Text('${application.value} · PID ${application.key}')),
           ]),
           if (section == 'devices' && data != null) ...[
             for (final device in (data!['devices'] as List? ?? const []))
@@ -218,8 +227,9 @@ Future<void> clearRecordedHistory(BuildContext context, ConsultationClient clien
   final confirmed = await showDialog<bool>(context: context, builder: (context) => AlertDialog(
     title: Text(l['clearHistory']), content: Text(l['clearHistoryScope']), actions: [
       TextButton(onPressed: () => Navigator.pop(context, false), child: Text(l['autostartCancel'])),
-      FilledButton(key: const ValueKey('history.confirmClear'), onPressed: () => Navigator.pop(context, true),
-        child: Text(l['clearHistory'])),
+      Semantics(identifier: 'history.confirmClear', child: FilledButton(
+        key: const ValueKey('history.confirmClear'), onPressed: () => Navigator.pop(context, true),
+        child: Text(l['clearHistory']))),
     ]));
   if (confirmed != true || !context.mounted) return;
   if (session != client.session || !client.canRequest) return;

@@ -38,11 +38,12 @@ class HistoryPanel extends StatelessWidget {
                 )),
               ),
               const SizedBox(height: 8),
-              Align(alignment: Alignment.centerLeft, child: OutlinedButton.icon(
-                key: const ValueKey('history.clear'),
-                onPressed: client.canRequest ? () => clearRecordedHistory(context, client, l) : null,
-                icon: const Icon(Icons.delete_outline, size: 18),
-                label: Text(l['clearHistory']))),
+              Align(alignment: Alignment.centerLeft, child: Semantics(
+                identifier: 'history.clear', enabled: client.canRequest, child: OutlinedButton.icon(
+                  key: const ValueKey('history.clear'),
+                  onPressed: client.canRequest ? () => clearRecordedHistory(context, client, l) : null,
+                  icon: const Icon(Icons.delete_outline, size: 18),
+                  label: Text(l['clearHistory'])))),
               _Availability(client: client, labels: l),
               _Status(status: client.historyStatus, labels: l, name: 'history'),
             ],

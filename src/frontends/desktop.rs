@@ -854,20 +854,31 @@ mod tests {
             assert!(!text.contains(secret));
         }
     }
+    fn ready_line(sequence: u64) -> Vec<u8> {
+        let mut line = serde_json::to_vec(&serde_json::json!({
+            "type":"ready", "protocol_version":PROTOCOL_VERSION, "sequence":sequence,
+        })).unwrap();
+        line.push(b'\n');
+        line
+    }
     #[test]
     fn parser_rejects_mutations_versions_extra_fields_and_bad_types() {
-        for line in [
-            r#"{"type":"mute","protocol_version":1}"#,
-            r#"{"type":"ready","protocol_version":3,"sequence":1}"#,
-            r#"{"type":"ready","protocol_version":4,"sequence":1}"#,
-            r#"{"type":"ready","protocol_version":1,"sequence":1,"command":"unmute"}"#,
-            r#"{"type":"ready","protocol_version":1,"sequence":"1"}"#,
-            r#"{"type":"timing","protocol_version":1,"stage":"shell","elapsed_ms":0}"#,
+        let valid = serde_json::json!({"type":"ready","protocol_version":PROTOCOL_VERSION,"sequence":1});
+        for (field, value) in [
+            ("type", serde_json::json!("mute")),
+            ("protocol_version", serde_json::json!(PROTOCOL_VERSION - 1)),
+            ("protocol_version", serde_json::json!(f64::from(PROTOCOL_VERSION))),
+            ("sequence", serde_json::json!("1")),
+            ("command", serde_json::json!("unmute")),
         ] {
-            assert!(parse_event(line.as_bytes()).is_err());
+            let mut invalid = valid.clone();
+            invalid[field] = value;
+            assert!(parse_event(&serde_json::to_vec(&invalid).unwrap()).is_err());
         }
-        assert!(matches!(parse_event(br#"{"type":"ready","protocol_version":5,"sequence":1}"#),
-            Ok(UiEvent::Ready { sequence: 1, .. })));
+        let invalid_stage = serde_json::json!({"type":"timing","protocol_version":PROTOCOL_VERSION,
+            "stage":"shell","elapsed_ms":0});
+        assert!(parse_event(&serde_json::to_vec(&invalid_stage).unwrap()).is_err());
+        assert!(matches!(parse_event(&ready_line(1)), Ok(UiEvent::Ready { sequence: 1, .. })));
     }
     #[test]
     fn oversized_line_cannot_smuggle_suffix_and_next_line_recovers() {
@@ -883,11 +894,11 @@ mod tests {
         };
         lines.feed(&vec![b'x'; MAX_EVENT_BYTES + 1], &mut feed);
         lines.feed(
-            b"{\"type\":\"ready\",\"protocol_version\":5,\"sequence\":1}\n",
+            &ready_line(1),
             &mut feed,
         );
         lines.feed(
-            b"{\"type\":\"ready\",\"protocol_version\":5,\"sequence\":2}\n",
+            &ready_line(2),
             &mut feed,
         );
         assert_eq!((accepted, rejected), (1, 1));
@@ -901,7 +912,8 @@ mod tests {
         assert_eq!(output.0.len(), MAX_FRAME_BYTES);
         let mut lines = EventLines::default();
         let mut results = Vec::new();
-        lines.feed(b"{\"type\":\"timing\",\"protocol_version\":5,", |e| {
+        let prefix = format!("{{\"type\":\"timing\",\"protocol_version\":{PROTOCOL_VERSION},");
+        lines.feed(prefix.as_bytes(), |e| {
             results.push(e)
         });
         assert!(results.is_empty());

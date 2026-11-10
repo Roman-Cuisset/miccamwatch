@@ -3488,3 +3488,25 @@ Lots futurs **à approuver, aucun correctif appliqué** :
   Ne pas déclarer l'étape 2 terminée : contrôles P0 et maintenance restent incomplets.
 - Routage : travail sans sous-agent, faute de preuve de routage effectif
   modèle/fournisseur. Aucun réglage global OMP changé.
+
+### Reprise du checkpoint et vérification des contrats
+
+- Sauvegarde locale `9937427` créée avant reprise des opérations longues.
+  Analyse Flutter de nouveau passée ; **10 tests tools** passent après correction
+  de la corrélation, déduplication des détails par PID et refus des contrôles
+  reposant sur un readback d'une ancienne session.
+- Rust Windows complet : première exécution 107 tests frontend réussis, trois
+  ignorés et quatre échecs de fixtures (Ready resté en protocole 5 ; deadline CAS
+  du nouveau test de durées ignorait la valeur protégée initiale). Pas de
+  contournement du parseur/CAS : fixtures réparées pour la vraie version et le
+  vrai état initial ; les **60 tests desktop** passent, puis **Clippy strict
+  windows-tray,flutter-desktop/all-targets** passe.
+- Scénario graphique de qualification `parity` préparé : utilise les vrais boutons,
+  Rust et les pipes, dans `settings_development` seulement. Il ne permet aucune
+  action matérielle ni autostart ; vérifie aussi l'effacement de l'historique du
+  préfixe privé, sa relecture et les consultations natives. Normal AOT et build
+  instrumenté seront distingués dans les preuves.
+- SDK Linux B2 retrouvé sous WSL, hors PATH : préfixe privé
+  `/home/roman/mcw-qualification/b2-20261029-082656`, Rust/Flutter/sysroot déjà
+  préparés. Ne pas refaire cette installation ni modifier ses paquets système ;
+  réutiliser l'outillage avec une copie de source et des sorties de test privées.

@@ -93,6 +93,9 @@ class UiQualification {
   Future<void> _tap(String identifier) async {
     const permitted = {'navigation.overview', 'navigation.history',
       'navigation.settings', 'navigation.diagnostics', 'navigation.about',
+      'navigation.controls', 'tools.queryRefresh', 'tools.deviceInventory',
+      'tools.consultPolicy', 'tools.consultPaths', 'tools.validatePolicy',
+      'history.clear', 'history.confirmClear',
       'history.refresh', 'diagnostics.run', 'autostart.refresh',
       'preferences.notificationsEnabled', 'autostart.change', 'autostart.confirm'};
     _require(permitted.contains(identifier), 'Not a qualification action');
@@ -130,7 +133,7 @@ class UiQualification {
     FlutterError.onError = _errorHandler;
     _handle = WidgetsBinding.instance.ensureSemantics();
     try {
-      _require(scenario == 'consultation' || scenario == 'startup', 'Unknown proof scenario');
+      _require(const {'consultation', 'startup', 'parity'}.contains(scenario), 'Unknown proof scenario');
       await _until(() => live() && _owner?.rootSemanticsNode != null, 'No live native snapshot/semantics');
       final mode = describe()['mode'];
       if (scenario == 'startup') {
@@ -198,6 +201,37 @@ class UiQualification {
         _require(queries.report != null && queries.report!.platform == describe()['platform'] &&
           !queries.diagnosticsStale, 'Native diagnostic identity/readback mismatch');
         cases.add('real-native-diagnostics-rendered');
+        if (scenario == 'parity') {
+          _require(mode == 'settings_development', 'Parity writes require the isolated settings owner');
+          await _tap('navigation.history');
+          await _query(queries.historyStatus, 'History before confirmed clear');
+          await _tap('history.clear');
+          await _tap('history.confirmClear');
+          await _until(() => queries.toolsReport?.data?['cleared'] == true && !queries.toolsStatus.busy,
+            'Native history clear not confirmed');
+          await _query(queries.historyStatus, 'History readback after clear');
+          await _until(() => queries.historyLoaded && !queries.historyStale && !queries.historyStatus.busy,
+            'History was not actually reloaded after clearing');
+          cases.add('isolated-history-clear-confirmed-and-reloaded');
+          await _tap('navigation.controls');
+          await _until(() => queries.toolsReport?.state != null && !queries.toolsStatus.busy,
+            'Native controls not read');
+          await _until(() => _node('tools.microphone_mute') != null && _node('tools.lock_microphone') != null,
+            'Native readback was not rendered');
+          _require(!queries.operational && _node('tools.microphone_mute') != null &&
+            _action('tools.microphone_mute') == null && _action('tools.camera_block') == null &&
+            _action('tools.lock_microphone') == null, 'Development device/lock actions became enabled');
+          cases.add('native-controls-readback-with-development-device-mutations-disabled');
+          for (final action in ['tools.deviceInventory', 'tools.consultPolicy',
+              'tools.consultPaths', 'tools.validatePolicy']) {
+            await _tap(action);
+            await _query(queries.toolsStatus, action);
+            _require(queries.toolsReport?.outcome == 'completed', 'Native query not completed: $action');
+            cases.add('native-$action-confirmed');
+          }
+          await _tap('tools.queryRefresh');
+          await _query(queries.toolsStatus, 'Final controls');
+        }
       }
       WidgetsBinding.instance.scheduleFrame();
       await WidgetsBinding.instance.endOfFrame;

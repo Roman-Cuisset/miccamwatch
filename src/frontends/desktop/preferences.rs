@@ -1104,7 +1104,7 @@ mod tests {
         let now: DateTime<Utc> = "2026-11-10T09:00:00Z".parse().unwrap();
         for minutes in [1, 47, 10_080] {
             let mut settings = protected_settings();
-            pause_request(NotificationPauseAction::Pause { minutes }, None)
+            pause_request(NotificationPauseAction::Pause { minutes }, settings.pause_notifications_until)
                 .apply_with_clock(&mut settings, || now).unwrap();
             assert_eq!(settings.pause_notifications_until, Some(now + Duration::minutes(i64::from(minutes))));
             assert!(settings.mute_on_lock);
@@ -1112,7 +1112,7 @@ mod tests {
         for minutes in [0, 10_081] {
             let mut settings = protected_settings();
             let before = serde_json::to_value(&settings).unwrap();
-            let request = pause_request(NotificationPauseAction::Pause { minutes }, None);
+            let request = pause_request(NotificationPauseAction::Pause { minutes }, settings.pause_notifications_until);
             assert!(request.apply_with_clock(&mut settings, || now).is_err());
             assert_eq!(serde_json::to_value(&settings).unwrap(), before);
             assert!(serde_json::from_value::<PreferenceRequest>(serde_json::to_value(request).unwrap()).is_err());
