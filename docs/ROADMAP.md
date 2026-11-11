@@ -3510,3 +3510,18 @@ Lots futurs **à approuver, aucun correctif appliqué** :
   `/home/roman/mcw-qualification/b2-20261029-082656`, Rust/Flutter/sysroot déjà
   préparés. Ne pas refaire cette installation ni modifier ses paquets système ;
   réutiliser l'outillage avec une copie de source et des sorties de test privées.
+
+### Sauvegardes GitHub désormais autorisées
+
+- Autorisation utilisateur explicite de pousser fréquemment les sauvegardes :
+  uniquement `work/flutter-hybrid-0220`, commits utiles et cohérents, sans réécrire
+  l'historique ni créer de commits vides. Main, tags, releases et site restent exclus.
+- Références distantes relues avant le premier push : main `73369ab`, tag annoté
+  v0.21.0 `06d800b` pointant sur `3d74686` ; branche distante 0.22 encore absente.
+- Automatisations inspectées : release sur tags `v*`/dispatch, site Actions sur
+  main et chemins site, CI générale sur push. Les commits de sauvegarde portent
+  les préfixes officiels `[CF-Pages-Skip]` et `[skip ci]` pour éviter tout
+  déploiement Pages et distinguer sauvegarde et véritable qualification CI.
+- Les deux binaires Rust Windows **release** de `52f8613`, avec
+  `windows-tray,flutter-desktop`, viennent de compiler avec succès. Reçu et sorties
+  conservés dans les preuves privées ; aucun exécutable installé remplacé.
