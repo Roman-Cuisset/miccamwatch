@@ -3525,3 +3525,15 @@ Lots futurs **à approuver, aucun correctif appliqué** :
 - Les deux binaires Rust Windows **release** de `52f8613`, avec
   `windows-tray,flutter-desktop`, viennent de compiler avec succès. Reçu et sorties
   conservés dans les preuves privées ; aucun exécutable installé remplacé.
+
+### 2026-11-11 — Compilation multiplateforme et sauvegardes de l'étape 2
+
+- Checkpoints `9937427`, `52f8613` et `ae13b73` désormais sauvegardés sur
+  `origin/work/flutter-hybrid-0220`, sans main/tag/release/déploiement.
+- Builds Flutter Windows release normal et instrumenté `parity` réussis sur
+  `ae13b73` ; bundles séparés figés dans les preuves privées, pas installés.
+- Premier test Linux réel avec le SDK/sysroot B2 réutilisé : compilation arrêtée
+  sur la fixture `desktop::unix::opening_fixture`, à laquelle manquaient les
+  nouveaux champs de contexte et de suivi du travail admis. Initialisation
+  corrigée comme dans le constructeur de production ; nouvelle exécution requise.
+  Les avertissements des dépendances vendoriées ne sont pas masqués.

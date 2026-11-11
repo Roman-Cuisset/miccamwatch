@@ -938,7 +938,8 @@ mod tests {
             pending_consultation: None, consultation_available: true, autostart_writable: false,
         };
         (directory, Supervisor { executable, child: Some(child), next_ticket: 0,
-            error: None, open_failure: None, consultation_worker: None })
+            error: None, open_failure: None, consultation_worker: None,
+            context: super::tools::Context::default(), observed_pending: false })
     }
     #[test]
     fn before_ready_exit_is_open_failure_but_ready_exit_and_explicit_close_are_not() {
