@@ -3615,3 +3615,31 @@ Lots futurs **à approuver, aucun correctif appliqué** :
   coordinateur caméra Windows/reprise/legacy, enforcement watcher, Exit Rust et
   maintenance liée au vrai owner/bundle complet. P1 : filtres/session/logs et
   détail d'application multi-accès. Aucun de ces manques n'est validé par le secours natif.
+
+### Contrôle de préservation et reprise sûre
+
+- Main local/distant reste `73369ab`, tag v0.21.0 objet `06d800b` → `3d74686`.
+  B5 `b6f820b`, RC native `f4d68ae`, branche CRT `2451088` et stash `a373866`
+  inchangés. Tous les enregistrements de worktree sont conservés ; seul le HEAD
+  du worktree contrôlé `mcw-flutter-0220` évolue. Les problèmes historiques des
+  autres worktrees n'ont été ni nettoyés ni restaurés.
+- Les cinq empreintes de référence du quotidien sont identiques : deux binaires
+  MSI, settings, intention micro et journal caméra. Autostart HKCU identique.
+  Pas de promesse de hash complet de l'historique quotidien : il n'était pas
+  intégralement haché au départ et les tests n'y ont rien écrit.
+- La lecture finale constate un tray MSI PID 8948, différent du PID 12340 initial.
+  Cause non établie ; **aucun processus quotidien lancé, arrêté ou relancé par
+  cette qualification**, aucune protection touchée pour expliquer ou corriger
+  ce changement. Ne pas attribuer une continuité de processus à une simple
+  identité de fichiers ; aucune réparation automatique n'a été tentée.
+- Les preuves, reproductions privées et archives CI sont dans
+  `%LOCALAPPDATA%\MicCamWatchQualification\v022-stage2-20261110-093726`.
+  Les logs bruts, tokens, noms d'applications et chemins personnels ne sont pas
+  ajoutés à Git. Les commits sont ciblés ; seuls la branche de développement et
+  le workflow de qualification explicite sont publiés/exécutés, pas main/site/release.
+- Reprise : lire d'abord le delta des 44 familles dans `V0.22.0_PARITY_AUDIT.md`
+  et le statut du plan. Les P0/P1 restants interdisent de déclarer l'étape 2
+  terminée ou d'avancer à l'étape 3. Aucun changement d'architecture/contrat de
+  restauration sensible par simple contournement de bouton désactivé.
+- Modèle principal : `openai-codex/gpt-6.1-sol`, OpenAI Codex OAuth. Aucun
+  sous-agent, routage exact non démontré ; aucun réglage global changé.
