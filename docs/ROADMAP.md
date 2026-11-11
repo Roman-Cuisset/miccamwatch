@@ -3583,3 +3583,35 @@ Lots futurs **à approuver, aucun correctif appliqué** :
   dépendance non déclarée**, imports ordinaires et différés. `mcw --version` et
   `mcw-tray --version` retournent immédiatement 0.22.0 avec sortie 0, même sans
   répertoire de préférences disponible. Pas une preuve Windows vierge/MSI hybride.
+
+### Qualification Linux et macOS de la tranche — résultats conservés
+
+- Linux : source archivée `4aeabd6`, SDK/sysroot B2 réutilisé sans installation
+  système ; pub offline/lockfile, **99 tests Flutter et build release Linux x64**
+  réussis. Preuves `linux-flutter-release.*`. Aucun nouveau runtime Mint/SNI,
+  GPU, ARM ou plancher ABI Ubuntu22.04 revendiqué.
+- [CI macOS 42976746704](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/42976746704)
+  sur **`eff1ce976111ae18b577f8d789935d5b2870328d`** : Intel et Apple Silicon
+  réussis. Par cible : Clippy, 66 desktop + 5 settings + 12 history + 7 autostart
+  + 2 gates Rust, 99 tests Flutter, builds release, architecture et seals.
+- Pas seulement les jobs verts : reçus `graphical-receipt.json` et huit scénarios
+  par cible examinés ; **24 réouvertures / 32 preuves UI par architecture**, hôte
+  AppKit permanent, unicité et fin Flutter, menus et préférences privées. Release
+  normale distincte de l'instrumentation : snapshot réel et teardown après mort
+  du propriétaire ; ses cycles graphiques non instrumentés restent non exécutés.
+- Quatre archives téléchargées et SHA-256 vérifiés : preuves Intel
+  `4ebffbe75989a8057c2cb049ecdd66dd7892cee40bfcaa9b440c884c4b104343`,
+  produits Intel `7c845614e866327a9a6fce8e890d39238e65a6cb69e526692f46ab2781bcd0ff`,
+  preuves ARM `3607f844de908c2c0033337ad80bbcbbd5b0c0c7cb7759aa3573b0b06b79cb40`,
+  produits ARM `dc32d83e9aad6e3146e5376a8fb5c067541a83112178909c31be5cd4c2a065a7`.
+  Archives durables dans les preuves locales, indépendantes de leur rétention CI.
+- Captures natives Intel clair et ARM sombre examinées : diagnostics réels,
+  caméra inconnue/dégradée explicitement visible. Avertissements MediaToolbox du
+  runner conservés ; pas de TCC/matériel, Developer ID, notarisation ou installation
+  qualifiés. Aucun Mac manuel exigé. Le sélecteur postérieur à `eff1ce9` n'est pas
+  inclus dans ce run, même si ses sources actuelles compilent sous Windows/Linux.
+- Matrice des **44 familles actualisée** dans l'audit, matrice historique reliée,
+  plan corrigé : **étape 2 incomplète**, pas étape 3/RC. Points de reprise P0 :
+  coordinateur caméra Windows/reprise/legacy, enforcement watcher, Exit Rust et
+  maintenance liée au vrai owner/bundle complet. P1 : filtres/session/logs et
+  détail d'application multi-accès. Aucun de ces manques n'est validé par le secours natif.
