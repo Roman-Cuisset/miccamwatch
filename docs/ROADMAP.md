@@ -3537,3 +3537,22 @@ Lots futurs **à approuver, aucun correctif appliqué** :
   nouveaux champs de contexte et de suivi du travail admis. Initialisation
   corrigée comme dans le constructeur de production ; nouvelle exécution requise.
   Les avertissements des dépendances vendoriées ne sont pas masqués.
+- Suite Linux finale : **67 tests desktop réussis**, puis Clippy strict
+  `flutter-desktop/all-targets` réussi avec le sysroot privé. Le contexte de la
+  fixture imbriquée utilise `Default::default()` (son parent n'est pas le module
+  de production) ; les deux erreurs de compilation précédentes restent conservées.
+- Windows : **12 cycles UI réussis**, six en release normale et six avec scénario
+  `parity`, répartis clair/sombre. Les vrais boutons ont interrogé Rust, changé puis
+  rétabli la préférence de notification privée, effacé/relu uniquement l'historique
+  privé et vérifié que périphériques/verrouillage/autostart restent interdits en
+  développement. Chaque sortie termine Flutter, les ticks Rust continuent, tous
+  les processus possédés finissent et les valeurs des préférences privées reviennent.
+  Captures WGC des seules fenêtres possédées examinées en clair/sombre ; les détails
+  techniques natifs restent parfois en anglais, sans prétendre à une traduction
+  intégrale ni à une validation lecteur d'écran externe.
+- Coût descriptif de la release normale, intervalles de 8 s seulement : RSS fermé
+  initial 19,66–22,74 Mio, ouvert 135,87–140,04 Mio, fermé final 21,12–23,93 Mio ;
+  commit privé ouvert 120,55–121,30 Mio. CPU fermé 5,36–6,62 % / ouvert 7,47–7,66 %
+  d'un cœur. Ready première ouverture observée 523 ms, réouvertures suivantes
+  280–323 ms ; fenêtre réellement visible 395–649 ms, sortie 252–296 ms.
+  Ni comparaison à la stable, ni campagne CPU de l'étape 4, ni mesure disque-froid.
