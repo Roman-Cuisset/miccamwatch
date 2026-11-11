@@ -95,6 +95,8 @@ class UiQualification {
       'navigation.settings', 'navigation.diagnostics', 'navigation.about',
       'navigation.controls', 'tools.queryRefresh', 'tools.deviceInventory',
       'tools.consultPolicy', 'tools.consultPaths', 'tools.validatePolicy',
+      'preferences.language', 'language.engine', 'language.en', 'language.fr', 'language.de',
+      'language.es', 'language.ja', 'language.zh', 'language.ru',
       'history.clear', 'history.confirmClear',
       'history.refresh', 'diagnostics.run', 'autostart.refresh',
       'preferences.notificationsEnabled', 'autostart.change', 'autostart.confirm'};
@@ -203,6 +205,22 @@ class UiQualification {
         cases.add('real-native-diagnostics-rendered');
         if (scenario == 'parity') {
           _require(mode == 'settings_development', 'Parity writes require the isolated settings owner');
+          final engineLocale = describe()['locale'];
+          _require(describe()['interface_locale'] == engineLocale,
+            'A new window retained a previous language override');
+          await _tap('navigation.settings');
+          for (final language in ['en', 'fr', 'de', 'es', 'ja', 'zh', 'ru']) {
+            await _tap('preferences.language');
+            await _tap('language.$language');
+            await _until(() => describe()['interface_locale'] == language,
+              'Explicit interface language was not applied');
+            _require(describe()['locale'] == engineLocale, 'Interface choice changed the engine language');
+          }
+          await _tap('preferences.language');
+          await _tap('language.engine');
+          await _until(() => describe()['interface_locale'] == engineLocale,
+            'Engine language was not restored');
+          cases.add('seven-window-languages-without-native-language-or-settings-mutation');
           await _tap('navigation.history');
           await _query(queries.historyStatus, 'History before confirmed clear');
           await _tap('history.clear');

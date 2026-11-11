@@ -1,4 +1,4 @@
-// Engine-selected language; collector/application/detail text remains verbatim.
+// Engine-selected language unless the user chooses a window-only override.
 class Labels {
   Labels(String locale) : index = const ['en', 'fr', 'de', 'es', 'ja', 'zh', 'ru'].indexOf(locale);
   final int index;
@@ -11,6 +11,9 @@ class Labels {
 const _labels = <String, List<String>>{
   'overview': ['Overview', 'Vue d’ensemble', 'Übersicht', 'Resumen', '概要', '概览', 'Обзор'],
   'controls': ['Controls', 'Contrôles', 'Steuerung', 'Controles', '操作', '控制', 'Управление'],
+  'interfaceLanguage': ['Interface language', 'Langue de l’interface', 'Sprache der Oberfläche', 'Idioma de la interfaz', '表示言語', '界面语言', 'Язык интерфейса'],
+  'languageFromEngine': ['Follow the engine', 'Suivre le moteur', 'Sprache der Engine', 'Seguir al motor', 'エンジンに従う', '跟随引擎', 'Как у движка'],
+  'languageWindowOnly': ['For this window only. Closing it restores the CLI/policy language on next opening. Native diagnostic text is unchanged.', 'Pour cette fenêtre uniquement. À la réouverture, la langue CLI/politique revient. Les diagnostics natifs restent inchangés.', 'Nur für dieses Fenster. Beim erneuten Öffnen gilt die CLI-/Richtliniensprache. Native Diagnosetexte bleiben unverändert.', 'Solo para esta ventana. Al volver a abrir se usa el idioma de la CLI o política. No cambia el diagnóstico nativo.', 'このウィンドウのみ。開き直すと CLI・ポリシーの言語に戻ります。ネイティブ診断の文言は変更しません。', '仅用于此窗口。重新打开时恢复命令行或策略的语言。原生诊断文本保持不变。', 'Только для этого окна. При следующем открытии действует язык CLI или политики. Нативная диагностика не меняется.'],
   'nativeControls': ['Native controls', 'Contrôles du moteur', 'Native Steuerung', 'Controles del motor', 'ネイティブ操作', '原生控制', 'Управление движком'],
   'nativeOnDemand': ['Read on demand, not live. Refresh before acting. Observation, software mute and access restrictions are different.', 'Relecture à la demande, pas en direct. Actualisez avant une action. Observation, sourdine et restriction d’accès sont distinctes.', 'Abfrage bei Bedarf, nicht live. Vor Aktionen aktualisieren. Beobachtung, Stummschaltung und Zugriffsbegrenzung sind verschieden.', 'Lectura a petición, no en vivo. Actualice antes de actuar. Observar, silenciar y restringir acceso son cosas distintas.', '要求時の読み取りで、ライブ表示ではありません。操作前に更新してください。観測・ミュート・アクセス制限は別のものです。', '按需读取，非实时状态。操作前请刷新。观测、软件静音和访问限制是不同概念。', 'Данные по запросу, не в реальном времени. Обновите перед действием. Наблюдение, отключение звука и запрет доступа — разные вещи.'],
   'nativeReadOnly': ['Development session: device and process changes are disabled.', 'Session de développement : modifications des périphériques et processus désactivées.', 'Entwicklungssitzung: Geräte- und Prozessänderungen deaktiviert.', 'Sesión de desarrollo: cambios de dispositivos y procesos desactivados.', '開発セッションでは機器とプロセスの変更は無効です。', '开发会话中禁止更改设备和进程。', 'В сеансе разработки изменение устройств и процессов отключено.'],

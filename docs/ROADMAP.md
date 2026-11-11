@@ -3556,3 +3556,21 @@ Lots futurs **à approuver, aucun correctif appliqué** :
   d'un cœur. Ready première ouverture observée 523 ms, réouvertures suivantes
   280–323 ms ; fenêtre réellement visible 395–649 ms, sortie 252–296 ms.
   Ni comparaison à la stable, ni campagne CPU de l'étape 4, ni mesure disque-froid.
+
+### Choix explicite des sept langues — fenêtre uniquement
+
+- `main.dart`/`labels.dart` : sélecteur commun en/fr/de/es/ja/zh/ru et option
+  « Suivre le moteur ». Un choix explicite résiste aux nouveaux snapshots pendant
+  cette fenêtre ; une nouvelle fenêtre revient à la langue CLI/politique.
+  Aucun nouveau champ persistant ni changement de langue/politique Rust.
+- Analyse et **suite Flutter complète : 99 tests réussis**. Builds Windows release
+  normal et `parity` de nouveau réussis. Huit cycles supplémentaires réels :
+  deux normaux et six instrumentés clair/sombre ; sélection des sept langues par
+  les vrais menus, retour à la langue moteur, relecture des contrôles et extinction
+  complète de chaque UI. Préférences privées rétablies ; commandes matérielles et
+  autostart toujours interdites dans ce mode. Pas une validation visuelle manuelle
+  complète de chaque panneau en sept langues ni une traduction des messages OS.
+- CI macOS exacte de `eff1ce9` lancée explicitement, sans replay B5 ni publication :
+  [42976746704](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/42976746704).
+  Ce SHA précède le sélecteur ; aucun succès de ce run ne qualifiera implicitement
+  cette modification Dart ultérieure. Son résultat reste à examiner.

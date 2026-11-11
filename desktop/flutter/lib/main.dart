@@ -98,6 +98,7 @@ class _MicCamWatchAppState extends State<MicCamWatchApp> {
   late final Timer clock;
   UiQualification? qualification;
   late bool dark = widget.dark;
+  String? languageOverride;
   AppPage page = AppPage.overview;
   bool ready = false;
   bool receivedTiming = false;
@@ -126,6 +127,7 @@ class _MicCamWatchAppState extends State<MicCamWatchApp> {
         live: () => ready && session.transportLive, closing: () => closing || !mounted,
         describe: () => {
           'locale': session.snapshot?.locale,
+          'interface_locale': languageOverride ?? session.snapshot?.locale ?? 'en',
           'platform': session.snapshot?.engine['platform'],
           'mode': session.snapshot?.engine['mode'],
           'sequence': session.sequence,
@@ -208,7 +210,8 @@ class _MicCamWatchAppState extends State<MicCamWatchApp> {
   Widget build(BuildContext context) {
     final c = Palette(dark);
     final snapshot = session.snapshot;
-    final l = Labels(snapshot?.locale ?? 'en');
+    final locale = languageOverride ?? snapshot?.locale ?? 'en';
+    final l = Labels(locale);
     final sequence = snapshot?.sequence;
     // Ready acknowledges a rendered, validated frame, not collector freshness.
     // An old observation must remain visibly unknown, not prevent UI startup.
@@ -293,15 +296,18 @@ class _MicCamWatchAppState extends State<MicCamWatchApp> {
             const SizedBox(height: 14),
             if (page == AppPage.overview) ..._overview(c, l, snapshot),
             if (page == AppPage.controls) NativeToolsPanel(client: consultation,
-              locale: snapshot?.locale ?? 'en', accesses: snapshot?.accesses ?? const []),
-            if (page == AppPage.history) HistoryPanel(client: consultation, locale: snapshot?.locale ?? 'en'),
+              locale: locale, accesses: snapshot?.accesses ?? const []),
+            if (page == AppPage.history) HistoryPanel(client: consultation, locale: locale),
             if (page == AppPage.settings) ...[
-              AutostartPanel(client: consultation, locale: snapshot?.locale ?? 'en'),
+              InterfaceLanguagePicker(value: languageOverride, nativeLocale: snapshot?.locale ?? 'en',
+                onChanged: (value) => setState(() => languageOverride = value)),
               const SizedBox(height: 16),
-              PreferencesPanel(client: preferenceCommands, locale: snapshot?.locale ?? 'en'),
+              AutostartPanel(client: consultation, locale: locale),
+              const SizedBox(height: 16),
+              PreferencesPanel(client: preferenceCommands, locale: locale),
             ],
             if (page == AppPage.diagnostics) ...[
-              DetailedDiagnosticsPanel(client: consultation, locale: snapshot?.locale ?? 'en'),
+              DetailedDiagnosticsPanel(client: consultation, locale: locale),
               const SizedBox(height: 20),
               Text(l['reportLive'], style: c.type(20, bold: true)),
               const SizedBox(height: 12),
@@ -452,3 +458,39 @@ class _MicCamWatchAppState extends State<MicCamWatchApp> {
 
 String _time(DateTime date) => '${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}:${date.second.toString().padLeft(2, '0')}';
 String _truth(Labels l, Object? value) => l[value == true ? 'yes' : value == false ? 'no' : 'unknown'];
+
+/// Presentation only: native CLI/policy language and preferences are never changed.
+class InterfaceLanguagePicker extends StatelessWidget {
+  const InterfaceLanguagePicker({super.key, required this.value,
+    required this.nativeLocale, required this.onChanged});
+  final String? value;
+  final String nativeLocale;
+  final ValueChanged<String?> onChanged;
+  static const languages = <String, String>{
+    'en': 'English', 'fr': 'Français', 'de': 'Deutsch', 'es': 'Español',
+    'ja': '日本語', 'zh': '中文', 'ru': 'Русский',
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    final l = Labels(value ?? nativeLocale);
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text(l['interfaceLanguage'], style: Theme.of(context).textTheme.titleMedium),
+      const SizedBox(height: 8),
+      MenuAnchor(menuChildren: [
+        for (final choice in <String?>[null, ...languages.keys])
+          Semantics(identifier: 'language.${choice ?? 'engine'}',
+            child: MenuItemButton(onPressed: () => onChanged(choice),
+              leadingIcon: value == choice ? const Icon(Icons.check, size: 18) : const SizedBox(width: 18),
+              child: Text(choice == null ? '${l['languageFromEngine']} (${languages[nativeLocale] ?? nativeLocale})'
+                : languages[choice]!))),
+      ], builder: (context, controller, child) => Semantics(identifier: 'preferences.language',
+        child: OutlinedButton.icon(onPressed: () => controller.isOpen ? controller.close() : controller.open(),
+          icon: const Icon(Icons.language, size: 18),
+          label: Text(value == null ? '${l['languageFromEngine']} (${languages[nativeLocale] ?? nativeLocale})'
+            : languages[value]!)))),
+      const SizedBox(height: 8),
+      Text(l['languageWindowOnly']),
+    ]);
+  }
+}
