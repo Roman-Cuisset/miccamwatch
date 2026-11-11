@@ -202,4 +202,24 @@ Ne pas sélectionner un fournisseur différent à partir de cette session. Le mo
 - Artefacts/SHA/SBOM/provenance/signatures réels, notes honnêtes, rollback et conditions d'arrêt relus, autorisation finale du propriétaire. Stable0.21.0, tags, données et protections préservés jusqu'aux opérations autorisées.
 - GitHub stable complète avant site/winget ; aucun manifeste URL/SHA fictif, aucun nouvel identifiant winget.
 
-**Statut actuel : ÉTAPE1/6 uniquement.** Les références, la matrice et ce plan sont livrés ; étapes2–6 non commencées. Prochaine décision demandée après lecture du rapport : valider le périmètre et autoriser **étape2 avec GPT-6.1 Sol xhigh**, pas encore push, installation, mutation matérielle ou publication.
+**Statut au 11 novembre 2026 : ÉTAPE 2/6 INCOMPLÈTE.** L'étape 1 est validée et
+une tranche fonctionnelle est implémentée sur `work/flutter-hybrid-0220` :
+protocole 6, outils natifs préparés/confirmés, préférences lock, consultations,
+effacement d'historique, pause complète et choix des sept langues pour la fenêtre.
+La [section 8 de l'audit](V0.22.0_PARITY_AUDIT.md#8-delta-dimplémentation-de-létape-2--11-novembre-2026)
+met à jour les 44 familles et distingue implémentation et qualification.
+
+Restent dans **l'étape 2**, pas silencieusement reportés au packaging :
+coordinateur caméra Windows/reprise/legacy (C01–C03), enforcement automatique
+réutilisant le watcher (O07), Exit Rust depuis Flutter (L02), filtres/session/logs
+avancés (O02/O05), détail multi-accès complet (O04) et instructions de maintenance
+liées au véritable owner ou transaction de bundle complète (U01/U02). Les
+nouvelles commandes Unix matérielles restent à qualifier sans toucher au quotidien.
+Le défaut d'un contrat sûr doit être résolu/revu, pas compensé par un bouton natif.
+
+Les pushes de sauvegarde sont désormais expressément autorisés sur la branche de
+développement uniquement, avec préfixes de non-déploiement Cloudflare et skip CI ;
+une qualification macOS est déclenchée séparément, avec son SHA exact. Ce n'est
+pas une permission de main/tag/release/site, d'installation ou d'action matérielle.
+**Ne pas commencer l'étape 3 ni proposer une RC.** Reprise recommandée :
+GPT-6.1 Sol / OpenAI Codex OAuth / xhigh, aucun sous-agent sans preuve de routage.

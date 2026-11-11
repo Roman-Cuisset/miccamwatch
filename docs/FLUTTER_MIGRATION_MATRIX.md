@@ -1,12 +1,34 @@
-# Native feature migration inventory — stages A, B1, B2, B3, B4 and B5
+# Native feature migration inventory — A–B5 and v0.22.0 stage 2
 
-> **Décision du4novembre2026 : prochaine release v0.22.0, aucune0.21.1 intermédiaire.** La matrice normative P0/P1/P2 est désormais l'[audit0.22](V0.22.0_PARITY_AUDIT.md), avec son [plan en six étapes](RELEASE_0.22.0_PLAN.md). Les sections ci-dessous conservent les contrats, priorités et preuves historiques A–B5 ; leurs formulations « current » anciennes ne remplacent pas le code B5/protocole5 ni les nouveaux critères d'acceptation.
+> **Prochaine release : v0.22.0, aucune 0.21.1 intermédiaire.** La matrice normative est l'[audit 0.22](V0.22.0_PARITY_AUDIT.md), dont la **section 8 actualise les 44 familles après l'implémentation de l'étape 2**. Le [plan en six étapes](RELEASE_0.22.0_PLAN.md) conserve les critères d'acceptation. L'étape 2 reste incomplète ; les preuves A–B5 ci-dessous restent historiques, pas une qualification du code actuel.
 
 Source baseline: `b5cf391c1905cbc391c47220f1347c55ba8e24cc`, 27 October 2026. Inspection only; runtime qualification is recorded separately. This inventory preserves every native/public CLI capability and its actual limitations.
 
-The inventory priorities mean **A = microphone**, **B = presentation/preferences**, **C = sensitive operations**; cross-platform and visual-finalization gates remain separate. Camera/lock/maintenance actions still require their command-specific gates. Current B4 uses strict Flutter protocol5, without a protocol4 downgrade path; the separate native AppKit helper retains protocol4. [B4 qualification](FLUTTER_B4_QUALIFICATION.md), [B1 protocol3 evidence](FLUTTER_PREFERENCES_B1.md) and [protocol2 stage-A history](FLUTTER_COMMANDS_STAGE_A.md) distinguish current contracts from historical evidence.
+The historical inventory priorities mean **A = microphone**, **B = presentation/preferences**, **C = sensitive operations**. The current v0.22 development bridge is strict protocol **6**, without downgrade; the separate native AppKit helper remains protocol 4. Historical [B4 qualification](FLUTTER_B4_QUALIFICATION.md), [B1 protocol 3 evidence](FLUTTER_PREFERENCES_B1.md) and [protocol 2 stage-A history](FLUTTER_COMMANDS_STAGE_A.md) retain their exact sources and do not qualify later changes.
 
 Stage A implementation update: Windows now has explicit desired-state microphone commands through the existing Rust worker, private protocol2 admission and native readback. Real mute/release, UI process exit, retained native guard and reopening without duplicate UI have been exercised. Other controls/platforms remain gated; this inventory's source references and “inspection only” evidence describe the pinned baseline, not the later runtime qualification. Sidebar/Windows branding now uses official assets; macOS/Linux Flutter packaging identity remains unqualified. See the current stage A results in the ROADMAP.
+
+## v0.22 stage 2 checkpoint — 11 November 2026
+
+Development branch `work/flutter-hybrid-0220`; no release or stable replacement.
+The per-function statuses, remaining acceptance tests and P0/P1 blockers are in
+[audit section 8](V0.22.0_PARITY_AUDIT.md#8-delta-dimplémentation-de-létape-2--11-novembre-2026).
+
+- Added native prepared/confirmed tools, capability-gated Unix controls, lock
+  preferences, devices/current application context, policy/path validation,
+  confirmed local-history clearing, diagnostic copying and all native pause durations.
+- About uses the real engine version, with seven translated paragraphs. The user
+  can choose any supported language for the current window without changing Rust
+  policy/preferences; closing returns the next window to the native language.
+- Windows normal/instrumented releases and actual owned light/dark windows
+  exercised; Rust continues and every Flutter child exits. Linux native checks
+  passed against a private WSL SDK. Fresh macOS qualification is separate and
+  cannot be inferred from B5 or from Windows tests.
+- **Not full parity:** Windows camera coordination/resume/legacy, automatic
+  enforcement, advanced sessions/logs/filters, complete multi-access application
+  detail, Flutter Exit and installation-aware hybrid maintenance remain open.
+  Native fallback is retained, not counted as a completed Flutter action.
+
 
 ## B5 integration checkpoint — 2 November 2026
 
