@@ -3574,3 +3574,12 @@ Lots futurs **à approuver, aucun correctif appliqué** :
   [42976746704](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/42976746704).
   Ce SHA précède le sélecteur ; aucun succès de ce run ne qualifiera implicitement
   cette modification Dart ultérieure. Son résultat reste à examiner.
+- Le scénario `parity` termine désormais sur Réglages pour conserver une preuve
+  visuelle du vrai sélecteur ; deux nouvelles fenêtres clair/sombre ont repassé
+  le scénario complet et leurs captures possédées ont été examinées. Aucun
+  événement souris/clavier global ni capture du bureau n'a été utilisé.
+- Audit des fichiers réellement exécutés : paire Rust release + runner et moteur
+  du bundle Flutter normal actuel, **4 PE sans CRT dynamique inattendu ni autre
+  dépendance non déclarée**, imports ordinaires et différés. `mcw --version` et
+  `mcw-tray --version` retournent immédiatement 0.22.0 avec sortie 0, même sans
+  répertoire de préférences disponible. Pas une preuve Windows vierge/MSI hybride.

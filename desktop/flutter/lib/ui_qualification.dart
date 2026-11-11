@@ -249,6 +249,7 @@ class UiQualification {
           }
           await _tap('tools.queryRefresh');
           await _query(queries.toolsStatus, 'Final controls');
+          await _tap('navigation.settings');
         }
       }
       WidgetsBinding.instance.scheduleFrame();
