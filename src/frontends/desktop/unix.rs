@@ -517,6 +517,14 @@ impl Supervisor {
     pub fn configure_enforcement(&mut self, runtime: crate::watcher::enforcement::Runtime) {
         self.context.enforcement = Some(runtime);
     }
+    pub fn configure_exit_owner(&mut self, owner: super::exit_owner::Client) {
+        self.context.exit_owner = Some(owner);
+    }
+    pub fn delivery_complete(&self) -> bool {
+        self.child.as_ref().is_none_or(|child| child.closing.is_some() ||
+            (child.outbox.writing.is_none() && child.outbox.latest.is_none()
+                && child.outbox.written >= child.outbox.highest))
+    }
     pub fn has_pending_work(&self) -> bool {
         consultation::Worker::pending(&self.consultation_worker)
     }

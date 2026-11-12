@@ -96,6 +96,7 @@ class UiQualification {
       'navigation.controls', 'tools.queryRefresh', 'tools.deviceInventory',
       'tools.consultPolicy', 'tools.consultPaths', 'tools.validatePolicy',
       'tools.enforcementRefresh',
+      'tools.exitRefresh', 'tools.quit_engine', 'tools.confirm',
       'preferences.language', 'language.engine', 'language.en', 'language.fr', 'language.de',
       'language.es', 'language.ja', 'language.zh', 'language.ru',
       'history.clear', 'history.confirmClear',
@@ -136,9 +137,27 @@ class UiQualification {
     FlutterError.onError = _errorHandler;
     _handle = WidgetsBinding.instance.ensureSemantics();
     try {
-      _require(const {'consultation', 'startup', 'parity', 'controls', 'enforcement'}.contains(scenario), 'Unknown proof scenario');
+      _require(const {'consultation', 'startup', 'parity', 'controls', 'enforcement', 'quit'}.contains(scenario), 'Unknown proof scenario');
       await _until(() => live() && _owner?.rootSemanticsNode != null, 'No live native snapshot/semantics');
       final mode = describe()['mode'];
+      if (scenario == 'quit') {
+        _require(mode == 'settings_development' && !queries.operational,
+          'Quit proof requires the private owner with device actions disabled');
+        await _tap('navigation.controls');
+        await _until(() => !queries.toolsStatus.busy, 'Initial controls pending');
+        await _tap('tools.exitRefresh');
+        await _query(queries.toolsStatus, 'Private native exit readiness');
+        _require(queries.toolsReport?.exit?.ready == true, 'Native exit refused or unavailable');
+        await _tap('tools.quit_engine');
+        await _until(() => _action('tools.confirm') != null, 'Explicit quit confirmation missing');
+        cases.add('private-owner-quit-prepared-without-device-authority');
+        // This is NOT success. The external harness must prove the exact native
+        // owner exits normally and every owned frontend process is gone.
+        _record('quit_prepared');
+        final confirmation = _action('tools.confirm')!;
+        _owner!.performAction(confirmation.id, SemanticsAction.tap);
+        return;
+      }
       if (scenario == 'startup') {
         _require(mode == 'operational' && Platform.environment['GITHUB_ACTIONS'] == 'true' &&
           Platform.environment['RUNNER_ENVIRONMENT'] == 'github-hosted' &&

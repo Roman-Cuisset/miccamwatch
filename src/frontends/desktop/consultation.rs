@@ -373,6 +373,8 @@ impl Worker {
         autostart_writable: bool,
         context: super::tools::Context,
     ) -> Result<()> {
+        ensure!(!context.exit_owner.as_ref().is_some_and(|owner| owner.status().is_ok_and(|s| s.requested)),
+            "Native owner is exiting; no new operation admitted");
         if owner.is_none() {
             *owner = Some(Self::start()?);
         }

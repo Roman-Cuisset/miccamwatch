@@ -5,7 +5,7 @@ class NativeControl {
   const NativeControl._(this.kind, this.parameters);
   factory NativeControl.action(String kind) {
     if (!const {'microphone_mute', 'microphone_restore', 'camera_block',
-      'camera_allow', 'camera_resume', 'camera_inspect'}.contains(kind)) {
+      'camera_allow', 'camera_resume', 'camera_inspect', 'quit_engine'}.contains(kind)) {
       throw ArgumentError.value(kind, 'kind');
     }
     return NativeControl._(kind, const {});
@@ -68,6 +68,7 @@ class NativeControl {
 class ToolsRequest {
   const ToolsRequest._(this.action, this.parameters, {this.control});
   const ToolsRequest.controls() : this._('controls', const {});
+  const ToolsRequest.exitStatus() : this._('exit_status', const {});
   const ToolsRequest.devices() : this._('devices', const {});
   const ToolsRequest.paths() : this._('paths', const {});
   const ToolsRequest.policy() : this._('policy', const {});
@@ -150,6 +151,20 @@ class EnforcementStatus {
   }
 }
 
+class ExitStatus {
+  ExitStatus._(this.ready, this.requested);
+  final bool ready;
+  final bool requested;
+  factory ExitStatus.fromJson(dynamic value) {
+    final data = _object(value, {'ready', 'requested', 'scope'});
+    _text(data['scope'], 1024);
+    final ready = _bool(data['ready']);
+    final requested = _bool(data['requested']);
+    if (ready && requested) throw const FormatException('Exit status is inconsistent');
+    return ExitStatus._(ready, requested);
+  }
+}
+
 class NativeReport {
   const NativeReport._(this.outcome, this.state, this.token, this.control,
       this.data, this.error);
@@ -161,6 +176,7 @@ class NativeReport {
   final String? error;
   EnforcementStatus? get enforcement => data?['enforcement'] == null
       ? null : EnforcementStatus.fromJson(data!['enforcement']);
+  ExitStatus? get exit => data?['exit'] == null ? null : ExitStatus.fromJson(data!['exit']);
   factory NativeReport.fromJson(dynamic value) {
     final map = _object(value, {'outcome', 'state', 'token', 'control', 'data', 'error'});
     final outcome = _text(map['outcome'], 32);
@@ -175,8 +191,8 @@ class NativeReport {
     final state = map['state'] == null ? null : NativeState.fromJson(map['state']);
     final control = map['control'] == null ? null : NativeControl.fromJson(map['control']);
     final error = map['error'] == null ? null : _text(map['error'], 1024);
-    if (outcome == 'prepared' && (token == null || state == null ||
-        control == null || error != null)) {
+    if (outcome == 'prepared' && (token == null || control == null || error != null ||
+        (state == null && control.kind != 'quit_engine'))) {
       throw const FormatException('Incomplete native preparation');
     }
     if (outcome != 'prepared' && token != null) {
@@ -192,6 +208,9 @@ class NativeReport {
     _boundedData(rawData, 0);
     if (rawData is Map<String, dynamic> && rawData['enforcement'] != null) {
       EnforcementStatus.fromJson(rawData['enforcement']);
+    }
+    if (rawData is Map<String, dynamic> && rawData['exit'] != null) {
+      ExitStatus.fromJson(rawData['exit']);
     }
     return NativeReport._(outcome, state, token, control,
       rawData == null ? null : Map.unmodifiable(rawData as Map<String, dynamic>), error);

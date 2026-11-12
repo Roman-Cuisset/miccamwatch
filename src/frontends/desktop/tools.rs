@@ -12,6 +12,7 @@ pub struct Context {
     pub operational: bool,
     pub data_writable: bool,
     pub enforcement: Option<crate::watcher::enforcement::Runtime>,
+    pub exit_owner: Option<super::exit_owner::Client>,
     #[cfg(windows)]
     pub camera_owner: Option<super::camera_owner::Client>,
 }
@@ -29,6 +30,7 @@ impl Context {
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Request {
     Controls {},
+    ExitStatus {},
     Prepare { control: Control },
     Commit { token: String, confirmation: String },
     Devices {},
@@ -52,6 +54,7 @@ pub enum Control {
     LockPolicy { microphone: bool, camera: bool, restore: bool },
     Terminate { pid: u32 },
     AutomaticEnforcement { enabled: bool },
+    QuitEngine,
 }
 impl Request {
     pub fn validate(&self) -> Result<()> {
@@ -67,7 +70,11 @@ impl Request {
         }
         Ok(())
     }
-    pub fn needs_operational(&self) -> bool { matches!(self, Self::Prepare { .. } | Self::Commit { .. }) }
+    // Commit authority comes only from the retained server-side preparation.
+    // An explicit quit can be tested in a private owner without device rights.
+    pub fn needs_operational(&self) -> bool {
+        matches!(self, Self::Prepare { control } if !matches!(control, Control::QuitEngine))
+    }
     pub fn needs_data_write(&self) -> bool { matches!(self, Self::ClearHistory { .. }) }
 }
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -118,12 +125,14 @@ struct Prepared {
     camera_stamp: Option<super::camera_owner::Stamp>,
     created: Instant,
 }
+struct PreparedExit { token: String, revision: u64, created: Instant }
 #[derive(Default)]
 pub struct Session {
     prepared: Option<Prepared>,
+    exit_prepared: Option<PreparedExit>,
 }
 impl Session {
-    pub fn reset(&mut self) { self.prepared = None; }
+    pub fn reset(&mut self) { self.prepared = None; self.exit_prepared = None; }
     fn take_prepared(&mut self, token: &str, now: Instant) -> Result<Prepared> {
         let prepared = self.prepared.take().context("No current native confirmation; refresh and confirm again")?;
         let lifetime = if matches!(prepared.control, Control::Terminate { .. }) { Duration::from_secs(3) } else { Duration::from_secs(30) };
@@ -137,7 +146,21 @@ impl Session {
         ensure!(!request.needs_data_write() || context.data_writable, "Local history is read-only");
         match request {
             Request::Controls {} => Ok(Report { state: Some(native_state(context)?),
-                ..Report::data(serde_json::json!({"enforcement":context.enforcement.as_ref().map(|owner| owner.status()).transpose()?})) }),
+                ..Report::data(serde_json::json!({
+                    "enforcement":context.enforcement.as_ref().map(|owner| owner.status()).transpose()?,
+                    "exit":context.exit_owner.as_ref().map(|owner| owner.status()).transpose()?,
+                })) }),
+            Request::ExitStatus {} => Ok(Report::data(serde_json::json!({
+                "exit":context.exit_owner.as_ref().map(|owner| owner.status()).transpose()?,
+            }))),
+            Request::Prepare { control: Control::QuitEngine } => {
+                self.reset();
+                let revision = context.exit_owner.as_ref().context("No native exit owner")?.prepare()?;
+                let token = super::new_private_token()?;
+                self.exit_prepared = Some(PreparedExit { token: token.clone(), revision, created: Instant::now() });
+                Ok(Report { outcome: "prepared", state: None, token: Some(token), control: Some(Control::QuitEngine),
+                    data: serde_json::json!({"confirmation_seconds":30}), error: None })
+            }
             Request::Prepare { control } => {
                 self.reset();
                 let state = native_state(context)?;
@@ -180,8 +203,21 @@ impl Session {
                 Ok(Report { outcome: "prepared", state: Some(state), token: Some(token), control: Some(control), data: serde_json::json!({"confirmation_seconds":seconds,"target":target_description}), error: None })
             }
             Request::Commit { token, .. } => {
+                if let Some(prepared) = self.exit_prepared.take() {
+                    self.prepared = None;
+                    ensure!(prepared.token == token && prepared.created.elapsed() <= Duration::from_secs(30),
+                        "Native exit confirmation stale or expired");
+                    let result = context.exit_owner.as_ref().context("No native exit owner")
+                        .and_then(|owner| owner.execute(prepared.revision));
+                    let error = result.as_ref().err().map(|e| bounded(format!("{e:#}")));
+                    return Ok(Report { outcome: if error.is_some() { "not_confirmed" } else { "completed" },
+                        state: None, token: None, control: Some(Control::QuitEngine),
+                        data: serde_json::json!({"exit_requested":result.is_ok(),"engine_exit_confirmed":false,
+                            "exit":context.exit_owner.as_ref().map(|owner| owner.status()).transpose()?}), error });
+                }
                 // Consume BEFORE observation/effect. A failed/stale/expired request cannot be replayed.
                 let prepared = self.take_prepared(&token, Instant::now())?;
+                ensure!(context.operational, "Device/process commands are disabled in development mode");
                 let state = native_state(context)?;
                 ensure!(same_control_state(&prepared.state, &state, &prepared.control), "Native state changed; refresh and confirm again");
                 validate_control(&prepared.control, &state)?;
@@ -365,6 +401,7 @@ fn validate_control(control: &Control, state: &NativeState) -> Result<()> {
         }
         Control::Terminate { pid } => ensure!(*pid > 4 && *pid != std::process::id(), "Protected or ambiguous process target"),
         Control::AutomaticEnforcement { .. } => {}
+        Control::QuitEngine => bail!("Quit must use the native owner's separate exit contract"),
     }
     Ok(())
 }
@@ -496,7 +533,7 @@ mod tests {
             enforcement_lease: None,
             enforcement_policy: None,
             #[cfg(windows)] camera_stamp: None,
-            created:now }) }
+            created:now }), ..Default::default() }
     }
     #[test]
     fn confirmation_is_single_use_expiring_and_invalidated_on_session_reset() {
@@ -573,6 +610,10 @@ mod tests {
         }
         assert!(session.execute(Request::Commit{token:"a".repeat(32),confirmation:"apply_prepared_native_action".into()},&context).is_err());
         assert!(session.prepared.is_none());
+        let mut session=prepared(Control::CameraBlock,Instant::now());
+        assert!(session.execute(Request::Commit{token:"a".repeat(32),
+            confirmation:"apply_prepared_native_action".into()},&context).is_err());
+        assert!(session.prepared.is_none(), "A mode change must retire the old hardware authority");
     }
     #[test]
     fn missing_applied_policy_is_not_replaced_with_default_assessment() {
@@ -584,5 +625,24 @@ mod tests {
     #[test]
     fn process_authority_never_comes_from_an_arbitrary_instance_in_the_wire() {
         assert!(serde_json::from_str::<Request>(r#"{"action":"prepare","control":{"kind":"terminate","pid":12345,"instance":"forged"}}"#).is_err());
+    }
+    #[test]
+    fn quit_uses_its_native_owner_without_device_readback_and_consumes_bad_confirmations() {
+        let mut session = Session::default();
+        assert!(session.execute(Request::Prepare { control: Control::QuitEngine }, &Context::default()).is_err());
+        let (client, owner) = super::super::exit_owner::channel();
+        owner.poll(true);
+        let context = Context { exit_owner: Some(client), ..Default::default() };
+        let prepared = session.execute(Request::Prepare { control: Control::QuitEngine }, &context).unwrap();
+        assert!(prepared.state.is_none()); // Quitting is not gated on a device/settings probe.
+        assert!(!context.operational); // No hardware permission was granted for this quit.
+        assert!(session.execute(Request::Commit { token: "b".repeat(32),
+            confirmation: "apply_prepared_native_action".into() }, &context).is_err());
+        assert!(session.execute(Request::Commit { token: prepared.token.unwrap(),
+            confirmation: "apply_prepared_native_action".into() }, &context).is_err());
+        assert!(!owner.requested());
+        let _ = session.execute(Request::Prepare { control: Control::QuitEngine }, &context).unwrap();
+        session.reset();
+        assert!(session.exit_prepared.is_none());
     }
 }

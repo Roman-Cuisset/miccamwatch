@@ -306,6 +306,10 @@ struct TrayAppState {
     #[cfg(feature = "flutter-desktop")]
     enforcement: crate::watcher::enforcement::Runtime,
     #[cfg(feature = "flutter-desktop")]
+    desktop_exit_client: crate::frontends::desktop::exit_owner::Client,
+    #[cfg(feature = "flutter-desktop")]
+    desktop_exit_owner: crate::frontends::desktop::exit_owner::Owner,
+    #[cfg(feature = "flutter-desktop")]
     desktop_camera_client: crate::frontends::desktop::camera_owner::Client,
     #[cfg(feature = "flutter-desktop")]
     desktop_camera_owner: crate::frontends::desktop::camera_owner::Owner,
@@ -622,6 +626,8 @@ pub fn run_tray(
     let enforcement = crate::watcher::enforcement::Runtime::default();
     #[cfg(feature = "flutter-desktop")]
     let (desktop_camera_client, desktop_camera_owner) = crate::frontends::desktop::camera_owner::channel();
+    #[cfg(feature = "flutter-desktop")]
+    let (desktop_exit_client, desktop_exit_owner) = crate::frontends::desktop::exit_owner::channel();
     let refreshes = start_refresh_worker(
         Arc::clone(&hwnd_cell),
         Arc::clone(&workers_alive),
@@ -665,6 +671,10 @@ pub fn run_tray(
         preference_worker: None,
         #[cfg(feature = "flutter-desktop")]
         enforcement,
+        #[cfg(feature = "flutter-desktop")]
+        desktop_exit_client,
+        #[cfg(feature = "flutter-desktop")]
+        desktop_exit_owner,
         #[cfg(feature = "flutter-desktop")]
         desktop_camera_client,
         #[cfg(feature = "flutter-desktop")]
@@ -886,6 +896,8 @@ unsafe extern "system" fn tray_wnd_proc(
             LRESULT(0)
         }
         WM_COMMAND => {
+            #[cfg(feature = "flutter-desktop")]
+            if state(hwnd).is_some_and(|s| s.desktop_exit_owner.requested()) { return LRESULT(0); }
             match wparam.0 & 0xffff {
                 CMD_TOGGLE_MUTE => toggle_mute(hwnd),
                 CMD_TOGGLE_CAMERA => queue_manual_camera(hwnd, CameraRequest::Manual),
@@ -2212,6 +2224,7 @@ fn open_flutter_desktop(hwnd: HWND) -> bool {
     supervisor.configure_policy(Arc::clone(&state.desktop_policy), state.explicit_policy);
     supervisor.configure_camera_owner(state.desktop_camera_client.clone());
     supervisor.configure_enforcement(state.enforcement.clone());
+    supervisor.configure_exit_owner(state.desktop_exit_client.clone());
     // Window activation may synchronously send messages; no tray state reference
     // is used across the native call.
     let opened = supervisor.open(frame, "light");
@@ -2267,7 +2280,7 @@ fn refresh_desktop(hwnd: HWND) {
         let activity = s.restore_activity.lock();
         let available = s.pending_manual == 0 && s.pending_lock_block.is_none()
             && s.pending_lock_restore.is_none() && activity.pending == 0 && !activity.closing
-            && s.desktop_camera_pending.is_none();
+            && s.desktop_camera_pending.is_none() && !s.desktop_exit_owner.requested();
         s.desktop_camera_owner.publish(Stamp {
             camera: s.camera_generation,
             manual: s.manual_generation,
@@ -2386,6 +2399,23 @@ fn refresh_desktop(hwnd: HWND) {
                     s.settings_error = Some(format!("Desktop command state delivery: {error:#}"));
                 }
             }
+        }
+    }
+    #[cfg(feature = "flutter-desktop")]
+    if let Some(s) = state(hwnd) {
+        let activity = s.restore_activity.lock();
+        let ready = s.pending_microphone == 0 && can_close_tray(s.pending_manual,
+            s.pending_lock_block.is_some(), s.pending_lock_restore.is_some(), activity.pending)
+            && !activity.closing && !s.preference_worker.as_ref().is_some_and(
+                crate::frontends::desktop::preferences::PreferenceWorker::is_pending);
+        drop(activity);
+        if s.desktop_exit_owner.poll(ready) { eprintln!("desktop event=exit_admitted source=flutter"); }
+        if s.desktop_exit_owner.requested() && ready && s.flutter.as_ref()
+            .is_none_or(|ui| !ui.has_pending_work() && ui.delivery_complete())
+        {
+            // Re-enter exactly the same native safe-close path after response
+            // delivery and all admitted effects; never terminate a device guard.
+            unsafe { let _ = PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0)); }
         }
     }
     let Some((desktop, view)) = state(hwnd).and_then(|s| {

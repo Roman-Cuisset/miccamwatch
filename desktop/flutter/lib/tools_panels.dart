@@ -20,6 +20,8 @@ class _NativeToolsPanelState extends State<NativeToolsPanel> {
   String? nativeSession;
   EnforcementStatus? enforcement;
   String? enforcementSession;
+  ExitStatus? exit;
+  String? exitSession;
   Map<String, dynamic>? data;
   String? section;
   String? issue;
@@ -50,6 +52,10 @@ class _NativeToolsPanelState extends State<NativeToolsPanel> {
           enforcement = result.enforcement;
           enforcementSession = client.session;
         }
+        if (result.data?.containsKey('exit') == true) {
+          exit = result.exit;
+          exitSession = client.session;
+        }
         if (request.action != 'prepare' && request.action != 'commit') {
           data = result.data; section = request.action;
         }
@@ -62,7 +68,7 @@ class _NativeToolsPanelState extends State<NativeToolsPanel> {
     }
   }
   Future<void> _apply(NativeControl control) async {
-    if (dialogOpen || !client.operational || !client.canRequest) return;
+    if (dialogOpen || (!client.operational && control.kind != 'quit_engine') || !client.canRequest) return;
     final session = client.session;
     final prepared = await _query(ToolsRequest.prepare(control));
     if (!mounted || prepared == null || prepared.outcome != 'prepared') return;
@@ -79,6 +85,7 @@ class _NativeToolsPanelState extends State<NativeToolsPanel> {
             const SizedBox(height: 10),
             if (control.kind.startsWith('microphone')) Text(prepared.state!.text('microphone_scope')),
             if (control.kind.startsWith('camera')) Text(prepared.state!.text('camera_scope')),
+            if (control.kind == 'quit_engine') Text(l['quitScope']),
             if (control.kind == 'camera_restore_legacy') ...[
               Text(l['cameraLegacyWarning']),
               SelectableText(control.parameters['instance_id'] as String),
@@ -97,14 +104,14 @@ class _NativeToolsPanelState extends State<NativeToolsPanel> {
           ]))),
       actions: [
         TextButton(onPressed: () => Navigator.pop(context, false), child: Text(l['autostartCancel'])),
-        FilledButton(key: const ValueKey('tools.confirm'),
-          onPressed: () => Navigator.pop(context, true), child: Text(l['autostartConfirm'])),
+        Semantics(identifier: 'tools.confirm', child: FilledButton(key: const ValueKey('tools.confirm'),
+          onPressed: () => Navigator.pop(context, true), child: Text(l['autostartConfirm']))),
       ],
     ));
     if (!mounted) return;
     setState(() => dialogOpen = false);
     if (confirmed != true) return;
-    if (session != client.session || !client.operational || !client.canRequest) {
+    if (session != client.session || (!client.operational && control.kind != 'quit_engine') || !client.canRequest) {
       setState(() => issue = l['nativeContextChanged']); return;
     }
     await _query(ToolsRequest.commit(prepared));
@@ -242,6 +249,17 @@ class _NativeToolsPanelState extends State<NativeToolsPanel> {
           Text(l['policyValidationScope']),
           if (const {'paths', 'policy', 'validate_policy', 'maintenance'}.contains(section) && data != null)
             Padding(padding: const EdgeInsets.only(top: 12), child: _DataView(data: data!)),
+        ]),
+        _ToolCard(title: l['quit_engine'], children: [
+          Text(l['quitScope']),
+          const SizedBox(height: 8),
+          if (exit?.requested == true) Text(l['quitRequested']),
+          Wrap(spacing: 8, runSpacing: 8, children: [
+            action('exitRefresh', Icons.refresh, enabled ? () => _query(const ToolsRequest.exitStatus()) : null),
+            action('quit_engine', Icons.power_settings_new,
+              enabled && exitSession == client.session && exit?.ready == true
+                ? () => _apply(NativeControl.action('quit_engine')) : null),
+          ]),
         ]),
       ]);
     });

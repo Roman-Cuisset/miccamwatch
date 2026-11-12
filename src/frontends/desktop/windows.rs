@@ -249,6 +249,17 @@ impl Supervisor {
     pub fn configure_enforcement(&mut self, runtime: crate::watcher::enforcement::Runtime) {
         self.context.enforcement = Some(runtime);
     }
+    pub fn configure_exit_owner(&mut self, owner: super::exit_owner::Client) {
+        self.context.exit_owner = Some(owner);
+    }
+    pub fn delivery_complete(&self) -> bool {
+        self.child.as_ref().is_none_or(|child| {
+            child.exited() || child.signals.disconnected.load(Ordering::Acquire) ||
+                child.mailbox.pending.lock().unwrap_or_else(|e| e.into_inner()).highest_sequence
+                    .is_none_or(|sequence| child.signals.wrote_frame.load(Ordering::Acquire)
+                        && child.signals.written_sequence.load(Ordering::Acquire) >= sequence)
+        })
+    }
     pub fn has_pending_work(&self) -> bool {
         consultation::Worker::pending(&self.consultation_worker)
     }
@@ -372,6 +383,7 @@ impl Supervisor {
             child.consultation.finish(id, completion.result);
             child.controls_changed = true;
         }
+        let exiting = self.context.exit_owner.as_ref().is_some_and(|owner| owner.status().is_ok_and(|s| s.requested));
         if let Some(child) = self.child.as_mut() {
             let available = consultation::Worker::available(&self.consultation_worker);
             child.controls_changed |= child.consultation_available != available;
@@ -409,6 +421,7 @@ impl Supervisor {
                     }
                     UiEvent::Command { request, .. } => {
                         let ready = child.ready
+                            && !exiting
                             && child.closing.is_none()
                             && !child.exited()
                             && !child.signals.disconnected.load(Ordering::Acquire)
@@ -444,6 +457,7 @@ impl Supervisor {
                     }
                     UiEvent::PreferencesCommand { request, .. } => {
                         let ready = child.ready
+                            && !exiting
                             && child.closing.is_none()
                             && !child.exited()
                             && !child.signals.disconnected.load(Ordering::Acquire)
@@ -473,6 +487,7 @@ impl Supervisor {
                     }
                     UiEvent::ConsultationRequest { request, .. } => {
                         let ready = child.ready && child.closing.is_none() && !child.exited()
+                            && !exiting
                             && !child.signals.disconnected.load(Ordering::Acquire)
                             && child.last_frame_at.elapsed() <= Duration::from_secs(5)
                             && child.consultation_available;

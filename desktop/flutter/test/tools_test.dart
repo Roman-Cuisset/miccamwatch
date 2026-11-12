@@ -317,4 +317,51 @@ void main() {
     await tester.pumpWidget(const SizedBox());
     client.dispose();
   });
+  test('only explicit quit preparation may omit unrelated device observations', () {
+    final quit = report(outcome: 'prepared', control: {'kind': 'quit_engine'});
+    expect(NativeReport.fromJson(quit).state, isNull);
+    expect(() => NativeReport.fromJson({...quit, 'control': {'kind': 'camera_block'}}), throwsFormatException);
+    expect(() => NativeReport.fromJson(report(data: {'exit': {
+      'ready': true, 'requested': true, 'scope': 'inconsistent fixture',
+    }})), throwsFormatException);
+  });
+
+  testWidgets('explicit quit can use a private owner without granting device rights and cancellation is harmless', (tester) async {
+    tester.view.physicalSize = const Size(900, 2400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    var sequence = 1;
+    var commits = 0;
+    late ConsultationClient client;
+    client = ConsultationClient(send: (message) async {
+      final request = message['request'] as Map<String, dynamic>;
+      final tools = (request['operation'] as Map<String, dynamic>)['request'] as Map<String, dynamic>;
+      if (tools['action'] == 'commit') commits++;
+      final result = tools['action'] == 'prepare'
+        ? report(outcome: 'prepared', control: {'kind': 'quit_engine'}, data: {'confirmation_seconds': 30})
+        : report(state: nativeState(), data: {'exit': {'ready': true, 'requested': false, 'scope': 'private fixture'}});
+      client.update(fixtures.view(completion: fixtures.result(id: request['id'] as int, operation: 'tools', tools: result)),
+        fixtures.sessionA, ++sequence, true, operational: false);
+    });
+    client.update(fixtures.view(), fixtures.sessionA, sequence, true, operational: false);
+    await tester.pumpWidget(MaterialApp(home: Scaffold(body: SingleChildScrollView(
+      child: NativeToolsPanel(client: client, locale: 'en', accesses: const [])))));
+    await tester.pumpAndSettle();
+    expect(tester.widget<OutlinedButton>(find.byKey(const ValueKey('tools.microphone_mute'))).onPressed, isNull);
+    final quit = find.byKey(const ValueKey('tools.quit_engine'));
+    await tester.ensureVisible(quit);
+    expect(tester.widget<OutlinedButton>(quit).onPressed, isNotNull);
+    await tester.tap(quit);
+    await tester.pumpAndSettle();
+    expect(find.byType(AlertDialog), findsOneWidget);
+    await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+    await tester.pumpAndSettle();
+    expect(commits, 0);
+    client.update(fixtures.view(), fixtures.sessionB, 1, true);
+    await tester.pump();
+    expect(tester.widget<OutlinedButton>(quit).onPressed, isNull);
+    await tester.pumpWidget(const SizedBox());
+    client.dispose();
+  });
 }

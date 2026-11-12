@@ -116,6 +116,8 @@ struct Observer {
     mode: DevelopmentMode,
     preference_worker: Option<crate::frontends::desktop::preferences::PreferenceWorker>,
     enforcement: crate::watcher::enforcement::Runtime,
+    exit_client: crate::frontends::desktop::exit_owner::Client,
+    exit_owner: crate::frontends::desktop::exit_owner::Owner,
     microphone_worker: Option<super::microphone_worker::Worker>,
     pending_microphone: usize,
     microphone_generation: u64,
@@ -142,16 +144,18 @@ impl Observer {
                 result.as_ref().map_err(String::as_str)
             })
     }
-    fn can_exit(&self) -> bool {
+    fn can_exit_native(&self) -> bool {
         !self
             .preference_worker
             .as_ref()
             .is_some_and(crate::frontends::desktop::preferences::PreferenceWorker::is_pending)
-            && !self.ui.as_ref().is_some_and(|ui| ui.has_pending_work())
             && (!self.controlled
                 || (self.pending_microphone == 0
                     && (!self.control_used
                         || self.microphone().is_ok_and(|status| !status.requested))))
+    }
+    fn can_exit(&self) -> bool {
+        self.can_exit_native() && !self.ui.as_ref().is_some_and(|ui| ui.has_pending_work())
     }
     fn frame(&mut self) -> DesktopSnapshot {
         if self.current.is_some() {
@@ -214,6 +218,7 @@ impl Observer {
             let mut ui = Supervisor::new()?;
             ui.configure_policy(Arc::new(Policy::default()), false);
             ui.configure_enforcement(self.enforcement.clone());
+            ui.configure_exit_owner(self.exit_client.clone());
             self.ui = Some(ui);
         }
         self.ui
@@ -364,6 +369,12 @@ impl Observer {
                 .as_mut()
                 .expect("running supervisor")
                 .publish(frame)?;
+        }
+        if self.exit_owner.poll(self.can_exit_native()) { eprintln!("desktop event=exit_admitted source=flutter"); }
+        if self.exit_owner.requested() && self.can_exit() &&
+            self.ui.as_ref().is_none_or(Supervisor::delivery_complete)
+        {
+            unsafe { let _ = PostMessageW(Some(self.hwnd), WM_CLOSE, WPARAM(0), LPARAM(0)); }
         }
         Ok(())
     }
@@ -679,6 +690,7 @@ pub(super) fn run(
         IconGlyph::Error,
         unsafe { GetSystemMetrics(SM_CXSMICON) }.max(16),
     )?;
+    let (exit_client, exit_owner) = crate::frontends::desktop::exit_owner::channel();
     let mut observer = Box::new(Observer {
         hwnd: HWND::default(),
         lang,
@@ -694,6 +706,8 @@ pub(super) fn run(
         mode,
         preference_worker: None,
         enforcement: Default::default(),
+        exit_client,
+        exit_owner,
         microphone_worker: None,
         pending_microphone: 0,
         microphone_generation: 0,

@@ -9,6 +9,7 @@ pub mod commands;
 pub mod preferences;
 pub mod consultation;
 pub mod tools;
+pub mod exit_owner;
 #[cfg(windows)]
 pub mod camera_owner;
 #[cfg(windows)]

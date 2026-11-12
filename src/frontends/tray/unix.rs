@@ -1785,16 +1785,20 @@ struct FlutterFrontend {
     lang: Language,
     policy: Option<Arc<Policy>>,
     enforcement: crate::watcher::enforcement::Runtime,
+    exit_client: crate::frontends::desktop::exit_owner::Client,
+    exit_owner: crate::frontends::desktop::exit_owner::Owner,
 }
 #[cfg(feature = "flutter-desktop")]
 impl FlutterFrontend {
     fn new(lang: Language, writable: bool, profile_writable: bool, operational: bool) -> Self {
+        let (exit_client, exit_owner) = crate::frontends::desktop::exit_owner::channel();
         Self {
             ui: None, worker: None, sequence: 1, writable, profile_writable, operational,
             applied_profile: None, lang,
             current: None,
             policy: (!operational).then(|| Arc::new(Policy::default())),
             enforcement: Default::default(),
+            exit_client, exit_owner,
         }
     }
     fn attached(&self) -> bool {
@@ -1844,6 +1848,7 @@ impl FlutterFrontend {
         if let (Some(ui), Some(policy)) = (self.ui.as_mut(), self.policy.as_ref()) {
             ui.configure_policy(Arc::clone(policy), !self.profile_writable);
             ui.configure_enforcement(self.enforcement.clone());
+            ui.configure_exit_owner(self.exit_client.clone());
         }
         let frame = self.frame();
         self.ui.as_mut().expect("initialized UI").open(frame, theme)
@@ -1870,7 +1875,10 @@ impl FlutterFrontend {
         if let Some(command) = self.ui.as_mut().and_then(Supervisor::take_preference) {
             let ticket = command.ticket;
             let work = PreferenceWork { ticket, request: command.request, profile_writable: self.profile_writable };
-            if let Err(error) = PreferenceWorker::enqueue(&mut self.worker, work) {
+            let result = if self.exit_owner.requested() {
+                Err(anyhow::anyhow!("Native owner is exiting; preference not admitted"))
+            } else { PreferenceWorker::enqueue(&mut self.worker, work) };
+            if let Err(error) = result {
                 self.ui.as_mut().expect("request UI").complete_preference(ticket, CommandState::Rejected,
                     Some("preferences_worker"), Some(format!("Preference request not queued: {error:#}")));
             }
@@ -1890,6 +1898,13 @@ impl FlutterFrontend {
     fn has_pending_work(&self) -> bool {
         self.worker.as_ref().is_some_and(crate::frontends::desktop::preferences::PreferenceWorker::is_pending)
             || self.ui.as_ref().is_some_and(|ui| ui.has_pending_work())
+    }
+    fn poll_exit(&self) -> bool {
+        let ready = !self.worker.as_ref().is_some_and(
+            crate::frontends::desktop::preferences::PreferenceWorker::is_pending);
+        if self.exit_owner.poll(ready) { eprintln!("desktop event=exit_admitted source=flutter"); }
+        self.exit_owner.requested() && !self.has_pending_work()
+            && self.ui.as_ref().is_none_or(crate::frontends::desktop::unix::Supervisor::delivery_complete)
     }
     fn finish(&mut self) {
         if let Some(ui) = self.ui.as_mut() { let _ = ui.close(); }
@@ -2192,6 +2207,7 @@ fn run_flutter_development(lang: Language, initial_window: bool, theme: &str, wr
                 }
             }
             frontend.refresh()?;
+            if frontend.poll_exit() { break; }
             if let Some(error) = frontend.take_open_failure() {
                 #[cfg(target_os = "linux")]
                 if let Some(host) = native.as_mut() {
@@ -2360,6 +2376,7 @@ pub fn run_tray(
             #[cfg(feature = "flutter-desktop")]
             {
                 if flutter.refresh()? { next_poll = Instant::now(); }
+                if flutter.poll_exit() { break; }
                 if let Some(error) = flutter.take_open_failure() {
                     eprintln!("MicCamWatch Flutter failed before ready, opening native desktop: {error}");
                     if let Err(error) = host.show_window() {
@@ -2590,6 +2607,8 @@ pub fn run_tray(
                     break;
                 }
                 Ok(command) => {
+                    #[cfg(feature = "flutter-desktop")]
+                    if flutter.exit_owner.requested() { continue; }
                     if matches!(command, Command::Status) {
                         #[cfg(feature = "flutter-desktop")]
                         let opened = show_desktop(&mut flutter, &mut host);
