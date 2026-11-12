@@ -3694,3 +3694,41 @@ Lots futurs **à approuver, aucun correctif appliqué** :
   Linux/macOS de ce code à ce point ; ne pas réattribuer les anciens résultats.
   Pas de publication, changement MSI stable, protection quotidienne ou site.
 
+
+### 2026-11-12 — Enforcement natif depuis Flutter
+
+- `watcher/enforcement.rs` détient une autorité de session dans Rust. Les deux
+  algorithmes existants Windows/Unix sont réutilisés par des callbacks natifs
+  testables ; aucun second collecteur, service ou moteur n'est lancé. Le tray
+  Windows applique l'enforcement dans son worker d'observation, Unix dans sa
+  boucle existante. Fréquence et vérifications de confiance inchangées.
+- Activation/désactivation Flutter par préparation, confirmation explicite,
+  révision privée, politique/profil encore identiques et relecture du résultat.
+  Refus des commandes en développement. Deux observations actives explicitement
+  Deny et identité native conservée restent nécessaires ; Ready/Alert/identité
+  absente/couverture perdue ne donnent pas une autorisation de terminer.
+- La désactivation attend la fin d'un effet natif déjà admis ; elle n'annule pas
+  une terminaison. Les compteurs distinguent demandes natives acceptées et erreurs,
+  pas une promesse que tous les processus sont arrêtés ou les périphériques bloqués.
+- **Contrat de durée explicite** : comme les flags `watch --kill/--no-kill`,
+  l'activation appartient à cette session Rust ; fermer/réouvrir Flutter ne la
+  perd pas, redémarrer Rust la désactive. La politique TOML et son action restent
+  consultables, inchangées ; aucun nouveau réglage persistant n'est inventé.
+  L'ancien tray n'appliquait pas automatiquement `action=kill` ; on ne transforme
+  pas silencieusement cette configuration en nouvelle autorisation de terminaison.
+- Tests : trois tests Rust du runtime (deux observations, PID réutilisé,
+  déconnexion du frontend, redémarrage, gaps, refus natif), refus de préparation
+  en développement, Clippy strict et analyse Flutter réussis. Les 14 tests
+  `tools_test.dart` réussissent, dont intent non optimiste, refus et session
+  remplacée. Un test initial utilisait `Snapshot.clone()` non disponible :
+  corrigé uniquement dans la fixture, sans ajouter de copie au modèle produit.
+- Builds release Windows Rust/Flutter réussis. Six nouveaux cycles graphiques
+  réels clair/sombre ont vérifié la lecture de l'état Rust désactivé, IPC,
+  préférences privées restaurées et absence de frontend résiduel. Captures de la
+  page Contrôles examinées ; le panneau enforcement se trouve plus bas que le
+  viewport capturé, **pas encore de preuve visuelle desktop de ce panneau**.
+  Aucun processus quotidien ou fixture système réel n'a été terminé.
+- Qualifications Linux/macOS encore à effectuer pour ce delta. L02, les
+  sessions/journaux, multi-accès et contrats maintenance restent à terminer ;
+  l'étape2 n'est pas déclarée achevée.
+

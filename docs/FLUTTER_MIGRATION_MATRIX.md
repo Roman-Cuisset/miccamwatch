@@ -369,3 +369,16 @@ Development controls remain disabled. Closing Flutter does not cancel admitted
 native work or own guard restoration. Remaining P0/P1 and platform qualifications
 are not marked complete by this checkpoint.
 
+
+### O07 — process-owned enforcement checkpoint
+
+Flutter can explicitly enable/disable the existing two-observation policy
+enforcement through Rust. It is session-scoped like CLI flags, not an edit of the
+policy file. Native identity revalidation and error reporting remain authoritative;
+Flutter closure does not disable it, engine restart starts disabled. Windows and
+Unix reuse their existing watcher algorithms and observations. Three native
+runtime fixture tests, development denial, 14 Flutter tool tests, strict Clippy,
+analysis, Windows release builds and six real isolated IPC/UI cycles passed.
+No real process was terminated; new Unix runtime qualification and an actual
+desktop capture of the lower enforcement panel remain pending.
+
