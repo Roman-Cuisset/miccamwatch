@@ -382,3 +382,18 @@ analysis, Windows release builds and six real isolated IPC/UI cycles passed.
 No real process was terminated; new Unix runtime qualification and an actual
 desktop capture of the lower enforcement panel remain pending.
 
+
+### L02 — explicit engine exit checkpoint
+
+The common Flutter interface has a separately confirmed Quit MicCamWatch action.
+Its private native owner admits or refuses a retained revision, drains accepted
+work and the response, then uses the existing native exit path. Window closure
+does not call this lane. Persistent guards and native owned-original restoration
+are not forcibly changed. Hardware commits still require operational authority.
+
+Windows: 66 desktop tests, 105 Flutter tests, strict Clippy/analyze/release builds;
+four actual Flutter-requested native engine exits (both themes, restarted owners),
+exit0, no owned-process residue, private preferences retained. Initial missing
+confirmation semantic identifier was fixed and its failed proof retained.
+Unix/macOS integration is present but not newly qualified at this checkpoint.
+

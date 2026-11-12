@@ -3732,3 +3732,46 @@ Lots futurs **à approuver, aucun correctif appliqué** :
   sessions/journaux, multi-accès et contrats maintenance restent à terminer ;
   l'étape2 n'est pas déclarée achevée.
 
+
+### 2026-11-12 — Sortie explicite du moteur depuis Flutter
+
+- Nouvelle voie privée `desktop/exit_owner.rs` : préparation à usage unique,
+  révision native, admission bornée, refus si occupé/périmé/déconnecté. La
+  fermeture normale de Flutter ne demande **jamais** cette sortie.
+- `tools.rs` distingue `quit_engine` des contrôles de périphériques. La sortie
+  utilise seulement l'autorité du propriétaire natif ; elle n'exige pas de sonde
+  matérielle ni de chargement des préférences. Les commits matériels restent
+  autorisés uniquement après récupération de leur préparation côté serveur et
+  contrôle du mode opérationnel ; aucun droit matériel n'est donné au mode isolé.
+- Windows Win32 et son propriétaire de développement réutilisent leur prédicat
+  natif d'arrêt, hors le ticket de consultation de sortie lui-même, puis attendent
+  la fin des travaux admis et l'écriture de la réponse IPC avant le même WM_CLOSE.
+  Aucun TerminateProcess d'un moteur ou d'une garde ; les gardes persistantes ne
+  sont ni libérées ni réinitialisées. Les nouvelles commandes sont refusées après
+  admission de la sortie.
+- Unix est raccordé au même mécanisme : fin de la boucle native, drain des
+  workers, fermeture du frontend et nettoyage existant. La restauration finale
+  existante reste limitée aux originaux détenus, session positivement déverrouillée
+  et intention de verrouillage ; aucun changement de contrat de restauration.
+- Flutter présente « Quitter MicCamWatch » avec confirmation et explication dans
+  les sept langues, séparément de fermer la fenêtre. Une demande admise n'est
+  jamais présentée comme une preuve que le moteur est déjà terminé.
+- Windows : **66 tests desktop**, **105 tests Flutter**, Clippy strict, analyse,
+  builds release Rust et Flutter réussis. Les refus couvrent état occupé,
+  révision ancienne, expiration, double demande, propriétaire absent et perte du
+  frontend ; la préparation Quit n'autorise pas les commandes matérielles.
+- **Quatre vrais arrêts** demandés depuis Flutter (clair/sombre, deux propriétaires
+  neufs par thème) : confirmation rendue, événement natif `exit_admitted`, code
+  de sortie du moteur **0**, toutes les générations de processus possédées
+  terminées, préférences privées inchangées. Le harnais n'a envoyé aucun message
+  d'arrêt pour obtenir ces résultats ; son nettoyage n'a vérifié que des moteurs
+  déjà terminés. Les cycles précédents de simple fermeture continuent à prouver
+  que Rust reste actif dans cet autre cas.
+- Premier essai GUI conservé en échec : le bouton avait une ValueKey mais aucun
+  identifiant de sémantique pour le pilote. Ajout du vrai identifiant accessible
+  `tools.confirm`, puis quatre arrêts réussis avec le bundle corrigé.
+  Preuves : `explicit-quit-v2-*/receipt.json` dans le préfixe privé de finalisation.
+- Aucune sortie sur l'instance stable quotidienne, aucune garde désactivée, aucun
+  test matériel. Unix/macOS : raccordement implémenté, nouvelle qualification
+  encore à faire à ce checkpoint. L'étape 2 continue avec les P1 restants.
+
