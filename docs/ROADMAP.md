@@ -3643,3 +3643,54 @@ Lots futurs **à approuver, aucun correctif appliqué** :
   restauration sensible par simple contournement de bouton désactivé.
 - Modèle principal : `openai-codex/gpt-6.1-sol`, OpenAI Codex OAuth. Aucun
   sous-agent, routage exact non démontré ; aucun réglage global changé.
+
+## 2026-11-12 — v0.22.0, finalisation étape 2 : coordinateur caméra Windows
+
+- Reprise vérifiée sur `work/flutter-hybrid-0220` à `93e8003`, synchronisée
+  avec origin, sans modification ni fichier non suivi dans ce worktree. Les
+  quatre documents de référence ont été lus intégralement. Aucun nettoyage des
+  autres worktrees, du stash ou des suppressions historiques ; aucun sous-agent,
+  faute de preuve technique du routage modèle/fournisseur/authentification.
+- IPC **7** : commandes caméra Block, Allow, Resume et récupération historique
+  d'un identifiant Windows exact. Le jeton préparé est à usage unique ; Rust
+  retient la révision privée du coordinateur. Aucun numéro de génération ni
+  droit natif n'est accepté depuis Dart.
+- `src/frontends/desktop/camera_owner.rs`, `tools.rs`, `windows.rs` et
+  `src/frontends/tray.rs` : délégation bornée au propriétaire permanent, même
+  worker caméra natif, même coordination des restaurations/verrouillages.
+  Une révision modifiée, une opération pendante, une admission expirée ou une
+  file indisponible refusent l'effet. La fermeture Flutter n'annule pas un effet
+  déjà admis. Les résultats sont rendus après mise à jour du coordinateur puis
+  relecture native ; un délai ou une relecture inconnue ne devient pas succès.
+- Block/Allow et récupération explicite remplacent l'intention manuelle, tandis
+  que Resume conserve le contrat de restauration natif. UAC reste entièrement
+  natif. La récupération historique exige un ID exact borné, un avertissement
+  distinct et la confirmation ; aucun ancien enregistrement non signé ne devient
+  une autorité. La reprise confirme le service demandé, pas un blocage universel.
+- Flutter : commandes, textes dans les sept langues et avertissement avancé ;
+  les actions restent désactivées en développement. Correction démontrée par
+  test : après annulation du dialogue, rafraîchir immédiatement les contrôles
+  au lieu d'attendre le prochain snapshot.
+- Vérifications Windows locales : **113 tests frontends réussis, 3 ignorés** ;
+  Clippy strict tous targets ; analyse Flutter ; **101 tests Flutter réussis** ;
+  builds Rust release hybride et Flutter release normal/instrumenté réussis.
+  Les premiers tests Rust/Clippy précèdent le changement mécanique IPC6→7 ;
+  le build Rust et les tests/builds Flutter ont ensuite utilisé IPC7.
+- Vraies fenêtres Contrôles clair/sombre capturées par HWND/PID/génération
+  possédés et examinées. **Six cycles** (trois par thème), ouvertures concurrentes,
+  IPC réel, sept langues dans le scénario, fermeture complète du frontend et
+  progression de l'observation Rust après fermeture. Aucun effet caméra/micro
+  réel n'a été exécuté ; refus/UAC et révisions testés par fixtures.
+- Le reçu clair conserve un échec du harnais : comparaison des octets TOML après
+  sérialisation Rust. Les huit préférences relues sont strictement identiques ;
+  les trois cycles et l'arrêt possédé étaient réussis. Le diagnostic séparé
+  `persistence-review.json` conserve cette distinction, sans effacer l'échec.
+  Le scénario sombre compare les valeurs et réussit. Les captures montrent les
+  actions de développement désactivées, pas une qualification matérielle.
+- Preuves privées : `%LOCALAPPDATA%\MicCamWatchQualification\v022-stage2-final-20261112-084140`.
+  Pas de logs bruts, secrets, chemins utilisateur ou exécutables ajoutés à Git.
+- **Étape 2 encore en cours** : poursuivre enforcement, sortie contrôlée,
+  sessions/journaux, multi-accès et maintenance. Aucune qualification nouvelle
+  Linux/macOS de ce code à ce point ; ne pas réattribuer les anciens résultats.
+  Pas de publication, changement MSI stable, protection quotidienne ou site.
+

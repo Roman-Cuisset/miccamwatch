@@ -353,3 +353,19 @@ Evidence: **SET:20-74,88-147**; **WT:2177-2227**; **U:2118-2140,2239-2260**. Rep
 | History path/clear, application details, complete diagnostics | Native CLI/interfaces retained | Read APIs before destructive clear; browser/export is new API work, not missing migration wiring |
 | Language/theme persistence, update/uninstall | Existing limited/native behavior retained | No imaginary settings fields or generic installation-independent updater |
 | Linux x64/ARM64, macOS Intel/Apple Silicon | Native fallback retained; no B1 Flutter runtime qualification | Owned Unix transport/lifecycle, platform restore semantics, full payload/identity/signing gates; ARM physical validation remains absent |
+
+## v0.22.0 finalisation — 12 November 2026
+
+The dated A–B5 rows above remain historical. The current 44-family status is
+`V0.22.0_PARITY_AUDIT.md` §8, including the §8.4 camera delta.
+
+| Family | Implemented now | Verification boundary |
+|---|---|---|
+| C01 Windows Block/Allow | IPC7 private prepared revision, delegation to the existing permanent tray camera queue, native consent and fresh readback | Fixtures and six isolated real-UI cycles; no hardware effect on the daily installation |
+| C02 Windows Resume | Explicit action preserves manual intent and confirms helper/request state independently of observed coverage | Native refusal/stale/busy/disconnect tests; no real UAC/hardware activation |
+| C03 Windows historical recovery | Exact bounded instance ID, distinct warning/confirmation, existing native recovery authority only | Typed/forged-authority and UI tests; no historical device actually enabled |
+
+Development controls remain disabled. Closing Flutter does not cancel admitted
+native work or own guard restoration. Remaining P0/P1 and platform qualifications
+are not marked complete by this checkpoint.
+
