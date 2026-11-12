@@ -18,6 +18,8 @@ class NativeToolsPanel extends StatefulWidget {
 class _NativeToolsPanelState extends State<NativeToolsPanel> {
   NativeState? native;
   String? nativeSession;
+  EnforcementStatus? enforcement;
+  String? enforcementSession;
   Map<String, dynamic>? data;
   String? section;
   String? issue;
@@ -44,6 +46,10 @@ class _NativeToolsPanelState extends State<NativeToolsPanel> {
       if (mounted) setState(() {
         native = result.state ?? native;
         if (result.state != null) nativeSession = client.session;
+        if (result.data?.containsKey('enforcement') == true) {
+          enforcement = result.enforcement;
+          enforcementSession = client.session;
+        }
         if (request.action != 'prepare' && request.action != 'commit') {
           data = result.data; section = request.action;
         }
@@ -76,6 +82,10 @@ class _NativeToolsPanelState extends State<NativeToolsPanel> {
             if (control.kind == 'camera_restore_legacy') ...[
               Text(l['cameraLegacyWarning']),
               SelectableText(control.parameters['instance_id'] as String),
+            ],
+            if (control.kind == 'automatic_enforcement') ...[
+              Text(l['enforcementScope']),
+              Text(l[control.parameters['enabled'] == true ? 'enforcementEnable' : 'enforcementDisable']),
             ],
             if (control.kind == 'lock_policy') ...[
               Text('${l['lockMicrophone']}: ${l[control.parameters['microphone'] == true ? 'yes' : 'no']}'),
@@ -178,6 +188,21 @@ class _NativeToolsPanelState extends State<NativeToolsPanel> {
           lock('lockMicrophone', 'lock_microphone', state.flag('lock_supported')),
           lock('lockCamera', 'lock_camera', state.flag('camera_lock_supported')),
           lock('restoreOnUnlock', 'restore_on_unlock', state.flag('lock_supported')),
+        ]),
+        _ToolCard(title: l['automatic_enforcement'], children: [
+          Text(l['enforcementScope']),
+          const SizedBox(height: 8),
+          action('enforcementRefresh', Icons.refresh, enabled ? () => _query(const ToolsRequest.controls()) : null),
+          if (enforcement case final status?) ...[
+            Text(l[status.enabled ? 'enforcementEnabled' : 'enforcementDisabled'],
+              style: Theme.of(context).textTheme.titleSmall),
+            Text('${l['enforcementRequests']}: ${status.accepted} · ${l['enforcementFailures']}: ${status.failed}'),
+            if (status.error case final error?) SelectableText(error),
+            const SizedBox(height: 8),
+            action(status.enabled ? 'enforcementDisable' : 'enforcementEnable', Icons.policy_outlined,
+              controlsEnabled && enforcementSession == client.session
+                ? () => _apply(NativeControl.enforcement(!status.enabled)) : null),
+          ] else Text(l['unavailable']),
         ]),
         _ToolCard(title: l['devicesAndApplications'], children: [
           Wrap(spacing: 8, runSpacing: 8, children: [

@@ -514,6 +514,9 @@ impl Supervisor {
         self.context.policy = Some(policy);
         self.context.explicit_policy = explicit;
     }
+    pub fn configure_enforcement(&mut self, runtime: crate::watcher::enforcement::Runtime) {
+        self.context.enforcement = Some(runtime);
+    }
     pub fn has_pending_work(&self) -> bool {
         consultation::Worker::pending(&self.consultation_worker)
     }

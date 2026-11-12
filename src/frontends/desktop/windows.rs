@@ -246,6 +246,9 @@ impl Supervisor {
     pub fn configure_camera_owner(&mut self, owner: super::camera_owner::Client) {
         self.context.camera_owner = Some(owner);
     }
+    pub fn configure_enforcement(&mut self, runtime: crate::watcher::enforcement::Runtime) {
+        self.context.enforcement = Some(runtime);
+    }
     pub fn has_pending_work(&self) -> bool {
         consultation::Worker::pending(&self.consultation_worker)
     }

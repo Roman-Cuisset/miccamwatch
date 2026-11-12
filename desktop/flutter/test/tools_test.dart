@@ -260,4 +260,61 @@ void main() {
     await tester.pumpWidget(const SizedBox());
     client.dispose();
   });
+  test('enforcement requires a boolean intent and strictly typed native status', () {
+    expect(NativeControl.fromJson(NativeControl.enforcement(true).toJson()), NativeControl.enforcement(true));
+    expect(() => NativeControl.fromJson({'kind': 'automatic_enforcement', 'enabled': 'true'}), throwsFormatException);
+    expect(() => NativeControl.fromJson({'kind': 'automatic_enforcement', 'enabled': true, 'generation': 12}), throwsFormatException);
+    expect(() => NativeReport.fromJson(report(data: {'enforcement': {
+      'enabled': 'true', 'generation': 1, 'accepted_requests': 0,
+      'failed_requests': 0, 'last_error': null, 'scope': 'fixture only',
+    }})), throwsFormatException);
+  });
+
+  testWidgets('enforcement intent waits for Rust; refusal and session changes cannot enable it', (tester) async {
+    tester.view.physicalSize = const Size(900, 2400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    var sequence = 1;
+    Map<String, dynamic>? pendingCommit;
+    Map<String, dynamic> status(bool enabled) => {
+      'enabled': enabled, 'generation': enabled ? 1 : 0, 'accepted_requests': 0,
+      'failed_requests': 0, 'last_error': null, 'scope': 'fixture only',
+    };
+    late ConsultationClient client;
+    client = ConsultationClient(send: (message) async {
+      final request = message['request'] as Map<String, dynamic>;
+      final tools = (request['operation'] as Map<String, dynamic>)['request'] as Map<String, dynamic>;
+      if (tools['action'] == 'commit') { pendingCommit = request; return; }
+      complete(client, tools['action'] == 'prepare'
+        ? report(outcome: 'prepared', state: nativeState(),
+            control: tools['control'] as Map<String, dynamic>, data: {'confirmation_seconds': 30})
+        : report(state: nativeState(), data: {'enforcement': status(false)}),
+        id: request['id'] as int, sequence: ++sequence);
+    });
+    client.update(fixtures.view(), fixtures.sessionA, sequence, true, operational: true);
+    await tester.pumpWidget(MaterialApp(home: Scaffold(body: SingleChildScrollView(
+      child: NativeToolsPanel(client: client, locale: 'en', accesses: const [])))));
+    await tester.pumpAndSettle();
+    final enable = find.byKey(const ValueKey('tools.enforcementEnable'));
+    await tester.ensureVisible(enable);
+    await tester.tap(enable);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('tools.confirm')));
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(pendingCommit, isNotNull);
+    expect(find.text('Automatic termination disabled'), findsOneWidget);
+    complete(client, report(outcome: 'not_confirmed', state: nativeState(),
+      control: {'kind': 'automatic_enforcement', 'enabled': true},
+      data: {'enforcement': status(false)}, error: 'Native authorization refused'),
+      id: pendingCommit!['id'] as int, sequence: ++sequence);
+    await tester.pumpAndSettle();
+    expect(find.text('Automatic termination disabled'), findsOneWidget);
+    expect(find.textContaining('Native authorization refused'), findsOneWidget);
+    client.update(fixtures.view(), fixtures.sessionB, 1, true, operational: true);
+    await tester.pump();
+    expect(tester.widget<OutlinedButton>(enable).onPressed, isNull);
+    await tester.pumpWidget(const SizedBox());
+    client.dispose();
+  });
 }

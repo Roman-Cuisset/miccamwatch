@@ -385,6 +385,17 @@ fn update_enforcement_candidates<'a>(
     observations: &mut HashMap<(String, String), u8>,
     terminated: &mut HashSet<(String, String)>,
 ) {
+    update_enforcement_candidates_with(accesses, enabled, observations, terminated,
+        crate::platform::terminate_process_by_pid);
+}
+
+pub(super) fn update_enforcement_candidates_with<'a>(
+    accesses: impl Iterator<Item = &'a Access>,
+    enabled: bool,
+    observations: &mut HashMap<(String, String), u8>,
+    terminated: &mut HashSet<(String, String)>,
+    mut terminate: impl FnMut(u32, &str) -> Result<()>,
+) {
     if !enabled {
         observations.clear();
         return;
@@ -419,7 +430,7 @@ fn update_enforcement_candidates<'a>(
         if *count < 2 {
             continue;
         }
-        match crate::platform::terminate_process_by_pid(pid, instance) {
+        match terminate(pid, instance) {
             Ok(()) => {
                 terminated.insert((access.key.clone(), instance.to_owned()));
                 eprintln!(

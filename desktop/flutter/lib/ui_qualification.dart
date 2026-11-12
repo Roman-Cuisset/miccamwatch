@@ -95,6 +95,7 @@ class UiQualification {
       'navigation.settings', 'navigation.diagnostics', 'navigation.about',
       'navigation.controls', 'tools.queryRefresh', 'tools.deviceInventory',
       'tools.consultPolicy', 'tools.consultPaths', 'tools.validatePolicy',
+      'tools.enforcementRefresh',
       'preferences.language', 'language.engine', 'language.en', 'language.fr', 'language.de',
       'language.es', 'language.ja', 'language.zh', 'language.ru',
       'history.clear', 'history.confirmClear',
@@ -135,7 +136,7 @@ class UiQualification {
     FlutterError.onError = _errorHandler;
     _handle = WidgetsBinding.instance.ensureSemantics();
     try {
-      _require(const {'consultation', 'startup', 'parity', 'controls'}.contains(scenario), 'Unknown proof scenario');
+      _require(const {'consultation', 'startup', 'parity', 'controls', 'enforcement'}.contains(scenario), 'Unknown proof scenario');
       await _until(() => live() && _owner?.rootSemanticsNode != null, 'No live native snapshot/semantics');
       final mode = describe()['mode'];
       if (scenario == 'startup') {
@@ -203,7 +204,7 @@ class UiQualification {
         _require(queries.report != null && queries.report!.platform == describe()['platform'] &&
           !queries.diagnosticsStale, 'Native diagnostic identity/readback mismatch');
         cases.add('real-native-diagnostics-rendered');
-        if (scenario == 'parity' || scenario == 'controls') {
+        if (const {'parity', 'controls', 'enforcement'}.contains(scenario)) {
           _require(mode == 'settings_development', 'Parity writes require the isolated settings owner');
           final engineLocale = describe()['locale'];
           _require(describe()['interface_locale'] == engineLocale,
@@ -249,7 +250,14 @@ class UiQualification {
           }
           await _tap('tools.queryRefresh');
           await _query(queries.toolsStatus, 'Final controls');
-          if (scenario != 'controls') await _tap('navigation.settings');
+          if (scenario == 'enforcement') {
+            await _tap('tools.enforcementRefresh');
+            await _query(queries.toolsStatus, 'Native enforcement readback');
+            _require(queries.toolsReport?.enforcement?.enabled == false && !queries.operational,
+              'Isolated native enforcement state unavailable or unexpectedly enabled');
+            cases.add('native-enforcement-disabled-readback-and-no-development-process-effects');
+          }
+          if (scenario == 'parity') await _tap('navigation.settings');
         }
       }
       WidgetsBinding.instance.scheduleFrame();

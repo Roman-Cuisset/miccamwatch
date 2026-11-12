@@ -235,6 +235,15 @@ fn enforce_policy(
     observations: &mut HashMap<(String, String), u8>,
     attempted: &mut HashSet<(String, String)>,
 ) {
+    enforce_policy_with(snapshot, observations, attempted, platform::terminate_process_by_pid);
+}
+
+pub(super) fn enforce_policy_with(
+    snapshot: &Snapshot,
+    observations: &mut HashMap<(String, String), u8>,
+    attempted: &mut HashSet<(String, String)>,
+    mut terminate: impl FnMut(u32, &str) -> Result<()>,
+) {
     let candidates: HashMap<_, _> = snapshot
         .accesses
         .iter()
@@ -266,7 +275,7 @@ fn enforce_policy(
             continue;
         }
         attempted.insert(identity.clone());
-        match platform::terminate_process_by_pid(pid, &identity.1) {
+        match terminate(pid, &identity.1) {
             Ok(()) => eprintln!(
                 "TERMINATED policy-denied process {} (PID {pid}) after two observations",
                 access.application

@@ -304,6 +304,8 @@ struct TrayAppState {
     #[cfg(feature = "flutter-desktop")]
     preference_worker: Option<crate::frontends::desktop::preferences::PreferenceWorker>,
     #[cfg(feature = "flutter-desktop")]
+    enforcement: crate::watcher::enforcement::Runtime,
+    #[cfg(feature = "flutter-desktop")]
     desktop_camera_client: crate::frontends::desktop::camera_owner::Client,
     #[cfg(feature = "flutter-desktop")]
     desktop_camera_owner: crate::frontends::desktop::camera_owner::Owner,
@@ -377,6 +379,8 @@ impl Drop for TrayAppState {
 struct RefreshPolicy {
     policy: crate::config::Policy,
     explicit_policy: bool,
+    #[cfg(feature = "flutter-desktop")]
+    enforcement: crate::watcher::enforcement::Runtime,
 }
 
 fn start_refresh_worker(
@@ -391,6 +395,8 @@ fn start_refresh_worker(
     let RefreshPolicy {
         mut policy,
         explicit_policy,
+        #[cfg(feature = "flutter-desktop")]
+        enforcement,
     } = profile_policy;
     let CameraRefreshSignals {
         dirty: camera_dirty,
@@ -455,6 +461,11 @@ fn start_refresh_worker(
             let snapshot = monitor
                 .snapshot((&filter).into())
                 .map_err(|error| format!("{error:#}"));
+            #[cfg(feature = "flutter-desktop")]
+            match &snapshot {
+                Ok(snapshot) => enforcement.observe(snapshot),
+                Err(_) => enforcement.observation_gap(),
+            }
             let microphone_generation = microphone_sequence.load(Ordering::Acquire);
             let microphone = monitor
                 .microphone_protection_status()
@@ -608,6 +619,8 @@ pub fn run_tray(
     #[cfg(feature = "flutter-desktop")]
     let desktop_policy = Arc::new(policy.clone());
     #[cfg(feature = "flutter-desktop")]
+    let enforcement = crate::watcher::enforcement::Runtime::default();
+    #[cfg(feature = "flutter-desktop")]
     let (desktop_camera_client, desktop_camera_owner) = crate::frontends::desktop::camera_owner::channel();
     let refreshes = start_refresh_worker(
         Arc::clone(&hwnd_cell),
@@ -622,6 +635,8 @@ pub fn run_tray(
         RefreshPolicy {
             policy,
             explicit_policy,
+            #[cfg(feature = "flutter-desktop")]
+            enforcement: enforcement.clone(),
         },
     );
     // The shell downsamples anything larger than the small-icon metric, which is what
@@ -648,6 +663,8 @@ pub fn run_tray(
         flutter: None,
         #[cfg(feature = "flutter-desktop")]
         preference_worker: None,
+        #[cfg(feature = "flutter-desktop")]
+        enforcement,
         #[cfg(feature = "flutter-desktop")]
         desktop_camera_client,
         #[cfg(feature = "flutter-desktop")]
@@ -2194,6 +2211,7 @@ fn open_flutter_desktop(hwnd: HWND) -> bool {
     };
     supervisor.configure_policy(Arc::clone(&state.desktop_policy), state.explicit_policy);
     supervisor.configure_camera_owner(state.desktop_camera_client.clone());
+    supervisor.configure_enforcement(state.enforcement.clone());
     // Window activation may synchronously send messages; no tray state reference
     // is used across the native call.
     let opened = supervisor.open(frame, "light");

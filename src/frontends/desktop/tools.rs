@@ -11,6 +11,7 @@ pub struct Context {
     pub applied_profile: Option<PrivacyProfile>,
     pub operational: bool,
     pub data_writable: bool,
+    pub enforcement: Option<crate::watcher::enforcement::Runtime>,
     #[cfg(windows)]
     pub camera_owner: Option<super::camera_owner::Client>,
 }
@@ -50,6 +51,7 @@ pub enum Control {
     CameraInspect,
     LockPolicy { microphone: bool, camera: bool, restore: bool },
     Terminate { pid: u32 },
+    AutomaticEnforcement { enabled: bool },
 }
 impl Request {
     pub fn validate(&self) -> Result<()> {
@@ -110,6 +112,8 @@ struct Prepared {
     control: Control,
     state: NativeState,
     process_instance: Option<String>,
+    enforcement_lease: Option<crate::watcher::enforcement::Lease>,
+    enforcement_policy: Option<(Arc<Policy>, Option<PrivacyProfile>, bool)>,
     #[cfg(windows)]
     camera_stamp: Option<super::camera_owner::Stamp>,
     created: Instant,
@@ -132,7 +136,8 @@ impl Session {
         ensure!(!request.needs_operational() || context.operational, "Device/process commands are disabled in development mode");
         ensure!(!request.needs_data_write() || context.data_writable, "Local history is read-only");
         match request {
-            Request::Controls {} => Ok(Report { state: Some(native_state(context)?), ..Report::data(serde_json::Value::Null) }),
+            Request::Controls {} => Ok(Report { state: Some(native_state(context)?),
+                ..Report::data(serde_json::json!({"enforcement":context.enforcement.as_ref().map(|owner| owner.status()).transpose()?})) }),
             Request::Prepare { control } => {
                 self.reset();
                 let state = native_state(context)?;
@@ -140,6 +145,13 @@ impl Session {
                 #[cfg(windows)]
                 let camera_stamp = camera_action(&control).map(|_| context.camera_owner.as_ref()
                     .context("Native camera coordinator unavailable")?.prepare()).transpose()?;
+                let enforcement_lease = if matches!(control, Control::AutomaticEnforcement { .. }) {
+                    context.policy()?.validate()?;
+                    Some(context.enforcement.as_ref().context("No native enforcement owner")?.prepare()?)
+                } else { None };
+                let enforcement_policy = enforcement_lease.map(|_| (
+                    Arc::clone(context.policy.as_ref().expect("policy validated above")),
+                    context.applied_profile, context.explicit_policy));
                 let target = if let Control::Terminate { pid } = control {
                     let target = process_access(pid, context)?;
                     let executable = target.executable.as_deref().context("Executable identity is unavailable")?;
@@ -161,6 +173,8 @@ impl Session {
                 let token = super::new_private_token()?;
                 self.prepared = Some(Prepared { token: token.clone(), control: control.clone(), state: state.clone(), process_instance: instance,
                     #[cfg(windows)] camera_stamp,
+                    enforcement_lease,
+                    enforcement_policy,
                     created: Instant::now() });
                 let seconds = if matches!(control, Control::Terminate { .. }) { 3 } else { 30 };
                 Ok(Report { outcome: "prepared", state: Some(state), token: Some(token), control: Some(control), data: serde_json::json!({"confirmation_seconds":seconds,"target":target_description}), error: None })
@@ -171,15 +185,26 @@ impl Session {
                 let state = native_state(context)?;
                 ensure!(same_control_state(&prepared.state, &state, &prepared.control), "Native state changed; refresh and confirm again");
                 validate_control(&prepared.control, &state)?;
-                #[cfg(windows)]
-                let result = match camera_action(&prepared.control) {
-                    Some(action) => context.camera_owner.as_ref().context("Native camera coordinator unavailable")
-                        .and_then(|owner| owner.execute(action, prepared.camera_stamp.context("No retained native camera revision")?))
-                        .map(|()| serde_json::Value::Null),
-                    None => apply(&prepared.control, prepared.process_instance.as_deref(), &state),
+                let result = if let Control::AutomaticEnforcement { enabled } = &prepared.control {
+                    ensure!(prepared.enforcement_policy.as_ref().is_some_and(|(policy, profile, explicit)|
+                        context.policy.as_ref().is_some_and(|current| Arc::ptr_eq(policy, current))
+                        && *profile == context.applied_profile && *explicit == context.explicit_policy),
+                        "Applied policy changed after preparation; confirm enforcement again");
+                    context.enforcement.as_ref().context("No native enforcement owner")
+                        .and_then(|owner| owner.set(prepared.enforcement_lease.context("No retained enforcement revision")?, *enabled))
+                        .map(|status| serde_json::json!({"enforcement":status}))
+                } else {
+                    #[cfg(windows)]
+                    let result = match camera_action(&prepared.control) {
+                        Some(action) => context.camera_owner.as_ref().context("Native camera coordinator unavailable")
+                            .and_then(|owner| owner.execute(action, prepared.camera_stamp.context("No retained native camera revision")?))
+                            .map(|()| serde_json::Value::Null),
+                        None => apply(&prepared.control, prepared.process_instance.as_deref(), &state),
+                    };
+                    #[cfg(not(windows))]
+                    let result = apply(&prepared.control, prepared.process_instance.as_deref(), &state);
+                    result
                 };
-                #[cfg(not(windows))]
-                let result = apply(&prepared.control, prepared.process_instance.as_deref(), &state);
                 let readback = native_state(context);
                 let error = result.as_ref().err().map(|e| bounded(format!("{e:#}")));
                 let state_error = readback.as_ref().err().map(|e| bounded(format!("Native readback unavailable: {e:#}")));
@@ -306,6 +331,7 @@ fn same_control_state(before: &NativeState, after: &NativeState, control: &Contr
         Control::MicrophoneMute | Control::MicrophoneRestore => before.microphone == after.microphone,
         Control::LockPolicy { .. } => before.lock_microphone == after.lock_microphone && before.lock_camera == after.lock_camera && before.restore_on_unlock == after.restore_on_unlock,
         Control::Terminate { .. } => true, // retained instance is revalidated by the native termination API.
+        Control::AutomaticEnforcement { .. } => true,
         _ => before.camera == after.camera && before.camera_requested == after.camera_requested && before.camera_pending == after.camera_pending,
     }
 }
@@ -338,6 +364,7 @@ fn validate_control(control: &Control, state: &NativeState) -> Result<()> {
             ensure!(!*camera || state.camera_lock_supported, "Automatic camera-on-lock is Windows-only");
         }
         Control::Terminate { pid } => ensure!(*pid > 4 && *pid != std::process::id(), "Protected or ambiguous process target"),
+        Control::AutomaticEnforcement { .. } => {}
     }
     Ok(())
 }
@@ -466,6 +493,8 @@ mod tests {
     fn prepared(control: Control, now: Instant) -> Session {
         Session { prepared: Some(Prepared { token:"a".repeat(32),control,state:state(),
             process_instance:Some("retained-native-instance".into()),
+            enforcement_lease: None,
+            enforcement_policy: None,
             #[cfg(windows)] camera_stamp: None,
             created:now }) }
     }
@@ -538,7 +567,8 @@ mod tests {
     fn development_cannot_prepare_or_replay_any_hardware_or_process_action() {
         let mut session=Session::default();
         let context=Context::default();
-        for control in [Control::MicrophoneMute,Control::CameraBlock,Control::Terminate{pid:12345}] {
+        for control in [Control::MicrophoneMute,Control::CameraBlock,Control::Terminate{pid:12345},
+            Control::AutomaticEnforcement{enabled:true}] {
             assert!(session.execute(Request::Prepare{control},&context).is_err());
         }
         assert!(session.execute(Request::Commit{token:"a".repeat(32),confirmation:"apply_prepared_native_action".into()},&context).is_err());

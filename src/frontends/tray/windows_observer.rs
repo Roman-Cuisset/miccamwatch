@@ -115,6 +115,7 @@ struct Observer {
     controlled: bool,
     mode: DevelopmentMode,
     preference_worker: Option<crate::frontends::desktop::preferences::PreferenceWorker>,
+    enforcement: crate::watcher::enforcement::Runtime,
     microphone_worker: Option<super::microphone_worker::Worker>,
     pending_microphone: usize,
     microphone_generation: u64,
@@ -212,6 +213,7 @@ impl Observer {
         if self.ui.is_none() {
             let mut ui = Supervisor::new()?;
             ui.configure_policy(Arc::new(Policy::default()), false);
+            ui.configure_enforcement(self.enforcement.clone());
             self.ui = Some(ui);
         }
         self.ui
@@ -691,6 +693,7 @@ pub(super) fn run(
         controlled,
         mode,
         preference_worker: None,
+        enforcement: Default::default(),
         microphone_worker: None,
         pending_microphone: 0,
         microphone_generation: 0,

@@ -18,6 +18,8 @@ class NativeControl {
     if (pid <= 4 || pid > 0xffffffff) throw ArgumentError.value(pid, 'pid');
     return NativeControl._('terminate', Map.unmodifiable({'pid': pid}));
   }
+  factory NativeControl.enforcement(bool enabled) =>
+      NativeControl._('automatic_enforcement', Map.unmodifiable({'enabled': enabled}));
   factory NativeControl.restoreLegacyCamera(String instanceId) {
     if (instanceId.trim().isEmpty || instanceId.length > 2048 ||
         RegExp(r'[\x00-\x1f\x7f]').hasMatch(instanceId)) {
@@ -41,6 +43,10 @@ class NativeControl {
     if (kind == 'terminate') {
       final data = _object(value, {'kind', 'pid'});
       return NativeControl.terminate(_int(data['pid'], 5, 0xffffffff));
+    }
+    if (kind == 'automatic_enforcement') {
+      final data = _object(value, {'kind', 'enabled'});
+      return NativeControl.enforcement(_bool(data['enabled']));
     }
     if (kind == 'camera_restore_legacy') {
       final data = _object(value, {'kind', 'instance_id'});
@@ -126,6 +132,24 @@ class NativeState {
   }
 }
 
+class EnforcementStatus {
+  EnforcementStatus._(this.enabled, this.generation, this.accepted, this.failed, this.error);
+  final bool enabled;
+  final int generation;
+  final int accepted;
+  final int failed;
+  final String? error;
+  factory EnforcementStatus.fromJson(dynamic value) {
+    final data = _object(value, {'enabled', 'generation', 'accepted_requests',
+      'failed_requests', 'last_error', 'scope'});
+    _text(data['scope'], 1024);
+    return EnforcementStatus._(_bool(data['enabled']), _int(data['generation'], 0, 0x7fffffffffffffff),
+      _int(data['accepted_requests'], 0, 0x7fffffffffffffff),
+      _int(data['failed_requests'], 0, 0x7fffffffffffffff),
+      data['last_error'] == null ? null : _text(data['last_error'], 1024));
+  }
+}
+
 class NativeReport {
   const NativeReport._(this.outcome, this.state, this.token, this.control,
       this.data, this.error);
@@ -135,6 +159,8 @@ class NativeReport {
   final NativeControl? control;
   final Map<String, dynamic>? data;
   final String? error;
+  EnforcementStatus? get enforcement => data?['enforcement'] == null
+      ? null : EnforcementStatus.fromJson(data!['enforcement']);
   factory NativeReport.fromJson(dynamic value) {
     final map = _object(value, {'outcome', 'state', 'token', 'control', 'data', 'error'});
     final outcome = _text(map['outcome'], 32);
@@ -164,6 +190,9 @@ class NativeReport {
       throw const FormatException('Invalid native report data');
     }
     _boundedData(rawData, 0);
+    if (rawData is Map<String, dynamic> && rawData['enforcement'] != null) {
+      EnforcementStatus.fromJson(rawData['enforcement']);
+    }
     return NativeReport._(outcome, state, token, control,
       rawData == null ? null : Map.unmodifiable(rawData as Map<String, dynamic>), error);
   }

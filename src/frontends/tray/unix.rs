@@ -1784,6 +1784,7 @@ struct FlutterFrontend {
     applied_profile: Option<PrivacyProfile>,
     lang: Language,
     policy: Option<Arc<Policy>>,
+    enforcement: crate::watcher::enforcement::Runtime,
 }
 #[cfg(feature = "flutter-desktop")]
 impl FlutterFrontend {
@@ -1793,6 +1794,7 @@ impl FlutterFrontend {
             applied_profile: None, lang,
             current: None,
             policy: (!operational).then(|| Arc::new(Policy::default())),
+            enforcement: Default::default(),
         }
     }
     fn attached(&self) -> bool {
@@ -1841,6 +1843,7 @@ impl FlutterFrontend {
         }
         if let (Some(ui), Some(policy)) = (self.ui.as_mut(), self.policy.as_ref()) {
             ui.configure_policy(Arc::clone(policy), !self.profile_writable);
+            ui.configure_enforcement(self.enforcement.clone());
         }
         let frame = self.frame();
         self.ui.as_mut().expect("initialized UI").open(frame, theme)
@@ -2450,6 +2453,8 @@ pub fn run_tray(
                 match monitor.snapshot((&filter).into()) {
                     Ok(snapshot) => {
                         #[cfg(feature = "flutter-desktop")]
+                        flutter.enforcement.observe(&snapshot);
+                        #[cfg(feature = "flutter-desktop")]
                         let observed_at = chrono::Utc::now();
                         #[cfg(target_os = "macos")]
                         {
@@ -2466,6 +2471,8 @@ pub fn run_tray(
                         flutter.observe(Ok(snapshot), observed_at);
                     }
                     Err(error) => {
+                        #[cfg(feature = "flutter-desktop")]
+                        flutter.enforcement.observation_gap();
                         #[cfg(feature = "flutter-desktop")]
                         flutter.observe(Err(format!("{error:#}")), chrono::Utc::now());
                         #[cfg(target_os = "macos")]
