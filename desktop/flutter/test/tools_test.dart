@@ -30,6 +30,61 @@ void complete(ConsultationClient client, Map<String, dynamic> report, {
 }
 
 void main() {
+  test('camera recovery is exact, bounded and cannot carry forged native authority', () {
+    final control = NativeControl.restoreLegacyCamera(r'USB\VID_TEST\EXACT');
+    expect(NativeControl.fromJson(control.toJson()), control);
+    expect(NativeControl.action('camera_resume').toJson(), {'kind': 'camera_resume'});
+    for (final id in ['', '   ', 'device\nother', 'x' * 2049]) {
+      expect(() => NativeControl.restoreLegacyCamera(id), throwsArgumentError);
+    }
+    expect(() => NativeControl.fromJson({...control.toJson(), 'generation': 12}), throwsFormatException);
+  });
+
+  testWidgets('camera confirmation cancellation sends no command; native refusal never becomes protection', (tester) async {
+    tester.view.physicalSize = const Size(900, 1400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    var sequence = 1;
+    var commits = 0;
+    late ConsultationClient client;
+    final state = {...nativeState(), 'can_camera': true, 'camera_requested': true,
+      'camera_service': false, 'camera_present': 1, 'can_resume': true};
+    client = ConsultationClient(send: (message) async {
+      final request = message['request'] as Map<String, dynamic>;
+      final tools = (request['operation'] as Map<String, dynamic>)['request'] as Map<String, dynamic>;
+      final action = tools['action'];
+      if (action == 'commit') commits++;
+      complete(client, action == 'prepare'
+        ? report(outcome: 'prepared', state: state, control: tools['control'] as Map<String, dynamic>,
+            data: {'confirmation_seconds': 30})
+        : action == 'commit'
+          ? report(outcome: 'not_confirmed', state: state, control: {'kind': 'camera_block'}, error: 'UAC declined; no confirmed protection')
+          : report(state: state),
+        id: request['id'] as int, sequence: ++sequence);
+    });
+    client.update(fixtures.view(), fixtures.sessionA, sequence, true, operational: true);
+    await tester.pumpWidget(MaterialApp(home: Scaffold(body: SingleChildScrollView(
+      child: NativeToolsPanel(client: client, locale: 'en', accesses: const [])))));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('tools.camera_block')));
+    await tester.pumpAndSettle();
+    expect(find.byType(AlertDialog), findsOneWidget);
+    await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+    await tester.pumpAndSettle();
+    expect(commits, 0);
+    await tester.tap(find.byKey(const ValueKey('tools.camera_block')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('tools.confirm')));
+    await tester.pumpAndSettle();
+    expect(commits, 1);
+    expect(find.textContaining('UAC declined'), findsOneWidget);
+    expect(client.toolsReport!.state!.text('camera'), 'unknown');
+    expect(client.toolsStatus.state, QueryState.uncertain);
+    await tester.pumpWidget(const SizedBox());
+    client.dispose();
+  });
+
   test('closed native reports reject inconsistent confirmations and unknown authority', () {
     final prepared = report(outcome: 'prepared', state: nativeState(),
       control: {'kind': 'microphone_mute'});

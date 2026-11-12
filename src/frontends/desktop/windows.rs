@@ -243,6 +243,9 @@ impl Supervisor {
         self.context.policy = Some(policy);
         self.context.explicit_policy = explicit;
     }
+    pub fn configure_camera_owner(&mut self, owner: super::camera_owner::Client) {
+        self.context.camera_owner = Some(owner);
+    }
     pub fn has_pending_work(&self) -> bool {
         consultation::Worker::pending(&self.consultation_worker)
     }

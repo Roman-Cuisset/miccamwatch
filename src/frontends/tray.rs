@@ -213,10 +213,15 @@ struct TrayRefresh {
     applied_profile: Option<PrivacyProfile>,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 enum CameraRequest {
     Manual,
     Resume,
+    #[cfg(feature = "flutter-desktop")]
+    Desktop {
+        id: u64,
+        action: crate::frontends::desktop::camera_owner::Action,
+    },
     Block {
         id: u64,
         previous: CameraPrivacyState,
@@ -298,6 +303,12 @@ struct TrayAppState {
     flutter: Option<crate::frontends::desktop::windows::Supervisor>,
     #[cfg(feature = "flutter-desktop")]
     preference_worker: Option<crate::frontends::desktop::preferences::PreferenceWorker>,
+    #[cfg(feature = "flutter-desktop")]
+    desktop_camera_client: crate::frontends::desktop::camera_owner::Client,
+    #[cfg(feature = "flutter-desktop")]
+    desktop_camera_owner: crate::frontends::desktop::camera_owner::Owner,
+    #[cfg(feature = "flutter-desktop")]
+    desktop_camera_pending: Option<(u64, crate::frontends::desktop::camera_owner::Completion)>,
     #[cfg(feature = "flutter-desktop")]
     desktop_observation: Option<DesktopObservation>,
     #[cfg(feature = "flutter-desktop")]
@@ -596,6 +607,8 @@ pub fn run_tray(
         microphone_worker::Worker::start(policy.clone(), Arc::clone(&hwnd_cell));
     #[cfg(feature = "flutter-desktop")]
     let desktop_policy = Arc::new(policy.clone());
+    #[cfg(feature = "flutter-desktop")]
+    let (desktop_camera_client, desktop_camera_owner) = crate::frontends::desktop::camera_owner::channel();
     let refreshes = start_refresh_worker(
         Arc::clone(&hwnd_cell),
         Arc::clone(&workers_alive),
@@ -635,6 +648,12 @@ pub fn run_tray(
         flutter: None,
         #[cfg(feature = "flutter-desktop")]
         preference_worker: None,
+        #[cfg(feature = "flutter-desktop")]
+        desktop_camera_client,
+        #[cfg(feature = "flutter-desktop")]
+        desktop_camera_owner,
+        #[cfg(feature = "flutter-desktop")]
+        desktop_camera_pending: None,
         #[cfg(feature = "flutter-desktop")]
         desktop_observation: None,
         #[cfg(feature = "flutter-desktop")]
@@ -968,7 +987,17 @@ fn start_camera_worker(hwnd_cell: Arc<AtomicIsize>) -> CameraWorker {
                             crate::privacy::set_camera_state(CameraPrivacyState::Blocked)?;
                         }
                         CameraRequest::Restore { previous, .. } => {
-                            crate::privacy::set_camera_state(previous)?;
+                            crate::privacy::set_camera_state(*previous)?;
+                        }
+                        #[cfg(feature = "flutter-desktop")]
+                        CameraRequest::Desktop { action, .. } => {
+                            use crate::frontends::desktop::camera_owner::Action;
+                            match action {
+                                Action::Block => crate::privacy::set_camera_state(CameraPrivacyState::Blocked)?,
+                                Action::Allow => crate::privacy::set_camera_state(CameraPrivacyState::Allowed)?,
+                                Action::Resume => crate::privacy::resume_camera_protection()?,
+                                Action::RestoreLegacy { instance_id } => { crate::privacy::restore_legacy_camera(instance_id)?; }
+                            }
                         }
                     }
                     crate::privacy::camera_observation()
@@ -997,7 +1026,7 @@ fn start_camera_worker(hwnd_cell: Arc<AtomicIsize>) -> CameraWorker {
 fn camera_worker<T>(
     requests: Receiver<CameraRequest>,
     results: SyncSender<(CameraRequest, Result<T, String>)>,
-    mut execute: impl FnMut(CameraRequest) -> Result<T, String>,
+    mut execute: impl FnMut(&CameraRequest) -> Result<T, String>,
     mut notify: impl FnMut(),
     mut alive: impl FnMut() -> bool,
 ) {
@@ -1005,7 +1034,8 @@ fn camera_worker<T>(
         if !alive() {
             break;
         }
-        if results.send((request, execute(request))).is_err() {
+        let result = execute(&request);
+        if results.send((request, result)).is_err() {
             break;
         }
         notify();
@@ -1510,8 +1540,9 @@ fn operation_error(state: &mut TrayAppState, resource: Resource, manual: bool, m
 
 fn queue_manual_camera(hwnd: HWND, request: CameraRequest) {
     let Some(state) = state(hwnd) else { return };
+    let replaces_intent = matches!(request, CameraRequest::Manual);
     if state.pending_manual < 6 && state.camera_requests.try_send(request).is_ok() {
-        if matches!(request, CameraRequest::Manual) {
+        if replaces_intent {
             state.manual_generation = state.manual_generation.wrapping_add(1);
         }
         state.pending_manual += 1;
@@ -1723,6 +1754,17 @@ fn handle_camera_operation_result(
             state.pending_manual -= 1;
             handle_camera_result(state, request, result);
             queue_deferred_lock_block(state);
+        }
+        #[cfg(feature = "flutter-desktop")]
+        CameraRequest::Desktop { id, action } => {
+            state.pending_manual -= 1;
+            let acknowledgement = result.as_ref().map(|_| ()).map_err(Clone::clone);
+            let manual = if action.replaces_manual_intent() { CameraRequest::Manual } else { CameraRequest::Resume };
+            handle_camera_result(state, manual, result);
+            queue_deferred_lock_block(state);
+            if let Some((expected, reply)) = state.desktop_camera_pending.take() {
+                reply.finish(if expected == id { acknowledgement } else { Err("Native camera completion identity mismatch; outcome unknown".into()) });
+            }
         }
         CameraRequest::Block {
             id,
@@ -2151,6 +2193,7 @@ fn open_flutter_desktop(hwnd: HWND) -> bool {
         },
     };
     supervisor.configure_policy(Arc::clone(&state.desktop_policy), state.explicit_policy);
+    supervisor.configure_camera_owner(state.desktop_camera_client.clone());
     // Window activation may synchronously send messages; no tray state reference
     // is used across the native call.
     let opened = supervisor.open(frame, "light");
@@ -2200,6 +2243,36 @@ fn open_native_desktop(hwnd: HWND) -> bool {
 }
 
 fn refresh_desktop(hwnd: HWND) {
+    #[cfg(feature = "flutter-desktop")]
+    if let Some(s) = state(hwnd) {
+        use crate::frontends::desktop::camera_owner::Stamp;
+        let activity = s.restore_activity.lock();
+        let available = s.pending_manual == 0 && s.pending_lock_block.is_none()
+            && s.pending_lock_restore.is_none() && activity.pending == 0 && !activity.closing
+            && s.desktop_camera_pending.is_none();
+        s.desktop_camera_owner.publish(Stamp {
+            camera: s.camera_generation,
+            manual: s.manual_generation,
+            locked: s.lock_state != SessionLockState::Unlocked,
+            restore: s.settings.restore_on_unlock,
+        }, available);
+        drop(activity);
+        if let Some(request) = s.desktop_camera_owner.take()
+            && let Ok((action, reply)) = s.desktop_camera_owner.admit(request)
+        {
+            let replaces_intent = action.replaces_manual_intent();
+            s.camera_next_id = s.camera_next_id.wrapping_add(1);
+            let id = s.camera_next_id;
+            match s.camera_requests.try_send(CameraRequest::Desktop { id, action }) {
+                Ok(()) => {
+                    if replaces_intent { s.manual_generation = s.manual_generation.wrapping_add(1); }
+                    s.pending_manual += 1;
+                    s.desktop_camera_pending = Some((id, reply));
+                }
+                Err(_) => reply.finish(Err("Native camera queue unavailable; no action accepted".into())),
+            }
+        }
+    }
     #[cfg(feature = "flutter-desktop")]
     if let Some(s) = state(hwnd) {
         use crate::frontends::desktop::{
@@ -4359,6 +4432,8 @@ mod tests {
                 CameraRequest::Restore { .. } => Ok(CameraPrivacyState::Allowed),
                 CameraRequest::Manual => Ok(CameraPrivacyState::Blocked),
                 CameraRequest::Block { .. } | CameraRequest::Resume => unreachable!(),
+                #[cfg(feature = "flutter-desktop")]
+                CameraRequest::Desktop { .. } => unreachable!(),
             },
             || {},
             || true,
@@ -4381,6 +4456,8 @@ mod tests {
                     );
                 }
                 CameraRequest::Block { .. } | CameraRequest::Resume => unreachable!(),
+                #[cfg(feature = "flutter-desktop")]
+                CameraRequest::Desktop { .. } => unreachable!(),
             }
         }
         assert_eq!(actual, CameraPrivacyState::Blocked);

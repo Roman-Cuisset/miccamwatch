@@ -11,6 +11,8 @@ pub struct Context {
     pub applied_profile: Option<PrivacyProfile>,
     pub operational: bool,
     pub data_writable: bool,
+    #[cfg(windows)]
+    pub camera_owner: Option<super::camera_owner::Client>,
 }
 impl Context {
     fn policy(&self) -> Result<Policy> {
@@ -43,6 +45,8 @@ pub enum Control {
     MicrophoneRestore,
     CameraBlock,
     CameraAllow,
+    CameraResume,
+    CameraRestoreLegacy { instance_id: String },
     CameraInspect,
     LockPolicy { microphone: bool, camera: bool, restore: bool },
     Terminate { pid: u32 },
@@ -51,6 +55,8 @@ impl Request {
     pub fn validate(&self) -> Result<()> {
         match self {
             Self::Prepare { control: Control::Terminate { pid } } | Self::Application { pid } => ensure!(*pid > 1, "Invalid process identity"),
+            Self::Prepare { control: Control::CameraRestoreLegacy { instance_id } } =>
+                ensure!(!instance_id.trim().is_empty() && instance_id.len() <= 2048 && !instance_id.chars().any(char::is_control), "An exact native camera instance ID is required"),
             Self::ValidatePolicy { path: Some(path) } => ensure!(!path.is_empty() && path.len() <= 4096 && !path.chars().any(char::is_control), "Invalid policy file path"),
             Self::Commit { token, confirmation } => ensure!(
                 token.len() == 32 && token.bytes().all(|b| b.is_ascii_hexdigit()) && confirmation == "apply_prepared_native_action", "Invalid native confirmation"),
@@ -104,6 +110,8 @@ struct Prepared {
     control: Control,
     state: NativeState,
     process_instance: Option<String>,
+    #[cfg(windows)]
+    camera_stamp: Option<super::camera_owner::Stamp>,
     created: Instant,
 }
 #[derive(Default)]
@@ -124,11 +132,14 @@ impl Session {
         ensure!(!request.needs_operational() || context.operational, "Device/process commands are disabled in development mode");
         ensure!(!request.needs_data_write() || context.data_writable, "Local history is read-only");
         match request {
-            Request::Controls {} => Ok(Report { state: Some(native_state()?), ..Report::data(serde_json::Value::Null) }),
+            Request::Controls {} => Ok(Report { state: Some(native_state(context)?), ..Report::data(serde_json::Value::Null) }),
             Request::Prepare { control } => {
                 self.reset();
-                let state = native_state()?;
+                let state = native_state(context)?;
                 validate_control(&control, &state)?;
+                #[cfg(windows)]
+                let camera_stamp = camera_action(&control).map(|_| context.camera_owner.as_ref()
+                    .context("Native camera coordinator unavailable")?.prepare()).transpose()?;
                 let target = if let Control::Terminate { pid } = control {
                     let target = process_access(pid, context)?;
                     let executable = target.executable.as_deref().context("Executable identity is unavailable")?;
@@ -148,18 +159,28 @@ impl Session {
                     "instance": instance,
                 }));
                 let token = super::new_private_token()?;
-                self.prepared = Some(Prepared { token: token.clone(), control: control.clone(), state: state.clone(), process_instance: instance, created: Instant::now() });
+                self.prepared = Some(Prepared { token: token.clone(), control: control.clone(), state: state.clone(), process_instance: instance,
+                    #[cfg(windows)] camera_stamp,
+                    created: Instant::now() });
                 let seconds = if matches!(control, Control::Terminate { .. }) { 3 } else { 30 };
                 Ok(Report { outcome: "prepared", state: Some(state), token: Some(token), control: Some(control), data: serde_json::json!({"confirmation_seconds":seconds,"target":target_description}), error: None })
             }
             Request::Commit { token, .. } => {
                 // Consume BEFORE observation/effect. A failed/stale/expired request cannot be replayed.
                 let prepared = self.take_prepared(&token, Instant::now())?;
-                let state = native_state()?;
+                let state = native_state(context)?;
                 ensure!(same_control_state(&prepared.state, &state, &prepared.control), "Native state changed; refresh and confirm again");
                 validate_control(&prepared.control, &state)?;
+                #[cfg(windows)]
+                let result = match camera_action(&prepared.control) {
+                    Some(action) => context.camera_owner.as_ref().context("Native camera coordinator unavailable")
+                        .and_then(|owner| owner.execute(action, prepared.camera_stamp.context("No retained native camera revision")?))
+                        .map(|()| serde_json::Value::Null),
+                    None => apply(&prepared.control, prepared.process_instance.as_deref(), &state),
+                };
+                #[cfg(not(windows))]
                 let result = apply(&prepared.control, prepared.process_instance.as_deref(), &state);
-                let readback = native_state();
+                let readback = native_state(context);
                 let error = result.as_ref().err().map(|e| bounded(format!("{e:#}")));
                 let state_error = readback.as_ref().err().map(|e| bounded(format!("Native readback unavailable: {e:#}")));
                 let mut error = error.or(state_error);
@@ -290,8 +311,10 @@ fn same_control_state(before: &NativeState, after: &NativeState, control: &Contr
 }
 fn effect_confirmed(control: &Control, actual: &NativeState) -> bool {
     match control {
-        Control::CameraBlock => actual.camera == "blocked",
-        Control::CameraAllow => actual.camera == "allowed",
+        Control::CameraBlock => actual.camera == "blocked" && (!cfg!(windows) ||
+            (actual.camera_requested == Some(true) && actual.camera_service == Some(true))),
+        Control::CameraAllow | Control::CameraRestoreLegacy { .. } => actual.camera == "allowed",
+        Control::CameraResume => actual.camera_requested == Some(true) && actual.camera_service == Some(true),
         Control::MicrophoneMute => actual.microphone == "muted",
         _ => true,
     }
@@ -307,6 +330,8 @@ fn validate_control(control: &Control, state: &NativeState) -> Result<()> {
         Control::MicrophoneMute => ensure!(!cfg!(windows) && state.can_mute, "Use the Windows microphone owner, or writable Unix input controls"),
         Control::MicrophoneRestore => ensure!(!cfg!(windows) && state.can_restore, "No supported Unix original-state restoration is available"),
         Control::CameraBlock | Control::CameraAllow => ensure!(state.can_camera, "Camera controls are unavailable; no authorization requested"),
+        Control::CameraResume => ensure!(cfg!(windows) && state.can_resume, "No stopped Windows camera protection is available to resume"),
+        Control::CameraRestoreLegacy { .. } => ensure!(cfg!(windows) && state.can_camera, "Explicit historical camera restoration requires the Windows coordinator"),
         Control::CameraInspect => ensure!(cfg!(target_os="macos") && state.can_inspect, "Expanded profile inspection is macOS-only"),
         Control::LockPolicy { microphone, camera, .. } => {
             ensure!(!(*microphone || *camera) || state.lock_supported, "Automatic session lock protection is unavailable");
@@ -316,7 +341,7 @@ fn validate_control(control: &Control, state: &NativeState) -> Result<()> {
     }
     Ok(())
 }
-fn native_state() -> Result<NativeState> {
+fn native_state(context: &Context) -> Result<NativeState> {
     let settings = Settings::load()?;
     let microphone = PlatformMonitor::new(Policy::default()).and_then(|m| m.microphone_mute_state());
     let can_mute = !cfg!(windows) && microphone.as_ref().is_ok_and(|s| *s != MicrophoneMuteState::Unavailable);
@@ -336,13 +361,14 @@ fn native_state() -> Result<NativeState> {
             state.camera = if camera.present_total==0 || camera.unknown_devices>0 || camera.pending_restore>0 { "unknown".into() } else { camera.state.as_str().into() };
             state.camera_requested=Some(camera.desired_blocked);state.camera_service=Some(camera.helper_active);
             state.camera_present=Some(camera.present_total);state.camera_pending=Some(camera.pending_restore);
-            state.can_resume=camera.desired_blocked && !camera.helper_active;
+            let owner_available = context.camera_owner.as_ref().is_some_and(|owner| owner.prepare().is_ok());
+            state.can_camera = owner_available;
+            state.can_resume=camera.desired_blocked && !camera.helper_active && owner_available;
             state.camera_error=camera.detail.map(bounded);
-            // Requests must first join the native tray's camera generation/lock coordinator.
-            state.can_camera = false;
-            state.can_resume = false;
-            let detail = state.camera_error.take().unwrap_or_default();
-            state.camera_error = Some(bounded(format!("{detail}\nFlutter camera commands await the native tray camera coordinator; native controls are preserved.")));
+            if !owner_available {
+                let detail = state.camera_error.take().unwrap_or_default();
+                state.camera_error = Some(bounded(format!("{detail}\nNative camera coordinator busy or unavailable; no action is enabled.")));
+            }
         }
         Err(error) => { state.can_camera=false;state.camera_error=Some(bounded(format!("{error:#}"))); }
     }
@@ -353,6 +379,8 @@ fn native_state() -> Result<NativeState> {
     }
     #[cfg(target_os="linux")]
     if let Err(error)=crate::privacy::camera_control_preflight() { state.can_camera=false;state.camera_error=Some(bounded(format!("{error:#}"))); }
+    #[cfg(not(windows))]
+    let _ = context;
     Ok(state)
 }
 fn apply(control: &Control, expected_instance: Option<&str>, before: &NativeState) -> Result<serde_json::Value> {
@@ -362,7 +390,9 @@ fn apply(control: &Control, expected_instance: Option<&str>, before: &NativeStat
             let count=PlatformMonitor::new(Policy::default())?.set_microphone_mute(matches!(control,Control::MicrophoneMute))?;
             return Ok(serde_json::json!({"changed":count,"restoration":"Existing native owned-original semantics; a mixed/premuted aggregate is not blindly unmuted"}));
         }
+        #[cfg(not(windows))]
         Control::CameraBlock => crate::privacy::set_camera_state(crate::privacy::CameraPrivacyState::Blocked)?,
+        #[cfg(not(windows))]
         Control::CameraAllow => crate::privacy::set_camera_state(crate::privacy::CameraPrivacyState::Allowed)?,
         #[cfg(target_os="macos")]
         Control::CameraInspect => return Ok(serde_json::to_value(crate::privacy::camera_inspection(true)?)?),
@@ -383,6 +413,18 @@ fn apply(control: &Control, expected_instance: Option<&str>, before: &NativeStat
         _ => bail!("This native control is not supported on this platform"),
     }
     Ok(serde_json::Value::Null)
+}
+
+#[cfg(windows)]
+fn camera_action(control: &Control) -> Option<super::camera_owner::Action> {
+    use super::camera_owner::Action;
+    match control {
+        Control::CameraBlock => Some(Action::Block),
+        Control::CameraAllow => Some(Action::Allow),
+        Control::CameraResume => Some(Action::Resume),
+        Control::CameraRestoreLegacy { instance_id } => Some(Action::RestoreLegacy { instance_id: instance_id.clone() }),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -423,7 +465,9 @@ mod tests {
     }
     fn prepared(control: Control, now: Instant) -> Session {
         Session { prepared: Some(Prepared { token:"a".repeat(32),control,state:state(),
-            process_instance:Some("retained-native-instance".into()),created:now }) }
+            process_instance:Some("retained-native-instance".into()),
+            #[cfg(windows)] camera_stamp: None,
+            created:now }) }
     }
     #[test]
     fn confirmation_is_single_use_expiring_and_invalidated_on_session_reset() {
@@ -451,6 +495,15 @@ mod tests {
         assert!(effect_confirmed(&Control::CameraAllow,&actual));
         assert!(!effect_confirmed(&Control::CameraBlock,&actual));
         actual.camera="blocked".into();
+        #[cfg(windows)]
+        {
+            assert!(!effect_confirmed(&Control::CameraBlock,&actual));
+            actual.camera_requested=Some(true);
+            actual.camera_service=Some(false);
+            assert!(!effect_confirmed(&Control::CameraResume,&actual));
+            actual.camera_service=Some(true);
+            assert!(effect_confirmed(&Control::CameraResume,&actual));
+        }
         assert!(effect_confirmed(&Control::CameraBlock,&actual));
         actual.microphone="mixed".into();
         assert!(!effect_confirmed(&Control::MicrophoneMute,&actual));

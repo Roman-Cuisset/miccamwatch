@@ -135,7 +135,7 @@ class UiQualification {
     FlutterError.onError = _errorHandler;
     _handle = WidgetsBinding.instance.ensureSemantics();
     try {
-      _require(const {'consultation', 'startup', 'parity'}.contains(scenario), 'Unknown proof scenario');
+      _require(const {'consultation', 'startup', 'parity', 'controls'}.contains(scenario), 'Unknown proof scenario');
       await _until(() => live() && _owner?.rootSemanticsNode != null, 'No live native snapshot/semantics');
       final mode = describe()['mode'];
       if (scenario == 'startup') {
@@ -203,7 +203,7 @@ class UiQualification {
         _require(queries.report != null && queries.report!.platform == describe()['platform'] &&
           !queries.diagnosticsStale, 'Native diagnostic identity/readback mismatch');
         cases.add('real-native-diagnostics-rendered');
-        if (scenario == 'parity') {
+        if (scenario == 'parity' || scenario == 'controls') {
           _require(mode == 'settings_development', 'Parity writes require the isolated settings owner');
           final engineLocale = describe()['locale'];
           _require(describe()['interface_locale'] == engineLocale,
@@ -249,7 +249,7 @@ class UiQualification {
           }
           await _tap('tools.queryRefresh');
           await _query(queries.toolsStatus, 'Final controls');
-          await _tap('navigation.settings');
+          if (scenario != 'controls') await _tap('navigation.settings');
         }
       }
       WidgetsBinding.instance.scheduleFrame();

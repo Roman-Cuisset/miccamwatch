@@ -5,7 +5,7 @@ class NativeControl {
   const NativeControl._(this.kind, this.parameters);
   factory NativeControl.action(String kind) {
     if (!const {'microphone_mute', 'microphone_restore', 'camera_block',
-      'camera_allow', 'camera_inspect'}.contains(kind)) {
+      'camera_allow', 'camera_resume', 'camera_inspect'}.contains(kind)) {
       throw ArgumentError.value(kind, 'kind');
     }
     return NativeControl._(kind, const {});
@@ -17,6 +17,13 @@ class NativeControl {
   factory NativeControl.terminate(int pid) {
     if (pid <= 4 || pid > 0xffffffff) throw ArgumentError.value(pid, 'pid');
     return NativeControl._('terminate', Map.unmodifiable({'pid': pid}));
+  }
+  factory NativeControl.restoreLegacyCamera(String instanceId) {
+    if (instanceId.trim().isEmpty || instanceId.length > 2048 ||
+        RegExp(r'[\x00-\x1f\x7f]').hasMatch(instanceId)) {
+      throw ArgumentError.value(instanceId, 'instanceId');
+    }
+    return NativeControl._('camera_restore_legacy', Map.unmodifiable({'instance_id': instanceId}));
   }
   final String kind;
   final Map<String, dynamic> parameters;
@@ -34,6 +41,11 @@ class NativeControl {
     if (kind == 'terminate') {
       final data = _object(value, {'kind', 'pid'});
       return NativeControl.terminate(_int(data['pid'], 5, 0xffffffff));
+    }
+    if (kind == 'camera_restore_legacy') {
+      final data = _object(value, {'kind', 'instance_id'});
+      try { return NativeControl.restoreLegacyCamera(_text(data['instance_id'], 2048)); }
+      on ArgumentError { throw const FormatException('Invalid camera instance'); }
     }
     _object(value, {'kind'});
     try { return NativeControl.action(kind); }

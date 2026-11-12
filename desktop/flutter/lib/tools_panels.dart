@@ -23,6 +23,7 @@ class _NativeToolsPanelState extends State<NativeToolsPanel> {
   String? issue;
   bool dialogOpen = false;
   final policyPath = TextEditingController();
+  final cameraInstance = TextEditingController();
   Labels get l => Labels(widget.locale);
   ConsultationClient get client => widget.client;
   @override
@@ -33,7 +34,7 @@ class _NativeToolsPanelState extends State<NativeToolsPanel> {
     });
   }
   @override
-  void dispose() { policyPath.dispose(); super.dispose(); }
+  void dispose() { policyPath.dispose(); cameraInstance.dispose(); super.dispose(); }
 
   Future<NativeReport?> _query(ToolsRequest request) async {
     if (!client.canRequest) return null;
@@ -59,7 +60,7 @@ class _NativeToolsPanelState extends State<NativeToolsPanel> {
     final session = client.session;
     final prepared = await _query(ToolsRequest.prepare(control));
     if (!mounted || prepared == null || prepared.outcome != 'prepared') return;
-    dialogOpen = true;
+    setState(() => dialogOpen = true);
     final target = prepared.data?['target'];
     final confirmed = await showDialog<bool>(context: context, builder: (context) => AlertDialog(
       title: Text(l['nativeConfirm']),
@@ -72,6 +73,10 @@ class _NativeToolsPanelState extends State<NativeToolsPanel> {
             const SizedBox(height: 10),
             if (control.kind.startsWith('microphone')) Text(prepared.state!.text('microphone_scope')),
             if (control.kind.startsWith('camera')) Text(prepared.state!.text('camera_scope')),
+            if (control.kind == 'camera_restore_legacy') ...[
+              Text(l['cameraLegacyWarning']),
+              SelectableText(control.parameters['instance_id'] as String),
+            ],
             if (control.kind == 'lock_policy') ...[
               Text('${l['lockMicrophone']}: ${l[control.parameters['microphone'] == true ? 'yes' : 'no']}'),
               Text('${l['lockCamera']}: ${l[control.parameters['camera'] == true ? 'yes' : 'no']}'),
@@ -86,8 +91,9 @@ class _NativeToolsPanelState extends State<NativeToolsPanel> {
           onPressed: () => Navigator.pop(context, true), child: Text(l['autostartConfirm'])),
       ],
     ));
-    dialogOpen = false;
-    if (!mounted || confirmed != true) return;
+    if (!mounted) return;
+    setState(() => dialogOpen = false);
+    if (confirmed != true) return;
     if (session != client.session || !client.operational || !client.canRequest) {
       setState(() => issue = l['nativeContextChanged']); return;
     }
@@ -150,8 +156,21 @@ class _NativeToolsPanelState extends State<NativeToolsPanel> {
             Wrap(spacing: 8, runSpacing: 8, children: [
               controlled('camera_block', Icons.videocam_off_outlined, state.flag('can_camera')),
               controlled('camera_allow', Icons.restore, state.flag('can_camera')),
+              controlled('camera_resume', Icons.restart_alt, state.flag('can_resume')),
               if (state.flag('can_inspect')) controlled('camera_inspect', Icons.fact_check_outlined, true),
             ]),
+            if (state.values['camera_requested'] != null) ...[
+              const SizedBox(height: 12),
+              Text(l['cameraLegacyWarning']),
+              const SizedBox(height: 8),
+              TextField(controller: cameraInstance, maxLength: 2048,
+                decoration: InputDecoration(labelText: l['cameraInstance'], border: const OutlineInputBorder(), isDense: true)),
+              action('camera_restore_legacy', Icons.history,
+                controlsEnabled && state.flag('can_camera') ? () {
+                  try { _apply(NativeControl.restoreLegacyCamera(cameraInstance.text)); }
+                  on ArgumentError { setState(() => issue = l['cameraInstance']); }
+                } : null),
+            ],
           ],
         ]),
         if (state != null) _ToolCard(title: l['lockSettings'], children: [

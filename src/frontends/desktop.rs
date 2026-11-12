@@ -10,11 +10,13 @@ pub mod preferences;
 pub mod consultation;
 pub mod tools;
 #[cfg(windows)]
+pub mod camera_owner;
+#[cfg(windows)]
 pub mod windows;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod unix;
 
-pub const PROTOCOL_VERSION: u8 = 6;
+pub const PROTOCOL_VERSION: u8 = 7;
 pub const MAX_FRAME_BYTES: usize = 262_144;
 pub const MAX_EVENT_BYTES: usize = 4096;
 const MAX_STRING_BYTES: usize = 1024;
