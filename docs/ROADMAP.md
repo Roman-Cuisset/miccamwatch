@@ -3834,3 +3834,61 @@ Aucun sous-agent : routage fournisseur/modèle/authentification non prouvé.
 Unix/macOS du nouveau code. Ne pas assimiler les transactions hybrides de
 l'étape 3 à une fonctionnalité déjà distribuable.
 
+
+### 2026-11-13 — Maintenance hybride sûre et métadonnées publiques
+
+Code `4e7b20b`, branche `work/flutter-hybrid-0220`.
+
+- Nouveau `desktop/maintenance.rs` : diagnostic passif du vrai exécutable,
+  instructions du gestionnaire issues des fonctions natives existantes, et
+  `check_updates` sans transaction. Les vérifications de provenance ne sont pas
+  dupliquées : leur sortie formatée est livrée à la CLI ou au DTO.
+- Windows réutilise self_update déjà présent, timeout 8 s/retries 0, version
+  sémantique et URL officielle exactes. Unix réutilise son résolveur HTTPS ;
+  le nouveau check borné ignore `.curlrc`, pas l'ancien appel d'update natif.
+  Aucune dépendance réseau ou plugin Flutter ajouté.
+- Flutter : résultat version/date/URL, distinction développement/public, état
+  antérieur périmé en cas d'erreur/déconnexion, gestionnaire non confirmé honnête,
+  sept langues. Une consultation n'est ni un téléchargement ni une preuve de
+  signature. Les captures finales montrent moteur 0.22.0 et release v0.21.0.
+- Garde de transaction au début des API Rust update/uninstall/worker et dispatch
+  CLI hybride précoce avant préférences/politique. Aucun remplacement de paire
+  Rust ou retrait partiel d'un bundle Flutter non qualifié. Les boutons restent
+  explicitement désactivés ; les demandes IPC d'installation/suppression sont
+  rejetées par schéma, pas simulées en réussite.
+- Les fonctions de transactions natives sans `flutter-desktop` restent en place.
+  Il ne s'agit pas de qualifier un installateur hybride : ce travail demeure
+  étape 3, avec les vrais reçus, ownership, fichiers Flutter et rollback.
+- Le build initial a exposé un accès `pub(crate)` invalide depuis la crate
+  binaire : corrigé en utilisant l'entrée publique update déjà existante, sans
+  élargir l'API ni modifier la protection.
+
+**Vérifié :** quatre tests Rust, 23 tests Flutter tools/maintenance avec les
+14 variantes langue/thème, Clippy strict hybride et natif de secours, analyse
+Flutter, builds release. Quatre fenêtres réelles (deux par thème) :
+consultation de gestionnaire puis vraie requête GitHub publique, fermeture
+Flutter, observation Rust poursuivie, owner terminé à 0, préférences privées
+inchangées. Les deux dernières captures ont été examinées sur le panneau
+réel des versions ; un premier déplacement de harness ne montrait que le haut
+des contrôles, et n'est pas revendiqué comme preuve visuelle de ce panneau.
+La qualification utilise maintenant `Scrollable.ensureVisible` dans le seul
+arbre de widgets possédé, sans souris/clavier globaux.
+
+Deux commandes version : sortie 0 et 0.22.0 ; update/uninstall hybrides :
+refus explicite **sortie 2**, payload et scope privé SHA-256 identiques.
+Le premier harness attendait 1 par erreur ; son échec est conservé et la
+convention du produit n'a pas été changée. Garde PE exécutée sur les deux Rust
+et les deux PE du bundle Flutter figé : imports normaux/différés conformes,
+aucun CRT dynamique inattendu. Ni Windows vierge ni MSI/ZIP hybride qualifié.
+
+Preuves durables : même répertoire `v022-stage2-final-20261112-084140`,
+`maintenance-*`, `qualify_maintenance_windows.py`,
+`qualify_cli_refusals.py`, `qualify_maintenance_visual.py`.
+Les scripts et résultats initiaux restent présents. Pas de changement de
+l'installation quotidienne, de garde, de préférences, d'historique ou de
+périphérique. Zéro sous-agent.
+
+**Suite de l'étape 2 :** O02/O05 (sessions, filtres/cadence, journaux), complétude
+des autres familles et nouvelles qualifications Linux/macOS du commit exact.
+Ne pas annoncer l'étape terminée ni commencer l'étape 3 sur ce seul checkpoint.
+

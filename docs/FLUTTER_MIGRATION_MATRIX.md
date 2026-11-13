@@ -419,3 +419,27 @@ Unix/macOS integration is present but not newly qualified at this checkpoint.
   la nouvelle source IPC 8/O04 et macOS restent à qualifier.
 - O02/O05 (sessions, cadence, sinks) et U01/U02 (maintenance) demeurent ouverts.
 
+
+## U01/U02 — maintenance sans transaction incomplète, 13 novembre 2026
+
+Code `4e7b20b`. Contrats étape 2 :
+
+- Propriétaire natif : chemin/version réels, même diagnostic de gestionnaire que
+  la CLI, absence de preuve affichée comme non confirmée, jamais comme libre
+  autorisation de retirer des fichiers.
+- Vérification publique réelle, datée et en lecture seule ; timeout 8 s, URL et
+  version contrôlées, pas de téléchargement ni de revendication de signature.
+  La version publique v0.21.0 n'est pas confondue avec le moteur dev 0.22.0.
+- Update/uninstall hybrides explicitement désactivés et refusés côté Rust,
+  y compris CLI/worker, avant mutation. Native-only conserve les mécanismes
+  précédents ; transactions complètes/installateurs/rollback restent étape 3.
+- DTO stricts, erreurs/refus/déconnexion, ancien résultat marqué périmé,
+  textes et contrôles désactivés dans les sept langues.
+- Windows : quatre tests Rust, 23 Flutter ciblés, Clippy strict des deux
+  variantes, analyse/builds release, vrais échanges GUI et captures examinées.
+  `--version` x2 : 0 ; refus update/uninstall : 2, scope privé/payload identiques.
+  Audit PE réel normal/différé : quatre images sans dépendance CRT inattendue.
+- Échecs initiaux de compilation et de harness conservés ; aucun succès CI,
+  Windows vierge, package hybride ou test matériel revendiqué à ce checkpoint.
+- Nouveau code Linux/macOS à qualifier ; O02/O05 toujours incomplets.
+
