@@ -10,6 +10,7 @@ pub mod preferences;
 pub mod consultation;
 pub mod tools;
 pub mod exit_owner;
+mod applications;
 #[cfg(windows)]
 pub mod camera_owner;
 #[cfg(windows)]
@@ -17,7 +18,7 @@ pub mod windows;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod unix;
 
-pub const PROTOCOL_VERSION: u8 = 7;
+pub const PROTOCOL_VERSION: u8 = 8;
 pub const MAX_FRAME_BYTES: usize = 262_144;
 pub const MAX_EVENT_BYTES: usize = 4096;
 const MAX_STRING_BYTES: usize = 1024;

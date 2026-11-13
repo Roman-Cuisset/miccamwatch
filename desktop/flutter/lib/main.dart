@@ -90,7 +90,10 @@ class MicCamWatchApp extends StatefulWidget {
 }
 
 class _MicCamWatchAppState extends State<MicCamWatchApp> {
-  final session = wire.SnapshotSession();
+  final session = wire.SnapshotSession(onInvalidFrame: UiQualification.enabled
+    ? (error) => stderr.writeln('MCW_FLUTTER_FRAME_REJECTED ${jsonEncode({
+        'reason': error is FormatException ? error.message : error.runtimeType.toString(),
+      })}') : null);
   late final wire.SnapshotInput input;
   late final MicrophoneCommandClient microphoneCommands;
   late final PreferenceCommandClient preferenceCommands;
@@ -125,10 +128,13 @@ class _MicCamWatchAppState extends State<MicCamWatchApp> {
       qualification = UiQualification(
         queries: consultation, preferences: preferenceCommands,
         live: () => ready && session.transportLive, closing: () => closing || !mounted,
+        observedPids: () => (session.snapshot?.accesses ?? const <Map<String, dynamic>>[])
+          .map((access) => access['pid']).whereType<int>().where((pid) => pid > 1).toSet().toList(),
         describe: () => {
           'locale': session.snapshot?.locale,
           'interface_locale': languageOverride ?? session.snapshot?.locale ?? 'en',
           'platform': session.snapshot?.engine['platform'],
+          'engine_state': session.snapshot?.engine['state'],
           'mode': session.snapshot?.engine['mode'],
           'sequence': session.sequence,
           'observation_fresh': session.isLive,

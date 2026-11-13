@@ -35,6 +35,7 @@ pub enum Request {
     Commit { token: String, confirmation: String },
     Devices {},
     Application { pid: u32 },
+    ApplicationNext { cursor: String },
     Paths {},
     Policy {},
     ValidatePolicy { path: Option<String> },
@@ -60,6 +61,8 @@ impl Request {
     pub fn validate(&self) -> Result<()> {
         match self {
             Self::Prepare { control: Control::Terminate { pid } } | Self::Application { pid } => ensure!(*pid > 1, "Invalid process identity"),
+            Self::ApplicationNext { cursor } => ensure!(cursor.len() == 32 &&
+                cursor.bytes().all(|b| b.is_ascii_hexdigit()), "Invalid application cursor"),
             Self::Prepare { control: Control::CameraRestoreLegacy { instance_id } } =>
                 ensure!(!instance_id.trim().is_empty() && instance_id.len() <= 2048 && !instance_id.chars().any(char::is_control), "An exact native camera instance ID is required"),
             Self::ValidatePolicy { path: Some(path) } => ensure!(!path.is_empty() && path.len() <= 4096 && !path.chars().any(char::is_control), "Invalid policy file path"),
@@ -130,9 +133,11 @@ struct PreparedExit { token: String, revision: u64, created: Instant }
 pub struct Session {
     prepared: Option<Prepared>,
     exit_prepared: Option<PreparedExit>,
+    application: Option<super::applications::Browser>,
 }
 impl Session {
-    pub fn reset(&mut self) { self.prepared = None; self.exit_prepared = None; }
+    pub fn reset(&mut self) { self.reset_preparation(); self.application = None; }
+    fn reset_preparation(&mut self) { self.prepared = None; self.exit_prepared = None; }
     fn take_prepared(&mut self, token: &str, now: Instant) -> Result<Prepared> {
         let prepared = self.prepared.take().context("No current native confirmation; refresh and confirm again")?;
         let lifetime = if matches!(prepared.control, Control::Terminate { .. }) { Duration::from_secs(3) } else { Duration::from_secs(30) };
@@ -147,14 +152,14 @@ impl Session {
         match request {
             Request::Controls {} => Ok(Report { state: Some(native_state(context)?),
                 ..Report::data(serde_json::json!({
-                    "enforcement":context.enforcement.as_ref().map(|owner| owner.status()).transpose()?,
+                    "enforcement_runtime":context.enforcement.as_ref().map(|owner| owner.status()).transpose()?,
                     "exit":context.exit_owner.as_ref().map(|owner| owner.status()).transpose()?,
                 })) }),
             Request::ExitStatus {} => Ok(Report::data(serde_json::json!({
                 "exit":context.exit_owner.as_ref().map(|owner| owner.status()).transpose()?,
             }))),
             Request::Prepare { control: Control::QuitEngine } => {
-                self.reset();
+                self.reset_preparation();
                 let revision = context.exit_owner.as_ref().context("No native exit owner")?.prepare()?;
                 let token = super::new_private_token()?;
                 self.exit_prepared = Some(PreparedExit { token: token.clone(), revision, created: Instant::now() });
@@ -162,7 +167,7 @@ impl Session {
                     data: serde_json::json!({"confirmation_seconds":30}), error: None })
             }
             Request::Prepare { control } => {
-                self.reset();
+                self.reset_preparation();
                 let state = native_state(context)?;
                 validate_control(&control, &state)?;
                 #[cfg(windows)]
@@ -228,7 +233,7 @@ impl Session {
                         "Applied policy changed after preparation; confirm enforcement again");
                     context.enforcement.as_ref().context("No native enforcement owner")
                         .and_then(|owner| owner.set(prepared.enforcement_lease.context("No retained enforcement revision")?, *enabled))
-                        .map(|status| serde_json::json!({"enforcement":status}))
+                        .map(|status| serde_json::json!({"enforcement_runtime":status}))
                 } else {
                     #[cfg(windows)]
                     let result = match camera_action(&prepared.control) {
@@ -262,7 +267,15 @@ impl Session {
                 Ok(Report::data(serde_json::json!({"devices":values,"truncated":truncated})))
             }
             Request::Application { pid } => {
-                Ok(Report::data(application_details(process_access(pid, context)?)))
+                self.application = None;
+                let mut browser = super::applications::Browser::new(process_accesses(pid, context)?.collect())?;
+                let page = browser.page(None)?;
+                self.application = Some(browser);
+                Ok(Report::data(page))
+            }
+            Request::ApplicationNext { cursor } => {
+                Ok(Report::data(self.application.as_mut().context("No retained application snapshot; refresh")?
+                    .page(Some(&cursor))?))
             }
             Request::Paths {} => Ok(Report::data(serde_json::json!({
                 "settings":crate::settings::settings_path()?.display().to_string(),
@@ -300,9 +313,17 @@ impl Session {
         }
     }
 }
-fn application_details(access: crate::model::Access) -> serde_json::Value {
+pub(super) fn application_details(access: crate::model::Access) -> serde_json::Value {
     let truncated = access.evidence.len() > 32 || access.modules.len() > 32
-        || access.process.as_ref().is_some_and(|process| process.ancestry.len() > 16);
+        || access.evidence.iter().any(|e| e.detail.len() > 1024)
+        || access.modules.iter().any(|m| m.len() > 1024) || access.application.len() > 1024
+        || [access.executable.as_deref(),access.parent_name.as_deref(),access.device.as_deref()]
+            .into_iter().flatten().any(|s| s.len() > 1024)
+        || access.signature.as_ref().is_some_and(|s|
+            [s.signer.as_deref(),s.error.as_deref()].into_iter().flatten().any(|s| s.len() > 1024))
+        || access.process.as_ref().is_some_and(|p| p.ancestry.len() > 16
+            || p.instance_id.len() > 1024 || p.ancestry.iter().any(|a| a.name.len() > 1024)
+            || [p.user.as_deref(),p.integrity.as_deref()].into_iter().flatten().any(|s| s.len() > 1024));
     let evidence: Vec<_> = access.evidence.into_iter().take(32).map(|e| serde_json::json!({
         "kind":e.kind,"source":e.source,"detail":bounded(e.detail)})).collect();
     let signature = access.signature.map(|s| serde_json::json!({
@@ -352,10 +373,13 @@ fn bounded(mut text: String) -> String {
     while !text.is_char_boundary(end) { end -= 1; }
     text.truncate(end); text
 }
-fn process_access(pid: u32, context: &Context) -> Result<crate::model::Access> {
+fn process_accesses(pid: u32, context: &Context) -> Result<impl Iterator<Item=crate::model::Access>> {
     let monitor = PlatformMonitor::new(context.policy()?)?;
     let snapshot = monitor.snapshot(crate::collector::CaptureScope { include_ready: true, ..Default::default() })?;
-    let mut matches = snapshot.accesses.into_iter().filter(|a| a.pid == Some(pid));
+    Ok(snapshot.accesses.into_iter().filter(move |a| a.pid == Some(pid)))
+}
+fn process_access(pid: u32, context: &Context) -> Result<crate::model::Access> {
+    let mut matches = process_accesses(pid, context)?;
     let first = matches.next().context("No current observed access is attributed to this process")?;
     let identity = first.process.as_ref().map(|process| &process.instance_id);
     ensure!(matches.all(|access| access.process.as_ref().map(|process| &process.instance_id) == identity),

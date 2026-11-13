@@ -30,6 +30,17 @@ void complete(ConsultationClient client, Map<String, dynamic> report, {
 }
 
 void main() {
+  test('observed application decisions are not automatic enforcement ownership', () {
+    final parsed = NativeReport.fromJson(report(data: {
+      'pid': 42, 'resource': 'camera', 'enforcement': 'unknown',
+      'access_index': 1, 'access_count': 1, 'next_cursor': null,
+      'snapshot_read_at': '2026-11-13T07:00:00Z', 'snapshot_not_live': true,
+      'process_identity_confirmed': false, 'truncated': false,
+    }));
+    expect(parsed.data!['enforcement'], 'unknown');
+    expect(parsed.enforcement, isNull);
+  });
+
   test('camera recovery is exact, bounded and cannot carry forged native authority', () {
     final control = NativeControl.restoreLegacyCamera(r'USB\VID_TEST\EXACT');
     expect(NativeControl.fromJson(control.toJson()), control);
@@ -264,7 +275,7 @@ void main() {
     expect(NativeControl.fromJson(NativeControl.enforcement(true).toJson()), NativeControl.enforcement(true));
     expect(() => NativeControl.fromJson({'kind': 'automatic_enforcement', 'enabled': 'true'}), throwsFormatException);
     expect(() => NativeControl.fromJson({'kind': 'automatic_enforcement', 'enabled': true, 'generation': 12}), throwsFormatException);
-    expect(() => NativeReport.fromJson(report(data: {'enforcement': {
+    expect(() => NativeReport.fromJson(report(data: {'enforcement_runtime': {
       'enabled': 'true', 'generation': 1, 'accepted_requests': 0,
       'failed_requests': 0, 'last_error': null, 'scope': 'fixture only',
     }})), throwsFormatException);
@@ -289,7 +300,7 @@ void main() {
       complete(client, tools['action'] == 'prepare'
         ? report(outcome: 'prepared', state: nativeState(),
             control: tools['control'] as Map<String, dynamic>, data: {'confirmation_seconds': 30})
-        : report(state: nativeState(), data: {'enforcement': status(false)}),
+        : report(state: nativeState(), data: {'enforcement_runtime': status(false)}),
         id: request['id'] as int, sequence: ++sequence);
     });
     client.update(fixtures.view(), fixtures.sessionA, sequence, true, operational: true);
@@ -306,7 +317,7 @@ void main() {
     expect(find.text('Automatic termination disabled'), findsOneWidget);
     complete(client, report(outcome: 'not_confirmed', state: nativeState(),
       control: {'kind': 'automatic_enforcement', 'enabled': true},
-      data: {'enforcement': status(false)}, error: 'Native authorization refused'),
+      data: {'enforcement_runtime': status(false)}, error: 'Native authorization refused'),
       id: pendingCommit!['id'] as int, sequence: ++sequence);
     await tester.pumpAndSettle();
     expect(find.text('Automatic termination disabled'), findsOneWidget);
@@ -361,6 +372,83 @@ void main() {
     client.update(fixtures.view(), fixtures.sessionB, 1, true);
     await tester.pump();
     expect(tester.widget<OutlinedButton>(quit).onPressed, isNull);
+    await tester.pumpWidget(const SizedBox());
+    client.dispose();
+  });
+  test('application pages reject missing continuations and inconsistent snapshot metadata', () {
+    final data = <String, dynamic>{'access_index': 1, 'access_count': 2,
+      'next_cursor': 'c' * 32, 'snapshot_not_live': true,
+      'process_identity_confirmed': true, 'snapshot_read_at': '2026-11-12T09:00:00Z', 'truncated': false};
+    NativeReport.fromJson(report(data: data));
+    for (final change in <Map<String, dynamic>>[
+      {'access_index': 3}, {'access_count': 0}, {'next_cursor': null},
+      {'snapshot_not_live': false}, {'process_identity_confirmed': 'yes'},
+    ]) {
+      expect(() => NativeReport.fromJson(report(data: {...data, ...change})), throwsFormatException);
+    }
+    expect(() => ToolsRequest.applicationNext('forged'), throwsArgumentError);
+  });
+
+  testWidgets('all simultaneous accesses are reachable and a new session retires page actions', (tester) async {
+    tester.view.physicalSize = const Size(900, 2400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    var sequence = 1;
+    late ConsultationClient client;
+    client = ConsultationClient(send: (message) async {
+      final request = message['request'] as Map<String, dynamic>;
+      final tools = (request['operation'] as Map<String, dynamic>)['request'] as Map<String, dynamic>;
+      final next = tools['action'] == 'application_next';
+      complete(client, tools['action'] == 'controls' ? report(state: nativeState()) : report(data: {
+        'pid': 12345, 'application': 'Fixture recorder',
+        'resource': next ? 'camera' : 'microphone', 'device': next ? 'camera-two' : 'input-one',
+        'access_index': next ? 2 : 1, 'access_count': 2, 'next_cursor': next ? null : 'c' * 32,
+        'snapshot_not_live': true, 'process_identity_confirmed': true,
+        'snapshot_read_at': '2026-11-12T09:00:00Z', 'truncated': false,
+      }), id: request['id'] as int, sequence: ++sequence);
+    });
+    client.update(fixtures.view(), fixtures.sessionA, sequence, true, operational: true);
+    await tester.pumpWidget(MaterialApp(home: Scaffold(body: SingleChildScrollView(
+      child: NativeToolsPanel(client: client, locale: 'en', accesses: const [
+        {'pid': 12345, 'application': 'Fixture recorder', 'resource': 'microphone', 'device': 'input-one'},
+        {'pid': 12345, 'application': 'Fixture recorder', 'resource': 'camera', 'device': 'camera-two'},
+      ])))));
+    await tester.pumpAndSettle();
+    final application = find.byKey(const ValueKey('tools.application.12345'));
+    await tester.ensureVisible(application);
+    await tester.tap(application);
+    await tester.pumpAndSettle();
+    expect(find.textContaining('input-one'), findsOneWidget);
+    final next = find.byKey(const ValueKey('tools.applicationNext'));
+    await tester.ensureVisible(next);
+    await tester.tap(next);
+    await tester.pumpAndSettle();
+    expect(find.textContaining('camera-two'), findsOneWidget);
+    expect(find.textContaining('input-one'), findsNothing);
+    expect(find.textContaining('2 / 2'), findsOneWidget);
+    expect(next, findsNothing);
+    final terminate = find.byKey(const ValueKey('tools.terminate'));
+    expect(tester.widget<OutlinedButton>(terminate).onPressed, isNotNull);
+    client.update(fixtures.view(), fixtures.sessionB, 1, true, operational: true);
+    await tester.pump();
+    expect(tester.widget<OutlinedButton>(terminate).onPressed, isNull);
+    await tester.pumpWidget(const SizedBox());
+    client.dispose();
+  });
+
+  testWidgets('a completion delivered immediately before session replacement cannot authorize the new view', (tester) async {
+    late ConsultationClient client;
+    client = ConsultationClient(send: (message) async {
+      complete(client, report(state: nativeState()), id: message['request']['id'] as int);
+      client.update(fixtures.view(), fixtures.sessionB, 1, true, operational: true);
+    });
+    client.update(fixtures.view(), fixtures.sessionA, 1, true, operational: true);
+    await tester.pumpWidget(MaterialApp(home: Scaffold(body: SingleChildScrollView(
+      child: NativeToolsPanel(client: client, locale: 'en', accesses: const [])))));
+    await tester.pumpAndSettle();
+    expect(client.session, fixtures.sessionB);
+    expect(find.byKey(const ValueKey('tools.microphone_mute')), findsNothing);
     await tester.pumpWidget(const SizedBox());
     client.dispose();
   });

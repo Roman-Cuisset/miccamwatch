@@ -15,7 +15,7 @@ import 'preferences_model.dart';
 
 class UiQualification {
   UiQualification({required this.queries, required this.preferences,
-    required this.describe, required this.live, required this.closing});
+    required this.describe, required this.live, required this.closing, required this.observedPids});
 
   static const scenario = String.fromEnvironment('MCW_UI_QUALIFICATION');
   static const enabled = scenario != '';
@@ -24,6 +24,7 @@ class UiQualification {
   final Map<String, Object?> Function() describe;
   final bool Function() live;
   final bool Function() closing;
+  final List<int> Function() observedPids;
   final List<String> cases = [];
   final List<String> errors = [];
   SemanticsHandle? _handle;
@@ -96,13 +97,15 @@ class UiQualification {
       'navigation.controls', 'tools.queryRefresh', 'tools.deviceInventory',
       'tools.consultPolicy', 'tools.consultPaths', 'tools.validatePolicy',
       'tools.enforcementRefresh',
+      'tools.applicationNext',
       'tools.exitRefresh', 'tools.quit_engine', 'tools.confirm',
       'preferences.language', 'language.engine', 'language.en', 'language.fr', 'language.de',
       'language.es', 'language.ja', 'language.zh', 'language.ru',
       'history.clear', 'history.confirmClear',
       'history.refresh', 'diagnostics.run', 'autostart.refresh',
       'preferences.notificationsEnabled', 'autostart.change', 'autostart.confirm'};
-    _require(permitted.contains(identifier), 'Not a qualification action');
+    _require(permitted.contains(identifier) || (scenario == 'applications' &&
+      RegExp(r'^tools\.application\.[0-9]{1,10}$').hasMatch(identifier)), 'Not a qualification action');
     _require(scenario == 'startup' || !identifier.startsWith('autostart.c'),
       'Startup mutation is not admitted in consultation qualification');
     await _until(() => _action(identifier) != null,
@@ -137,9 +140,41 @@ class UiQualification {
     FlutterError.onError = _errorHandler;
     _handle = WidgetsBinding.instance.ensureSemantics();
     try {
-      _require(const {'consultation', 'startup', 'parity', 'controls', 'enforcement', 'quit'}.contains(scenario), 'Unknown proof scenario');
+      _require(const {'consultation', 'startup', 'parity', 'controls', 'enforcement', 'quit', 'applications'}.contains(scenario), 'Unknown proof scenario');
       await _until(() => live() && _owner?.rootSemanticsNode != null, 'No live native snapshot/semantics');
       final mode = describe()['mode'];
+      if (scenario == 'applications') {
+        _require(!queries.operational && const {'settings_development','read_only_development'}.contains(mode),
+          'Application proof is read-only in a private owner');
+        await _until(() => describe()['engine_state'] != 'unavailable', 'No completed native observation');
+        final pids = observedPids();
+        if (pids.isEmpty) { _record('not_executed', 'No attributed access; no fake application inserted'); return; }
+        await _tap('navigation.controls');
+        await _until(() => !queries.toolsStatus.busy, 'Initial controls pending');
+        await _tap('tools.application.${pids.first}');
+        await _query(queries.toolsStatus, 'Real attributed application');
+        final first = queries.toolsReport!.data!;
+        final count = first['access_count'] as int;
+        final readAt = first['snapshot_read_at'];
+        _require(first['pid'] == pids.first && first['snapshot_not_live'] == true,
+          'Native application identity/snapshot metadata mismatch');
+        var seen = 1;
+        while (queries.toolsReport!.data!['next_cursor'] != null) {
+          _require(seen < 128, 'Qualification page bound reached; remaining accesses not verified');
+          await _tap('tools.applicationNext');
+          await _query(queries.toolsStatus, 'Next native simultaneous access');
+          seen++;
+          final page = queries.toolsReport!.data!;
+          _require(page['access_count'] == count && page['access_index'] == seen &&
+            page['snapshot_read_at'] == readAt && page['pid'] == pids.first,
+            'Application pages mixed snapshots or process IDs');
+        }
+        _require(seen == count, 'Native simultaneous accesses were omitted');
+        _require(_action('tools.terminate') == null, 'Development process action became enabled');
+        cases.add('actual-attributed-application-pages-and-frozen-readback');
+        _record('passed');
+        return;
+      }
       if (scenario == 'quit') {
         _require(mode == 'settings_development' && !queries.operational,
           'Quit proof requires the private owner with device actions disabled');

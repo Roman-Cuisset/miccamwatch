@@ -6,7 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'preferences_model.dart';
 import 'consultation_model.dart';
 
-const protocolVersion = 7;
+const protocolVersion = 8;
 const maxFrameBytes = 262144;
 const resourceNames = ['microphone', 'camera'];
 const activityNames = ['active', 'ready', 'none_observed', 'unknown'];
@@ -205,12 +205,14 @@ void _timestamp(dynamic value) {
 enum ConnectionState { connecting, live, stale, error, disconnected }
 
 class SnapshotSession extends ChangeNotifier {
-  SnapshotSession({Duration Function()? elapsed, DateTime Function()? now})
+  SnapshotSession({Duration Function()? elapsed, DateTime Function()? now,
+      void Function(Object)? onInvalidFrame})
       : _elapsed = elapsed ?? (Stopwatch()..start()).elapsedDuration,
-        _now = now ?? DateTime.now;
+        _now = now ?? DateTime.now, _onInvalidFrame = onInvalidFrame;
 
   final DateTime Function() _now;
   final Duration Function() _elapsed;
+  final void Function(Object)? _onInvalidFrame;
   Snapshot? snapshot;
   Duration? _received;
   DateTime? receivedAt;
@@ -236,7 +238,8 @@ class SnapshotSession extends ChangeNotifier {
       receivedAt = _now();
       error = null;
       state = _observationFresh ? ConnectionState.live : ConnectionState.stale;
-    } on Object {
+    } on Object catch (error) {
+      _onInvalidFrame?.call(error);
       fail('Invalid snapshot / incompatible protocol');
       return;
     }

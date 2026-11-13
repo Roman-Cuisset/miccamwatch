@@ -24,6 +24,7 @@ class _NativeToolsPanelState extends State<NativeToolsPanel> {
   String? exitSession;
   Map<String, dynamic>? data;
   String? section;
+  String? applicationSession;
   String? issue;
   bool dialogOpen = false;
   final policyPath = TextEditingController();
@@ -42,28 +43,31 @@ class _NativeToolsPanelState extends State<NativeToolsPanel> {
 
   Future<NativeReport?> _query(ToolsRequest request) async {
     if (!client.canRequest) return null;
+    final session = client.session;
     setState(() => issue = null);
     try {
       final result = await client.requestTools(request);
-      if (mounted) setState(() {
+      if (!mounted || client.session != session) return null;
+      setState(() {
         native = result.state ?? native;
-        if (result.state != null) nativeSession = client.session;
-        if (result.data?.containsKey('enforcement') == true) {
+        if (result.state != null) nativeSession = session;
+        if (result.data?.containsKey('enforcement_runtime') == true) {
           enforcement = result.enforcement;
-          enforcementSession = client.session;
+          enforcementSession = session;
         }
         if (result.data?.containsKey('exit') == true) {
           exit = result.exit;
-          exitSession = client.session;
+          exitSession = session;
         }
         if (request.action != 'prepare' && request.action != 'commit') {
           data = result.data; section = request.action;
+          if (request.action == 'application' || request.action == 'application_next') applicationSession = session;
         }
         issue = result.error;
       });
       return result;
     } catch (error) {
-      if (mounted) setState(() => issue = '${l['nativeUnconfirmed']}\n$error');
+      if (mounted && client.session == session) setState(() => issue = '${l['nativeUnconfirmed']}\n$error');
       return null;
     }
   }
@@ -214,10 +218,11 @@ class _NativeToolsPanelState extends State<NativeToolsPanel> {
         _ToolCard(title: l['devicesAndApplications'], children: [
           Wrap(spacing: 8, runSpacing: 8, children: [
             action('deviceInventory', Icons.devices_other, enabled ? () => _query(const ToolsRequest.devices()) : null),
-            for (final application in applications.entries.take(16))
-              OutlinedButton(key: ValueKey('tools.application.${application.key}'),
-                onPressed: enabled ? () => _query(ToolsRequest.application(application.key)) : null,
-                child: Text('${application.value} · PID ${application.key}')),
+            for (final application in applications.entries)
+              Semantics(identifier: 'tools.application.${application.key}', child:
+                OutlinedButton(key: ValueKey('tools.application.${application.key}'),
+                  onPressed: enabled ? () => _query(ToolsRequest.application(application.key)) : null,
+                  child: Text('${application.value} · PID ${application.key}'))),
           ]),
           if (section == 'devices' && data != null) ...[
             for (final device in (data!['devices'] as List? ?? const []))
@@ -226,11 +231,25 @@ class _NativeToolsPanelState extends State<NativeToolsPanel> {
                 title: Text(device['name'] as String), subtitle: SelectableText(device['id'] as String)),
             if (data!['truncated'] == true) Text(l['truncated']),
           ],
-          if (section == 'application' && data != null) ...[
-            const SizedBox(height: 12), _DataView(data: data!),
+          if (const {'application', 'application_next'}.contains(section) && data != null) ...[
+            const SizedBox(height: 12),
+            Text('${l['applicationAccess']}: ${data!['access_index']} / ${data!['access_count']}',
+              style: Theme.of(context).textTheme.titleSmall),
+            Text('${l['applicationSnapshot']}: ${data!['snapshot_read_at']}'),
+            Text(l['applicationSnapshotScope']),
+            if (applicationSession != client.session) Text(l['nativeContextChanged']),
+            if (data!['process_identity_confirmed'] != true) Text(l['applicationIdentityUnknown']),
+            if (data!['truncated'] == true) Text(l['truncated']),
+            _DataView(data: {for (final entry in data!.entries)
+              if (!const {'access_index','access_count','snapshot_read_at','snapshot_not_live',
+                'process_identity_confirmed','next_cursor','truncated'}.contains(entry.key)) entry.key: entry.value}),
+            if (data!['next_cursor'] case final String cursor)
+              action('applicationNext', Icons.navigate_next,
+                enabled && applicationSession == client.session ? () => _query(ToolsRequest.applicationNext(cursor)) : null),
             const SizedBox(height: 8),
             action('terminate', Icons.stop_circle_outlined,
-              enabled && client.operational && data!['pid'] is int
+              enabled && applicationSession == client.session && client.operational &&
+                data!['pid'] is int && data!['process_identity_confirmed'] == true
                 ? () => _apply(NativeControl.terminate(data!['pid'] as int)) : null),
             Text(l['terminateScope']),
           ],

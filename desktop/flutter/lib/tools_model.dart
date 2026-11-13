@@ -80,6 +80,10 @@ class ToolsRequest {
     _int(pid, 2, 0xffffffff);
     return ToolsRequest._('application', Map.unmodifiable({'pid': pid}));
   }
+  factory ToolsRequest.applicationNext(String cursor) {
+    if (!RegExp(r'^[0-9a-f]{32}$').hasMatch(cursor)) throw ArgumentError.value(cursor, 'cursor');
+    return ToolsRequest._('application_next', Map.unmodifiable({'cursor': cursor}));
+  }
   factory ToolsRequest.validatePolicy(String? path) {
     if (path != null && (path.isEmpty || path.length > 4096 ||
         RegExp(r'[\x00-\x1f\x7f]').hasMatch(path))) {
@@ -165,6 +169,25 @@ class ExitStatus {
   }
 }
 
+class ApplicationPage {
+  ApplicationPage._();
+  factory ApplicationPage.fromJson(Map<String, dynamic> data) {
+    final index = _int(data['access_index'], 1, 0x7fffffffffffffff);
+    final count = _int(data['access_count'], 1, 0x7fffffffffffffff);
+    final cursor = data['next_cursor'];
+    if (index > count || (cursor != null &&
+        (cursor is! String || !RegExp(r'^[0-9a-f]{32}$').hasMatch(cursor))) ||
+        (index < count) != (cursor != null) || data['snapshot_not_live'] != true) {
+      throw const FormatException('Inconsistent observed application page');
+    }
+    _bool(data['process_identity_confirmed']);
+    _bool(data['truncated']);
+    final timestamp = _text(data['snapshot_read_at'], 64);
+    if (DateTime.tryParse(timestamp) == null) throw const FormatException('Invalid snapshot time');
+    return ApplicationPage._();
+  }
+}
+
 class NativeReport {
   const NativeReport._(this.outcome, this.state, this.token, this.control,
       this.data, this.error);
@@ -174,8 +197,8 @@ class NativeReport {
   final NativeControl? control;
   final Map<String, dynamic>? data;
   final String? error;
-  EnforcementStatus? get enforcement => data?['enforcement'] == null
-      ? null : EnforcementStatus.fromJson(data!['enforcement']);
+  EnforcementStatus? get enforcement => data?['enforcement_runtime'] == null
+      ? null : EnforcementStatus.fromJson(data!['enforcement_runtime']);
   ExitStatus? get exit => data?['exit'] == null ? null : ExitStatus.fromJson(data!['exit']);
   factory NativeReport.fromJson(dynamic value) {
     final map = _object(value, {'outcome', 'state', 'token', 'control', 'data', 'error'});
@@ -206,11 +229,14 @@ class NativeReport {
       throw const FormatException('Invalid native report data');
     }
     _boundedData(rawData, 0);
-    if (rawData is Map<String, dynamic> && rawData['enforcement'] != null) {
-      EnforcementStatus.fromJson(rawData['enforcement']);
+    if (rawData is Map<String, dynamic> && rawData['enforcement_runtime'] != null) {
+      EnforcementStatus.fromJson(rawData['enforcement_runtime']);
     }
     if (rawData is Map<String, dynamic> && rawData['exit'] != null) {
       ExitStatus.fromJson(rawData['exit']);
+    }
+    if (rawData is Map<String, dynamic> && rawData.containsKey('access_count')) {
+      ApplicationPage.fromJson(rawData);
     }
     return NativeReport._(outcome, state, token, control,
       rawData == null ? null : Map.unmodifiable(rawData as Map<String, dynamic>), error);
