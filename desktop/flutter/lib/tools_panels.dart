@@ -22,9 +22,10 @@ class _NativeToolsPanelState extends State<NativeToolsPanel> {
   String? enforcementSession;
   ExitStatus? exit;
   String? exitSession;
-  Map<String, dynamic>? data;
+  NativeReport? detailReport;
+  Map<String, dynamic>? get data => detailReport?.data;
   String? section;
-  String? applicationSession;
+  String? detailSession;
   String? issue;
   bool dialogOpen = false;
   final policyPath = TextEditingController();
@@ -60,8 +61,8 @@ class _NativeToolsPanelState extends State<NativeToolsPanel> {
           exitSession = session;
         }
         if (request.action != 'prepare' && request.action != 'commit') {
-          data = result.data; section = request.action;
-          if (request.action == 'application' || request.action == 'application_next') applicationSession = session;
+          detailReport = result; section = request.action;
+          detailSession = session;
         }
         issue = result.error;
       });
@@ -237,7 +238,8 @@ class _NativeToolsPanelState extends State<NativeToolsPanel> {
               style: Theme.of(context).textTheme.titleSmall),
             Text('${l['applicationSnapshot']}: ${data!['snapshot_read_at']}'),
             Text(l['applicationSnapshotScope']),
-            if (applicationSession != client.session) Text(l['nativeContextChanged']),
+            Text(l['applicationPolicyScope']),
+            if (detailSession != client.session) Text(l['nativeContextChanged']),
             if (data!['process_identity_confirmed'] != true) Text(l['applicationIdentityUnknown']),
             if (data!['truncated'] == true) Text(l['truncated']),
             _DataView(data: {for (final entry in data!.entries)
@@ -245,10 +247,10 @@ class _NativeToolsPanelState extends State<NativeToolsPanel> {
                 'process_identity_confirmed','next_cursor','truncated'}.contains(entry.key)) entry.key: entry.value}),
             if (data!['next_cursor'] case final String cursor)
               action('applicationNext', Icons.navigate_next,
-                enabled && applicationSession == client.session ? () => _query(ToolsRequest.applicationNext(cursor)) : null),
+                enabled && detailSession == client.session ? () => _query(ToolsRequest.applicationNext(cursor)) : null),
             const SizedBox(height: 8),
             action('terminate', Icons.stop_circle_outlined,
-              enabled && applicationSession == client.session && client.operational &&
+              enabled && detailSession == client.session && client.operational &&
                 data!['pid'] is int && data!['process_identity_confirmed'] == true
                 ? () => _apply(NativeControl.terminate(data!['pid'] as int)) : null),
             Text(l['terminateScope']),
@@ -259,6 +261,7 @@ class _NativeToolsPanelState extends State<NativeToolsPanel> {
             action('consultPolicy', Icons.policy_outlined, enabled ? () => _query(const ToolsRequest.policy()) : null),
             action('consultPaths', Icons.folder_outlined, enabled ? () => _query(const ToolsRequest.paths()) : null),
             action('installationActions', Icons.info_outline, enabled ? () => _query(const ToolsRequest.maintenance()) : null),
+            action('checkUpdates', Icons.system_update_alt, enabled ? () => _query(const ToolsRequest.checkUpdates()) : null),
           ]),
           const SizedBox(height: 12),
           TextField(controller: policyPath, maxLength: 1024,
@@ -266,8 +269,38 @@ class _NativeToolsPanelState extends State<NativeToolsPanel> {
           action('validatePolicy', Icons.rule, enabled ? () => _query(ToolsRequest.validatePolicy(
             policyPath.text.isEmpty ? null : policyPath.text)) : null),
           Text(l['policyValidationScope']),
-          if (const {'paths', 'policy', 'validate_policy', 'maintenance'}.contains(section) && data != null)
+          if (const {'paths', 'policy', 'validate_policy'}.contains(section) && data != null)
             Padding(padding: const EdgeInsets.only(top: 12), child: _DataView(data: data!)),
+          if (const {'maintenance', 'check_updates'}.contains(section) && detailReport != null &&
+              (client.toolsStale || client.toolsStatus.busy || detailSession != client.session))
+            Text(l['reportPrevious']),
+          if (section == 'maintenance' && detailReport?.maintenance != null) ...[
+            const SizedBox(height: 12),
+            Text('${l['reportVersion']}: ${detailReport!.maintenance!.version}'),
+            Text(l['installedExecutable']),
+            SelectableText(detailReport!.maintenance!.executable),
+            const SizedBox(height: 8),
+            Text(l[detailReport!.maintenance!.ownerGuidance == null
+              ? 'maintenanceOwnerUnknown' : 'maintenanceNativeOwner']),
+            if (detailReport!.maintenance!.ownerGuidance case final guidance?) SelectableText(guidance),
+            const SizedBox(height: 8),
+            Text(l['hybridTransactionsUnavailable']),
+            Wrap(spacing: 8, runSpacing: 8, children: [
+              action('updateInstallation', Icons.system_update_alt, null),
+              action('removeInstallation', Icons.delete_outline, null),
+            ]),
+            SelectableText(detailReport!.maintenance!.releasesUrl),
+          ],
+          if (section == 'check_updates' && detailReport?.releaseCheck != null) ...[
+            const SizedBox(height: 12),
+            Semantics(liveRegion: true, child: Text(l[detailReport!.releaseCheck!.available
+              ? 'releaseAvailable' : 'releaseNotNewer'], style: Theme.of(context).textTheme.titleSmall)),
+            Text('${l['reportVersion']}: ${detailReport!.releaseCheck!.currentVersion}'),
+            Text('${l['latestPublicRelease']}: ${detailReport!.releaseCheck!.tag}'),
+            Text('${l['releaseCheckedAt']}: ${detailReport!.releaseCheck!.checkedAt.toUtc().toIso8601String()}'),
+            Text(l['releaseMetadataOnly']),
+            SelectableText(detailReport!.releaseCheck!.url),
+          ],
         ]),
         _ToolCard(title: l['quit_engine'], children: [
           Text(l['quitScope']),

@@ -92,6 +92,7 @@ printf 'mcw updated to %s.\n' "${tag#v}"
 "#;
 
 pub fn update() -> Result<()> {
+    crate::uninstall::ensure_hybrid_transaction_qualified()?;
     ordinary_user()?;
     #[cfg(target_os = "linux")]
     root_camera_installation_absent()?;
@@ -856,7 +857,13 @@ fn sha256(file: File) -> Result<String> {
 }
 
 fn latest_tag() -> Result<String> {
-    let output = Command::new("/usr/bin/curl")
+    latest_tag_with_timeout("300", false)
+}
+
+fn latest_tag_with_timeout(timeout: &str, skip_user_config: bool) -> Result<String> {
+    let mut command = Command::new("/usr/bin/curl");
+    if skip_user_config { command.arg("--disable"); }
+    let output = command
         .args([
             "--proto",
             "=https",
@@ -870,7 +877,7 @@ fn latest_tag() -> Result<String> {
             "--connect-timeout",
             "30",
             "--max-time",
-            "300",
+            timeout,
             "--head",
             "--output",
             "/dev/null",
@@ -899,6 +906,16 @@ fn latest_tag() -> Result<String> {
         .context("release tag must start with v")?;
     Version::parse(version).context("latest release does not have a supported semantic version")?;
     Ok(tag.to_owned())
+}
+
+/// Read-only public metadata; never enter installation/update orchestration.
+#[cfg(feature = "flutter-desktop")]
+pub(crate) fn check_latest_release() -> Result<(String, bool)> {
+    let tag = latest_tag_with_timeout("8", true)?;
+    let latest = Version::parse(&tag[1..])?;
+    let current = Version::parse(env!("CARGO_PKG_VERSION"))?;
+    let available = current.compare(&latest) == Ordering::Less;
+    Ok((tag, available))
 }
 
 struct Staging {

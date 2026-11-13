@@ -41,6 +41,7 @@ pub enum Request {
     ValidatePolicy { path: Option<String> },
     ClearHistory { confirmation: String },
     Maintenance {},
+    CheckUpdates {},
 }
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -303,13 +304,8 @@ impl Session {
                 crate::history::clear()?;
                 Ok(Report::data(serde_json::json!({"cleared":true,"history":crate::history::path()?.display().to_string(),"scope":"current history and its rotations only; preferences, explicit logs and protection records preserved"})))
             }
-            Request::Maintenance {} => Ok(Report::data(serde_json::json!({
-                "version":env!("CARGO_PKG_VERSION"),
-                "update":"Hybrid binary-only update is disabled until the complete bundle transaction is qualified. Use the verified whole installer or the actual package manager; do not replace only the Rust pair.",
-                "uninstall":"Use the owner of this installation (MSI, Cargo, Homebrew, app or managed installer). First resolve owned protection/restoration and disable only its startup registration. User preferences and history are retained. No removal is performed by this query.",
-                "releases":"https://github.com/Roman-Cuisset/miccamwatch/releases",
-                "mutation_available":false,
-            }))),
+            Request::Maintenance {} => Ok(Report::data(super::maintenance::inspect()?)),
+            Request::CheckUpdates {} => Ok(Report::data(super::maintenance::check_release()?)),
         }
     }
 }

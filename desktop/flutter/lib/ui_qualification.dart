@@ -74,6 +74,23 @@ class UiQualification {
     return result;
   }
 
+  Future<void> _reveal(String identifier) async {
+    // Scroll only this real Flutter widget tree, never the host pointer/desktop.
+    final matches = <Element>[];
+    void visit(Element element) {
+      if (element.widget.key == ValueKey<String>(identifier)) matches.add(element);
+      element.visitChildElements(visit);
+    }
+    final root = WidgetsBinding.instance.rootElement;
+    if (root != null) visit(root);
+    _require(matches.length <= 1, 'Ambiguous owned widget key: $identifier');
+    if (matches.isNotEmpty) {
+      await Scrollable.ensureVisible(matches.single, alignment: .1);
+      WidgetsBinding.instance.scheduleFrame();
+      await WidgetsBinding.instance.endOfFrame;
+    }
+  }
+
   SemanticsNode? _action(String identifier) {
     final root = _node(identifier);
     if (root == null) return null;
@@ -97,6 +114,7 @@ class UiQualification {
       'navigation.controls', 'tools.queryRefresh', 'tools.deviceInventory',
       'tools.consultPolicy', 'tools.consultPaths', 'tools.validatePolicy',
       'tools.enforcementRefresh',
+      'tools.installationActions', 'tools.checkUpdates',
       'tools.applicationNext',
       'tools.exitRefresh', 'tools.quit_engine', 'tools.confirm',
       'preferences.language', 'language.engine', 'language.en', 'language.fr', 'language.de',
@@ -110,6 +128,7 @@ class UiQualification {
       'Startup mutation is not admitted in consultation qualification');
     await _until(() => _action(identifier) != null,
       'No enabled rendered action: $identifier (identified node: ${_node(identifier) != null})');
+    await _reveal(identifier);
     var node = _action(identifier)!;
     if (node.getSemanticsData().hasAction(SemanticsAction.showOnScreen)) {
       _owner!.performAction(node.id, SemanticsAction.showOnScreen);
@@ -140,9 +159,28 @@ class UiQualification {
     FlutterError.onError = _errorHandler;
     _handle = WidgetsBinding.instance.ensureSemantics();
     try {
-      _require(const {'consultation', 'startup', 'parity', 'controls', 'enforcement', 'quit', 'applications'}.contains(scenario), 'Unknown proof scenario');
+      _require(const {'consultation', 'startup', 'parity', 'controls', 'enforcement', 'quit', 'applications', 'maintenance'}.contains(scenario), 'Unknown proof scenario');
       await _until(() => live() && _owner?.rootSemanticsNode != null, 'No live native snapshot/semantics');
       final mode = describe()['mode'];
+      if (scenario == 'maintenance') {
+        _require(!queries.operational && const {'settings_development','read_only_development'}.contains(mode),
+          'Maintenance proof must have no device/process authority');
+        await _tap('navigation.controls');
+        await _until(() => !queries.toolsStatus.busy, 'Initial controls pending');
+        await _tap('tools.installationActions');
+        await _query(queries.toolsStatus, 'Native installation-owner guidance');
+        _require(queries.toolsReport!.maintenance != null, 'Missing typed native maintenance');
+        _require(_action('tools.updateInstallation') == null && _action('tools.removeInstallation') == null,
+          'Unqualified hybrid transaction became enabled');
+        cases.add('native-owner-guidance-without-installation-mutation');
+        await _tap('tools.checkUpdates');
+        await _query(queries.toolsStatus, 'Public release metadata');
+        _require(queries.toolsReport!.releaseCheck != null, 'Missing native public release metadata');
+        cases.add('actual-public-release-check-without-package-download');
+        await _reveal('tools.checkUpdates');
+        _record('passed');
+        return;
+      }
       if (scenario == 'applications') {
         _require(!queries.operational && const {'settings_development','read_only_development'}.contains(mode),
           'Application proof is read-only in a private owner');

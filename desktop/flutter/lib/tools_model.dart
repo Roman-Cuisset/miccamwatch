@@ -73,6 +73,7 @@ class ToolsRequest {
   const ToolsRequest.paths() : this._('paths', const {});
   const ToolsRequest.policy() : this._('policy', const {});
   const ToolsRequest.maintenance() : this._('maintenance', const {});
+  const ToolsRequest.checkUpdates() : this._('check_updates', const {});
   const ToolsRequest.clearHistory() : this._('clear_history', const {
     'confirmation': 'clear_only_recorded_history',
   });
@@ -188,15 +189,58 @@ class ApplicationPage {
   }
 }
 
+class MaintenanceView {
+  const MaintenanceView._(this.version, this.executable, this.ownerGuidance, this.releasesUrl);
+  final String version, executable, releasesUrl;
+  final String? ownerGuidance;
+  factory MaintenanceView.fromJson(dynamic value) {
+    final data = _object(value, {'version', 'executable', 'native_owner_guidance',
+      'owner_guidance_available', 'transactions_available', 'reason', 'releases_url'});
+    final guidance = data['native_owner_guidance'] == null
+      ? null : _text(data['native_owner_guidance'], 4096);
+    if ((guidance != null && guidance.trim().isEmpty) ||
+        _bool(data['owner_guidance_available']) != (guidance != null) ||
+        data['transactions_available'] != false || data['reason'] != 'hybrid_bundle_unqualified' ||
+        data['releases_url'] != 'https://github.com/Roman-Cuisset/miccamwatch/releases') {
+      throw const FormatException('Unqualified or inconsistent installation transaction');
+    }
+    return MaintenanceView._(_text(data['version'], 128),
+      _text(data['executable'], 4096), guidance, data['releases_url'] as String);
+  }
+}
+
+class ReleaseCheck {
+  const ReleaseCheck._(this.currentVersion, this.tag, this.url, this.available, this.checkedAt);
+  final String currentVersion, tag, url;
+  final bool available;
+  final DateTime checkedAt;
+  factory ReleaseCheck.fromJson(dynamic value) {
+    final data = _object(value, {'current_version', 'latest_tag', 'release_url',
+      'update_available', 'checked_at', 'scope'});
+    final tag = _text(data['latest_tag'], 128);
+    if (!RegExp(r'^v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$').hasMatch(tag) ||
+        data['release_url'] != 'https://github.com/Roman-Cuisset/miccamwatch/releases/tag/$tag' ||
+        data['scope'] != 'release_metadata_only') {
+      throw const FormatException('Invalid public release identity');
+    }
+    final checkedAt = DateTime.tryParse(_text(data['checked_at'], 64));
+    if (checkedAt == null) throw const FormatException('Invalid release check time');
+    return ReleaseCheck._(_text(data['current_version'], 128), tag,
+      data['release_url'] as String, _bool(data['update_available']), checkedAt);
+  }
+}
+
 class NativeReport {
   const NativeReport._(this.outcome, this.state, this.token, this.control,
-      this.data, this.error);
+      this.data, this.error, this.maintenance, this.releaseCheck);
   final String outcome;
   final NativeState? state;
   final String? token;
   final NativeControl? control;
   final Map<String, dynamic>? data;
   final String? error;
+  final MaintenanceView? maintenance;
+  final ReleaseCheck? releaseCheck;
   EnforcementStatus? get enforcement => data?['enforcement_runtime'] == null
       ? null : EnforcementStatus.fromJson(data!['enforcement_runtime']);
   ExitStatus? get exit => data?['exit'] == null ? null : ExitStatus.fromJson(data!['exit']);
@@ -239,7 +283,9 @@ class NativeReport {
       ApplicationPage.fromJson(rawData);
     }
     return NativeReport._(outcome, state, token, control,
-      rawData == null ? null : Map.unmodifiable(rawData as Map<String, dynamic>), error);
+      rawData == null ? null : Map.unmodifiable(rawData as Map<String, dynamic>), error,
+      rawData?['maintenance'] == null ? null : MaintenanceView.fromJson(rawData['maintenance']),
+      rawData?['release_check'] == null ? null : ReleaseCheck.fromJson(rawData['release_check']));
   }
 }
 

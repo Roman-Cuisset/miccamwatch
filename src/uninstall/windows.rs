@@ -49,7 +49,7 @@ pub(super) fn run() -> Result<u8> {
             .is_some_and(|name| name.eq_ignore_ascii_case("mcw.exe")),
         "uninstall requires the installed mcw.exe, not a renamed copy"
     );
-    if owner_guidance(&current)? {
+    if owner_guidance(&current, |message| eprintln!("{message}"))? {
         return Ok(2);
     }
     let _installation = crate::autostart::try_lock_installation(&current)?;
@@ -170,7 +170,7 @@ fn worker_inner(parent_pid: u32, parent_created: u64, helper: &Path) -> Result<(
         "worker is not in its inherited private temporary staging namespace"
     );
     ensure!(
-        !owner_guidance(&current)?,
+        !owner_guidance(&current, |message| eprintln!("{message}"))?,
         "installation is manager owned; use its reported removal command"
     );
     let installation = crate::autostart::try_lock_installation(&current)?;
@@ -529,7 +529,7 @@ fn ordinary_user() -> Result<()> {
     Ok(())
 }
 
-fn owner_guidance(current: &Path) -> Result<bool> {
+pub(crate) fn owner_guidance(current: &Path, mut report: impl FnMut(std::fmt::Arguments<'_>)) -> Result<bool> {
     let parent = current.parent().context("executable has no directory")?;
     safe_ancestors(parent)?;
     if parent.file_name().is_some_and(|name| name == "bin") {
@@ -554,25 +554,25 @@ fn owner_guidance(current: &Path) -> Result<bool> {
                     })
                 })
             {
-                eprintln!(
+                report(format_args!(
                     "Cargo owns this exact install root. Explicitly restore protection and normally exit its frontends, then run: cargo uninstall --root \"{}\" miccamwatch. Cargo metadata has no historical binary hashes, so MCW does not delete or claim removal of a possibly modified Cargo payload.",
                     root.display()
-                );
+                ));
                 return Ok(true);
             }
         }
     }
     match registered_owner(parent)? {
         Some(RegisteredOwner::Msi(product_code)) => {
-            eprintln!(
+            report(format_args!(
                 "Windows Installer registration matches this installation. Explicitly restore protection and exit its frontends, then run: msiexec.exe /x {product_code}. The MSI owns PATH/shortcuts/payload removal. No MSI operation, elevation or success was claimed."
-            );
+            ));
             Ok(true)
         }
         Some(RegisteredOwner::Managed) => {
-            eprintln!(
+            report(format_args!(
                 "A registered MicCamWatch installation matches this directory; use Windows Settings > Apps > Installed apps > MicCamWatch > Uninstall after explicit restoration and normal frontend exit. No registered command was executed or success claimed."
-            );
+            ));
             Ok(true)
         }
         None => Ok(false),

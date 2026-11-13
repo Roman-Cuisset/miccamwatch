@@ -111,6 +111,11 @@ fn run() -> Result<u8> {
     if matches!(&cli.command, Command::Uninstall) {
         return uninstall::run();
     }
+    #[cfg(feature = "flutter-desktop")]
+    if matches!(&cli.command, Command::Update) {
+        // Dispatch before loading preferences/policy or opening native monitors.
+        return updater::update().map(|()| 0);
+    }
     #[cfg(windows)]
     if let Command::Tray { command, .. } = &cli.command
         && matches!(command, None | Some(TrayCommand::Run | TrayCommand::Open))

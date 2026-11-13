@@ -28,7 +28,31 @@ pub(crate) fn stop_installed_tray() -> Result<bool> {
     Ok(false)
 }
 
+/// Public metadata only: no installation lock, download, shutdown or mutation.
+#[cfg(feature = "flutter-desktop")]
+pub(crate) fn check_latest_release() -> Result<(String, bool)> {
+    let releases = self_update::backends::github::Update::configure()
+        .repo_owner("Roman-Cuisset")
+        .repo_name("miccamwatch")
+        .bin_name("mcw")
+        .current_version(cargo_crate_version!())
+        .timeout(Duration::from_secs(8))
+        .retries(0)
+        .build()?
+        .get_latest_release()
+        .context("failed to check public release metadata")?;
+    let release = releases.latest().context("no public MicCamWatch release")?;
+    let version = release.version();
+    let tag = format!("v{version}");
+    anyhow::ensure!(release.release_notes_url().and_then(|url|
+        url.strip_prefix("https://github.com/Roman-Cuisset/miccamwatch/releases/tag/")) == Some(tag.as_str()),
+        "Public release URL does not match this repository and version");
+    let comparison = self_update::version::cmp_versions(cargo_crate_version!(), version)?;
+    Ok((tag, comparison == Ordering::Less))
+}
+
 pub fn update() -> Result<()> {
+    crate::uninstall::ensure_hybrid_transaction_qualified()?;
     let current = env::current_exe().context("failed to locate the installed mcw executable")?;
     crate::uninstall::windows::ensure_binary_update_allowed(&current)?;
     let installation_lock = crate::autostart::lock_installation(&current)?;

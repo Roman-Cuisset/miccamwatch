@@ -10,6 +10,7 @@ pub(crate) mod windows;
 /// Remove this installation, or report its exact owner's procedure without
 /// claiming success. This branch must run before monitor/control startup.
 pub fn run() -> Result<u8> {
+    ensure_hybrid_transaction_qualified()?;
     #[cfg(windows)]
     {
         windows::run()
@@ -22,6 +23,7 @@ pub fn run() -> Result<u8> {
 
 #[cfg(windows)]
 pub fn run_worker(parent_pid: u32, parent_created: u64) -> Result<u8> {
+    ensure_hybrid_transaction_qualified()?;
     windows::run_worker(parent_pid, parent_created)
 }
 
@@ -35,6 +37,13 @@ pub fn portable_receipt() -> Result<String> {
         env!("CARGO_PKG_VERSION"),
     )?;
     String::from_utf8(bytes).context("portable receipt is not UTF-8")
+}
+
+/// Native-only transactions do not own a complete Flutter bundle yet.
+pub(crate) fn ensure_hybrid_transaction_qualified() -> Result<()> {
+    anyhow::ensure!(!cfg!(feature = "flutter-desktop"),
+        "This hybrid build refuses installation mutation until the complete bundle transaction is qualified (stage 3). No updater/remover, frontend shutdown, preference write or protection restoration was started. Use the installation owner's reviewed whole-package procedure; never replace only the Rust executables.");
+    Ok(())
 }
 
 fn ensure_preferences_inactive() -> Result<()> {
@@ -53,7 +62,7 @@ fn unix_run() -> Result<u8> {
     use std::ffi::OsStr;
     crate::autostart::ordinary_user()?;
     let current = std::env::current_exe().context("cannot locate this installed executable")?;
-    if unix_owner_guidance(&current)? {
+    if unix_owner_guidance(&current, |message| eprintln!("{message}"))? {
         return Ok(2);
     }
     // Reuse receipt and checksum validation, including the Linux privileged
@@ -98,7 +107,7 @@ fn inherit(file: &File) -> Result<()> {
 }
 
 #[cfg(unix)]
-fn unix_owner_guidance(current: &Path) -> Result<bool> {
+pub(crate) fn unix_owner_guidance(current: &Path, mut report: impl FnMut(std::fmt::Arguments<'_>)) -> Result<bool> {
     use std::{ffi::OsStr, process::Command};
     let physical = current
         .canonicalize()
@@ -110,10 +119,10 @@ fn unix_owner_guidance(current: &Path) -> Result<bool> {
     }) {
         // Never invalidate a seal by deleting only Contents/MacOS/mcw. A whole
         // app has no public-installer receipt and may be managed externally.
-        eprintln!(
+        report(format_args!(
             "macOS application bundle preserved: {}. Explicitly restore using this app's mcw unmute and mcw camera allow; finish any Device Management approval, disable owned autostart with this app's mcw autostart disable, then quit MicCamWatch. In Finder, move this exact whole app to Trash (or use its administrator/MDM owner). Settings/history/policy remain. No automatic app-bundle deletion or success is claimed.",
             bundle.display()
-        );
+        ));
         return Ok(true);
     }
     // Cargo is itself an installation manager. Its metadata does not retain
@@ -143,10 +152,10 @@ fn unix_owner_guidance(current: &Path) -> Result<bool> {
                     })
                 })
             {
-                eprintln!(
+                report(format_args!(
                     "Cargo-owned installation preserved. After explicit restoration and normal frontend exit, use: cargo uninstall --root {} miccamwatch. Cargo controls its own manifest and payload removal; MCW does not claim success.",
                     shell_quote(root)?
-                );
+                ));
                 return Ok(true);
             }
         }
@@ -168,9 +177,9 @@ fn unix_owner_guidance(current: &Path) -> Result<bool> {
                 .canonicalize()
                 .is_ok_and(|target| target == physical)
             {
-                eprintln!(
+                report(format_args!(
                     "Homebrew-owned installation preserved. Explicitly restore and quit its frontend, then use: brew uninstall --formula miccamwatch. Settings/history/policy remain; no uninstall success is claimed."
-                );
+                ));
                 return Ok(true);
             }
         }
@@ -187,9 +196,9 @@ fn unix_owner_guidance(current: &Path) -> Result<bool> {
         let package = String::from_utf8(output.stdout).context("package owner is not UTF-8")?;
         let package = package.trim();
         if matches!(package, "miccamwatch" | "miccamwatch-bin") {
-            eprintln!(
+            report(format_args!(
                 "Arch package-manager installation preserved. Explicitly restore and quit its frontend, then use: sudo pacman -R -- {package}. The manager owns removal; no elevation or success is claimed."
-            );
+            ));
             return Ok(true);
         }
         bail!(
@@ -205,10 +214,10 @@ fn unix_owner_guidance(current: &Path) -> Result<bool> {
         let _ = directory
             .file(current.file_name().context("executable has no filename")?)?
             .context("standalone executable disappeared")?;
-        eprintln!(
+        report(format_args!(
             "Standalone macOS executable preserved (no installer ownership receipt). Explicitly restore with this exact mcw unmute / mcw camera allow, disable its owned autostart, and quit its frontends. Then remove only this exact file: rm -- {}. Settings/history/policy remain; no automatic removal or success is claimed.",
             shell_quote(current)?
-        );
+        ));
         return Ok(true);
     }
     Ok(false)
