@@ -3775,3 +3775,62 @@ Lots futurs **à approuver, aucun correctif appliqué** :
   test matériel. Unix/macOS : raccordement implémenté, nouvelle qualification
   encore à faire à ce checkpoint. L'étape 2 continue avec les P1 restants.
 
+
+## 2026-11-13 — Étape 2/6 : applications multi-accès et protocole 8
+
+**Branche : `work/flutter-hybrid-0220`. Code : `b2ac919`. Étape toujours
+incomplète ; aucun passage automatique au packaging de l'étape 3.**
+
+- Nouveau `desktop/applications.rs` Rust : instantané par PID, toutes les
+  ressources/périphériques, curseur privé consommable une seule fois, refus
+  d'identités contradictoires, budget réel de JSON et troncature annoncée.
+  Flutter présente la date, le caractère non live, la continuation et l'absence
+  d'autorité de terminaison d'une simple lecture. Plus de limite silencieuse
+  aux seize premiers boutons d'application.
+- Le test desktop réel a trouvé une collision du champ `enforcement` :
+  décision d'évaluation d'un accès et statut d'application automatique ne sont
+  pas le même contrat. Le runtime est maintenant `enforcement_runtime`, IPC 8
+  dans Rust/Dart et le timing Win32 ; ancien protocole refusé, pas de shim.
+  Le test de régression empêche de transformer une décision observée en runtime.
+- La réponse d'une ancienne session, même déjà complétée avant son remplacement,
+  n'est plus relabellisée comme appartenant à la session courante. Fermer Flutter
+  supprime les continuations, pas la garde Rust.
+
+### Vérifications réellement exécutées
+
+- 69 tests Rust desktop réussis ; Clippy strict et analyse Flutter réussis ;
+  builds release Rust hybride et Flutter Windows réussis.
+- Suite Flutter complète : 108 réussites, un échec de consommateur de la nouvelle
+  clé. Après correction du panneau, 20/20 tests tools réussis. Échec et reçus
+  initiaux conservés ; ne pas prétendre qu'une invocation complète finale avait
+  déjà réussi. La CI ultérieure devra qualifier le commit exact.
+- Six cycles desktop sur de vraies observations (trois clair, trois sombre) :
+  requêtes réellement attribuées, rafales sans doublon, disparition de Flutter,
+  ticks Rust après fermeture, préférences privées identiques, arrêt owner code 0.
+- Captures HWND possédées examinées en clair et sombre, dont application et
+  panneau d'enforcement. Défilement par messages au seul HWND Flutter possédé ;
+  aucun contrôle de la souris de l'hôte. Les captures avec noms/chemins restent
+  privées hors Git.
+- Plusieurs ressources pour un même PID : fixtures déterministes uniquement ;
+  le processus réel consulté n'avait qu'un accès. Aucune terminaison ni commande
+  matérielle. L'état de risque ou une décision de politique ne prouve jamais
+  qu'un périphérique est bloqué.
+- Source P0 `ee8daa8` : sous WSL Linux, 71 tests desktop, 3 tests enforcement et
+  Clippy strict réussis. Ce reçu ne qualifie pas encore IPC 8/O04 ou un bureau
+  Linux accéléré. Pas de nouvelle validation macOS de ce code à ce point.
+- Le build Flutter interrompu du 12 avait laissé un reçu « running » malgré
+  une sortie de compilation ; seule cette étape a été reprise pour obtenir un
+  code retour observé. Les compilations/tests déjà aboutis n'ont pas été relancés
+  sans changement justifiant leur réexécution.
+
+Preuves durables : `%LOCALAPPDATA%\MicCamWatchQualification\v022-stage2-final-20261112-084140`,
+notamment `applications-v8-*`, les deux échecs réels initiaux, et
+`qualify_applications_v8.py`. Sources et empreintes figées dans les préfixes privés.
+Installation quotidienne, garde, préférences et périphériques non modifiés.
+Aucun sous-agent : routage fournisseur/modèle/authentification non prouvé.
+
+**Reprise :** O02/O05 (filtres, cadence et sessions/journaux), U01/U02
+(contrats de maintenance), traductions/capacités restantes et qualification
+Unix/macOS du nouveau code. Ne pas assimiler les transactions hybrides de
+l'étape 3 à une fonctionnalité déjà distribuable.
+

@@ -397,3 +397,25 @@ exit0, no owned-process residue, private preferences retained. Initial missing
 confirmation semantic identifier was fixed and its failed proof retained.
 Unix/macOS integration is present but not newly qualified at this checkpoint.
 
+
+## O04 — détails multi-accès vérifiés, 13 novembre 2026
+
+- Code `b2ac919`, IPC **8**. Tous les accès du même instantané d'application
+  sont consultables par continuations privées ; refus des générations mélangées,
+  des curseurs réutilisés/étrangers et des réponses d'une ancienne session.
+- Les détails affichent leur date et leur caractère non live. Une identité
+  inconnue désactive la terminaison ; la lecture n'autorise jamais une action.
+- Collision détectée en vraie fenêtre entre décision observée `enforcement`
+  et état du runtime : ce dernier utilise désormais `enforcement_runtime`.
+  Le test de régression conserve la décision observée sans l'interpréter comme
+  une protection ou une terminaison automatique activée.
+- Windows : 69 tests Rust desktop, Clippy/analyse/builds release réussis ;
+  20 tests Flutter tools réussis après un échec conservé dans la suite complète
+  (108 autres réussites). Six cycles réels, deux thèmes, captures examinées,
+  processus Flutter absent après fermeture et observation Rust maintenue.
+- Pagination multi-périphériques : fixtures ; requête réelle : un accès sur le
+  PID consulté. Aucune action sur les périphériques ou processus quotidiens.
+- Linux : 71 tests desktop + 3 enforcement et Clippy sur **`ee8daa8` seulement** ;
+  la nouvelle source IPC 8/O04 et macOS restent à qualifier.
+- O02/O05 (sessions, cadence, sinks) et U01/U02 (maintenance) demeurent ouverts.
+
