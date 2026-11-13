@@ -7,8 +7,8 @@ import 'package:miccamwatch_desktop/preferences_model.dart';
 import 'consultation_test.dart' as fixtures;
 
 Map<String, dynamic> nativeState({String microphone = 'unmuted', String camera = 'unknown'}) => {
-  'microphone': microphone, 'microphone_scope': 'Fixture INPUT mute; not access denial',
-  'camera': camera, 'camera_scope': 'Fixture camera coverage is incomplete',
+  'microphone': microphone, 'microphone_scope': 'windows_endpoint_sdk_mute',
+  'camera': camera, 'camera_scope': 'windows_pnp_camera',
   'camera_requested': null, 'camera_service': null, 'camera_present': null,
   'camera_pending': null, 'camera_error': 'Fixture camera command unavailable',
   'microphone_error': null, 'can_mute': true, 'can_restore': true,
@@ -106,6 +106,8 @@ void main() {
       (value) => value['elevate'] = true,
       (value) => value['control'] = {'kind': 'terminate', 'pid': 123, 'instance': 'forged'},
       (value) => value['state'] = {...nativeState(), 'can_camera': 'yes'},
+      (value) => value['state'] = {...nativeState(), 'microphone_scope': 'universal_hardware_block'},
+      (value) => value['state'] = {...nativeState(), 'camera_scope': 'unknown_scope'},
     ]) {
       final value = {...prepared}; mutation(value);
       expect(() => NativeReport.fromJson(value), throwsFormatException);

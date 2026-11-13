@@ -88,8 +88,8 @@ class _NativeToolsPanelState extends State<NativeToolsPanel> {
             const SizedBox(height: 10),
             Text(l['nativeConfirmScope']),
             const SizedBox(height: 10),
-            if (control.kind.startsWith('microphone')) Text(prepared.state!.text('microphone_scope')),
-            if (control.kind.startsWith('camera')) Text(prepared.state!.text('camera_scope')),
+            if (control.kind.startsWith('microphone')) Text(l[prepared.state!.text('microphone_scope')]),
+            if (control.kind.startsWith('camera')) Text(l[prepared.state!.text('camera_scope')]),
             if (control.kind == 'quit_engine') Text(l['quitScope']),
             if (control.kind == 'camera_restore_legacy') ...[
               Text(l['cameraLegacyWarning']),
@@ -163,7 +163,7 @@ class _NativeToolsPanelState extends State<NativeToolsPanel> {
           if (state != null) ...[
             const Divider(height: 28),
             Text('${l['microphone']}: ${l[state.text('microphone')]}', style: Theme.of(context).textTheme.titleSmall),
-            Text(state.text('microphone_scope')),
+            Text(l[state.text('microphone_scope')]),
             if (state.issue('microphone_error') case final error?) SelectableText(error),
             const SizedBox(height: 8),
             Wrap(spacing: 8, runSpacing: 8, children: [
@@ -172,13 +172,14 @@ class _NativeToolsPanelState extends State<NativeToolsPanel> {
             ]),
             const Divider(height: 28),
             Text('${l['camera']}: ${l[state.text('camera')]}', style: Theme.of(context).textTheme.titleSmall),
-            Text(state.text('camera_scope')),
+            Text(l[state.text('camera_scope')]),
             if (state.issue('camera_error') case final error?) SelectableText(error),
             const SizedBox(height: 8),
             Wrap(spacing: 8, runSpacing: 8, children: [
               controlled('camera_block', Icons.videocam_off_outlined, state.flag('can_camera')),
               controlled('camera_allow', Icons.restore, state.flag('can_camera')),
-              controlled('camera_resume', Icons.restart_alt, state.flag('can_resume')),
+              if (state.values['camera_requested'] != null)
+                controlled('camera_resume', Icons.restart_alt, state.flag('can_resume')),
               if (state.flag('can_inspect')) controlled('camera_inspect', Icons.fact_check_outlined, true),
             ]),
             if (state.values['camera_requested'] != null) ...[

@@ -15,6 +15,7 @@ import 'consultation_model.dart';
 import 'consultation_panels.dart';
 import 'ui_qualification.dart';
 import 'tools_panels.dart';
+import 'observation_view.dart';
 
 final _started = Stopwatch()..start();
 Future<void> _output = Future<void>.value();
@@ -102,6 +103,9 @@ class _MicCamWatchAppState extends State<MicCamWatchApp> {
   UiQualification? qualification;
   late bool dark = widget.dark;
   String? languageOverride;
+  String viewResource = 'all';
+  int viewMinimumRisk = 0;
+  bool viewIncludeReady = true;
   AppPage page = AppPage.overview;
   bool ready = false;
   bool receivedTiming = false;
@@ -141,6 +145,8 @@ class _MicCamWatchAppState extends State<MicCamWatchApp> {
           'transport_live': session.transportLive,
           'page': page.name,
           'theme': dark ? 'dark' : 'light',
+          'view_resource': viewResource, 'view_minimum_risk': viewMinimumRisk,
+          'view_include_ready': viewIncludeReady,
         },
       );
       unawaited(qualification!.run());
@@ -352,27 +358,15 @@ class _MicCamWatchAppState extends State<MicCamWatchApp> {
     }),
     const SizedBox(height: 12),
     if (snapshot?.engine['platform'] == 'windows')
-      MicrophoneCommandPanel(client: microphoneCommands, locale: snapshot?.locale ?? 'en', snapshot: snapshot),
+      MicrophoneCommandPanel(client: microphoneCommands, locale: languageOverride ?? snapshot?.locale ?? 'en', snapshot: snapshot),
     const SizedBox(height: 18),
     Text(l['applications'], style: c.type(17, bold: true)),
     const SizedBox(height: 9),
-    _panel(c, snapshot == null || snapshot.accesses.isEmpty
-      ? Text(l['noRows'], style: c.type(13, muted: true))
-      : Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          for (final access in snapshot.accesses) Padding(
-            padding: const EdgeInsets.symmetric(vertical: 8),
-            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Icon(access['resource'] == 'microphone' ? Icons.mic_none : Icons.videocam_outlined,
-                size: 20, color: c.secondary), const SizedBox(width: 10),
-              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text(access['application'] as String, style: c.type(14, bold: true)),
-                Text('${l[access['resource'] as String]} · PID ${access['pid'] ?? '—'} · ${l[access['activity'] as String]}', style: c.type(12, muted: true)),
-                Text('${l['confidence']}: ${l[access['confidence'] as String? ?? 'unknown']}', style: c.type(12, muted: true)),
-                if (access['device'] != null) Text(access['device'] as String, style: c.type(12, muted: true)),
-                if (access['started_at'] != null) Text(access['started_at'] as String, style: c.type(12, muted: true)),
-              ])),
-            ])),
-        ])),
+    _panel(c, ObservationView(accesses: snapshot?.accesses ?? const [], locale: languageOverride ?? snapshot?.locale ?? 'en',
+      resource: viewResource, minimumRisk: viewMinimumRisk, includeReady: viewIncludeReady,
+      onResource: (value) => setState(() => viewResource = value),
+      onMinimumRisk: (value) => setState(() => viewMinimumRisk = value),
+      onIncludeReady: (value) => setState(() => viewIncludeReady = value))),
     if (snapshot?.truncated ?? false) Padding(padding: const EdgeInsets.only(top: 10),
       child: Text(l['truncated'], style: c.type(12).copyWith(color: c.warning))),
   ];

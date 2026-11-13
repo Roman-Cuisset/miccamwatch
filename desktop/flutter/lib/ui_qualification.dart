@@ -121,6 +121,8 @@ class UiQualification {
       'language.es', 'language.ja', 'language.zh', 'language.ru',
       'history.clear', 'history.confirmClear',
       'history.refresh', 'diagnostics.run', 'autostart.refresh',
+      'observations.resource.camera', 'observations.resource.all',
+      'observations.risk.blocked', 'observations.risk.expected', 'observations.includeReady',
       'preferences.notificationsEnabled', 'autostart.change', 'autostart.confirm'};
     _require(permitted.contains(identifier) || (scenario == 'applications' &&
       RegExp(r'^tools\.application\.[0-9]{1,10}$').hasMatch(identifier)), 'Not a qualification action');
@@ -159,9 +161,33 @@ class UiQualification {
     FlutterError.onError = _errorHandler;
     _handle = WidgetsBinding.instance.ensureSemantics();
     try {
-      _require(const {'consultation', 'startup', 'parity', 'controls', 'enforcement', 'quit', 'applications', 'maintenance'}.contains(scenario), 'Unknown proof scenario');
+      _require(const {'consultation', 'startup', 'parity', 'controls', 'enforcement', 'quit', 'applications', 'maintenance', 'filters'}.contains(scenario), 'Unknown proof scenario');
       await _until(() => live() && _owner?.rootSemanticsNode != null, 'No live native snapshot/semantics');
       final mode = describe()['mode'];
+      if (scenario == 'filters') {
+        _require(!queries.operational && const {'settings_development','read_only_development'}.contains(mode),
+          'Filter proof is presentation-only in a private owner');
+        await _tap('navigation.overview');
+        await _tap('observations.resource.camera');
+        await _tap('observations.risk.blocked');
+        await _tap('observations.includeReady');
+        _require(describe()['view_resource'] == 'camera' && describe()['view_minimum_risk'] == 3 &&
+          describe()['view_include_ready'] == false, 'Rendered filters were not applied');
+        var invalid = false;
+        bool visit(SemanticsNode node) {
+          final identifier = node.getSemanticsData().identifier;
+          if (identifier.startsWith('observations.row.') &&
+              !identifier.startsWith('observations.row.camera.active.blocked.')) invalid = true;
+          node.visitChildren(visit);
+          return true;
+        }
+        visit(_owner!.rootSemanticsNode!);
+        _require(!invalid, 'Displayed rows ignore resource, native severity or Ready filters');
+        await _reveal('observations.includeReady');
+        cases.add('rendered-resource-native-risk-ready-filters');
+        _record('passed');
+        return;
+      }
       if (scenario == 'maintenance') {
         _require(!queries.operational && const {'settings_development','read_only_development'}.contains(mode),
           'Maintenance proof must have no device/process authority');

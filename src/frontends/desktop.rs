@@ -1,5 +1,5 @@
 //! Bounded presentation and typed-command boundary. Never export the complete model.
-use crate::model::{Activity, CollectorState, Confidence, Resource, Snapshot};
+use crate::model::{Activity, CollectorState, Confidence, Resource, Risk, Snapshot};
 use anyhow::{Result, ensure};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -19,7 +19,7 @@ pub mod windows;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod unix;
 
-pub const PROTOCOL_VERSION: u8 = 8;
+pub const PROTOCOL_VERSION: u8 = 9;
 pub const MAX_FRAME_BYTES: usize = 262_144;
 pub const MAX_EVENT_BYTES: usize = 4096;
 const MAX_STRING_BYTES: usize = 1024;
@@ -88,6 +88,7 @@ pub struct DesktopAccess {
     pub resource: Resource,
     pub activity: Activity,
     pub confidence: Confidence,
+    pub risk: Risk,
     pub application: String,
     pub pid: Option<u32>,
     pub device: Option<String>,
@@ -264,6 +265,7 @@ impl DesktopSnapshot {
                     resource: a.resource,
                     activity: a.activity,
                     confidence: a.confidence,
+                    risk: a.risk,
                     application: clip(&a.application, &mut dto.truncated),
                     pid: a.pid,
                     device: a.device.as_deref().map(|s| clip(s, &mut dto.truncated)),
@@ -710,6 +712,23 @@ mod tests {
     }
     fn dto(source: &Snapshot) -> DesktopSnapshot {
         DesktopSnapshot::from_snapshot(4, Utc::now(), "en", Ok(source), "read_only_development")
+    }
+    #[test]
+    fn native_risk_is_preserved_independently_of_confidence_and_global_counts() {
+        let mut s = source();
+        let mut expected = access();
+        expected.risk = Risk::Expected;
+        let mut blocked = access();
+        blocked.key = "second-input".into();
+        blocked.risk = Risk::Blocked;
+        blocked.confidence = Confidence::Low;
+        s.accesses = vec![expected, blocked];
+        let encoded: serde_json::Value = serde_json::from_slice(&dto(&s).encode().unwrap()).unwrap();
+        assert_eq!(encoded["accesses"][0]["risk"], "expected");
+        assert_eq!(encoded["accesses"][0]["confidence"], "high");
+        assert_eq!(encoded["accesses"][1]["risk"], "blocked");
+        assert_eq!(encoded["accesses"][1]["confidence"], "low");
+        assert_eq!(encoded["resources"][0]["active_count"], 2);
     }
     fn access() -> Access {
         Access {

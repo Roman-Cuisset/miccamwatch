@@ -43,6 +43,20 @@ Map<String, dynamic> frame({int sequence = 1}) => {
 List<int> encode(Map<String, dynamic> value) => utf8.encode(jsonEncode(value));
 
 void main() {
+  test('native assessment is required and never inferred from confidence or a missing field', () {
+    final value = frame();
+    value['accesses'] = <Map<String, dynamic>>[{'resource': 'microphone', 'activity': 'active',
+      'confidence': 'high', 'risk': 'expected', 'application': 'Fixture observed input',
+      'pid': null, 'device': null, 'started_at': null}];
+    expect(Snapshot.decode(encode(value)).accesses.single['risk'], 'expected');
+    for (final invalid in [null, 'unknown', 'guaranteed_safe', 1]) {
+      value['accesses'][0]['risk'] = invalid;
+      expect(() => Snapshot.decode(encode(value)), throwsFormatException);
+    }
+    value['accesses'][0].remove('risk');
+    expect(() => Snapshot.decode(encode(value)), throwsFormatException);
+  });
+
   test('valid snapshot preserves unknown versus none observed', () {
     final snapshot = Snapshot.decode(encode(frame()));
     expect(snapshot.activity(snapshot.resources[0]), 'none_observed');
@@ -59,7 +73,7 @@ void main() {
     value['collectors'][0]['state'] = 'degraded';
     value['observation_gaps'] = ['microphone', 'camera'];
     value['accesses'] = [{'resource': 'microphone', 'activity': 'active',
-      'confidence': 'high', 'application': 'Observed application', 'pid': 123,
+      'confidence': 'high', 'risk': 'suspicious', 'application': 'Observed application', 'pid': 123,
       'device': null, 'started_at': null}];
     final snapshot = Snapshot.decode(encode(value));
     expect(snapshot.activity(snapshot.resources[0]), 'active');

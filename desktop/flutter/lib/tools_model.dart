@@ -124,6 +124,10 @@ class NativeState {
     final data = _object(value, {...texts, ...issues, ...flags,
       'camera_requested', 'camera_service', 'camera_present', 'camera_pending'});
     for (final key in texts) { _text(data[key], 1024); }
+    if (!const {'windows_endpoint_sdk_mute','linux_pipewire_input_mute','macos_coreaudio_input_mute'}.contains(data['microphone_scope']) ||
+        !const {'windows_pnp_camera','linux_uvc_camera','macos_owned_camera_profile'}.contains(data['camera_scope'])) {
+      throw const FormatException('Unknown native capability scope');
+    }
     for (final key in issues) {
       if (data[key] != null) _text(data[key], 1024);
     }

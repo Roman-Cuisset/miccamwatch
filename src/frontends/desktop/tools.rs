@@ -432,8 +432,8 @@ fn native_state(context: &Context) -> Result<NativeState> {
     let mut state = NativeState {
         microphone: microphone.as_ref().map(|s| format!("{s:?}").to_lowercase()).unwrap_or_else(|_| "unknown".into()),
         microphone_error: microphone.err().map(|e| bounded(format!("{e:#}"))),
-        microphone_scope: if cfg!(windows) { "Windows endpoint SDK mute, not access denial" } else if cfg!(target_os="linux") { "Writable capture sources in this PipeWire session only; restore owned originals" } else { "Writable CoreAudio INPUT mute controls only; restore owned originals" },
-        camera: "unknown".into(), camera_scope: if cfg!(windows) { "Owned Windows PnP camera disables; explicit UAC, arrival enforcement is not instantaneous" } else if cfg!(target_os="linux") { "Authorized USB/UVC interfaces only; no non-USB, global hotplug or lock guarantee" } else { "Owned Restrictions profile; manual System Settings approval, not per-app TCC" },
+        microphone_scope: if cfg!(windows) { "windows_endpoint_sdk_mute" } else if cfg!(target_os="linux") { "linux_pipewire_input_mute" } else { "macos_coreaudio_input_mute" },
+        camera: "unknown".into(), camera_scope: if cfg!(windows) { "windows_pnp_camera" } else if cfg!(target_os="linux") { "linux_uvc_camera" } else { "macos_owned_camera_profile" },
         camera_requested: None, camera_service: None, camera_present: None, camera_pending: None, camera_error: None,
         can_mute, can_restore: !cfg!(windows), can_camera: true, can_resume: false, can_inspect: cfg!(target_os="macos"),
         lock_microphone: settings.mute_on_lock, lock_camera: settings.block_camera_on_lock, restore_on_unlock: settings.restore_on_unlock,

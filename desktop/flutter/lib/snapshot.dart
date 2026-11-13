@@ -6,10 +6,12 @@ import 'package:flutter/foundation.dart';
 import 'preferences_model.dart';
 import 'consultation_model.dart';
 
-const protocolVersion = 8;
+const protocolVersion = 9;
 const maxFrameBytes = 262144;
 const resourceNames = ['microphone', 'camera'];
 const activityNames = ['active', 'ready', 'none_observed', 'unknown'];
+// Wire order is the native Risk ordering, used only for presentation filtering.
+const riskNames = ['expected', 'unexplained', 'suspicious', 'blocked'];
 const healthNames = ['healthy', 'degraded', 'unavailable'];
 
 // Rust owns the versioned observation and narrowly typed command boundary.
@@ -73,10 +75,11 @@ class Snapshot {
     }
     for (final item in _list(root['accesses'], 128)) {
       final access = _object(item, const ['resource', 'activity', 'confidence',
-        'application', 'pid', 'device', 'started_at']);
+        'risk', 'application', 'pid', 'device', 'started_at']);
       _enum(access['resource'], resourceNames);
       _enum(access['activity'], activityNames);
       _confidence(access['confidence']);
+      _enum(access['risk'], riskNames);
       _text(access['application']);
       if (access['pid'] != null) _integer(access['pid'], maximum: 4294967295);
       _nullableText(access['device']);
