@@ -136,6 +136,8 @@ jobs:
             2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/rust-clippy.log"
           cargo test --lib --locked --features flutter-desktop frontends::desktop \
             2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/rust-desktop-tests.log"
+          cargo test --lib --locked --features flutter-desktop watcher::enforcement:: \
+            2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/rust-enforcement-tests.log"
           cargo test --lib --locked --features flutter-desktop settings::tests \
             2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/rust-settings-tests.log"
           cargo test --lib --locked --features flutter-desktop history:: \
@@ -174,6 +176,21 @@ jobs:
             SWIFT_ACTIVE_COMPILATION_CONDITIONS=MCW_QUALIFICATION \
             CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual build \
             2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/instrumented-build.log"
+      - name: Build separately identified Flutter quit confirmation with native window proof
+        if: ${{ !inputs.runtime-replay }}
+        working-directory: desktop/flutter
+        run: |
+          set -euo pipefail
+          flutter build macos --release --no-pub --dart-define=MCW_UI_QUALIFICATION=quit \
+            2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/quit-dart-build.log"
+          /usr/bin/xcodebuild -workspace macos/Runner.xcworkspace -scheme Runner \
+            -configuration Release -destination "platform=macOS,arch=$EXPECTED_ARCH" \
+            -derivedDataPath "$RUNNER_TEMP/mcw-flutter-macos/quit-derived" \
+            CONFIGURATION_BUILD_DIR="$RUNNER_TEMP/mcw-flutter-macos/quit" \
+            ARCHS="$EXPECTED_ARCH" ONLY_ACTIVE_ARCH=YES \
+            SWIFT_ACTIVE_COMPILATION_CONDITIONS=MCW_QUALIFICATION \
+            CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual build \
+            2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/quit-build.log"
       - name: Preserve complete built products before any graphical qualification
         if: ${{ !inputs.runtime-replay }}
         run: |
@@ -186,6 +203,7 @@ jobs:
           cp target/release/mcw "$root/built-products/mcw"
           /usr/bin/ditto "$root/release/MicCamWatch.app" "$root/built-products/release/MicCamWatch.app"
           /usr/bin/ditto "$root/instrumented/MicCamWatch.app" "$root/built-products/instrumented/MicCamWatch.app"
+          /usr/bin/ditto "$root/quit/MicCamWatch.app" "$root/built-products/quit/MicCamWatch.app"
           printf '%s\n' "$GITHUB_SHA" > "$root/built-products/source-commit.txt"
           tar -C "$root" -czf "$root/built-products.tar.gz" built-products
           shasum -a256 "$root/built-products.tar.gz" > "$root/built-products.SHA256SUMS"
@@ -215,6 +233,15 @@ jobs:
             --instrumented-app "${MCW_FROZEN_INSTRUMENTED_APP:-$RUNNER_TEMP/mcw-flutter-macos/instrumented/MicCamWatch.app}" \
             "$@" \
             2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/qualification.log"
+      - name: Verify rendered Flutter quit confirmation and permanent native owner teardown
+        if: ${{ !inputs.runtime-replay }}
+        run: |
+          set -euo pipefail
+          python3 -B desktop/qualification/macos_quit.py \
+            --app "$RUNNER_TEMP/mcw-flutter-macos/quit/MicCamWatch.app" \
+            --session "$RUNNER_TEMP/mcw-flutter-macos/evidence/session.json" \
+            --proof "$RUNNER_TEMP/mcw-flutter-macos/evidence/flutter-quit" \
+            2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/quit-qualification.log"
       - name: Summarize observed graphical status (never infer from a successful build)
         if: always()
         timeout-minutes: 1

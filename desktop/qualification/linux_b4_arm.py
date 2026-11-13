@@ -170,7 +170,7 @@ def main():
     status = run(['git', 'status', '--porcelain'], cwd=repo)
     save(out / 'source-receipt.json', {'source_revision': revision, 'source_status': status})
     build(['cargo', 'clippy', '--all-targets', '--locked', '--features', 'flutter-desktop', '--', '-D', 'warnings'], out / 'cargo-clippy.log', repo, env)
-    for name in ('frontends::desktop', 'history::', 'autostart::tests', 'settings::tests'):
+    for name in ('frontends::desktop', 'watcher::enforcement::', 'history::', 'autostart::tests', 'settings::tests'):
         build(['cargo', 'test', '--lib', '--locked', '--features', 'flutter-desktop', name],
               out / ('rust-tests-' + name.replace('::', '-') + '.log'), repo, env)
     build(['cargo', 'build', '--locked', '--release', '--features', 'flutter-desktop', '--bin', 'mcw'], out / 'cargo-build.log', repo, env)
