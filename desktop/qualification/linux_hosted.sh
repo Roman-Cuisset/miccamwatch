@@ -27,7 +27,10 @@ python3 -c 'import json,os; from pathlib import Path; p=Path(os.environ["MCW_B3_
   cargo test --lib --locked --features flutter-desktop settings::tests
   cargo test --lib --locked --features flutter-desktop history::
   cargo test --lib --locked --features flutter-desktop autostart::tests
-  cargo test --lib --locked --features flutter-desktop frontends::tray::unix::menu_tests::qualification_
+  cargo test --lib --locked --features flutter-desktop frontends::tray::menu_tests::qualification_ -- --list | tee "$out/native-tests-selected.log"
+  grep -Fx 'frontends::tray::menu_tests::qualification_native_view_has_no_mutating_actions: test' "$out/native-tests-selected.log"
+  grep -Fx 'frontends::tray::menu_tests::qualification_dispatch_rejects_every_native_mutation: test' "$out/native-tests-selected.log"
+  cargo test --lib --locked --features flutter-desktop frontends::tray::menu_tests::qualification_ -- --test-threads=1
   cargo build --locked --release --features flutter-desktop --bin mcw
   (cd desktop/flutter && flutter pub get --enforce-lockfile && flutter analyze --no-pub && flutter test --no-pub && flutter build linux --release --no-pub)
   cc desktop/qualification/linux_xwindow.c -O2 -Wall -Wextra -Werror -lX11 -o "$out/linux_xwindow"
