@@ -472,5 +472,6 @@ Qualification Unix exacte `6094f3a` :
 quatre cibles réussies, reçus et captures examinés au §9.2 de l'audit.
 Deux gardes Linux non sélectionnées par l'ancien script : corrigé `5ed7303`,
 contrôle ciblé [43406668221](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/43406668221)
-encore en attente. Pas de rebuild Flutter ou d'exécution ARM physique revendiqués.
+réussi : deux gardes réellement sélectionnées et exécutées par cible, source
+`5ed7303`. Pas de rebuild Flutter ou d'exécution ARM physique revendiqués.
 

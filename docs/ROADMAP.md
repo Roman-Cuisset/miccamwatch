@@ -4001,3 +4001,42 @@ tag, fusion main ou déploiement.
 Reprise : terminer l'examen du contrôle de gardes ciblé ; O02/O05 demeurent les
 deux familles P1 fonctionnelles non achevées. Aucun passage automatique étape 3.
 
+### 2026-11-13 — Arrêt contrôlé de finalisation : preuves CI complètes, O02/O05 ouverts
+
+Contrôle ciblé
+[43406668221](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/43406668221)
+**réussi**, source `5ed7303e8ebdd610c7ae7ece9f16800832138e6a`.
+Les quatre artefacts ont été téléchargés et examinés : source exacte, les deux
+noms de tests attendus, puis **2 passed / 0 failed** sur chacune des quatre
+cibles Unix. Aucun rebuild Flutter ; les produits/cycles/captures de
+`43402431543` restent les preuves du code commun `6094f3a`.
+
+Sauvegardes utiles depuis `93e8003` : caméra `e7e990e`, enforcement `d90fa7f`,
+sortie propriétaire `79f9de3`, multi-accès `b2ac919`, maintenance `4e7b20b`,
+filtres/protocole9 `85c6493`, qualification Mac Quit `6094f3a`, garde Linux
+non-vide `5ed7303`. Les commits documentaires intermédiaires restent conservés
+sur `work/flutter-hybrid-0220`, notamment `a384b9d` (44 familles) et `1f6f82b`
+(preuves Unix). Tous ces commits sont poussés uniquement sur cette branche,
+avec skips de déploiement ; aucune release, aucun tag, aucune fusion main.
+
+Preuves durables :
+`%LOCALAPPDATA%\MicCamWatchQualification\v022-stage2-final-20261112-084140`.
+Les archives/logs reçus sont conservés au-delà de la rétention GitHub ;
+`native-gates-verified.json`, `unix-verified-receipts.json`,
+`stable-before.json`/`stable-after.json` et les captures permettent la reprise
+sans mémoire de conversation. Échecs initiaux et corrections restent traçables.
+
+**ÉTAPE 2/6 : INCOMPLÈTE.** Seuls les besoins fonctionnels avancés **O02/O05**
+restent ouverts dans le tableau courant : une session possédée par le moniteur
+unique avec cadence demandée/effective et des sinks explicites sûrs.
+Ne pas lancer une deuxième CLI `watch`, inventer des transitions depuis la vue
+bornée, ni autoriser un chemin de log arbitraire via le parent Rust.
+Le §9.1 de l'audit décrit les composants et tests nécessaires ; ces P1 ne sont
+pas reportés au packaging et ne sont pas reclassés optionnels.
+
+Prochain point de reprise : **finir ces contrats et leur UI dans l'étape 2**,
+avec GPT-6.1 Sol / OpenAI Codex OAuth / xhigh ; ne pas commencer l'étape 3.
+Zéro sous-agent utilisé, faute de preuve du routage modèle/fournisseur/auth.
+Les validations matérielles/UAC/Polkit/TCC et bundles installés restent bornées
+aux autorisations futures ; la garde et l'installation quotidienne sont intactes.
+

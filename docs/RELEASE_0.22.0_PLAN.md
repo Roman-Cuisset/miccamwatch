@@ -244,5 +244,5 @@ Reçus, archives/SHA, 24 cycles et deux Quit Flutter réels par Mac examinés,
 12 cycles Xvfb Linux x64 ; ARM64 build/ELF seulement.
 Le sélecteur de gardes Linux corrigé `5ed7303` est vérifié séparément par
 [43406668221](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/43406668221)
-(en cours à ce checkpoint), sans rebuild Flutter. Le §9.2 de l'audit détaille
+(réussi, deux gardes exécutées par cible), sans rebuild Flutter. Le §9.2 détaille
 les limites matérielles, TCC, signatures et packaging. Aucun Mac physique requis.
