@@ -238,7 +238,11 @@ depuis la projection Flutter ou une écriture arbitraire privilégiée.
 Le §9.1 de l'audit précise le contrat restant et ses tests de sécurité.
 Ces points demeurent des P1 de l'étape 2 ; aucune autorisation d'étape 3 implicite.
 
-Qualification Unix du code exact `6094f3a` lancée dans
+Qualification Unix du code exact `6094f3a` réussie sur quatre cibles dans
 [43402431543](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/43402431543).
-Build/tests, cycles graphiques, permissions matérielles et packaging final
-resteront distingués dans le reçu final. Aucun Mac physique requis.
+Reçus, archives/SHA, 24 cycles et deux Quit Flutter réels par Mac examinés,
+12 cycles Xvfb Linux x64 ; ARM64 build/ELF seulement.
+Le sélecteur de gardes Linux corrigé `5ed7303` est vérifié séparément par
+[43406668221](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/43406668221)
+(en cours à ce checkpoint), sans rebuild Flutter. Le §9.2 de l'audit détaille
+les limites matérielles, TCC, signatures et packaging. Aucun Mac physique requis.

@@ -3958,3 +3958,46 @@ références protégées et les empreintes de l'installation quotidienne au base
 Ne pas commencer l'étape 3 et ne pas conclure l'étape 2 terminée tant que O02/O05
 ne sont pas implémentés/testés.
 
+### 2026-11-13 — Quatre cibles Unix réussies, preuves téléchargées et examinées
+
+Run [43402431543](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/43402431543),
+source `6094f3a` : **quatre jobs réussis**. Logs intégraux et quatre artefacts
+conservés durablement hors dépôt ; empreintes des archives et source des produits
+macOS comparées. Le détail numérique est au §9.2 de l'audit, pas déduit du vert CI.
+
+- Linux x64 : Rust/Clippy, 115 Flutter, release et ELF ; 12 cycles réels Xvfb
+  (6 lifecycle + 6 préférences), SNI réel, propriétaire à 0 et aucun frontend
+  restant. Rendu logiciel, pas de mesure GPU/Mint accéléré.
+- Linux ARM64 : Rust/Clippy, 115 Flutter, release et ELF aarch64, Ubuntu24.04.
+  Pas d'exécution graphique/application, GPU, SBC physique ou compatibilité
+  Ubuntu22.04/Mint21 déduite.
+- Chaque Mac : 115 Flutter, Rust/Clippy/release, huit scénarios langue/thème,
+  24 close/reopen et 32 preuves de panneaux ; **deux Quit Flutter réels**, un
+  par thème, confirmation rendue → propriétaire à 0 → plus aucun processus du
+  préfixe privé. AppKit permanent, NSWindow réellement visible, protocole natif4
+  distinct du protocole Flutter9. Sandbox inchangée ; architectures, scellements
+  et minimum15 contrôlés. Quatre captures Flutter ScreenCaptureKit en clair/sombre
+  examinées, avec autorisation préexistante, jamais accordée par le test.
+- Limites : pas de matériel/TCC, Developer ID/notarisation, installateur ou
+  transaction d'update/uninstall hybride qualifiés. Aucun Mac manuel à organiser.
+
+**Défaut du test découvert et corrigé**, pas du produit : namespace Linux
+`frontends::tray::unix::menu_tests` sélectionnait zéro garde. `5ed7303` choisit le
+vrai namespace et exige les deux noms avant exécution. Contrôle ciblé sans
+rebuild Flutter :
+[43406668221](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/43406668221),
+source `5ed7303`, encore en cours à ce checkpoint. Le premier contrôle syntaxique
+direct du fichier Windows échouait sur CRLF ; le blob Git indexé LF passe, sans
+modifier artificiellement les conditions de CI. Reçus des deux essais conservés.
+
+Préservation vérifiée : cinq fichiers témoins (deux EXE MSI, préférences, intention
+micro et état caméra) **strictement identiques au début** ; main/origin main
+`73369ab`, tag annoté `06d800b` → `3d74686`, anciennes branches/candidate/CRT,
+12 worktrees et stash `a373866` conservés. Main propre ; les 215 suppressions
+historiques `work/github-visibility` restent présentes sans restauration.
+Zéro sous-agent, aucune installation quotidienne, action matérielle, publication,
+tag, fusion main ou déploiement.
+
+Reprise : terminer l'examen du contrôle de gardes ciblé ; O02/O05 demeurent les
+deux familles P1 fonctionnelles non achevées. Aucun passage automatique étape 3.
+

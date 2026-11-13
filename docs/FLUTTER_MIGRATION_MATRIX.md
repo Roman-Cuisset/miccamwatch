@@ -469,5 +469,8 @@ substitut. Le §9.1 identifie les contrats natifs, l'autorité des fichiers et l
 tests encore nécessaires ; pas de second moniteur ou de log synthétique.
 Qualification Unix exacte `6094f3a` :
 [43402431543](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/43402431543),
-en cours à ce checkpoint ; ne pas confondre son lancement avec un succès.
+quatre cibles réussies, reçus et captures examinés au §9.2 de l'audit.
+Deux gardes Linux non sélectionnées par l'ancien script : corrigé `5ed7303`,
+contrôle ciblé [43406668221](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/43406668221)
+encore en attente. Pas de rebuild Flutter ou d'exécution ARM physique revendiqués.
 
