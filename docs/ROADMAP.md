@@ -3921,3 +3921,40 @@ O02 reste **partiel** : cadence/session avancée non implémentée ; O05
 session/journaux explicites reste ouvert. Ne pas présenter ce filtre borné
 comme la parité complète de `watch`, ni comme une preuve d'absence de capture.
 
+### 2026-11-13 — Point de sauvegarde : 44 familles et qualification Unix exacte
+
+- Filtres/scopes `85c6493`, preuves documentées `b6dccc5`.
+- Outillage `6094f3a` : trois tests d'enforcement exécutés dans les jobs Linux
+  x64/ARM64 et macOS ; nouveau scénario **Flutter Quit** sur les deux Macs,
+  distinct de fermer NSWindow et du menu Exit natif. Build AOT séparé identifié,
+  confirmation sur widgets réels, propriétaire à 0 et absence de processus dans
+  les seuls chemins privés ; aucune augmentation de délai du produit.
+- Garde locale du nouveau harness : Windows refusé **avant** création de
+  répertoire/préfixe/lancement. AST Python et YAML vérifiés ; ce n'est pas une
+  exécution macOS. Aqua, sandbox et scellements restent obligatoires.
+- Qualification manuelle autorisée du SHA exact `6094f3a15c980d465ea70abd16442f7c59567705` :
+  [43402431543](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/43402431543).
+  Quatre cibles Unix demandées, sans runtime-replay ni bootstrap Intel ;
+  résultats **en attente** à ce checkpoint. Ne pas annoncer une CI réussie.
+- Audit PE actuel : les quatre images du préfixe Windows protocole 9 passent
+  la garde des imports normaux/différés. Pas une preuve MSI/ZIP ou Windows vierge.
+
+La section 9 de `V0.22.0_PARITY_AUDIT.md` contient un tableau courant des
+**44 familles**, contrôlées une fois chacune, séparant contrats fonctionnels,
+matériel non testé et étapes ultérieures. Les branches et plans historiques
+ne sont pas réécrits. Aucun sous-agent : routage effectif non prouvé.
+
+**Écart restant identifié, non masqué : O02/O05.** Les filtres de vue sont réels,
+mais cadence/session avancée et sorties `watch` n'ont pas de contrat Flutter
+complet. Les sources et les raisons de sécurité précises sont au §9.1 :
+collecteur unique, transitions complètes natives et destination de log possédée.
+Pas de deuxième `mcw watch`, de sink synthétique ou d'autorité arbitraire sur des
+fichiers pour prétendre terminer. Ce sont des P1 de l'étape 2, pas du packaging.
+
+**Prochaine opération sûre :** attendre le job local `gh run watch` déjà lancé,
+examiner les vrais reçus/logs/architectures/captures du run ci-dessus, corriger
+ses éventuels défauts et sauvegarder les preuves durables. Comparer ensuite les
+références protégées et les empreintes de l'installation quotidienne au baseline.
+Ne pas commencer l'étape 3 et ne pas conclure l'étape 2 terminée tant que O02/O05
+ne sont pas implémentés/testés.
+

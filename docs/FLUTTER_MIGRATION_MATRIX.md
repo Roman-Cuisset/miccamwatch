@@ -457,3 +457,17 @@ Code `4e7b20b`. Contrats étape 2 :
   par ce filtre de présentation. Aucun changement de fréquence ou nouveau
   collecteur ; nouvelles preuves Unix/CI du protocole 9 encore attendues.
 
+## Tableau de clôture des 44 familles — 13 novembre 2026
+
+Le [tableau courant de l'audit](V0.22.0_PARITY_AUDIT.md#9-état-courant-des-44-familles--13-novembre-2026)
+actualise les 44 familles sans remplacer leur référence native ni les preuves
+historiques ci-dessus. Protocole courant : **9**.
+
+Les manques fonctionnels de clôture sont **O02 (cadence/session avancée)** et
+**O05 (sessions et sorties explicites)**. Les filtres réels n'en sont pas un
+substitut. Le §9.1 identifie les contrats natifs, l'autorité des fichiers et les
+tests encore nécessaires ; pas de second moniteur ou de log synthétique.
+Qualification Unix exacte `6094f3a` :
+[43402431543](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/43402431543),
+en cours à ce checkpoint ; ne pas confondre son lancement avec un succès.
+

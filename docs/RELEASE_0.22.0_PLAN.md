@@ -223,3 +223,22 @@ une qualification macOS est déclenchée séparément, avec son SHA exact. Ce n'
 pas une permission de main/tag/release/site, d'installation ou d'action matérielle.
 **Ne pas commencer l'étape 3 ni proposer une RC.** Reprise recommandée :
 GPT-6.1 Sol / OpenAI Codex OAuth / xhigh, aucun sous-agent sans preuve de routage.
+
+## 10. État de finalisation au 13 novembre 2026
+
+Les listes du checkpoint du 11 novembre ci-dessus sont historiques :
+caméra Windows coordonnée, enforcement de session, Quit natif, détail multi-accès
+et contrats maintenance sont maintenant implémentés et testés Windows.
+Le protocole courant est **9**, pas 6. Les filtres d'affichage n'altèrent ni les
+sondes ni la cadence. Voir le [tableau courant des 44 familles](V0.22.0_PARITY_AUDIT.md#9-état-courant-des-44-familles--13-novembre-2026).
+
+**L'étape 2 reste incomplète sur O02/O05** : session/cadence et sorties avancées
+ne doivent pas être remplacées par une seconde CLI `watch`, un événement inventé
+depuis la projection Flutter ou une écriture arbitraire privilégiée.
+Le §9.1 de l'audit précise le contrat restant et ses tests de sécurité.
+Ces points demeurent des P1 de l'étape 2 ; aucune autorisation d'étape 3 implicite.
+
+Qualification Unix du code exact `6094f3a` lancée dans
+[43402431543](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/43402431543).
+Build/tests, cycles graphiques, permissions matérielles et packaging final
+resteront distingués dans le reçu final. Aucun Mac physique requis.
