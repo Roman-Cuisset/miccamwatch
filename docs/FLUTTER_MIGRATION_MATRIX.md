@@ -443,3 +443,17 @@ Code `4e7b20b`. Contrats étape 2 :
   Windows vierge, package hybride ou test matériel revendiqué à ce checkpoint.
 - Nouveau code Linux/macOS à qualifier ; O02/O05 toujours incomplets.
 
+## O02/V01 — vue filtrée et scopes natifs, 13 novembre 2026
+
+- `85c6493`, protocole **9** synchronisé Rust/Dart/runner Windows.
+- Risque natif obligatoire, sans inférence depuis la confiance.
+- Ressource, seuil natif et Ready filtrent réellement les lignes de cette
+  fenêtre ; cartes/observations/notifications/protections inchangées.
+- Six scopes natifs traduits, faux choix UAC Unix supprimé ; libellés microphone
+  suivent la langue de fenêtre. Sept langues, deux thèmes, trois tailles de texte.
+- Windows : 74 tests Rust, 115 Flutter, Clippy/analyse/builds réussis ;
+  six cycles réels, préférences privées préservées et captures examinées.
+- **O02 partiel/O05 ouvert** : cadence et sessions/journaux avancés non livrés
+  par ce filtre de présentation. Aucun changement de fréquence ou nouveau
+  collecteur ; nouvelles preuves Unix/CI du protocole 9 encore attendues.
+

@@ -3892,3 +3892,32 @@ périphérique. Zéro sous-agent.
 des autres familles et nouvelles qualifications Linux/macOS du commit exact.
 Ne pas annoncer l'étape terminée ni commencer l'étape 3 sur ce seul checkpoint.
 
+### 2026-11-13 — Filtres de présentation réels, protocole 9 et scopes traduits
+
+Code sauvegardé : `85c6493`. `DesktopAccess` transmet maintenant le **risque
+calculé par Rust**, indépendamment de la confiance ; protocole strict **9**.
+Flutter filtre les lignes d'observation par ressource, risque natif minimal
+et inclusion des Ready. Les cartes globales, sondes, protections, notifications
+et cadences restent inchangées. Filtres locaux à la fenêtre, pas une préférence
+`show_ready` prétendument active ni une nouvelle session `watch`.
+
+Les scopes microphone/caméra sont six identifiants fermés traduits dans les
+sept langues. « Classé bloqué » décrit une évaluation, pas un blocage matériel.
+La reprise UAC caméra n'est plus affichée sur les OS sans cette capacité.
+Le contrôle microphone suit aussi la langue choisie pour cette fenêtre.
+
+Vérifications Windows : **74 tests Rust desktop, 115 tests Flutter**, Clippy
+strict, analyse Flutter et deux builds release réussis. Tests de rendu dans
+sept langues, deux thèmes et trois facteurs de texte (1/1,25/1,5).
+Six vraies ouvertures/fermetures depuis le propriétaire privé (trois par thème),
+actions sur les widgets rendus et observations réelles ; zéro processus Flutter
+résiduel, compteur Rust progressant après fermeture, préférences privées
+identiques, sortie coopérative du propriétaire à 0. Captures clair/sombre
+réellement examinées, sans injection d'observations fictives.
+
+Preuves : `v022-stage2-final-20261112-084140/view-v9-*` et
+`qualify_view_v9_windows.py` dans le répertoire de qualification privé.
+O02 reste **partiel** : cadence/session avancée non implémentée ; O05
+session/journaux explicites reste ouvert. Ne pas présenter ce filtre borné
+comme la parité complète de `watch`, ni comme une preuve d'absence de capture.
+
