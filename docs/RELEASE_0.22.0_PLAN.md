@@ -267,4 +267,6 @@ Aucune autorisation d'étape 3, de publication ou de packaging hybride.
 
 Le protocole 10 porte le réglage d’affichage et la session de journalisation.
 Le contrat du journal figure dans [l’architecture](ARCHITECTURE.md).
-La qualification de cette révision reste nécessaire pour clôturer l’étape 2.
+La qualification logicielle d’O02/O05 a réussi sur `9b48753`. Les reçus et
+leurs limites figurent dans [l’audit de parité](V0.22.0_PARITY_AUDIT.md#94-reprise-du-16-novembre-2026).
+Les validations matérielles et celles du paquet hybride restent ouvertes.

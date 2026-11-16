@@ -4075,5 +4075,8 @@ v0.21.0, de l'installation stable ou des 12 worktrees.
 - O05 ajoute la création confirmée d’un journal JSONL privé, suivi par le
   propriétaire Rust et fermé à sa sortie. Le journal part des événements
   natifs, avec un plafond de 32 Mio et un état d’échec consultable.
-- La qualification graphique et multiplateforme de ce changement reste à
-  établir avant toute clôture de l’étape 2.
+- La qualification logicielle de `9b48753` a réussi. Le scénario Windows
+  opérationnel a vérifié le consentement, la poursuite de la session après
+  fermeture de Flutter, la clôture du journal et le redémarrage inactif.
+  Les résultats par cible et les limites figurent dans
+  [l’audit de parité](V0.22.0_PARITY_AUDIT.md#94-reprise-du-16-novembre-2026).

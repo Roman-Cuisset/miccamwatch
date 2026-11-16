@@ -499,8 +499,8 @@ reste **Partiel** et O05 **Incomplet** jusqu'à preuve du contraire.
 
 | Famille | Portée implémentée | Qualification |
 |---|---|---|
-| O02 | Intervalle d’affichage indépendant de la collecte, trois valeurs relues depuis Rust, réglage en mémoire et session possédée par le moteur. IPC 10. | Qualification de l’interface et du cycle de vie à confirmer sur les trois OS. |
-| O05 | Consentement par confirmation native, nouveau fichier JSONL privé, événements du snapshot complet, plafond explicite et état d’arrêt relu. | Qualification des permissions et de la sortie du propriétaire à confirmer sur les trois OS. |
+| O02 | Intervalle d’affichage indépendant de la collecte, trois valeurs relues depuis Rust, réglage en mémoire et session possédée par le moteur. IPC 10. | Tests Windows, Linux et macOS réussis. Cadence testée par horloge de présentation et absence de nouvelle collecte vérifiée côté Unix. |
+| O05 | Consentement par confirmation native, nouveau fichier JSONL privé, événements du snapshot complet, plafond explicite et état d’arrêt relu. | Tests des permissions et transitions réussis. Cycle opérationnel complet vérifié en fenêtre sur le runner Windows, événements couverts par fixtures. |
 
 Les états ci-dessus s’appliquent aux deux familles de la matrice existante.
 Les 42 autres familles gardent les résultats vérifiés dans l’audit de parité.
