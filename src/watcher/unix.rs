@@ -4,7 +4,7 @@ use crate::{
     history,
     i18n::Language,
     model::{
-        Access, AccessEvent, Action, Activity, EnforcementDecision, Risk,
+        Access, AccessEvent, Action, Activity, CollectorState, EnforcementDecision, Risk,
         SCHEMA_VERSION, Snapshot, event_code,
     },
     output,
@@ -273,7 +273,7 @@ pub(super) fn enforce_policy_with(
 mod tests {
     use super::*;
     use crate::watcher::transitions::reconcile;
-    use crate::model::{Activity, CollectorHealth, CollectorState, Confidence, EnforcementDecision, Resource, Risk};
+    use crate::model::{Activity, CollectorHealth, Confidence, EnforcementDecision, Resource, Risk};
 
     fn access() -> Access {
         Access {

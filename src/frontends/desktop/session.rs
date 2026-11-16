@@ -763,4 +763,19 @@ mod tests {
         assert_eq!(failed.phase, Phase::Failed);
         assert_eq!(std::fs::read_dir(outside).unwrap().count(), 0);
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn stop_detects_a_replaced_path_without_recreating_it() {
+        let (_temp, root, owner) = setup(MAX_FILE_BYTES);
+        let client = owner.client();
+        start(&client, 2000);
+        let directory = root.join("sessions");
+        std::fs::rename(&directory, root.join("moved")).unwrap();
+        let stopped = client
+            .execute(client.prepare(false).unwrap(), None)
+            .unwrap();
+        assert_eq!(stopped.phase, Phase::Failed);
+        assert!(!directory.exists());
+    }
 }

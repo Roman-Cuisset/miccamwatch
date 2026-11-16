@@ -468,6 +468,8 @@ impl Worker {
                     result: Err(
                         "Native consultation completion unavailable; restart the tray".into(),
                     ),
+                    #[cfg(unix)]
+                    refresh_observation: false,
                 })
             }
         }

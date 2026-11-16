@@ -101,6 +101,10 @@ mod private {
 
     impl Directory {
         pub(super) fn open(path: &Path) -> Result<Self> {
+            Self::walk(path, true)
+        }
+
+        fn walk(path: &Path, create: bool) -> Result<Self> {
             ensure!(path.is_absolute(), "Session directory must be absolute");
             let mut components = path.components().peekable();
             ensure!(
@@ -115,7 +119,7 @@ mod private {
                 let name = CString::new(name.as_bytes())?;
                 let parent = directory.as_raw_fd();
                 let next = match open_at(parent, &name, DIRECTORY_FLAGS, 0) {
-                    Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    Err(error) if create && error.kind() == io::ErrorKind::NotFound => {
                         if unsafe { libc::mkdirat(parent, name.as_ptr(), 0o700) } != 0 {
                             let error = io::Error::last_os_error();
                             if error.kind() != io::ErrorKind::AlreadyExists {
@@ -170,7 +174,8 @@ mod private {
     }
 
     pub(super) fn verify(file: &File, path: &Path) -> Result<()> {
-        let directory = Directory::open(path.parent().context("Missing session directory")?)?;
+        let directory =
+            Directory::walk(path.parent().context("Missing session directory")?, false)?;
         let filename = CString::new(
             path.file_name()
                 .context("Missing journal filename")?
