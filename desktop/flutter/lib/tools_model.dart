@@ -1,3 +1,5 @@
+import 'session_model.dart';
+
 import 'package:flutter/foundation.dart' show mapEquals;
 
 /// These are intentions. Only Rust can authorize them and confirm their effect.
@@ -69,6 +71,12 @@ class ToolsRequest {
   const ToolsRequest._(this.action, this.parameters, {this.control});
   const ToolsRequest.controls() : this._('controls', const {});
   const ToolsRequest.exitStatus() : this._('exit_status', const {});
+  const ToolsRequest.sessionStatus() : this._('session_status', const {});
+  const ToolsRequest.sessionStop() : this._('session_stop', const {});
+  ToolsRequest.sessionStart(int ms) : this._('session_start', {'requested_ms': ms});
+  ToolsRequest.sessionCadence(int ms) : this._('session_cadence', {'requested_ms': ms});
+  ToolsRequest.sessionConfirm(String token) : this._(
+      'session_confirm', {'token': token, 'consent': 'confirm_observation_session'});
   const ToolsRequest.devices() : this._('devices', const {});
   const ToolsRequest.paths() : this._('paths', const {});
   const ToolsRequest.policy() : this._('policy', const {});
@@ -247,6 +255,8 @@ class NativeReport {
   final ReleaseCheck? releaseCheck;
   EnforcementStatus? get enforcement => data?['enforcement_runtime'] == null
       ? null : EnforcementStatus.fromJson(data!['enforcement_runtime']);
+  ObservationSession? get observationSession => data?['observation_session'] == null
+      ? null : ObservationSession.fromJson(data!['observation_session']);
   ExitStatus? get exit => data?['exit'] == null ? null : ExitStatus.fromJson(data!['exit']);
   factory NativeReport.fromJson(dynamic value) {
     final map = _object(value, {'outcome', 'state', 'token', 'control', 'data', 'error'});
@@ -262,8 +272,14 @@ class NativeReport {
     final state = map['state'] == null ? null : NativeState.fromJson(map['state']);
     final control = map['control'] == null ? null : NativeControl.fromJson(map['control']);
     final error = map['error'] == null ? null : _text(map['error'], 1024);
-    if (outcome == 'prepared' && (token == null || control == null || error != null ||
-        (state == null && control.kind != 'quit_engine'))) {
+    final rawData = map['data'];
+    final observationConfirmation = rawData is Map<String, dynamic> &&
+        rawData['observation_confirmation'] == true &&
+        rawData['confirmation_seconds'] == 30 && rawData.length == 2;
+    if (outcome == 'prepared' && (token == null || error != null ||
+        (observationConfirmation
+          ? control != null || state != null
+          : control == null || (state == null && control.kind != 'quit_engine')))) {
       throw const FormatException('Incomplete native preparation');
     }
     if (outcome != 'prepared' && token != null) {
@@ -272,13 +288,15 @@ class NativeReport {
     if (outcome == 'not_confirmed' && (control == null || error == null)) {
       throw const FormatException('Unconfirmed action lacks its explanation');
     }
-    final rawData = map['data'];
     if (rawData != null && rawData is! Map<String, dynamic>) {
       throw const FormatException('Invalid native report data');
     }
     _boundedData(rawData, 0);
     if (rawData is Map<String, dynamic> && rawData['enforcement_runtime'] != null) {
       EnforcementStatus.fromJson(rawData['enforcement_runtime']);
+    }
+    if (rawData is Map<String, dynamic> && rawData['observation_session'] != null) {
+      ObservationSession.fromJson(rawData['observation_session']);
     }
     if (rawData is Map<String, dynamic> && rawData['exit'] != null) {
       ExitStatus.fromJson(rawData['exit']);

@@ -117,7 +117,7 @@ pub(crate) fn pin_directory_chain(path: &Path) -> Result<Vec<File>> {
         ensure!(trusted_owner(&metadata) && (metadata.mode() & 0o022 == 0 || root_sticky),
             "unsafe directory ownership or permissions: {}", path.display());
         #[cfg(target_os = "macos")]
-        reject_mutating_acl(&directory)?;
+        check_directory_acl(&directory, false)?;
         pins.push(directory);
     }
     Ok(pins)
@@ -131,7 +131,7 @@ fn trusted_owner(metadata: &std::fs::Metadata) -> bool {
 /// read/execute grants and ordinary deny-delete home ACLs, but fail closed on
 /// any explicit grant capable of changing a pinned object or its children.
 #[cfg(target_os = "macos")]
-fn reject_mutating_acl(file: &File) -> Result<()> {
+pub(crate) fn check_directory_acl(file: &File, private: bool) -> Result<()> {
     use std::ffi::c_void;
     unsafe extern "C" {
         fn acl_get_fd_np(fd: libc::c_int, kind: libc::c_int) -> *mut c_void;
@@ -172,7 +172,7 @@ fn reject_mutating_acl(file: &File) -> Result<()> {
             "cannot inspect desktop ownership ACL");
         const MUTATING: u64 = (1 << 2) | (1 << 4) | (1 << 5) | (1 << 6)
             | (1 << 8) | (1 << 10) | (1 << 12) | (1 << 13);
-        ensure!(tag != 1 || mask & MUTATING == 0, "unsafe desktop ownership ACL grant");
+        ensure!(tag != 1 || (!private && mask & MUTATING == 0), "unsafe desktop ownership ACL grant");
     }
     Ok(())
 }
@@ -228,7 +228,7 @@ impl Bundle {
             && trusted_owner(&metadata) && (!executable || metadata.mode() & 0o111 != 0),
             "unsafe desktop payload ownership, links or permissions: {}", path.display());
         #[cfg(target_os = "macos")]
-        reject_mutating_acl(&file)?;
+        check_directory_acl(&file, false)?;
         Ok(file)
     }
     fn pin_tree(root: &Path, path: &Path, pins: &mut Vec<PayloadPin>) -> Result<()> {
@@ -265,7 +265,7 @@ impl Bundle {
                 && trusted_owner(&opened) && opened.mode() & 0o022 == 0,
                 "unsafe desktop payload directory: {}", path.display());
             #[cfg(target_os = "macos")]
-            reject_mutating_acl(&directory)?;
+            check_directory_acl(&directory, false)?;
             pins.push(PayloadPin { path: path.to_path_buf(), file: directory });
             for entry in std::fs::read_dir(path)? {
                 Self::pin_tree(root, &entry?.path(), pins)?;
@@ -516,6 +516,9 @@ impl Supervisor {
     }
     pub fn configure_enforcement(&mut self, runtime: crate::watcher::enforcement::Runtime) {
         self.context.enforcement = Some(runtime);
+    }
+    pub fn configure_session(&mut self, client: super::session::Client) {
+        self.context.observation_session = Some(client);
     }
     pub fn configure_exit_owner(&mut self, owner: super::exit_owner::Client) {
         self.context.exit_owner = Some(owner);

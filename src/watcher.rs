@@ -6,6 +6,10 @@ mod windows;
 pub mod enforcement;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-pub use unix::{EventDispatcher, TransitionTracker, watch};
+pub use unix::{EventDispatcher, watch};
+#[cfg(any(unix, feature = "flutter-desktop"))]
+mod transitions;
+#[cfg(any(unix, feature = "flutter-desktop"))]
+pub use transitions::TransitionTracker;
 #[cfg(windows)]
 pub use windows::watch;

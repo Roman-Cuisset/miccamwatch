@@ -1773,6 +1773,9 @@ fn make_view(
 /// Shared process-owned Flutter presentation/preferences lane. Native collectors,
 /// controls and alerts never depend on the disposable child remaining open.
 #[cfg(feature = "flutter-desktop")]
+use crate::frontends::desktop::session;
+
+#[cfg(feature = "flutter-desktop")]
 struct FlutterFrontend {
     ui: Option<crate::frontends::desktop::unix::Supervisor>,
     worker: Option<crate::frontends::desktop::preferences::PreferenceWorker>,
@@ -1787,22 +1790,33 @@ struct FlutterFrontend {
     enforcement: crate::watcher::enforcement::Runtime,
     exit_client: crate::frontends::desktop::exit_owner::Client,
     exit_owner: crate::frontends::desktop::exit_owner::Owner,
+    session: Option<session::Owner>,
+    observations: session::Observations,
+    presentation: session::Presentation,
 }
 #[cfg(feature = "flutter-desktop")]
 impl FlutterFrontend {
-    fn new(lang: Language, writable: bool, profile_writable: bool, operational: bool) -> Self {
+    fn new(lang: Language, writable: bool, profile_writable: bool, operational: bool) -> Result<Self> {
         let (exit_client, exit_owner) = crate::frontends::desktop::exit_owner::channel();
-        Self {
+        Ok(Self {
             ui: None, worker: None, sequence: 1, writable, profile_writable, operational,
             applied_profile: None, lang,
             current: None,
             policy: (!operational).then(|| Arc::new(Policy::default())),
             enforcement: Default::default(),
             exit_client, exit_owner,
-        }
+            session: operational.then(|| session::Owner::new(session::Cadence::native(INTERVAL, None))).transpose()?,
+            observations: Default::default(), presentation: Default::default(),
+        })
     }
     fn attached(&self) -> bool {
         self.ui.as_ref().is_some_and(crate::frontends::desktop::unix::Supervisor::is_running)
+    }
+    fn session_status(&self) -> session::Status {
+        self.session.as_ref().map_or_else(
+            || session::Status::idle(session::Cadence::native(INTERVAL, None)),
+            session::Owner::status,
+        )
     }
     fn frame(&mut self) -> crate::frontends::desktop::DesktopSnapshot {
         self.sequence = self.sequence.checked_add(1).expect("desktop sequence exhausted");
@@ -1815,6 +1829,7 @@ impl FlutterFrontend {
             if self.operational { "operational" } else if self.writable {
                 "settings_development"
             } else { "read_only_development" },
+            self.session_status(),
         );
         frame.preferences = crate::frontends::desktop::observe_preferences(
             self.writable, self.profile_writable, self.applied_profile,
@@ -1832,12 +1847,17 @@ impl FlutterFrontend {
     fn observe(&mut self, snapshot: Result<Snapshot, String>, observed_at: chrono::DateTime<chrono::Utc>) {
         // Move the existing native observation; no DTO copies/serialization while
         // closed, and reopening never starts with a deliberately stale last UI.
+        if let Some(owner) = &self.session {
+            self.observations.observe(&owner.client(), snapshot.as_ref().ok(), observed_at);
+        }
         self.current = Some((snapshot, observed_at));
+        self.presentation.observed();
     }
     fn publish(&mut self) -> Result<()> {
         if self.attached() {
             let frame = self.frame();
             self.ui.as_mut().expect("attached UI").publish(frame)?;
+            self.presentation.published(Instant::now());
         }
         Ok(())
     }
@@ -1849,9 +1869,12 @@ impl FlutterFrontend {
             ui.configure_policy(Arc::clone(policy), !self.profile_writable);
             ui.configure_enforcement(self.enforcement.clone());
             ui.configure_exit_owner(self.exit_client.clone());
+            if let Some(owner) = &self.session { ui.configure_session(owner.client()); }
         }
         let frame = self.frame();
-        self.ui.as_mut().expect("initialized UI").open(frame, theme)
+        self.ui.as_mut().expect("initialized UI").open(frame, theme)?;
+        self.presentation.published(Instant::now());
+        Ok(())
     }
     fn refresh(&mut self) -> Result<bool> {
         use crate::frontends::desktop::{
@@ -1886,7 +1909,9 @@ impl FlutterFrontend {
         }
         changed |= self.ui.as_mut().is_some_and(Supervisor::take_controls_changed);
         let presentation_changed = self.ui.as_mut().is_some_and(Supervisor::take_presentation_changed);
-        if changed || presentation_changed { self.publish()?; }
+        if changed || presentation_changed || self.presentation.due(Instant::now(), self.session_status().cadence) {
+            self.publish()?;
+        }
         if let Some(error) = self.ui.as_mut().and_then(Supervisor::take_error) {
             eprintln!("MicCamWatch Flutter desktop: {error}; native controls remain available");
         }
@@ -1914,6 +1939,7 @@ impl FlutterFrontend {
             thread::sleep(Duration::from_millis(20));
         }
         self.ui.take();
+        if let Some(owner) = self.session.as_mut() { owner.finish(); }
     }
 }
 #[cfg(feature = "flutter-desktop")]
@@ -2095,7 +2121,7 @@ fn run_flutter_development(lang: Language, initial_window: bool, theme: &str, wr
     // Reuse the authenticated native singleton implementation unchanged, including
     // Linux SO_PEERPIDFD/image verification. The isolated XDG roots own this namespace.
     let Some(lifecycle) = Lifecycle::acquire_for_launch(initial_window, false)? else { return Ok(()) };
-    let mut frontend = FlutterFrontend::new(lang, writable, writable, false);
+    let mut frontend = FlutterFrontend::new(lang, writable, writable, false)?;
     // Opt-in genuine native registration; never label window-only mode as tray
     // proof. The Mac host uses the same pinned helper/input as operational mode.
     #[cfg(target_os = "linux")]
@@ -2291,7 +2317,7 @@ pub fn run_tray(
         return Ok(());
     };
     #[cfg(feature = "flutter-desktop")]
-    let mut flutter = FlutterFrontend::new(lang, true, !explicit_policy, true);
+    let mut flutter = FlutterFrontend::new(lang, true, !explicit_policy, true)?;
     #[cfg(feature = "flutter-desktop")]
     { flutter.policy = Some(Arc::new(policy.clone())); }
     let (sender, actions) = mpsc::sync_channel(32);
@@ -2567,8 +2593,6 @@ pub fn run_tray(
                     }
                 }
                 next_poll = Instant::now() + INTERVAL;
-                #[cfg(feature = "flutter-desktop")]
-                flutter.publish()?;
                 host.update(make_view(
                     (summary.clone(), if action_error { "error" } else { visual }),
                     mute,

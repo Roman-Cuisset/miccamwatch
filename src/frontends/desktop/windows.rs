@@ -249,6 +249,9 @@ impl Supervisor {
     pub fn configure_enforcement(&mut self, runtime: crate::watcher::enforcement::Runtime) {
         self.context.enforcement = Some(runtime);
     }
+    pub fn configure_session(&mut self, client: super::session::Client) {
+        self.context.observation_session = Some(client);
+    }
     pub fn configure_exit_owner(&mut self, owner: super::exit_owner::Client) {
         self.context.exit_owner = Some(owner);
     }

@@ -205,7 +205,8 @@ def operational_phase(prefix, proof, env, phase):
             require(len(matches) <= 1, 'Concurrent Flutter instances')
             return proof_from(lines, matches[0].pid) if matches else None
         value = runtime.until(report, timeout=60)
-        require(value.get('status') == 'passed' and value.get('mode') == 'operational'
+        expected_status = {'session': 'session_recording', 'session_restart': 'session_restart_idle'}.get(phase, 'passed')
+        require(value.get('status') == expected_status and value.get('mode') == 'operational'
                 and value.get('scenario') == 'startup', 'Native startup phase failed: ' + json.dumps(value))
         receipt['ui_proof'] = value
         ui_pid = value['pid']
@@ -215,6 +216,24 @@ def operational_phase(prefix, proof, env, phase):
         # The paired, pinned CLI stops only the authenticated owned operational scope.
         require(sha(prefix / 'mcw.exe') == json.loads((prefix / 'qualification-manifest.json').read_text())['cli_sha256'],
                 'Paired CLI changed')
+        if phase == 'session':
+            windows = runtime.until(lambda: runtime.windows({ui_pid}, 'MicCamWatch', True))
+            require(len(windows) == 1, 'The exact recording window is ambiguous')
+            require(runtime.U.PostMessageW(windows[0][0], 0x0010, 0, 0), 'Could not close the exact Flutter window')
+            runtime.until(lambda: not runtime.same_process_alive(ui_pid, generation['birth']), timeout=20)
+            require(owned.poll() is None, 'Window close stopped the native recorder owner')
+            reopen = subprocess.run([str(prefix / 'mcw.exe'), 'tray', 'open'], cwd=prefix,
+                                    env=child_env, capture_output=True, timeout=25)
+            require(reopen.returncode == 0, 'Paired CLI did not reopen the retained owner')
+            resumed = runtime.until(report, timeout=60)
+            require(resumed.get('status') == 'session_resumed' and resumed.get('mode') == 'operational'
+                    and resumed['pid'] != ui_pid and resumed['session_id'] == value['session_id']
+                    and resumed['journal_path'] == value['journal_path'] and resumed['events'] >= value['events'],
+                    'Reopened Flutter did not recover the same native journal')
+            receipt['ui_after_reopen'] = resumed
+            ui_pid = resumed['pid']
+            generation = runtime.kernel_process_state(ui_pid)
+            require(generation is not None and not generation['exited'], 'Reopened Flutter exited before closure proof')
         stop = subprocess.run([str(prefix / 'mcw.exe'), 'tray', 'stop'], cwd=prefix, env=child_env,
                               capture_output=True, timeout=25)
         receipt['stop'] = dict(code=stop.returncode, stdout=stop.stdout.decode(errors='replace'),
@@ -222,6 +241,20 @@ def operational_phase(prefix, proof, env, phase):
         require(stop.returncode == 0 and owned.wait(timeout=25) == 0, 'Owned operational shutdown failed')
         runtime.until(lambda: not runtime.same_process_alive(ui_pid, generation['birth']), timeout=20)
         receipt['owned_flutter_exited'] = True
+        if phase == 'session':
+            journal = Path(value['journal_path']).resolve(strict=True)
+            directory = (Path(env['LOCALAPPDATA']) / 'MicCamWatch' / 'sessions').resolve(strict=True)
+            require(journal.parent == directory and journal.suffix == '.jsonl', 'Journal escaped the owned directory')
+            rows = [json.loads(line) for line in journal.read_text(encoding='utf-8').splitlines()]
+            header, footer = rows[0], rows[-1]
+            require(header['type'] == 'session_start' and header['session_id'] == value['session_id']
+                    and header['consent'] == 'explicit_local_recording'
+                    and footer['type'] == 'session_stop' and footer['reason'] == 'owner_exit'
+                    and footer['events_written'] == len(rows) - 2
+                    and footer['events_written'] >= resumed['events']
+                    and all(row['schema_version'] == 3 for row in rows[1:-1]),
+                    'Owner shutdown did not leave the expected JSONL journal')
+            receipt['verified_journal'] = {'file': journal.name, 'header': header, 'footer': footer}
         reader.join(timeout=3)
         receipt['status'] = 'passed'
     except BaseException as error:
@@ -286,9 +319,19 @@ def startup(prefix, proof):
                            capture_output=True, timeout=15)
     require(query.returncode != 0, 'Task left after native disable')
     require(settings.read_bytes() == before, 'Startup lifecycle changed preferences')
+    session_env, session_settings = environment(proof / 'session-scope')
+    session_settings.write_text(session_settings.read_text().replace('history_enabled = true',
+        'history_enabled = false'), encoding='utf-8')
+    session_before = session_settings.read_bytes()
+    operational_phase(prefix, proof / 'observation-session', session_env, 'session')
+    operational_phase(prefix, proof / 'observation-restart', session_env, 'session_restart')
+    require(session_settings.read_bytes() == session_before, 'Observation session changed private preferences')
+    journals = list((Path(session_env['LOCALAPPDATA']) / 'MicCamWatch' / 'sessions').glob('*.jsonl'))
+    require(len(journals) == 1, 'Owner restart initiated another recording')
     save(proof / 'summary.json', dict(status='passed', activation=True, deactivation=True,
          owner_restart_persistence=True, foreign_registration_preserved=True,
          write_access_denial_confirmed=True, windows_user_optout_preserved=True,
+         observation_session_close_reopen_and_restart=True,
          preferences_preserved=True, preflight=baseline,
          limitations=['Hosted token is reported; not automatically a standard-user test',
                       'No device protection or installed-package lifecycle exercised']))

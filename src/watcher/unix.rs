@@ -1,9 +1,10 @@
+use super::TransitionTracker;
 use crate::{
     frontends::cli::Filter,
     history,
     i18n::Language,
     model::{
-        Access, AccessEvent, Action, Activity, CollectorState, EnforcementDecision, Resource, Risk,
+        Access, AccessEvent, Action, Activity, EnforcementDecision, Risk,
         SCHEMA_VERSION, Snapshot, event_code,
     },
     output,
@@ -20,26 +21,6 @@ use std::{
     sync::mpsc,
     time::{Duration, Instant},
 };
-
-#[derive(Default)]
-pub struct TransitionTracker {
-    previous: HashMap<String, Access>,
-    unseen: HashSet<Resource>,
-}
-
-impl TransitionTracker {
-    pub fn reconcile(
-        &mut self,
-        snapshot: &Snapshot,
-        emit: impl FnMut(&Access, Action) -> Result<()>,
-    ) -> Result<()> {
-        reconcile(&mut self.previous, &mut self.unseen, snapshot, emit)
-    }
-
-    pub(crate) fn observation_gap(&mut self) {
-        self.unseen.extend([Resource::Microphone, Resource::Camera]);
-    }
-}
 
 pub struct EventDispatcher {
     lang: Language,
@@ -288,65 +269,11 @@ pub(super) fn enforce_policy_with(
     }
 }
 
-fn reconcile(
-    previous: &mut HashMap<String, Access>,
-    unseen: &mut HashSet<Resource>,
-    snapshot: &Snapshot,
-    mut emit: impl FnMut(&Access, Action) -> Result<()>,
-) -> Result<()> {
-    for collector in &snapshot.collectors {
-        let resource = match collector.collector {
-            "pipewire_audio" | "coreaudio_input" => Resource::Microphone,
-            "pipewire_video" | "coremediaio_video" => Resource::Camera,
-            _ => continue,
-        };
-        // Limited coverage is not a scan gap unless the collector explicitly
-        // reports one; CoreMediaIO's unknown-client limitation still permits STOP.
-        if collector.state == CollectorState::Unavailable
-            || snapshot.observation_gaps.contains(&resource)
-        {
-            unseen.insert(resource);
-        } else if unseen.remove(&resource) {
-            // Recovery is not evidence of when an earlier capture stopped.
-            // Rebaseline without inventing a STOP across an observation gap.
-            previous.retain(|_, access| access.resource != resource);
-        }
-    }
-    let mut current = HashMap::new();
-    for access in &snapshot.accesses {
-        if !current.contains_key(&access.key) {
-            current.insert(access.key.clone(), access.clone());
-        }
-    }
-    for (key, access) in &current {
-        match previous.get(key) {
-            None => emit(access, Action::Start)?,
-            Some(old) if access_changed(old, access) => emit(access, Action::Update)?,
-            _ => {}
-        }
-    }
-    for (key, old) in previous.iter() {
-        if !current.contains_key(key) && !unseen.contains(&old.resource) {
-            emit(old, Action::Stop)?;
-        }
-    }
-    previous.retain(|_, access| unseen.contains(&access.resource));
-    previous.extend(current);
-    Ok(())
-}
-
-fn access_changed(old: &Access, current: &Access) -> bool {
-    old.activity != current.activity
-        || old.risk != current.risk
-        || old.confidence != current.confidence
-        || old.enforcement != current.enforcement
-        || old.evidence != current.evidence
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Activity, CollectorHealth, Confidence, EnforcementDecision, Risk};
+    use crate::watcher::transitions::reconcile;
+    use crate::model::{Activity, CollectorHealth, CollectorState, Confidence, EnforcementDecision, Resource, Risk};
 
     fn access() -> Access {
         Access {

@@ -15,6 +15,7 @@ import 'consultation_model.dart';
 import 'consultation_panels.dart';
 import 'ui_qualification.dart';
 import 'tools_panels.dart';
+import 'session_panel.dart';
 import 'observation_view.dart';
 
 final _started = Stopwatch()..start();
@@ -307,8 +308,15 @@ class _MicCamWatchAppState extends State<MicCamWatchApp> {
             ])),
             const SizedBox(height: 14),
             if (page == AppPage.overview) ..._overview(c, l, snapshot),
-            if (page == AppPage.controls) NativeToolsPanel(client: consultation,
-              locale: locale, accesses: snapshot?.accesses ?? const []),
+            if (page == AppPage.controls) ...[
+              if (snapshot != null) ...[
+                ObservationSessionPanel(client: consultation, locale: locale,
+                  status: snapshot.observationSession),
+                const SizedBox(height: 16),
+              ],
+              NativeToolsPanel(client: consultation,
+                locale: locale, accesses: snapshot?.accesses ?? const []),
+            ],
             if (page == AppPage.history) HistoryPanel(client: consultation, locale: locale),
             if (page == AppPage.settings) ...[
               InterfaceLanguagePicker(value: languageOverride, nativeLocale: snapshot?.locale ?? 'en',

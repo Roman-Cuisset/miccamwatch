@@ -5,8 +5,21 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:miccamwatch_desktop/snapshot.dart';
 import 'package:miccamwatch_desktop/preferences_model.dart' show PauseDirective;
 
+Map<String, Object?> cadence({int? requested}) => {
+  'native_ms': 2000,
+  'camera_inventory_ms': null,
+  'requested_ms': requested,
+  'presentation_ms': requested == 5000 ? 5000 : 2000,
+};
+
 Map<String, dynamic> frame({int sequence = 1}) => {
   'type': 'snapshot', 'protocol_version': protocolVersion, 'sequence': sequence,
+  'cadence': cadence(),
+  'observation_session': {
+    'phase': 'idle', 'session_id': null, 'started_at': null, 'path': null,
+    'events_written': 0, 'bytes_written': 0, 'last_error': null,
+    'max_bytes': 32 * 1024 * 1024, 'origin': 'native_owner', 'cadence': cadence(),
+  },
   'observed_at': '2026-10-27T08:00:00Z', 'locale': 'en',
   'engine': {'version': '0.21.1', 'platform': 'windows',
     'mode': 'read_only_development', 'state': 'healthy', 'detail': null},
@@ -110,6 +123,10 @@ void main() {
       (v) => v.remove('protection'),
       (v) => v['protocol_version'] = 3,
       (v) => v['protocol_version'] = 4,
+      (v) => v['protocol_version'] = 9,
+      (v) => v.remove('cadence'),
+      (v) => v['cadence'] = cadence(requested: 1000),
+      (v) => v['observation_session']['path'] = '/bad/path',
       (v) => v['protocol_version'] = protocolVersion.toDouble(),
       (v) => v['type'] = 'command',
       (v) => v['sequence'] = '1',

@@ -12,6 +12,7 @@ import 'package:flutter/widgets.dart';
 import 'consultation.dart';
 import 'preferences.dart';
 import 'preferences_model.dart';
+import 'session_model.dart';
 
 class UiQualification {
   UiQualification({required this.queries, required this.preferences,
@@ -36,10 +37,10 @@ class UiQualification {
     if (!value) throw StateError(message);
   }
 
-  void _record(String status, [String? error]) {
+  void _record(String status, [String? error, Map<String, Object?> details = const {}]) {
     stderr.writeln('MCW_FLUTTER_UI_PROOF ${jsonEncode({
       'pid': pid, 'scenario': scenario, 'status': status, ...describe(),
-      'cases': cases, 'framework_errors': errors, if (error != null) 'error': error,
+      'cases': cases, 'framework_errors': errors, ...details, if (error != null) 'error': error,
     })}');
   }
 
@@ -125,7 +126,9 @@ class UiQualification {
       'observations.risk.blocked', 'observations.risk.expected', 'observations.includeReady',
       'preferences.notificationsEnabled', 'autostart.change', 'autostart.confirm'};
     _require(permitted.contains(identifier) || (scenario == 'applications' &&
-      RegExp(r'^tools\.application\.[0-9]{1,10}$').hasMatch(identifier)), 'Not a qualification action');
+      RegExp(r'^tools\.application\.[0-9]{1,10}$').hasMatch(identifier)) ||
+      (scenario == 'startup' && const {'session.read', 'session.start', 'session.confirm'}
+        .contains(identifier)), 'Not a qualification action');
     _require(scenario == 'startup' || !identifier.startsWith('autostart.c'),
       'Startup mutation is not admitted in consultation qualification');
     await _until(() => _action(identifier) != null,
@@ -148,6 +151,35 @@ class UiQualification {
     await _until(() => !status.busy && status.state != QueryState.idle, '$label did not finish');
     _require(status.state == QueryState.succeeded,
       '$label failed: ${status.state.name}/${status.code}/${status.localIssue}');
+  }
+
+  Future<void> _sessionProof({required bool restarted}) async {
+    await _tap('navigation.controls');
+    await _until(() => !queries.toolsStatus.busy, 'Initial controls pending');
+    await _tap('session.read');
+    await _query(queries.toolsStatus, 'Observation journal readback');
+    var journal = queries.toolsReport?.observationSession;
+    _require(journal != null, 'Native journal status missing');
+    if (restarted) {
+      _require(journal!.phase == ObservationPhase.idle && journal.path == null &&
+        journal.cadence.requestedMs == null, 'Restart did not clear native session state');
+      _record('session_restart_idle');
+      return;
+    }
+    final resumed = journal!.phase == ObservationPhase.recording;
+    if (!resumed) {
+      _require(journal.phase == ObservationPhase.idle && journal.path == null, 'Unexpected existing session');
+      await _tap('session.start');
+      await _tap('session.confirm');
+      await _query(queries.toolsStatus, 'Confirmed observation recording');
+      journal = queries.toolsReport?.observationSession;
+    }
+    _require(journal?.phase == ObservationPhase.recording && journal?.path != null &&
+      journal?.cadence.nativeMs == 500 && journal?.cadence.cameraInventoryMs == 5000 &&
+      journal!.bytes > 0, 'Native observation recording was not confirmed');
+    _record(resumed ? 'session_resumed' : 'session_recording', null, {
+      'session_id': journal!.id, 'journal_path': journal.path, 'events': journal.events,
+    });
   }
 
   Future<void> run() async {
@@ -262,9 +294,13 @@ class UiQualification {
           Platform.environment['RUNNER_ENVIRONMENT'] == 'github-hosted' &&
           Platform.environment['MCW_UI_QUALIFICATION_STARTUP'] == 'allow',
           'Startup proof requires the separate disposable-runner preflight');
+        final phase = Platform.environment['MCW_UI_QUALIFICATION_PHASE'];
+        if (phase == 'session' || phase == 'session_restart') {
+          await _sessionProof(restarted: phase == 'session_restart');
+          return;
+        }
         await _tap('navigation.settings');
         await _query(queries.autostartStatus, 'Startup readback');
-        final phase = Platform.environment['MCW_UI_QUALIFICATION_PHASE'];
         _require(const {'enable', 'disable', 'foreign_refusal', 'write_failure', 'user_disabled'}
           .contains(phase), 'Startup phase required');
         final before = phase == 'disable';

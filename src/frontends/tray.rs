@@ -159,6 +159,7 @@ pub(crate) const UPDATE_STOPPED: usize = 0x4d435731;
 pub(crate) const UPDATE_BUSY: usize = 0x4d435732;
 pub(crate) const WM_OPEN_DESKTOP: u32 = WM_APP + 42;
 const TIMER_POLL_ID: usize = 1;
+const OBSERVATION_INTERVAL: Duration = Duration::from_millis(500);
 const CAMERA_POLL_INTERVAL: Duration = Duration::from_secs(5);
 const CMD_TOGGLE_MUTE: usize = 101;
 const CMD_TOGGLE_CAMERA: usize = 102;
@@ -318,6 +319,10 @@ struct TrayAppState {
     #[cfg(feature = "flutter-desktop")]
     desktop_observation: Option<DesktopObservation>,
     #[cfg(feature = "flutter-desktop")]
+    observation_session: desktop_session::Owner,
+    #[cfg(feature = "flutter-desktop")]
+    presentation: desktop_session::Presentation,
+    #[cfg(feature = "flutter-desktop")]
     desktop_sequence: u64,
     #[cfg(feature = "flutter-desktop")]
     desktop_policy: Arc<crate::config::Policy>,
@@ -380,7 +385,12 @@ impl Drop for TrayAppState {
     }
 }
 
+#[cfg(feature = "flutter-desktop")]
+use crate::frontends::desktop::session as desktop_session;
+
 struct RefreshPolicy {
+    #[cfg(feature = "flutter-desktop")]
+    session: desktop_session::Client,
     policy: crate::config::Policy,
     explicit_policy: bool,
     #[cfg(feature = "flutter-desktop")]
@@ -399,6 +409,8 @@ fn start_refresh_worker(
     let RefreshPolicy {
         mut policy,
         explicit_policy,
+        #[cfg(feature = "flutter-desktop")]
+        session,
         #[cfg(feature = "flutter-desktop")]
         enforcement,
     } = profile_policy;
@@ -452,6 +464,8 @@ fn start_refresh_worker(
         // the device disappears is what re-arms the prompt after a replug, and it keeps
         // a declined UAC prompt from being raised again for the same arrival.
         let mut restore_offered: Vec<String> = Vec::new();
+        #[cfg(feature = "flutter-desktop")]
+        let mut observations = desktop_session::Observations::default();
         while workers_alive.load(Ordering::Acquire) {
             let settings = Settings::load().map_err(|error| format!("{error:#}"));
             if let Ok(settings) = &settings
@@ -465,6 +479,9 @@ fn start_refresh_worker(
             let snapshot = monitor
                 .snapshot((&filter).into())
                 .map_err(|error| format!("{error:#}"));
+            let observed_at = chrono::Utc::now();
+            #[cfg(feature = "flutter-desktop")]
+            observations.observe(&session, snapshot.as_ref().ok(), observed_at);
             #[cfg(feature = "flutter-desktop")]
             match &snapshot {
                 Ok(snapshot) => enforcement.observe(snapshot),
@@ -502,7 +519,7 @@ fn start_refresh_worker(
                 &sender,
                 TrayRefresh {
                     snapshot,
-                    observed_at: chrono::Utc::now(),
+                    observed_at,
                     microphone,
                     microphone_generation,
                     camera: camera.clone(),
@@ -517,7 +534,7 @@ fn start_refresh_worker(
             }
             let h = hwnd_cell.load(Ordering::Relaxed);
             if h == 0 {
-                thread::sleep(Duration::from_millis(500));
+                thread::sleep(OBSERVATION_INTERVAL);
                 continue;
             }
             unsafe {
@@ -544,7 +561,7 @@ fn start_refresh_worker(
                     let _ = restore_requests.try_send(RestorePermit(Arc::clone(&restore_activity)));
                 }
             }
-            thread::sleep(Duration::from_millis(500));
+            thread::sleep(OBSERVATION_INTERVAL);
         }
     });
     receiver
@@ -628,6 +645,9 @@ pub fn run_tray(
     let (desktop_camera_client, desktop_camera_owner) = crate::frontends::desktop::camera_owner::channel();
     #[cfg(feature = "flutter-desktop")]
     let (desktop_exit_client, desktop_exit_owner) = crate::frontends::desktop::exit_owner::channel();
+    #[cfg(feature = "flutter-desktop")]
+    let observation_session = desktop_session::Owner::new(desktop_session::Cadence::native(
+        OBSERVATION_INTERVAL, Some(CAMERA_POLL_INTERVAL)))?;
     let refreshes = start_refresh_worker(
         Arc::clone(&hwnd_cell),
         Arc::clone(&workers_alive),
@@ -639,6 +659,8 @@ pub fn run_tray(
         restore_requests,
         Arc::clone(&restore_activity),
         RefreshPolicy {
+            #[cfg(feature = "flutter-desktop")]
+            session: observation_session.client(),
             policy,
             explicit_policy,
             #[cfg(feature = "flutter-desktop")]
@@ -683,6 +705,10 @@ pub fn run_tray(
         desktop_camera_pending: None,
         #[cfg(feature = "flutter-desktop")]
         desktop_observation: None,
+        #[cfg(feature = "flutter-desktop")]
+        observation_session,
+        #[cfg(feature = "flutter-desktop")]
+        presentation: Default::default(),
         #[cfg(feature = "flutter-desktop")]
         desktop_sequence: 0,
         #[cfg(feature = "flutter-desktop")]
@@ -1270,19 +1296,11 @@ fn apply_refresh(hwnd: HWND, state: &mut TrayAppState, refresh: TrayRefresh) {
     {
         // Retain the owned observation, not a second serialized/rendered copy.
         // A closed Flutter process causes no presentation serialization.
-        state.desktop_sequence = state.desktop_sequence.saturating_add(1);
         state.desktop_observation = Some(DesktopObservation {
             snapshot: refresh.snapshot,
             observed_at: refresh.observed_at,
         });
-        if state.flutter.as_ref().is_some_and(|ui| ui.is_running()) {
-            let frame = flutter_snapshot(state);
-            if let Some(ui) = state.flutter.as_mut()
-                && let Err(error) = ui.publish(frame)
-            {
-                state.settings_error = Some(format!("Desktop observation delivery: {error:#}"));
-            }
-        }
+        state.presentation.observed();
     }
     let mute_state = state.mute_state;
     if visual == state.visual
@@ -2158,6 +2176,7 @@ fn flutter_snapshot(state: &TrayAppState) -> crate::frontends::desktop::DesktopS
         state.lang.code(),
         snapshot,
         "operational",
+        state.observation_session.status(),
     );
     let microphone = if state.pending_microphone != 0 {
         Err("Native microphone operation pending; effective state not yet confirmed")
@@ -2224,6 +2243,7 @@ fn open_flutter_desktop(hwnd: HWND) -> bool {
     supervisor.configure_policy(Arc::clone(&state.desktop_policy), state.explicit_policy);
     supervisor.configure_camera_owner(state.desktop_camera_client.clone());
     supervisor.configure_enforcement(state.enforcement.clone());
+    supervisor.configure_session(state.observation_session.client());
     supervisor.configure_exit_owner(state.desktop_exit_client.clone());
     // Window activation may synchronously send messages; no tray state reference
     // is used across the native call.
@@ -2387,7 +2407,8 @@ fn refresh_desktop(hwnd: HWND) {
                 Err(error) => s.settings_error = Some(format!("Native settings readback: {error:#}")),
             }
         }
-        if changed || command.is_some() || preference_submitted || preference_completed {
+        let presentation_due = s.presentation.due(Instant::now(), s.observation_session.status().cadence);
+        if changed || command.is_some() || preference_submitted || preference_completed || presentation_due {
             s.desktop_sequence = s.desktop_sequence.saturating_add(1);
             // Reading/serializing preferences is presentation work: do it only
             // for a running child. open_flutter_desktop reads the initial frame.
@@ -2397,6 +2418,8 @@ fn refresh_desktop(hwnd: HWND) {
                     && let Err(error) = ui.publish(frame)
                 {
                     s.settings_error = Some(format!("Desktop command state delivery: {error:#}"));
+                } else {
+                    s.presentation.published(Instant::now());
                 }
             }
         }

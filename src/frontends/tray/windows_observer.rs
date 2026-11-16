@@ -8,7 +8,7 @@ use crate::{
     config::Policy,
     frontends::{
         cli::Filter,
-        desktop::{DesktopSnapshot, windows::Supervisor},
+        desktop::{DesktopSnapshot, session, windows::Supervisor},
     },
     i18n::Language,
     model::{Activity, CollectorState, Snapshot},
@@ -177,6 +177,7 @@ impl Observer {
             self.lang.code(),
             snapshot,
             mode,
+            session::Status::idle(session::Cadence::native(super::OBSERVATION_INTERVAL, Some(super::CAMERA_POLL_INTERVAL))),
         );
         if self.mode == DevelopmentMode::SettingsProbe {
             let observed_detail = frame.engine.detail.take().unwrap_or_default();
@@ -571,7 +572,7 @@ fn start_collector(observer: &Observer) -> thread::JoinHandle<()> {
             if let (Ok(snapshot), Some(worker)) = (&snapshot, &notifications) {
                 capture_alerts.observe(snapshot, worker, lang, false);
             }
-            if camera_at.is_none_or(|at: Instant| at.elapsed() >= Duration::from_secs(5)) {
+            if camera_at.is_none_or(|at: Instant| at.elapsed() >= super::CAMERA_POLL_INTERVAL) {
                 camera = crate::privacy::camera_observation().map_err(|e| format!("{e:#}"));
                 camera_at = Some(Instant::now());
             }
@@ -596,7 +597,7 @@ fn start_collector(observer: &Observer) -> thread::JoinHandle<()> {
                     unsafe { GetCurrentProcessId() }
                 );
             }
-            thread::park_timeout(Duration::from_millis(500));
+            thread::park_timeout(super::OBSERVATION_INTERVAL);
         }
     })
 }

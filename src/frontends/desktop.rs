@@ -9,6 +9,7 @@ pub mod commands;
 pub mod preferences;
 pub mod consultation;
 pub mod tools;
+pub mod session;
 pub mod exit_owner;
 mod applications;
 mod maintenance;
@@ -19,7 +20,7 @@ pub mod windows;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod unix;
 
-pub const PROTOCOL_VERSION: u8 = 9;
+pub const PROTOCOL_VERSION: u8 = 10;
 pub const MAX_FRAME_BYTES: usize = 262_144;
 pub const MAX_EVENT_BYTES: usize = 4096;
 const MAX_STRING_BYTES: usize = 1024;
@@ -65,6 +66,8 @@ pub struct DesktopSnapshot {
     pub controls: commands::Controls,
     pub preferences: preferences::PreferencesSnapshot,
     pub consultation: consultation::View,
+    pub cadence: session::Cadence,
+    pub observation_session: session::Status,
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct Engine {
@@ -208,8 +211,10 @@ impl DesktopSnapshot {
         locale: &str,
         snapshot: std::result::Result<&Snapshot, &str>,
         mode: &str,
+        observation_session: session::Status,
     ) -> Self {
         let mut truncated = false;
+        let cadence = observation_session.cadence;
         let source = snapshot.as_ref().ok().copied();
         let state = match source {
             None => "unavailable",
@@ -253,6 +258,8 @@ impl DesktopSnapshot {
             controls: commands::Controls::default(),
             preferences: preferences::PreferencesSnapshot::default(),
             consultation: consultation::View::default(),
+            cadence,
+            observation_session,
             truncated,
         };
         if let Some(s) = source {
@@ -710,8 +717,12 @@ mod tests {
             observation_gaps: vec![],
         }
     }
+    fn test_observation_session() -> session::Status {
+        session::Status::idle(session::Cadence::native(std::time::Duration::from_secs(2), None))
+    }
     fn dto(source: &Snapshot) -> DesktopSnapshot {
-        DesktopSnapshot::from_snapshot(4, Utc::now(), "en", Ok(source), "read_only_development")
+        DesktopSnapshot::from_snapshot(4, Utc::now(), "en", Ok(source), "read_only_development",
+            test_observation_session())
     }
     #[test]
     fn native_risk_is_preserved_independently_of_confidence_and_global_counts() {
@@ -764,6 +775,7 @@ mod tests {
             "en",
             Err("collector failed"),
             "read_only_development",
+            test_observation_session(),
         );
         assert_eq!(error.engine.state, "unavailable");
         assert_eq!(error.resources[0].activity, "unknown");

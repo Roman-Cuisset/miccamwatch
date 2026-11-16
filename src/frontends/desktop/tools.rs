@@ -13,6 +13,7 @@ pub struct Context {
     pub data_writable: bool,
     pub enforcement: Option<crate::watcher::enforcement::Runtime>,
     pub exit_owner: Option<super::exit_owner::Client>,
+    pub observation_session: Option<super::session::Client>,
     #[cfg(windows)]
     pub camera_owner: Option<super::camera_owner::Client>,
 }
@@ -31,6 +32,11 @@ impl Context {
 pub enum Request {
     Controls {},
     ExitStatus {},
+    SessionStatus {},
+    SessionStart { requested_ms: u32 },
+    SessionStop {},
+    SessionCadence { requested_ms: u32 },
+    SessionConfirm { token: String, consent: String },
     Prepare { control: Control },
     Commit { token: String, confirmation: String },
     Devices {},
@@ -69,6 +75,10 @@ impl Request {
             Self::ValidatePolicy { path: Some(path) } => ensure!(!path.is_empty() && path.len() <= 4096 && !path.chars().any(char::is_control), "Invalid policy file path"),
             Self::Commit { token, confirmation } => ensure!(
                 token.len() == 32 && token.bytes().all(|b| b.is_ascii_hexdigit()) && confirmation == "apply_prepared_native_action", "Invalid native confirmation"),
+            Self::SessionStart { requested_ms } | Self::SessionCadence { requested_ms } => super::session::validate_cadence(*requested_ms)?,
+            Self::SessionConfirm { token, consent } => ensure!(
+                token.len() == 32 && token.bytes().all(|b| b.is_ascii_hexdigit())
+                    && consent == "confirm_observation_session", "Invalid observation session consent"),
             Self::ClearHistory { confirmation } => ensure!(confirmation == "clear_only_recorded_history", "History removal requires explicit confirmation"),
             _ => {}
         }
@@ -129,16 +139,23 @@ struct Prepared {
     camera_stamp: Option<super::camera_owner::Stamp>,
     created: Instant,
 }
+struct PreparedObservation {
+    token: String,
+    requested_ms: Option<u32>,
+    revision: u64,
+    created: Instant,
+}
 struct PreparedExit { token: String, revision: u64, created: Instant }
 #[derive(Default)]
 pub struct Session {
     prepared: Option<Prepared>,
     exit_prepared: Option<PreparedExit>,
+    observation_prepared: Option<PreparedObservation>,
     application: Option<super::applications::Browser>,
 }
 impl Session {
     pub fn reset(&mut self) { self.reset_preparation(); self.application = None; }
-    fn reset_preparation(&mut self) { self.prepared = None; self.exit_prepared = None; }
+    fn reset_preparation(&mut self) { self.prepared = None; self.exit_prepared = None; self.observation_prepared = None; }
     fn take_prepared(&mut self, token: &str, now: Instant) -> Result<Prepared> {
         let prepared = self.prepared.take().context("No current native confirmation; refresh and confirm again")?;
         let lifetime = if matches!(prepared.control, Control::Terminate { .. }) { Duration::from_secs(3) } else { Duration::from_secs(30) };
@@ -156,6 +173,39 @@ impl Session {
                     "enforcement_runtime":context.enforcement.as_ref().map(|owner| owner.status()).transpose()?,
                     "exit":context.exit_owner.as_ref().map(|owner| owner.status()).transpose()?,
                 })) }),
+            Request::SessionStatus {} => Ok(Report::data(serde_json::json!({
+                "observation_session": context.observation_session.as_ref().map(|owner| owner.status()),
+            }))),
+            Request::SessionCadence { requested_ms } => {
+                ensure!(context.operational, "Presentation cadence is disabled in development mode");
+                let owner = context.observation_session.as_ref().context("No native observation session owner")?;
+                Ok(Report::data(serde_json::json!({"observation_session": owner.set_cadence(requested_ms)?})))
+            }
+            Request::SessionStart { .. } | Request::SessionStop {} => {
+                self.reset_preparation();
+                ensure!(context.operational && context.data_writable, "Observation sessions are disabled in development mode");
+                let requested_ms = match request {
+                    Request::SessionStart { requested_ms } => Some(requested_ms),
+                    _ => None,
+                };
+                let owner = context.observation_session.as_ref().context("No native observation session owner")?;
+                let revision = owner.prepare(requested_ms.is_some())?;
+                let token = super::new_private_token()?;
+                self.observation_prepared = Some(PreparedObservation {
+                    token: token.clone(), requested_ms, revision, created: Instant::now(),
+                });
+                Ok(Report { outcome: "prepared", token: Some(token),
+                    ..Report::data(serde_json::json!({"observation_confirmation": true, "confirmation_seconds": 30})) })
+            }
+            Request::SessionConfirm { token, .. } => {
+                let prepared = self.observation_prepared.take().context("No current observation session confirmation")?;
+                ensure!(prepared.token == token && prepared.created.elapsed() <= Duration::from_secs(30),
+                    "Observation session confirmation is stale or expired");
+                ensure!(context.operational && context.data_writable, "Observation sessions are disabled in development mode");
+                let owner = context.observation_session.as_ref().context("No native observation session owner")?;
+                let status = owner.execute(prepared.revision, prepared.requested_ms)?;
+                Ok(Report::data(serde_json::json!({"observation_session":status})))
+            }
             Request::ExitStatus {} => Ok(Report::data(serde_json::json!({
                 "exit":context.exit_owner.as_ref().map(|owner| owner.status()).transpose()?,
             }))),

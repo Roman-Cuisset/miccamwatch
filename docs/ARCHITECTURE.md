@@ -1546,3 +1546,40 @@ second collecteur et une autorité de fichier arbitraire :
   la projection bornée `DesktopSnapshot::from_snapshot` ; préserver les trous.
 
 Détail et plan : [`HANDOFF_CODEX_2026-11-13.md`](HANDOFF_CODEX_2026-11-13.md).
+
+
+### Cadence d’affichage et journal de session — protocole 10
+
+Le moteur publie `cadence` avec `native_ms`, `camera_inventory_ms` (le cas
+échéant), `requested_ms` et `presentation_ms`. Le dernier champ est le
+maximum de l’intervalle demandé et de l’intervalle natif. Sans demande, les
+deux intervalles coïncident. Au-delà du calendrier d’affichage périodique, une
+ouverture ou une commande peut publier immédiatement l’état courant. Unix
+collecte toutes les 2 s. Windows a un délai d’observation de 500 ms et un
+intervalle d’inventaire caméra de 5 s. Ces durées sont les paramètres des boucles
+natives. La CLI conserve son propre `watch --interval`.
+
+Le propriétaire conserve l’état de la session et la dernière cadence demandée
+jusqu’à sa sortie. `session_start` et `session_stop` préparent une action
+valable 30 secondes. `session_confirm` consomme cette préparation, et
+`session_status` relit le résultat natif. `session_cadence` modifie la
+diffusion en mémoire. Les demandes d’enregistrement sont refusées en
+développement. Le changement de cadence ne relance ni le collecteur ni le
+journal.
+
+Un enregistrement confirmé crée un fichier unique `session-<UTC>-<aléa>.jsonl`
+dans `sessions` sous le répertoire de données de MicCamWatch. Le journal
+contient un en-tête `session_start` (format 1, consentement, cadence initiale,
+version du moteur, taille maximale), des `AccessEvent` schéma 3, puis un
+`session_stop` (date, raison, compteur et position du pied). L’écriture
+s’effectue sur un worker natif à file bornée. La limite de 32 Mio inclut le
+pied. L’arrêt normal vide le fichier et vérifie son identité, sa taille et le
+pied relu. Les erreurs d’écriture, de file d’attente et de taille sont exposées
+dans l’état natif. L’historique et les notifications gardent leurs circuits
+existants.
+
+Le journal utilise les observations complètes. Lorsque la couverture d’une
+ressource tombe, ses transitions sont suspendues. La première observation
+complète au retour de la couverture sert de référence. Les autres ressources
+continuent d’être suivies. Les deux côtés de l’IPC doivent parler le protocole
+10.

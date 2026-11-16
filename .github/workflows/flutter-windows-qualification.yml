@@ -95,6 +95,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'MSI/ZIP exact-build dependency gate failed' }
       - name: Build hybrid Rust and normal Flutter release
         run: |
+          cargo test --lib --locked --features windows-tray,flutter-desktop frontends::desktop::session::tests
+          if ($LASTEXITCODE -ne 0) { throw 'Observation session tests failed' }
           cargo build --release --locked --features windows-tray,flutter-desktop
           if ($LASTEXITCODE -ne 0) { throw 'Hybrid Rust release failed' }
           Push-Location desktop/flutter
@@ -136,4 +138,6 @@ jobs:
           name: flutter-b5-windows-evidence
           retention-days: 14
           if-no-files-found: warn
-          path: ${{ env.MCW_B5_PROOF }}/
+          path: |
+            ${{ env.MCW_B5_PROOF }}/
+            !${{ env.MCW_B5_PROOF }}/**/sessions/*.jsonl

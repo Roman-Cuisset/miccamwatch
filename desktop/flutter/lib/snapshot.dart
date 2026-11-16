@@ -6,7 +6,9 @@ import 'package:flutter/foundation.dart';
 import 'preferences_model.dart';
 import 'consultation_model.dart';
 
-const protocolVersion = 9;
+import 'session_model.dart';
+
+const protocolVersion = 10;
 const maxFrameBytes = 262144;
 const resourceNames = ['microphone', 'camera'];
 const activityNames = ['active', 'ready', 'none_observed', 'unknown'];
@@ -16,7 +18,8 @@ const healthNames = ['healthy', 'degraded', 'unavailable'];
 
 // Rust owns the versioned observation and narrowly typed command boundary.
 class Snapshot {
-  Snapshot._(this.data, this.preferences, this.consultation);
+  Snapshot._(this.data, this.preferences, this.consultation, this.observationSession);
+  final ObservationSession observationSession;
   final Map<String, dynamic> data;
   final PreferenceView preferences;
   final ConsultationView consultation;
@@ -44,6 +47,7 @@ class Snapshot {
     final root = _object(value, ['type', 'protocol_version', 'sequence',
       'observed_at', 'engine', 'locale', 'resources', 'accesses', 'collectors',
       'observation_gaps', 'protection', 'diagnostics', 'truncated', 'controls', 'preferences',
+      'cadence', 'observation_session',
       if (decoded.containsKey('consultation')) 'consultation']);
     if (root['type'] != 'snapshot' || root['protocol_version'] is! int ||
         root['protocol_version'] != protocolVersion) {
@@ -54,6 +58,9 @@ class Snapshot {
       _invalid('Snapshot sequence did not increase');
     }
     _timestamp(root['observed_at']);
+    final cadence = ObservationCadence.fromJson(root['cadence']);
+    final observationSession = ObservationSession.fromJson(root['observation_session']);
+    if (!cadence.matches(observationSession.cadence)) _invalid('Inconsistent owner cadence');
     final engine = _object(root['engine'], const ['version', 'platform', 'mode', 'state', 'detail']);
     _text(engine['version']);
     _enum(engine['platform'], const ['windows', 'linux', 'macos']);
@@ -144,7 +151,7 @@ class Snapshot {
     if ((consultation.available || consultation.result != null) && token.isEmpty) {
       _invalid('Consultation lacks an authenticated session');
     }
-    return Snapshot._(root, preferences, consultation);
+    return Snapshot._(root, preferences, consultation, observationSession);
   }
 
   // Rust owns collector-specific interpretation on every platform. The view
@@ -223,14 +230,20 @@ class SnapshotSession extends ChangeNotifier {
   ConnectionState state = ConnectionState.connecting;
   int? get sequence => snapshot?.sequence;
   bool get isLive => state == ConnectionState.live;
+  Duration get _freshnessWindow {
+    final cadence = snapshot?.observationSession.cadence;
+    if (cadence == null) return const Duration(seconds: 5);
+    final budget = cadence.presentationMs + cadence.nativeMs + 1000;
+    return Duration(milliseconds: budget < 5000 ? 5000 : budget);
+  }
   bool get transportLive => state != ConnectionState.error &&
       state != ConnectionState.disconnected && _received != null &&
-      _elapsed() - _received! <= const Duration(seconds: 5);
+      _elapsed() - _received! <= _freshnessWindow;
   bool get _observationFresh {
     final observed = snapshot?.observedAt;
     if (observed == null) return false;
     final age = _now().toUtc().difference(observed);
-    return age >= const Duration(seconds: -2) && age <= const Duration(seconds: 5);
+    return age >= const Duration(seconds: -2) && age <= _freshnessWindow;
   }
 
   void accept(List<int> bytes) {

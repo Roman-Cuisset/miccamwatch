@@ -4065,3 +4065,15 @@ limites et la procédure de reprise sont dans
 Aucun sous-agent, aucune publication, aucune modification de `main`, du tag
 v0.21.0, de l'installation stable ou des 12 worktrees.
 
+
+
+## 2026-11-16 — Reprise de la session d’observation
+
+- O02 expose les intervalles natif, demandé et effectif. Le réglage agit sur
+  la livraison Flutter. La boucle de collecte et l’inventaire caméra gardent
+  leurs durées natives.
+- O05 ajoute la création confirmée d’un journal JSONL privé, suivi par le
+  propriétaire Rust et fermé à sa sortie. Le journal part des événements
+  natifs, avec un plafond de 32 Mio et un état d’échec consultable.
+- La qualification graphique et multiplateforme de ce changement reste à
+  établir avant toute clôture de l’étape 2.

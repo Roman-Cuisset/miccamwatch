@@ -261,3 +261,10 @@ Elles bornent le travail restant mais ne le réalisent pas : l'étape 2 reste
 incomplète. Le plan d'implémentation, les tests, les invariants et la reprise
 sont dans [`HANDOFF_CODEX_2026-11-13.md`](HANDOFF_CODEX_2026-11-13.md).
 Aucune autorisation d'étape 3, de publication ou de packaging hybride.
+
+
+## 12. Reprise O02/O05 au 16 novembre 2026
+
+Le protocole 10 porte le réglage d’affichage et la session de journalisation.
+Le contrat du journal figure dans [l’architecture](ARCHITECTURE.md).
+La qualification de cette révision reste nécessaire pour clôturer l’étape 2.
