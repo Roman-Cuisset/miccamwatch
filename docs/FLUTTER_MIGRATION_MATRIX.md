@@ -475,3 +475,21 @@ contrôle ciblé [43406668221](https://github.com/Roman-Cuisset/miccamwatch/acti
 réussi : deux gardes réellement sélectionnées et exécutées par cible, source
 `5ed7303`. Pas de rebuild Flutter ou d'exécution ARM physique revendiqués.
 
+### Passation O02/O05 vers Codex — 13 novembre 2026
+
+L'arrêt demandé intervient à `f70c7f7` ; aucun code produit n'est modifié après
+cette sauvegarde. Les deux P1 restants sont bornés, pas terminés :
+
+- **O02 — présentation seulement** : la cadence native de collecte reste celle
+  du propriétaire (Unix 2 s, Windows 500 ms ; caméra 5 s). Flutter ne règle que
+  la diffusion et affiche native/demandée/effective. Pas de second collecteur,
+  pas de parité `watch --interval`.
+- **O05 — répertoire possédé** : un fichier JSONL par session sous
+  `settings::data_dir()/sessions`, créé par Rust après consentement, chemin
+  affiché, refus des liens/remplacements et erreurs visibles. Aucun chemin
+  fourni par Flutter.
+
+Le plan d'implémentation et les tests d'acceptation sont dans
+[`HANDOFF_CODEX_2026-11-13.md`](HANDOFF_CODEX_2026-11-13.md). La ligne O02
+reste **Partiel** et O05 **Incomplet** jusqu'à preuve du contraire.
+

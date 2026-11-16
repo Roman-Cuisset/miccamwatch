@@ -1528,3 +1528,21 @@ refused, not silently redirected into another namespace. Publication prepares a
 to the discoverable endpoint. Consumers never accept bind's transient default
 permissions. No process-global umask change or unsafe-socket retry is involved;
 cleanup checks the owned inode instead of unlinking a replacement endpoint.
+
+## Session d'observation avancée — décision de portée (2026-11-13)
+
+O02/O05 ne sont pas implémentés. Le contrat retenu est borné pour éviter un
+second collecteur et une autorité de fichier arbitraire :
+
+- **Cadence** : seule la diffusion est réglable ; la collecte native du
+  propriétaire reste inchangée (Unix 2 s, Windows 500 ms, caméra 5 s). Les
+  valeurs native/demandée/effective doivent être exposées par Rust, jamais
+  recopiées en dur dans Dart. Pas de parité `watch --interval`.
+- **Journal** : un JSONL neuf par session, sous `settings::data_dir()/sessions`,
+  créé exclusivement par Rust après consentement ; aucun chemin fourni par l'UI.
+  Droits privés, refus des liens/reparse points, erreurs visibles, indépendance
+  de `history_enabled`, survie à la fermeture de Flutter.
+- **Transitions** : réutiliser les trackers natifs sur le snapshot complet, avant
+  la projection bornée `DesktopSnapshot::from_snapshot` ; préserver les trous.
+
+Détail et plan : [`HANDOFF_CODEX_2026-11-13.md`](HANDOFF_CODEX_2026-11-13.md).

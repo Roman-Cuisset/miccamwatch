@@ -4040,3 +4040,28 @@ Zéro sous-agent utilisé, faute de preuve du routage modèle/fournisseur/auth.
 Les validations matérielles/UAC/Polkit/TCC et bundles installés restent bornées
 aux autorisations futures ; la garde et l'installation quotidienne sont intactes.
 
+### 2026-11-13 — Arrêt demandé par l'utilisateur et passation vers Codex
+
+L'implémentation menée avec oh-my-pi s'arrête à `f70c7f7` (branche
+`work/flutter-hybrid-0220`, distante synchronisée, arbre propre). Rien n'est
+supprimé : les 17 commits, les preuves et l'historique restent en place, et
+aucune ligne de code produit n'est modifiée après `f70c7f7`.
+
+Décisions de portée validées par l'utilisateur le 13 novembre 2026 :
+
+- **O02 = présentation seulement** : la cadence de collecte native ne change pas ;
+  Flutter ne règle que la diffusion et affiche cadence native/demandée/effective,
+  sans revendiquer la parité `watch --interval`.
+- **O05 = répertoire possédé par Rust** : journaux JSONL créés dans
+  `data_dir()/sessions`, chemin affiché après consentement ; aucun chemin fourni
+  par Flutter.
+
+Ces décisions bornent O02/O05 ; elles ne les terminent pas. L'étape reste
+**2/6 INCOMPLÈTE** et l'étape 3 n'est pas commencée. Le plan d'implémentation
+précis, les fichiers à modifier, les tests d'acceptation, les invariants, les
+limites et la procédure de reprise sont dans
+[`docs/HANDOFF_CODEX_2026-11-13.md`](HANDOFF_CODEX_2026-11-13.md).
+
+Aucun sous-agent, aucune publication, aucune modification de `main`, du tag
+v0.21.0, de l'installation stable ou des 12 worktrees.
+

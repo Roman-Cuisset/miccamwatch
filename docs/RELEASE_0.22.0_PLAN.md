@@ -246,3 +246,18 @@ Le sélecteur de gardes Linux corrigé `5ed7303` est vérifié séparément par
 [43406668221](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/43406668221)
 (réussi, deux gardes exécutées par cible), sans rebuild Flutter. Le §9.2 détaille
 les limites matérielles, TCC, signatures et packaging. Aucun Mac physique requis.
+
+## 11. Passation vers Codex — 13 novembre 2026
+
+L'implémentation oh-my-pi s'arrête à `f70c7f7`, sans suppression ni modification
+produit. Deux décisions de portée ont été validées pour les seuls P1 restants :
+
+- O02 : cadence de **présentation** uniquement, collecte native inchangée,
+  cadences native/demandée/effective affichées, pas de parité `--interval`.
+- O05 : journal JSONL dans un **répertoire possédé par Rust**
+  (`data_dir()/sessions`), consentement et chemin affiché, aucun chemin Flutter.
+
+Elles bornent le travail restant mais ne le réalisent pas : l'étape 2 reste
+incomplète. Le plan d'implémentation, les tests, les invariants et la reprise
+sont dans [`HANDOFF_CODEX_2026-11-13.md`](HANDOFF_CODEX_2026-11-13.md).
+Aucune autorisation d'étape 3, de publication ou de packaging hybride.

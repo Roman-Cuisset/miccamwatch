@@ -542,3 +542,19 @@ restent ouverts.
 - Demandes supplémentaires inscrites, non implémentées : P1-MAC-APP-DMG (.dmg/.app ouverte directement en barre de menus), P1-UNINSTALL (`mcw uninstall` adapté ownership/protection/gestionnaire, données conservées). Priorités Windows tooltip/stdout hérités restent ouvertes ; pas de swap du PC encore protégé.
 - Provider Cloudflare injecte beacon Web Analytics ; notre CSP le bloque réellement. Ne pas whitelist/désactiver CSP pour masquer les erreurs. Désactiver ce réglage projet seulement avec accès Cloudflare autorisé ; aucun accès navigateur relay/token n'est disponible dans cette session et aucune mutation de compte n'a été faite.
 
+## Reprise Codex du 2026-11-13 — v0.22.0, étape 2
+
+La session oh-my-pi s'arrête à `f70c7f7` (branche `work/flutter-hybrid-0220`).
+Le travail de cette phase concerne l'application Flutter native et non les
+backends Linux/macOS : ne pas relancer les campagnes matérielles déjà bornées.
+
+Décisions validées pour les deux P1 restants :
+
+- O02 : cadence de présentation seulement, collecte native inchangée ;
+- O05 : journaux JSONL dans un répertoire possédé par Rust, sans chemin Flutter.
+
+Le plan, les fichiers, les tests et les limites sont dans
+[`HANDOFF_CODEX_2026-11-13.md`](HANDOFF_CODEX_2026-11-13.md). Les limites
+matérielles décrites plus haut restent valables : un runner hébergé ou Xvfb ne
+prouve ni TCC/UAC/Polkit, ni capture physique, ni ARM/SBC.
+
