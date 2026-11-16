@@ -497,7 +497,7 @@ pub struct Supervisor {
     open_failure: Option<String>,
     consultation_worker: Option<consultation::Worker>,
     context: super::tools::Context,
-    observed_pending: bool,
+    refresh_observation: bool,
 }
 impl Supervisor {
     pub fn new() -> Result<Self> {
@@ -508,7 +508,7 @@ impl Supervisor {
         #[cfg(target_os = "macos")]
         let executable = root.join("MicCamWatch.app/Contents/MacOS/MicCamWatch");
         Ok(Self { executable, child: None, next_ticket: 0, error: None, open_failure: None,
-            consultation_worker: None, context: super::tools::Context::default(), observed_pending: false })
+            consultation_worker: None, context: super::tools::Context::default(), refresh_observation: false })
     }
     pub fn configure_policy(&mut self, policy: std::sync::Arc<crate::config::Policy>, explicit: bool) {
         self.context.policy = Some(policy);
@@ -563,14 +563,16 @@ impl Supervisor {
         Ok(())
     }
     pub fn poll(&mut self) {
-        if let Some(completion) = consultation::Worker::try_complete(&mut self.consultation_worker)
-            && let Some(child) = self.child.as_mut()
-            && let Some((ticket, id)) = child.pending_consultation
-            && ticket == completion.ticket
-        {
-            child.pending_consultation = None;
-            child.consultation.finish(id, completion.result);
-            child.presentation_changed = true;
+        if let Some(completion) = consultation::Worker::try_complete(&mut self.consultation_worker) {
+            self.refresh_observation |= completion.refresh_observation;
+            if let Some(child) = self.child.as_mut()
+                && let Some((ticket, id)) = child.pending_consultation
+                && ticket == completion.ticket
+            {
+                child.pending_consultation = None;
+                child.consultation.finish(id, completion.result);
+                child.presentation_changed = true;
+            }
         }
         let now = Instant::now();
         let Some(child) = self.child.as_mut() else { return };
@@ -623,8 +625,7 @@ impl Supervisor {
     }
     pub fn take_preference(&mut self) -> Option<AuthorizedPreference> { self.child.as_mut()?.queued.take() }
     pub fn take_controls_changed(&mut self) -> bool {
-        let pending = consultation::Worker::pending(&self.consultation_worker);
-        let completed = std::mem::replace(&mut self.observed_pending, pending) && !pending;
+        let completed = std::mem::take(&mut self.refresh_observation);
         let changed = self.child.as_mut().is_some_and(|child| std::mem::take(&mut child.changed));
         completed || changed
     }
@@ -953,7 +954,7 @@ mod tests {
         };
         (directory, Supervisor { executable, child: Some(child), next_ticket: 0,
             error: None, open_failure: None, consultation_worker: None,
-            context: Default::default(), observed_pending: false })
+            context: Default::default(), refresh_observation: false })
     }
     #[test]
     fn before_ready_exit_is_open_failure_but_ready_exit_and_explicit_close_are_not() {

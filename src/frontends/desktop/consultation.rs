@@ -25,6 +25,16 @@ pub enum Operation {
     Tools { request: super::tools::Request },
 }
 impl Operation {
+    #[cfg(unix)]
+    fn refreshes_native_observation(&self) -> bool {
+        use super::tools::Request;
+        !matches!(self, Self::Tools {
+            request: Request::SessionStatus {} | Request::SessionStart { .. }
+                | Request::SessionStop {} | Request::SessionConfirm { .. }
+                | Request::SessionCadence { .. },
+        })
+    }
+
     fn name(&self) -> &'static str {
         match self {
             Self::History { .. } => "history",
@@ -53,6 +63,22 @@ impl Operation {
         }
         Ok(())
     }
+}
+
+#[cfg(all(test, unix))]
+#[test]
+fn session_requests_never_trigger_a_native_rescan() {
+    use super::tools::Request;
+    for request in [
+        Request::SessionStatus {},
+        Request::SessionStart { requested_ms: 2000 },
+        Request::SessionStop {},
+        Request::SessionConfirm { token: String::new(), consent: String::new() },
+        Request::SessionCadence { requested_ms: 5000 },
+    ] {
+        assert!(!Operation::Tools { request }.refreshes_native_observation());
+    }
+    assert!(Operation::Tools { request: Request::Controls {} }.refreshes_native_observation());
 }
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(try_from = "RequestWire")]
@@ -278,6 +304,8 @@ pub enum Payload {
 pub struct Completion {
     pub ticket: u64,
     pub result: std::result::Result<Payload, String>,
+    #[cfg(unix)]
+    pub refresh_observation: bool,
 }
 struct Query {
     ticket: u64,
@@ -321,6 +349,8 @@ impl Worker {
                         session = query.session;
                         tools.reset();
                     }
+                    #[cfg(unix)]
+                    let refresh_observation = query.operation.refreshes_native_observation();
                     let result = match query.operation {
                         Operation::History { cursor, limit } => {
                             browser.page(cursor.as_deref(), limit).map(Payload::History)
@@ -342,6 +372,8 @@ impl Worker {
                         .send(Completion {
                             ticket: query.ticket,
                             result,
+                            #[cfg(unix)]
+                            refresh_observation,
                         })
                         .is_err()
                     {
