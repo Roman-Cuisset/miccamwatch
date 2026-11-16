@@ -1,6 +1,6 @@
 # Native feature migration inventory — A–B5 and v0.22.0 stage 2
 
-> **Prochaine release : v0.22.0, aucune 0.21.1 intermédiaire.** La matrice normative est l'[audit 0.22](V0.22.0_PARITY_AUDIT.md), dont la **section 8 actualise les 44 familles après l'implémentation de l'étape 2**. Le [plan en six étapes](RELEASE_0.22.0_PLAN.md) conserve les critères d'acceptation. L'étape 2 reste incomplète ; les preuves A–B5 ci-dessous restent historiques, pas une qualification du code actuel.
+> **Prochaine publication publique prévue pour v0.22.0.** Le §9 de l’[audit de parité](V0.22.0_PARITY_AUDIT.md#matrice-des-44-familles) actualise les 44 familles. Les [reçus de la qualification fonctionnelle](V0.22.0_PARITY_AUDIT.md#qualification-etape-2) sur `945d69c` établissent l’état logiciel de l’étape 2. Le [plan en six étapes](RELEASE_0.22.0_PLAN.md) définit les validations installées et matérielles à venir.
 
 Source baseline: `b5cf391c1905cbc391c47220f1347c55ba8e24cc`, 27 October 2026. Inspection only; runtime qualification is recorded separately. This inventory preserves every native/public CLI capability and its actual limitations.
 
@@ -504,3 +504,15 @@ reste **Partiel** et O05 **Incomplet** jusqu'à preuve du contraire.
 
 Les états ci-dessus s’appliquent aux deux familles de la matrice existante.
 Les 42 autres familles gardent les résultats vérifiés dans l’audit de parité.
+
+### Clôture de l’étape 2 — 16 novembre 2026
+
+| Famille | Vérification ajoutée sur `945d69c` |
+|---|---|
+| M03 | Capacité PipeWire/CoreAudio et présence des originaux relues. Un journal illisible ou un état inconnu empêche la confirmation. |
+| C01–C03 | Intention, activité et restauration affichées. Autoriser requiert la relecture de l’arrêt de la garde. La récupération historique relit la configuration de l’instance exacte. |
+| C06 | Rapport d’inspection macOS dans Flutter, avec statut natif, inventaire et issue de l’autorisation. Annulation et relecture insuffisante restent visibles. |
+| O05 | Erreur de disque plein injectée dans un vrai fichier de test après une écriture partielle. Les lignes déjà validées sont conservées et l’échec remonte. |
+| L01–L03 | IPC 10, refus natifs de Quit, cycles de fenêtre et sorties explicites Aqua dans les deux thèmes. |
+
+Voir les [reçus de la qualification fonctionnelle](V0.22.0_PARITY_AUDIT.md#qualification-etape-2) pour les limites de chaque preuve.

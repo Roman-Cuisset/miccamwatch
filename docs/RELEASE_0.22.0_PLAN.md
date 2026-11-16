@@ -1,5 +1,7 @@
 # MicCamWatch v0.22.0 — plan définitif en six étapes
 
+> **Point de reprise du 16 novembre 2026.** La parité fonctionnelle de l’étape 2 est qualifiée sur le code `945d69c`. Voir les [reçus de la qualification fonctionnelle](V0.22.0_PARITY_AUDIT.md#qualification-etape-2).
+
 Date : **2026-11-04**. Décision propriétaire : une seule prochaine version publique, **v0.22.0 hybride Rust + Flutter**. Aucun calendrier artificiel. Ce plan n'autorise aucun push, merge, tag, release, déploiement ou modification de l'installation quotidienne.
 
 Source de la planification : [audit exhaustif et matrice P0/P1/P2](V0.22.0_PARITY_AUDIT.md). Les IDs ci-dessous désignent ses critères mesurables, pas des fonctionnalités déjà terminées. Les preuves B1–B5 et la candidate native0.21.1 restent conservées ; les reports automatiques vers0.21.2 du plan RC historique sont supplantés par cette décision.
@@ -270,3 +272,15 @@ Le contrat du journal figure dans [l’architecture](ARCHITECTURE.md).
 La qualification logicielle d’O02/O05 a réussi sur `9b48753`. Les reçus et
 leurs limites figurent dans [l’audit de parité](V0.22.0_PARITY_AUDIT.md#94-reprise-du-16-novembre-2026).
 Les validations matérielles et celles du paquet hybride restent ouvertes.
+
+## 13. Clôture de la parité fonctionnelle — 16 novembre 2026
+
+Le code `945d69c` satisfait les critères logiciels de l’étape 2. La matrice
+des 44 familles et les résultats par plateforme figurent dans les
+[reçus de la qualification fonctionnelle](V0.22.0_PARITY_AUDIT.md#qualification-etape-2). Les commandes de protection et de
+maintenance suivent les capacités natives de chaque OS.
+
+Pour l’étape 3, le premier contrôle porte sur le bundle et la liaison de
+ses composants. L’installation hybride, la mise à niveau, la récupération,
+la désinstallation en compte standard et les preuves de distribution sont
+à qualifier en isolation après accord.

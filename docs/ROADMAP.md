@@ -1,5 +1,7 @@
 # Roadmap technique MicCamWatch
 
+> **Point de reprise du 16 novembre 2026.** La parité fonctionnelle de l’étape 2 est qualifiée sur le code `945d69c`. Voir les [reçus de la qualification fonctionnelle](V0.22.0_PARITY_AUDIT.md#qualification-etape-2).
+
 Dernière mise à jour : **2026-10-24**. Responsable : lead architecture/développement.
 Base publiée : [v0.20.0 stable/latest](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.20.0), source `a26522028eafe02591f58c03ceb5c367f2d5d60b`, tag annoté `547f6185a0579876041d1ae7ebcdd6feccdcb5cf`, releaseID 420936561, publiée le 22/10 à 16:13:39Z. [Release native 39807585260](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/39807585260) réussie : neuf assets publics taille/digest API, huit entrées SHA256SUMS et huit sujets de provenance signée SLSA v1 vérifiés ; Windows EXE/MSI non signés, macOS ad-hoc.
 
@@ -4080,3 +4082,15 @@ v0.21.0, de l'installation stable ou des 12 worktrees.
   fermeture de Flutter, la clôture du journal et le redémarrage inactif.
   Les résultats par cible et les limites figurent dans
   [l’audit de parité](V0.22.0_PARITY_AUDIT.md#94-reprise-du-16-novembre-2026).
+
+## 2026-11-16 — Parité fonctionnelle Flutter terminée
+
+Le commit `945d69c` vérifie les relectures natives des protections Windows
+et des restaurations micro Unix. Flutter rend le rapport d’inspection
+caméra macOS. L’essai de disque plein injecté complète les preuves du
+journal explicite. Le protocole reste à la version 10.
+
+Les tests Windows, Linux x64 et ARM64, macOS Intel et Apple Silicon sont
+consignés dans les [reçus de la qualification fonctionnelle](V0.22.0_PARITY_AUDIT.md#qualification-etape-2). La validation suivante
+porte sur le bundle installé et ses transactions, après accord pour
+démarrer l’étape 3.
