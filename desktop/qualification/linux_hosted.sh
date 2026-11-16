@@ -24,6 +24,8 @@ python3 -c 'import json,os; from pathlib import Path; p=Path(os.environ["MCW_B3_
   cargo clippy --all-targets --locked --features flutter-desktop -- -D warnings
   cargo test --lib --locked --features flutter-desktop frontends::desktop
   cargo test --lib --locked --features flutter-desktop watcher::enforcement::
+  cargo test --lib --locked --features flutter-desktop platform::linux::control::tests
+  cargo test --lib --locked --features flutter-desktop privacy::
   cargo test --lib --locked --features flutter-desktop settings::tests
   cargo test --lib --locked --features flutter-desktop history::
   cargo test --lib --locked --features flutter-desktop autostart::tests

@@ -30,6 +30,66 @@ void complete(ConsultationClient client, Map<String, dynamic> report, {
 }
 
 void main() {
+  testWidgets('macOS inspection displays the returned refusal and retires it on reconnect', (tester) async {
+    tester.view.physicalSize = const Size(900, 1300);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    var sequence = 1;
+    var confirmations = 0;
+    late ConsultationClient client;
+    const control = {'kind': 'camera_inspect'};
+    final state = {...nativeState(microphone: 'mixed'),
+      'camera_scope': 'macos_owned_camera_profile',
+      'microphone_scope': 'macos_coreaudio_input_mute',
+      'can_inspect': true, 'can_restore': false,
+    };
+    final refusal = report(state: state, control: control, outcome: 'not_confirmed',
+      error: 'Inventory was not confirmed', data: {
+      'observed_at': '2026-11-16T12:00:00Z', 'state': 'unknown',
+      'complete_inventory': false, 'administrator_required': true,
+      'authorization': 'cancelled', 'detail': 'Native cancellation detail',
+    });
+    expect(() => NativeReport.fromJson({...refusal, 'outcome': 'completed', 'error': null}),
+      throwsFormatException);
+    client = ConsultationClient(send: (message) async {
+      final request = message['request'] as Map<String, dynamic>;
+      final tools = (request['operation'] as Map<String, dynamic>)['request'] as Map<String, dynamic>;
+      final action = tools['action'];
+      if (action == 'commit') confirmations++;
+      complete(client, action == 'prepare'
+        ? report(outcome: 'prepared', state: state, control: control, data: {'confirmation_seconds': 30})
+        : action == 'commit' ? refusal : report(state: state),
+        id: request['id'] as int, sequence: ++sequence);
+    });
+    client.update(fixtures.view(), fixtures.sessionA, sequence, true, operational: true);
+    await tester.pumpWidget(MaterialApp(home: Scaffold(body: SingleChildScrollView(
+      child: NativeToolsPanel(client: client, locale: 'fr', accesses: const [])))));
+    await tester.pumpAndSettle();
+    final restore = tester.widget<OutlinedButton>(find.byKey(const ValueKey('tools.microphone_restore')));
+    expect(restore.onPressed, isNull);
+    await tester.tap(find.byKey(const ValueKey('tools.camera_inspect')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(TextButton, 'Annuler'));
+    await tester.pumpAndSettle();
+    expect(confirmations, 0);
+    await tester.tap(find.byKey(const ValueKey('tools.camera_inspect')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('tools.confirm')));
+    await tester.pumpAndSettle();
+    expect(confirmations, 1);
+    expect(client.toolsStatus.state, QueryState.uncertain);
+    expect(find.text('Inspection des profils caméra'), findsOneWidget);
+    expect(find.text('Autorisation administrateur annulée'), findsOneWidget);
+    expect(find.text('Inventaire des profils incomplet'), findsOneWidget);
+    expect(find.text('Native cancellation detail'), findsOneWidget);
+    client.update(fixtures.view(), fixtures.sessionB, ++sequence, true, operational: true);
+    await tester.pumpAndSettle();
+    expect(find.text('Native cancellation detail'), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+    client.dispose();
+  });
+
   test('observed application decisions are not automatic enforcement ownership', () {
     final parsed = NativeReport.fromJson(report(data: {
       'pid': 42, 'resource': 'camera', 'enforcement': 'unknown',

@@ -138,6 +138,10 @@ jobs:
             2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/rust-desktop-tests.log"
           cargo test --lib --locked --features flutter-desktop watcher::enforcement:: \
             2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/rust-enforcement-tests.log"
+          cargo test --lib --locked --features flutter-desktop platform::macos::control::tests \
+            2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/rust-microphone-tests.log"
+          cargo test --lib --locked --features flutter-desktop privacy::tests \
+            2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/rust-camera-tests.log"
           cargo test --lib --locked --features flutter-desktop settings::tests \
             2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/rust-settings-tests.log"
           cargo test --lib --locked --features flutter-desktop history:: \

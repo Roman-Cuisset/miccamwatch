@@ -203,21 +203,23 @@ struct Journal {
 }
 fn load(path: &Path) -> Result<Journal> {
     match fs::read(path) {
-        Ok(bytes) => {
-            let journal: Journal = serde_json::from_slice(&bytes).context(
-                "invalid microphone restoration journal; refusing to overwrite original state",
-            )?;
-            if journal.version != 1 {
-                bail!("unsupported microphone restoration journal version");
-            }
-            Ok(journal)
-        }
+        Ok(bytes) => parse_journal(&bytes),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Journal {
             version: 1,
             ..Journal::default()
         }),
         Err(error) => Err(error.into()),
     }
+}
+
+fn parse_journal(bytes: &[u8]) -> Result<Journal> {
+    let journal: Journal = serde_json::from_slice(bytes).context(
+        "invalid microphone restoration journal; refusing to overwrite original state",
+    )?;
+    if journal.version != 1 {
+        bail!("unsupported microphone restoration journal version");
+    }
+    Ok(journal)
 }
 
 pub(crate) fn reserve_uninstall() -> Result<OperationLock> {
@@ -369,6 +371,24 @@ fn mute(journal: &mut Journal, path: &Path) -> Result<usize> {
     Ok(changed)
 }
 impl PlatformMonitor {
+    #[cfg(feature = "flutter-desktop")]
+    pub(crate) fn has_microphone_originals(&self) -> Result<bool> {
+        use std::{ffi::OsStr, io::{ErrorKind, Read as _}};
+        const MAX_BYTES: u64 = 1024 * 1024;
+        let path = crate::settings::data_dir()?.join("macos-controls");
+        let directory = match crate::autostart::Directory::open(&path, false) {
+            Ok(directory) => directory,
+            Err(error) if error.downcast_ref::<std::io::Error>()
+                .is_some_and(|error| error.kind() == ErrorKind::NotFound) => return Ok(false),
+            Err(error) => return Err(error),
+        };
+        let Some(file) = directory.file(OsStr::new("microphone.json"))? else { return Ok(false) };
+        let mut bytes = Vec::new();
+        file.take(MAX_BYTES + 1).read_to_end(&mut bytes)?;
+        anyhow::ensure!(bytes.len() as u64 <= MAX_BYTES, "Microphone restoration journal exceeds the readback limit");
+        Ok(!parse_journal(&bytes)?.originals.is_empty())
+    }
+
     pub fn microphone_mute_state(&self) -> Result<MicrophoneMuteState> {
         let reply = inventory()?;
         let mut controls = reply.controls.iter().filter(|c| c.writable);

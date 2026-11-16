@@ -22,6 +22,8 @@ class _NativeToolsPanelState extends State<NativeToolsPanel> {
   String? enforcementSession;
   ExitStatus? exit;
   String? exitSession;
+  CameraInspection? cameraInspection;
+  String? inspectionSession;
   NativeReport? detailReport;
   Map<String, dynamic>? get data => detailReport?.data;
   String? section;
@@ -60,6 +62,10 @@ class _NativeToolsPanelState extends State<NativeToolsPanel> {
           exit = result.exit;
           exitSession = session;
         }
+        if (request.action == 'commit' && result.control?.kind == 'camera_inspect') {
+          cameraInspection = result.cameraInspection;
+          inspectionSession = session;
+        }
         if (request.action != 'prepare' && request.action != 'commit') {
           detailReport = result; section = request.action;
           detailSession = session;
@@ -92,6 +98,7 @@ class _NativeToolsPanelState extends State<NativeToolsPanel> {
             if (control.kind.startsWith('camera')) Text(l[prepared.state!.text('camera_scope')]),
             if (control.kind == 'quit_engine') Text(l['quitScope']),
             if (control.kind == 'camera_restore_legacy') ...[
+              Text(l['cameraLegacyAllow']),
               Text(l['cameraLegacyWarning']),
               SelectableText(control.parameters['instance_id'] as String),
             ],
@@ -173,6 +180,14 @@ class _NativeToolsPanelState extends State<NativeToolsPanel> {
             const Divider(height: 28),
             Text('${l['camera']}: ${l[state.text('camera')]}', style: Theme.of(context).textTheme.titleSmall),
             Text(l[state.text('camera_scope')]),
+            if (state.values['camera_requested'] case final bool requested)
+              Text('${l['requested']} · ${l[requested ? 'yes' : 'no']}'),
+            if (state.values['camera_service'] case final bool active)
+              Text('${l['cameraGuardActive']} · ${l[active ? 'yes' : 'no']}'),
+            if (state.values['camera_present'] case final int count)
+              Text('${l['camerasPresent']} · $count'),
+            if (state.values['camera_pending'] case final int count)
+              Text('${l['cameraRestorationsPending']} · $count'),
             if (state.issue('camera_error') case final error?) SelectableText(error),
             const SizedBox(height: 8),
             Wrap(spacing: 8, runSpacing: 8, children: [
@@ -193,6 +208,16 @@ class _NativeToolsPanelState extends State<NativeToolsPanel> {
                   try { _apply(NativeControl.restoreLegacyCamera(cameraInstance.text)); }
                   on ArgumentError { setState(() => issue = l['cameraInstance']); }
                 } : null),
+            ],
+            if (cameraInspection case final report? when inspectionSession == client.session) ...[
+              const SizedBox(height: 12),
+              Semantics(liveRegion: true, child: Text(l['cameraInspectionResult'],
+                style: Theme.of(context).textTheme.titleSmall)),
+              Text('${l['observedAt']} · ${report.observedAt.toIso8601String()}'),
+              Text('${l['camera']} · ${l[report.state]}'),
+              Text(l[report.complete ? 'cameraInventoryComplete' : 'cameraInventoryIncomplete']),
+              Text(l['cameraAuthorization_${report.authorization}']),
+              if (report.detail.isNotEmpty) SelectableText(report.detail),
             ],
           ],
         ]),

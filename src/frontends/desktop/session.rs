@@ -9,6 +9,7 @@ use anyhow::{Context, Result, ensure};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use std::{
+    fs::File,
     io::{Read, Seek, SeekFrom, Write},
     path::Path,
     sync::{Arc, Mutex, mpsc},
@@ -159,6 +160,15 @@ impl Owner {
         directory: impl Fn() -> Result<std::path::PathBuf> + Send + 'static,
         max_bytes: u64,
     ) -> Result<Self> {
+        Self::spawn_with_writer(cadence, directory, max_bytes, Recorder::event)
+    }
+
+    fn spawn_with_writer(
+        cadence: Cadence,
+        directory: impl Fn() -> Result<std::path::PathBuf> + Send + 'static,
+        max_bytes: u64,
+        write_event: impl FnMut(&mut Recorder, &[u8]) -> Result<()> + Send + 'static,
+    ) -> Result<Self> {
         let (sender, receiver) = mpsc::sync_channel(8);
         let status = Arc::new(Mutex::new(Status {
             max_bytes,
@@ -167,7 +177,7 @@ impl Owner {
         let worker_status = Arc::clone(&status);
         let worker = thread::Builder::new()
             .name("mcw-session-journal".into())
-            .spawn(move || run(receiver, &worker_status, directory))?;
+            .spawn(move || run(receiver, &worker_status, directory, write_event))?;
         Ok(Self {
             client: Client { status, sender },
             worker: Some(worker),
@@ -317,6 +327,7 @@ fn run(
     receiver: mpsc::Receiver<Command>,
     shared: &Mutex<Status>,
     directory: impl Fn() -> Result<std::path::PathBuf>,
+    mut write_event: impl FnMut(&mut Recorder, &[u8]) -> Result<()>,
 ) {
     let mut recorder = None::<Recorder>;
     while let Ok(command) = receiver.recv() {
@@ -370,7 +381,7 @@ fn run(
                 if let Some(file) = recorder.as_mut()
                     && status.revision == revision
                 {
-                    let result = lines.iter().try_for_each(|line| file.event(line));
+                    let result = lines.iter().try_for_each(|line| write_event(file, line));
                     let mut status = shared.lock().expect("session status lock");
                     status.events_written = file.events;
                     status.bytes_written = file.bytes;
@@ -484,8 +495,16 @@ impl Recorder {
     }
 
     fn write_line(&mut self, line: &[u8]) -> Result<()> {
+        self.write_line_with(line, File::write_all)
+    }
+
+    fn write_line_with(
+        &mut self,
+        line: &[u8],
+        write: impl FnOnce(&mut File, &[u8]) -> std::io::Result<()>,
+    ) -> Result<()> {
         let file = &mut self.journal.file;
-        let result = file.write_all(line).and_then(|()| file.flush());
+        let result = write(file, line).and_then(|()| file.flush());
         if let Err(error) = result {
             file.set_len(self.bytes)
                 .and_then(|()| file.seek(SeekFrom::Start(self.bytes)).map(|_| ()))
@@ -684,6 +703,45 @@ mod tests {
                 0o700
             );
         }
+    }
+
+    #[test]
+    fn storage_full_after_a_partial_event_preserves_the_previous_record_and_reports_failure() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap().join("MicCamWatch");
+        let mut first = true;
+        let owner = Owner::spawn_with_writer(
+            Cadence::native(Duration::from_secs(2), None),
+            move || Ok(root.clone()),
+            MAX_FILE_BYTES,
+            move |recorder, line| {
+                if std::mem::take(&mut first) {
+                    return recorder.event(line);
+                }
+                recorder.write_line_with(line, |file, bytes| {
+                    file.write_all(&bytes[..bytes.len() / 2])?;
+                    Err(std::io::Error::new(
+                        std::io::ErrorKind::StorageFull,
+                        "fixture: disk full after a partial write",
+                    ))
+                })
+            },
+        )
+        .unwrap();
+        let client = owner.client();
+        start(&client, 2000);
+        Observations::default().observe(&client, Some(&sample(2)), Utc::now());
+        let stopped = client
+            .execute(client.prepare(false).unwrap(), None)
+            .unwrap();
+        assert_eq!(stopped.phase, Phase::Failed);
+        assert_eq!(stopped.events_written, 1);
+        assert!(stopped.last_error.as_ref().unwrap().contains("disk full"));
+        let saved = rows(&stopped);
+        assert_eq!(saved.len(), 3);
+        assert_eq!(saved[1]["action"], "start");
+        assert_eq!(saved[2]["reason"], "recording_error");
+        assert_eq!(saved[2]["events_written"], 1);
     }
 
     #[test]

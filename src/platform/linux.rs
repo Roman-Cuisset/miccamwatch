@@ -40,6 +40,11 @@ impl PlatformMonitor {
         self.control.microphone_mute_state()
     }
 
+    #[cfg(feature = "flutter-desktop")]
+    pub(crate) fn has_microphone_originals(&self) -> Result<bool> {
+        control::Control::has_microphone_originals()
+    }
+
     pub fn set_microphone_mute(&self, muted: bool) -> Result<usize> {
         self.control.set_microphone_mute(muted)
     }

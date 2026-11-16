@@ -242,6 +242,39 @@ class ReleaseCheck {
   }
 }
 
+class CameraInspection {
+  const CameraInspection._(this.observedAt, this.state, this.complete,
+      this.administratorRequired, this.authorization, this.detail);
+  final DateTime observedAt;
+  final String state;
+  final bool complete;
+  final bool administratorRequired;
+  final String authorization;
+  final String detail;
+
+  factory CameraInspection.fromJson(Object? value) {
+    final data = _object(value, {'observed_at', 'state', 'complete_inventory',
+      'administrator_required', 'authorization', 'detail'});
+    final at = DateTime.tryParse(_text(data['observed_at'], 64));
+    final state = _text(data['state'], 32);
+    final authorization = _text(data['authorization'], 32);
+    final complete = _bool(data['complete_inventory']);
+    final needsAdmin = _bool(data['administrator_required']);
+    final refused = authorization == 'cancelled' || authorization == 'denied';
+    if (at == null || !at.isUtc ||
+        !const {'allowed', 'blocked', 'system_managed', 'unknown'}.contains(state) ||
+        !const {'not_requested', 'granted', 'cancelled', 'denied'}.contains(authorization) ||
+        needsAdmin != (state == 'unknown' && !complete) ||
+        (refused && (state != 'unknown' || complete)) ||
+        (authorization == 'granted' && (state == 'unknown' || !complete))) {
+      throw const FormatException('Inconsistent native camera inspection');
+    }
+    return CameraInspection._(
+      at, state, complete, needsAdmin, authorization, _text(data['detail'], 1024),
+    );
+  }
+}
+
 class NativeReport {
   const NativeReport._(this.outcome, this.state, this.token, this.control,
       this.data, this.error, this.maintenance, this.releaseCheck);
@@ -257,6 +290,10 @@ class NativeReport {
       ? null : EnforcementStatus.fromJson(data!['enforcement_runtime']);
   ObservationSession? get observationSession => data?['observation_session'] == null
       ? null : ObservationSession.fromJson(data!['observation_session']);
+  CameraInspection? get cameraInspection =>
+      control?.kind == 'camera_inspect' && outcome != 'prepared' && data != null
+          ? CameraInspection.fromJson(data)
+          : null;
   ExitStatus? get exit => data?['exit'] == null ? null : ExitStatus.fromJson(data!['exit']);
   factory NativeReport.fromJson(dynamic value) {
     final map = _object(value, {'outcome', 'state', 'token', 'control', 'data', 'error'});
@@ -292,6 +329,13 @@ class NativeReport {
       throw const FormatException('Invalid native report data');
     }
     _boundedData(rawData, 0);
+    if (control?.kind == 'camera_inspect' && outcome != 'prepared' &&
+        (rawData != null || outcome == 'completed')) {
+      final inspection = CameraInspection.fromJson(rawData);
+      if (outcome == 'completed' && (!inspection.complete || inspection.state == 'unknown')) {
+        throw const FormatException('Incomplete inspection reported as successful');
+      }
+    }
     if (rawData is Map<String, dynamic> && rawData['enforcement_runtime'] != null) {
       EnforcementStatus.fromJson(rawData['enforcement_runtime']);
     }

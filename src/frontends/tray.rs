@@ -1051,7 +1051,9 @@ fn start_camera_worker(hwnd_cell: Arc<AtomicIsize>) -> CameraWorker {
                                 Action::Block => crate::privacy::set_camera_state(CameraPrivacyState::Blocked)?,
                                 Action::Allow => crate::privacy::set_camera_state(CameraPrivacyState::Allowed)?,
                                 Action::Resume => crate::privacy::resume_camera_protection()?,
-                                Action::RestoreLegacy { instance_id } => { crate::privacy::restore_legacy_camera(instance_id)?; }
+                                Action::RestoreLegacy { instance_id } => {
+                                    return crate::privacy::restore_legacy_camera_verified(instance_id);
+                                }
                             }
                         }
                     }

@@ -302,7 +302,9 @@ impl Session {
                 let state_error = readback.as_ref().err().map(|e| bounded(format!("Native readback unavailable: {e:#}")));
                 let mut error = error.or(state_error);
                 if error.is_none() {
-                    let confirmed = readback.as_ref().ok().is_some_and(|actual| effect_confirmed(&prepared.control, actual));
+                    let confirmed = readback.as_ref().ok().is_some_and(|actual| effect_confirmed(&prepared.control, actual))
+                        && (!matches!(prepared.control, Control::CameraInspect)
+                            || result.as_ref().is_ok_and(camera_inspection_confirmed));
                     if !confirmed { error = Some("The native request completed, but the requested effective state was not confirmed; consult the actual state and scope.".into()); }
                 }
                 Ok(Report {
@@ -434,7 +436,8 @@ fn process_access(pid: u32, context: &Context) -> Result<crate::model::Access> {
 }
 fn same_control_state(before: &NativeState, after: &NativeState, control: &Control) -> bool {
     match control {
-        Control::MicrophoneMute | Control::MicrophoneRestore => before.microphone == after.microphone,
+        Control::MicrophoneMute | Control::MicrophoneRestore => before.microphone == after.microphone
+            && before.can_mute == after.can_mute && before.can_restore == after.can_restore,
         Control::LockPolicy { .. } => before.lock_microphone == after.lock_microphone && before.lock_camera == after.lock_camera && before.restore_on_unlock == after.restore_on_unlock,
         Control::Terminate { .. } => true, // retained instance is revalidated by the native termination API.
         Control::AutomaticEnforcement { .. } => true,
@@ -445,11 +448,22 @@ fn effect_confirmed(control: &Control, actual: &NativeState) -> bool {
     match control {
         Control::CameraBlock => actual.camera == "blocked" && (!cfg!(windows) ||
             (actual.camera_requested == Some(true) && actual.camera_service == Some(true))),
-        Control::CameraAllow | Control::CameraRestoreLegacy { .. } => actual.camera == "allowed",
+        Control::CameraAllow => actual.camera == "allowed" && (!cfg!(windows) ||
+            (actual.camera_requested == Some(false) && actual.camera_service == Some(false))),
+        // The worker confirms restoration of the exact registered instance.
+        // The remaining cameras can still be owned by the system or unknown.
+        Control::CameraRestoreLegacy { .. } => actual.camera_requested == Some(false),
         Control::CameraResume => actual.camera_requested == Some(true) && actual.camera_service == Some(true),
         Control::MicrophoneMute => actual.microphone == "muted",
+        Control::MicrophoneRestore => !actual.can_restore && actual.microphone_error.is_none()
+            && matches!(actual.microphone.as_str(), "muted" | "mixed" | "unmuted"),
         _ => true,
     }
+}
+fn camera_inspection_confirmed(data: &serde_json::Value) -> bool {
+    data["complete_inventory"] == true
+        && matches!(data["state"].as_str(), Some("allowed" | "blocked" | "system_managed"))
+        && matches!(data["authorization"].as_str(), Some("not_requested" | "granted"))
 }
 fn merge_lock_preferences(settings: &mut Settings, expected: (bool,bool,bool), requested: (bool,bool,bool)) -> Result<()> {
     ensure!((settings.mute_on_lock,settings.block_camera_on_lock,settings.restore_on_unlock) == expected,
@@ -477,15 +491,26 @@ fn validate_control(control: &Control, state: &NativeState) -> Result<()> {
 }
 fn native_state(context: &Context) -> Result<NativeState> {
     let settings = Settings::load()?;
-    let microphone = PlatformMonitor::new(Policy::default()).and_then(|m| m.microphone_mute_state());
-    let can_mute = !cfg!(windows) && microphone.as_ref().is_ok_and(|s| *s != MicrophoneMuteState::Unavailable);
+    let (microphone, originals) = match PlatformMonitor::new(Policy::default()) {
+        Ok(monitor) => {
+            #[cfg(unix)]
+            let originals = if context.operational { monitor.has_microphone_originals() } else { Ok(false) };
+            #[cfg(windows)]
+            let originals = Ok::<bool, anyhow::Error>(false);
+            (monitor.microphone_mute_state(), originals)
+        }
+        Err(error) => (Err(error), Ok(false)),
+    };
+    let can_mute = cfg!(unix) && context.operational && originals.is_ok()
+        && microphone.as_ref().is_ok_and(|s| *s != MicrophoneMuteState::Unavailable);
+    let can_restore = can_mute && originals.as_ref().is_ok_and(|owned| *owned);
     let mut state = NativeState {
         microphone: microphone.as_ref().map(|s| format!("{s:?}").to_lowercase()).unwrap_or_else(|_| "unknown".into()),
-        microphone_error: microphone.err().map(|e| bounded(format!("{e:#}"))),
+        microphone_error: microphone.err().or_else(|| originals.err()).map(|e| bounded(format!("{e:#}"))),
         microphone_scope: if cfg!(windows) { "windows_endpoint_sdk_mute" } else if cfg!(target_os="linux") { "linux_pipewire_input_mute" } else { "macos_coreaudio_input_mute" },
         camera: "unknown".into(), camera_scope: if cfg!(windows) { "windows_pnp_camera" } else if cfg!(target_os="linux") { "linux_uvc_camera" } else { "macos_owned_camera_profile" },
         camera_requested: None, camera_service: None, camera_present: None, camera_pending: None, camera_error: None,
-        can_mute, can_restore: !cfg!(windows), can_camera: true, can_resume: false, can_inspect: cfg!(target_os="macos"),
+        can_mute, can_restore, can_camera: true, can_resume: false, can_inspect: cfg!(target_os="macos"),
         lock_microphone: settings.mute_on_lock, lock_camera: settings.block_camera_on_lock, restore_on_unlock: settings.restore_on_unlock,
         lock_supported: !cfg!(target_os="macos"), camera_lock_supported: cfg!(windows),
     };
@@ -513,8 +538,6 @@ fn native_state(context: &Context) -> Result<NativeState> {
     }
     #[cfg(target_os="linux")]
     if let Err(error)=crate::privacy::camera_control_preflight() { state.can_camera=false;state.camera_error=Some(bounded(format!("{error:#}"))); }
-    #[cfg(not(windows))]
-    let _ = context;
     Ok(state)
 }
 fn apply(control: &Control, expected_instance: Option<&str>, before: &NativeState) -> Result<serde_json::Value> {
@@ -529,7 +552,11 @@ fn apply(control: &Control, expected_instance: Option<&str>, before: &NativeStat
         #[cfg(not(windows))]
         Control::CameraAllow => crate::privacy::set_camera_state(crate::privacy::CameraPrivacyState::Allowed)?,
         #[cfg(target_os="macos")]
-        Control::CameraInspect => return Ok(serde_json::to_value(crate::privacy::camera_inspection(true)?)?),
+        Control::CameraInspect => {
+            let mut inspection = crate::privacy::camera_inspection(true)?;
+            inspection.detail = bounded(inspection.detail);
+            return Ok(serde_json::to_value(inspection)?);
+        }
         Control::LockPolicy { microphone, camera, restore } => {
             Settings::update_checked(|s| merge_lock_preferences(s,
                 (before.lock_microphone,before.lock_camera,before.restore_on_unlock),
@@ -628,6 +655,14 @@ mod tests {
         let mut actual=state();
         assert!(!effect_confirmed(&Control::CameraBlock,&actual));
         actual.camera="allowed".into();
+        #[cfg(windows)]
+        {
+            assert!(!effect_confirmed(&Control::CameraAllow,&actual));
+            actual.camera_requested=Some(false);
+            actual.camera_service=Some(true);
+            assert!(!effect_confirmed(&Control::CameraAllow,&actual));
+            actual.camera_service=Some(false);
+        }
         assert!(effect_confirmed(&Control::CameraAllow,&actual));
         assert!(!effect_confirmed(&Control::CameraBlock,&actual));
         actual.camera="blocked".into();
@@ -645,6 +680,37 @@ mod tests {
         assert!(!effect_confirmed(&Control::MicrophoneMute,&actual));
         actual.microphone="muted".into();
         assert!(effect_confirmed(&Control::MicrophoneMute,&actual));
+    }
+    #[test]
+    fn restoration_requires_owned_controls_to_clear_and_a_known_readback() {
+        let mut before = state();
+        before.microphone = "mixed".into();
+        before.can_mute = true;
+        before.can_restore = true;
+        let mut after = before.clone();
+        assert!(!effect_confirmed(&Control::MicrophoneRestore, &after));
+        after.can_restore = false;
+        assert!(!same_control_state(&before, &after, &Control::MicrophoneRestore));
+        assert!(effect_confirmed(&Control::MicrophoneRestore, &after));
+        after.microphone_error = Some("restoration journal unreadable".into());
+        assert!(!effect_confirmed(&Control::MicrophoneRestore, &after));
+        after.microphone_error = None;
+        after.microphone = "unavailable".into();
+        assert!(!effect_confirmed(&Control::MicrophoneRestore, &after));
+    }
+    #[test]
+    fn inspection_only_confirms_complete_authorized_or_passive_inventory() {
+        for authorization in ["cancelled", "denied", "invalid"] {
+            assert!(!camera_inspection_confirmed(&serde_json::json!({
+                "authorization":authorization, "complete_inventory":false, "state":"unknown"
+            })));
+        }
+        assert!(!camera_inspection_confirmed(&serde_json::json!({
+            "authorization":"not_requested", "complete_inventory":false, "state":"blocked"
+        })));
+        assert!(camera_inspection_confirmed(&serde_json::json!({
+            "authorization":"granted", "complete_inventory":true, "state":"system_managed"
+        })));
     }
     #[test]
     fn a_concurrent_lock_preference_change_is_not_overwritten_and_unrelated_preferences_survive() {
