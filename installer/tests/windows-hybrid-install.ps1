@@ -18,6 +18,19 @@ if ($standard) {
         $identity.Name -notmatch '\\mcwqa[0-9a-f]{8}$') {
         throw 'The process token, account or isolated prefix does not qualify as a standard-user fixture.'
     }
+    # Resolve folders for the loaded standard profile rather than consuming any
+    # application paths inherited from the runner administrator.
+    $profileKey = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\$StandardAccountSid"
+    $profile = [Environment]::ExpandEnvironmentVariables((Get-ItemProperty -LiteralPath $profileKey).ProfileImagePath)
+    $local = [Environment]::GetFolderPath('LocalApplicationData', 'Create')
+    $roaming = [Environment]::GetFolderPath('ApplicationData', 'Create')
+    if (!$profile -or $profile -ine [Environment]::GetFolderPath('UserProfile') -or
+        !$local.StartsWith($profile.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase) -or
+        !$roaming.StartsWith($profile.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'The loaded standard account does not own this fixture profile.'
+    }
+    $env:LOCALAPPDATA = $local
+    $env:APPDATA = $roaming
 } elseif ($env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or $env:GITHUB_ACTIONS -cne 'true') {
     throw 'This scenario requires a disposable GitHub-hosted Windows runner.'
 }
@@ -134,7 +147,7 @@ function Owned([string]$Name, [string]$Image) {
 
 try {
     $stable = Join-Path $Proof 'baseline-v0.21.0.msi'
-    Invoke-WebRequest -Uri 'https://github.com/Roman-Cuisset/miccamwatch/releases/download/v0.21.0/miccamwatch-windows-x86_64.msi' -OutFile $stable
+    Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/Roman-Cuisset/miccamwatch/releases/download/v0.21.0/miccamwatch-windows-x86_64.msi' -OutFile $stable
     $stableSha = (Get-FileHash -LiteralPath $stable -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($stableSha -cne '4e6145a4e48bff47f08c8341c24c14e7fab563146e36b8338f46441f7f4da3df') { throw 'Public v0.21.0 digest changed' }
     $oldCode = Identity $stable '0.21.0'
@@ -170,8 +183,17 @@ try {
         throw 'Failed upgrade left the candidate installed'
     }
     $rollback = Get-Content -LiteralPath (Join-Path $Proof 'upgrade-with-rollback.log') -Raw
-    if ($rollback -notmatch 'Expected MicCamWatch rollback fixture failure' -or $rollback -notmatch 'Rollback:') {
-        throw 'Expected MSI rollback was not observed'
+    $rollbackScript = [regex]::Match($rollback,
+        '(?s)Action ended [^\r\n]+RemoveExistingProducts\. Return value 1\..*?Action ended [^\r\n]+McwFixtureFailure\. Return value 3\..*?Executing op: Header\([^\r\n]*ScriptType=2,[^\r\n]*\)(?<restore>.*)')
+    if (!$rollbackScript.Success -or $rollback -notmatch 'Expected MicCamWatch rollback fixture failure') {
+        throw 'Expected MSI removal, injected failure and rollback script were not observed in order'
+    }
+    foreach ($name in @('mcw.exe','mcw-tray.exe')) {
+        $destination = [regex]::Escape((Join-Path $base $name))
+        if ($rollbackScript.Groups['restore'].Value -notmatch
+            ('(?im)^.*Executing op: FileCopy\(SourceName=[^,\r\n]+\.rbf,[^\r\n]*DestName=' + $destination + ',')) {
+            throw "Rollback log has no backup restore for $name"
+        }
     }
     $report.wholeMsiRollback = $true
 

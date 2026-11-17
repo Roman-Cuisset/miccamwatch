@@ -17,7 +17,7 @@ try { $generator.GetBytes($random) }
 finally { $generator.Dispose() }
 $password = ConvertTo-SecureString ('Qa1!' + [Convert]::ToBase64String($random)) -AsPlainText -Force
 [Array]::Clear($random, 0, $random.Length)
-$user = New-LocalUser -Name $account -Password $password -Description 'Disposable MicCamWatch standard-user qualification'
+$user = New-LocalUser -Name $account -Password $password -Description 'MicCamWatch standard-user fixture'
 if (!(@(Get-LocalGroupMember -SID 'S-1-5-32-545').SID.Value -contains $user.SID.Value)) {
     Add-LocalGroupMember -SID 'S-1-5-32-545' -Member $user
 }
