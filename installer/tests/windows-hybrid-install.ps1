@@ -102,14 +102,20 @@ function Check-Installed([string]$Code, [string]$Version) {
         !(Test-Path -LiteralPath "$base\mcw-tray.exe" -PathType Leaf) -or
         !(Test-Path -LiteralPath $shortcut)) { throw "Installed executables or shortcut version mismatch for $Version" }
     if ($Version -ne '0.21.0') {
-        # PowerShell does not wait for a GUI executable invoked with &.
-        $output = Join-Path $Proof "installed-tray-$Version.txt"
-        $process = Start-Process -FilePath "$base\mcw-tray.exe" -ArgumentList '--version' -WindowStyle Hidden `
-            -RedirectStandardOutput $output -PassThru
-        if (!$process.WaitForExit(5000) -or $process.ExitCode -ne 0 -or
-            (Get-Content -LiteralPath $output -Raw).Trim() -cne "mcw-tray $Version") {
-            throw 'Hybrid tray version mismatch'
-        }
+        # Keep the process handle. PowerShell 5 Start-Process can lose the
+        # exit status of a GUI program that exits before the first wait.
+        $info = [Diagnostics.ProcessStartInfo]::new("$base\mcw-tray.exe", '--version')
+        $info.UseShellExecute = $false
+        $info.CreateNoWindow = $true
+        $info.RedirectStandardOutput = $true
+        $process = [Diagnostics.Process]::Start($info)
+        try {
+            $output = $process.StandardOutput.ReadToEndAsync()
+            if (!$process.WaitForExit(10000) -or $process.ExitCode -ne 0 -or
+                !$output.Wait(1000) -or $output.Result.Trim() -cne "mcw-tray $Version") {
+                throw 'Hybrid tray version mismatch'
+            }
+        } finally { $process.Dispose() }
     }
 }
 
