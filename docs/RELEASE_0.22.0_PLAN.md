@@ -284,3 +284,11 @@ Pour l’étape 3, le premier contrôle porte sur le bundle et la liaison de
 ses composants. L’installation hybride, la mise à niveau, la récupération,
 la désinstallation en compte standard et les preuves de distribution sont
 à qualifier en isolation après accord.
+
+## 14. Qualification des paquets hybrides
+
+Les huit artefacts des cinq cibles, leurs révisions, leurs empreintes et les
+résultats des essais installés figurent dans le [rapport de distribution](HYBRID_DISTRIBUTION.md).
+L’étape 3 reste ouverte pour la mise à jour Rust du bundle Windows et le cycle
+de vie du ZIP portable. La qualification MSI en compte standard requiert un
+environnement Windows jetable qui autorise l’installation par utilisateur.

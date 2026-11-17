@@ -4094,3 +4094,10 @@ Les tests Windows, Linux x64 et ARM64, macOS Intel et Apple Silicon sont
 consignés dans les [reçus de la qualification fonctionnelle](V0.22.0_PARITY_AUDIT.md#qualification-etape-2). La validation suivante
 porte sur le bundle installé et ses transactions, après accord pour
 démarrer l’étape 3.
+
+## 2026-11-17 — Paquets hybrides v0.22.0
+
+La disposition Rust et Flutter, les huit SHA-256, la preuve ABI sous Ubuntu
+22.04 et les cycles installés par OS figurent dans le [rapport de distribution](HYBRID_DISTRIBUTION.md).
+L’étape 3 reste incomplète. La mise à jour Rust du bundle Windows et la
+récupération du ZIP portable restent ouvertes.
