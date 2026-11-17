@@ -12,13 +12,16 @@ on:
       msi-test-arm-standard-only:
         type: boolean
         default: false
+      rebuild-rust-only:
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 jobs:
   windows:
-    if: ${{ inputs.msi-test-run == '' && inputs.msi-test-source == '' }}
+    if: ${{ inputs.rebuild-rust-only || (inputs.msi-test-run == '' && inputs.msi-test-source == '') }}
     runs-on: windows-latest
     timeout-minutes: 80
     defaults:
@@ -32,6 +35,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+          fetch-depth: ${{ inputs.rebuild-rust-only && '0' || '1' }}
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
         with:
           toolchain: 1.98.1
@@ -45,6 +49,7 @@ jobs:
           $env:GITHUB_SHA | Set-Content (Join-Path $root 'source-commit.txt')
           rustc -Vv | Set-Content (Join-Path $root 'rust-version.txt')
       - name: Install exact hash-verified official Flutter Windows SDK
+        if: ${{ !inputs.rebuild-rust-only }}
         run: |
           $manifest = Invoke-RestMethod 'https://storage.googleapis.com/flutter_infra_release/releases/releases_windows.json'
           $record = @($manifest.releases | Where-Object { $_.version -eq '3.47.8' -and $_.channel -eq 'stable' -and $_.dart_sdk_arch -eq 'x64' })
@@ -60,6 +65,7 @@ jobs:
           (Join-Path $tools 'flutter/bin') >> $env:GITHUB_PATH
           $record[0] | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $env:MCW_B5_PROOF 'sdk-source.json')
       - name: Require matching framework engine and Dart
+        if: ${{ !inputs.rebuild-rust-only }}
         run: |
           (Get-Command flutter).Source | Set-Content (Join-Path $env:MCW_B5_PROOF 'flutter-command.txt')
           # A freshly extracted SDK bootstraps pub/tool caches on stdout. Finish
@@ -74,6 +80,7 @@ jobs:
           $info | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $env:MCW_B5_PROOF 'flutter-version.json')
           if ($info.frameworkRevision -ne '737ba8f885dc774b53b442759999a312c9461e4e' -or $info.engineRevision -ne 'cf636b1dfb818dd6a3ff16e390e93b1a036969c8' -or $info.dartSdkVersion.Split(' ')[0] -ne '3.13.7') { throw 'Unexpected SDK toolchain' }
       - name: Check Rust and actual native release imports
+        if: ${{ !inputs.rebuild-rust-only }}
         run: |
           cargo clippy --all-targets --locked --features windows-tray,flutter-desktop -- -D warnings
           if ($LASTEXITCODE -ne 0) { throw 'Strict Rust Clippy failed' }
@@ -89,6 +96,7 @@ jobs:
           New-Item -ItemType Directory -Path $native | Out-Null
           Copy-Item target/release/mcw.exe,target/release/mcw-tray.exe $native
       - name: Build and administratively extract exact native MSI and ZIP (no install)
+        if: ${{ !inputs.rebuild-rust-only }}
         run: |
           dotnet tool restore
           if ($LASTEXITCODE -ne 0) { throw 'Pinned WiX restore failed' }
@@ -105,6 +113,7 @@ jobs:
           python -B installer/tests/windows_distribution_imports.py "$native/mcw.exe" "$native/mcw-tray.exe" --msi $msi --zip $zip
           if ($LASTEXITCODE -ne 0) { throw 'MSI/ZIP exact-build dependency gate failed' }
       - name: Build hybrid Rust and normal Flutter release
+        if: ${{ !inputs.rebuild-rust-only }}
         run: |
           cargo test --lib --locked --features windows-tray,flutter-desktop frontends::desktop::session::tests
           if ($LASTEXITCODE -ne 0) { throw 'Observation session tests failed' }
@@ -127,8 +136,41 @@ jobs:
           $semantic = Join-Path $env:MCW_B5_PROOF 'semantic-native'
           New-Item -ItemType Directory -Path $semantic | Out-Null
           Copy-Item target/release/mcw.exe,target/release/mcw-tray.exe $semantic
+      - name: Restore the byte-identified unchanged release Flutter component
+        if: ${{ inputs.rebuild-rust-only }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MCW_FLUTTER_RUN: ${{ inputs.msi-test-run }}
+          MCW_FLUTTER_SOURCE: ${{ inputs.msi-test-source }}
+        run: |
+          if ($env:MCW_FLUTTER_RUN -cnotmatch '^[0-9]+$' -or $env:MCW_FLUTTER_SOURCE -cnotmatch '^[0-9a-f]{40}$') { throw 'An exact prior build is required' }
+          $run = gh run view $env:MCW_FLUTTER_RUN --repo $env:GITHUB_REPOSITORY --json headBranch,headSha,status,jobs | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $run.status -ne 'completed' -or $run.headBranch -cne $env:GITHUB_REF_NAME -or $run.headSha -cne $env:MCW_FLUTTER_SOURCE) { throw 'Wrong Flutter build provenance' }
+          $build = @($run.jobs.steps | Where-Object name -eq 'Build the complete hybrid ZIP and MSI and verify both container payloads')
+          if ($build.Count -ne 1 -or $build[0].conclusion -ne 'success') { throw 'The prior hybrid package must have passed the complete audit' }
+          git merge-base --is-ancestor $env:MCW_FLUTTER_SOURCE $env:GITHUB_SHA
+          if ($LASTEXITCODE -ne 0) { throw 'Flutter build source must be an ancestor' }
+          git diff --quiet $env:MCW_FLUTTER_SOURCE $env:GITHUB_SHA -- desktop/flutter
+          if ($LASTEXITCODE -ne 0) { throw 'Flutter sources changed; rebuild required' }
+          $restored = Join-Path $env:RUNNER_TEMP 'verified-prior-flutter'
+          gh run download $env:MCW_FLUTTER_RUN --repo $env:GITHUB_REPOSITORY --name "miccamwatch-hybrid-windows-x86_64-$env:MCW_FLUTTER_SOURCE" --dir $restored
+          if ($LASTEXITCODE -ne 0) { throw 'Audited Flutter source artifact unavailable' }
+          $zip = Join-Path $restored 'miccamwatch-hybrid-windows-x86_64.zip'
+          $hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          $sums = @(Get-Content -LiteralPath (Join-Path $restored 'SHA256SUMS') | Where-Object { $_ -ceq "$hash  miccamwatch-hybrid-windows-x86_64.zip" })
+          if ($sums.Count -ne 1) { throw 'Prior ZIP digest mismatch' }
+          $extracted = Join-Path $restored 'expanded'
+          Expand-Archive -LiteralPath $zip -DestinationPath $extracted
+          $manifest = Get-Content -LiteralPath (Join-Path $extracted 'miccamwatch-bundle.json') -Raw | ConvertFrom-Json
+          $version = (cargo metadata --locked --no-deps --format-version 1 | ConvertFrom-Json).packages[0].version
+          if ($LASTEXITCODE -ne 0 -or $manifest.revision -cne $env:MCW_FLUTTER_SOURCE -or $manifest.target -cne 'windows-x86_64' -or $manifest.version -cne $version -or $manifest.ipc -ne 10) { throw 'Prior bundle identity mismatch' }
+          Copy-Item -Recurse (Join-Path $extracted 'desktop') (Join-Path $env:MCW_B5_PROOF 'normal-bundle')
+          @{ run=$env:MCW_FLUTTER_RUN; revision=$env:MCW_FLUTTER_SOURCE; zip_sha256=$hash; artifact='normal Flutter release component' } |
+            ConvertTo-Json | Set-Content (Join-Path $env:MCW_B5_PROOF 'restored-flutter.json')
       - name: Build the complete hybrid ZIP and MSI and verify both container payloads
         run: |
+          dotnet tool restore
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned WiX restore failed' }
           cargo build --release --locked --features windows-tray,packaged-desktop
           if ($LASTEXITCODE -ne 0) { throw 'Packaged Rust build failed' }
           $output = Join-Path $env:MCW_B5_PROOF 'hybrid-distribution'
@@ -143,6 +185,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Packaged updater Clippy failed' }
           cargo test --locked --features packaged-desktop --lib updater:: -- --test-threads=1
           if ($LASTEXITCODE -ne 0) { throw 'Packaged updater tests failed' }
+          $env:MCW_TEST_HYBRID_ZIP = Join-Path $output 'miccamwatch-hybrid-windows-x86_64.zip'
+          cargo test --locked --features packaged-desktop --lib updater::bundle::tests::exact_archive_and_flutter_version_are_read_without_launching_it -- --exact --ignored
+          if ($LASTEXITCODE -ne 0) { throw 'Rust ZIP and Flutter version verification failed' }
           $raw = cargo test --locked --features packaged-desktop --lib --no-run --message-format=json
           if ($LASTEXITCODE -ne 0) { throw 'Packaged updater fixture build failed' }
           $tests = @($raw | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object {
@@ -152,6 +197,7 @@ jobs:
           & powershell.exe -NoProfile -NonInteractive -STA -File installer/tests/windows-hybrid-install.ps1 -Candidate (Join-Path $output 'miccamwatch-hybrid-windows-x86_64.msi') -Proof (Join-Path $output 'lifecycle') -RustMsiTest $tests[0].executable
           if ($LASTEXITCODE -ne 0) { throw 'Installed hybrid lifecycle failed' }
       - name: Qualify the same per-user MSI transaction under a genuine standard account
+        if: ${{ !inputs.rebuild-rust-only }}
         run: |
           $output = Join-Path $env:MCW_B5_PROOF 'hybrid-distribution'
           & powershell.exe -NoProfile -NonInteractive -File installer/tests/windows-hybrid-standard.ps1 -Candidate (Join-Path $output 'miccamwatch-hybrid-windows-x86_64.msi') -Proof (Join-Path $output 'standard')
@@ -174,6 +220,7 @@ jobs:
             ${{ env.MCW_B5_PROOF }}/hybrid-distribution/standard/**/*.json
             ${{ env.MCW_B5_PROOF }}/hybrid-distribution/standard/**/*.log
       - name: Build distinct semantic proof UI and qualify isolated lifecycle
+        if: ${{ !inputs.rebuild-rust-only }}
         run: |
           Push-Location desktop/flutter
           try {
@@ -206,7 +253,7 @@ jobs:
 
 
   installed-msi:
-    if: ${{ inputs.msi-test-run != '' || inputs.msi-test-source != '' }}
+    if: ${{ !inputs.rebuild-rust-only && (inputs.msi-test-run != '' || inputs.msi-test-source != '') }}
     name: Exact Windows MSI installation (${{ matrix.context }})
     permissions:
       contents: read

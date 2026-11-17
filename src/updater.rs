@@ -22,6 +22,8 @@ mod msi;
 #[cfg(feature = "packaged-desktop")]
 mod portable;
 #[cfg(feature = "packaged-desktop")]
+mod system_library;
+#[cfg(feature = "packaged-desktop")]
 #[doc(hidden)]
 pub use hybrid::{hold_runtime_lease, recover, remove_portable, run_worker};
 
@@ -281,14 +283,12 @@ fn validate_reported_version(path: &Path, expected: &str, stage: &Path) -> Resul
             child.0.wait().map_err(|error| {
                 transaction::io_error("wait for stopped CLI validation", path, error)
             })?;
-            bail!(
-                "staged CLI version validation exceeded its time/output bound; installation unchanged"
-            );
+            bail!("binary version probe exceeded its time or output limit");
         }
         std::thread::sleep(Duration::from_millis(20));
     };
     if fs::metadata(&output_path)?.len() > 4096 {
-        bail!("staged CLI version validation output is too large; installation unchanged");
+        bail!("binary version probe output is too large");
     }
     let mut bytes = [0u8; 4097];
     let mut file = fs::File::open(&output_path)?;
@@ -301,10 +301,10 @@ fn validate_reported_version(path: &Path, expected: &str, stage: &Path) -> Resul
         length += count;
     }
     if length > 4096 {
-        bail!("staged CLI version validation output is too large; installation unchanged");
+        bail!("binary version probe output is too large");
     }
     let reported = std::str::from_utf8(&bytes[..length])
-        .context("staged CLI version output is not valid UTF-8; installation unchanged")?;
+        .context("binary version probe output is not valid UTF-8")?;
     if !status.success() || reported.trim() != expected {
         bail!(
             "binary did not report expected version {expected} (status {status}, output {:?})",

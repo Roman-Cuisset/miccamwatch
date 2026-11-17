@@ -122,34 +122,46 @@ fn validate_x64_pe(mut file: File) -> Result<()> {
 }
 
 pub(super) fn verify_flutter_version(root: &Path, version: &str) -> Result<()> {
+    use std::ffi::c_void;
     use windows::{
-        Win32::Storage::FileSystem::{
-            GetFileVersionInfoSizeW, GetFileVersionInfoW, VS_FIXEDFILEINFO, VerQueryValueW,
-        },
-        core::{PCWSTR, w},
+        Win32::Storage::FileSystem::VS_FIXEDFILEINFO,
+        core::{BOOL, PCWSTR, w},
     };
+    let library = super::system_library::SystemLibrary::load("version.dll")?;
+    // These types mirror winver.h. Keep the selected System32 DLL resident
+    // while reading version data from the pinned Flutter executable.
+    let info_size: unsafe extern "system" fn(PCWSTR, *mut u32) -> u32 =
+        unsafe { library.export(c"GetFileVersionInfoSizeW") }?;
+    let get_info: unsafe extern "system" fn(PCWSTR, u32, u32, *mut c_void) -> BOOL =
+        unsafe { library.export(c"GetFileVersionInfoW") }?;
+    let query: unsafe extern "system" fn(
+        *const c_void,
+        PCWSTR,
+        *mut *mut c_void,
+        *mut u32,
+    ) -> BOOL = unsafe { library.export(c"VerQueryValueW") }?;
     let path = root.join("desktop/miccamwatch_desktop.exe");
     let _pinned = pin(&path)?;
     let path = super::msi::wide(path.as_os_str());
-    let length = unsafe { GetFileVersionInfoSizeW(PCWSTR(path.as_ptr()), None) };
+    let length = unsafe { info_size(PCWSTR(path.as_ptr()), std::ptr::null_mut()) };
     ensure!(
         (1..=65_536).contains(&length),
         "Flutter runner version resource is missing or oversized"
     );
     let mut resource = vec![0u8; length as usize];
     unsafe {
-        GetFileVersionInfoW(
+        get_info(
             PCWSTR(path.as_ptr()),
-            None,
+            0,
             length,
             resource.as_mut_ptr().cast(),
         )
-    }?;
+    }
+    .ok()?;
     let mut value = std::ptr::null_mut();
     let mut size = 0;
     ensure!(
-        unsafe { VerQueryValueW(resource.as_ptr().cast(), w!("\\"), &mut value, &mut size) }
-            .as_bool()
+        unsafe { query(resource.as_ptr().cast(), w!("\\"), &mut value, &mut size) }.as_bool()
             && !value.is_null()
             && size as usize >= std::mem::size_of::<VS_FIXEDFILEINFO>(),
         "cannot read Flutter runner version"
@@ -213,6 +225,19 @@ pub(super) mod tests {
     use super::*;
     use std::io::Write;
     use zip::write::SimpleFileOptions;
+
+    #[test]
+    #[ignore = "requires the exact release Flutter ZIP; extracts files without launching the application"]
+    fn exact_archive_and_flutter_version_are_read_without_launching_it() -> Result<()> {
+        let zip = std::env::var_os("MCW_TEST_HYBRID_ZIP").context("ZIP fixture missing")?;
+        let temp = tempfile::tempdir()?;
+        let expand = temp.path().join("expanded");
+        let version = env!("CARGO_PKG_VERSION");
+        extract(File::open(zip)?, &expand, version)?;
+        verify_flutter_version(&expand, version)?;
+        assert!(verify_flutter_version(&expand, "255.255.65535").is_err());
+        Ok(())
+    }
 
     pub(crate) fn fixture(root: &Path, version: &str) -> Result<String> {
         fs::create_dir(root)?;

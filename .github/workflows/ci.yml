@@ -36,6 +36,10 @@ on:
         description: Replay the x64 MSI under a standard account on Windows 11 Arm64
         type: boolean
         default: false
+      windows-rebuild-rust-only:
+        description: Rebuild Windows Rust and package it with the audited unchanged Flutter component from the identified source run
+        type: boolean
+        default: false
       flutter-intel-only:
         description: Target only Intel; bootstrap diagnostic controls remain separately opt-in
         type: boolean
@@ -103,6 +107,7 @@ jobs:
       msi-test-run: ${{ inputs.windows-msi-test-run || '' }}
       msi-test-source: ${{ inputs.windows-msi-test-source || '' }}
       msi-test-arm-standard-only: ${{ inputs.windows-msi-arm-standard-only || false }}
+      rebuild-rust-only: ${{ inputs.windows-rebuild-rust-only || false }}
 
   windows:
     if: ${{ !inputs.native-only && inputs.native-platform != 'flutter' && inputs.native-platform != 'flutter-windows' }}

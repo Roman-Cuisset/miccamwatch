@@ -1,26 +1,79 @@
-use super::{bundle, portable};
+use super::{
+    bundle, portable,
+    system_library::{SystemLibrary, system_directory},
+};
 use crate::uninstall::windows::valid_product_code;
 use anyhow::{Context, Result, bail, ensure};
-use std::{
-    ffi::OsStr,
-    os::windows::ffi::OsStrExt,
-    path::{Path, PathBuf},
-    process::Command,
-};
+use std::{ffi::OsStr, os::windows::ffi::OsStrExt, path::Path, process::Command};
 use windows::{
-    Win32::System::{
-        ApplicationInstallationAndServicing::*, SystemInformation::GetSystemDirectoryW,
+    Win32::{
+        Foundation::FILETIME,
+        System::ApplicationInstallationAndServicing::{
+            MSIHANDLE, MSIINSTALLCONTEXT, MSIINSTALLCONTEXT_USERUNMANAGED,
+        },
     },
     core::{PCWSTR, PWSTR, w},
 };
 
 const UPGRADE_CODE: &str = "{8FC9317B-4517-4E83-9F52-CF3257584BF6}";
 
-struct Handle(MSIHANDLE);
+struct Installer {
+    _library: SystemLibrary,
+    close: unsafe extern "system" fn(MSIHANDLE) -> u32,
+    database: unsafe extern "system" fn(PCWSTR, PCWSTR, *mut MSIHANDLE) -> u32,
+    view: unsafe extern "system" fn(MSIHANDLE, PCWSTR, *mut MSIHANDLE) -> u32,
+    execute: unsafe extern "system" fn(MSIHANDLE, MSIHANDLE) -> u32,
+    fetch: unsafe extern "system" fn(MSIHANDLE, *mut MSIHANDLE) -> u32,
+    record_string: unsafe extern "system" fn(MSIHANDLE, u32, PWSTR, *mut u32) -> u32,
+    summary: unsafe extern "system" fn(MSIHANDLE, PCWSTR, u32, *mut MSIHANDLE) -> u32,
+    summary_property: unsafe extern "system" fn(
+        MSIHANDLE,
+        u32,
+        *mut u32,
+        *mut i32,
+        *mut FILETIME,
+        PWSTR,
+        *mut u32,
+    ) -> u32,
+    product_info: unsafe extern "system" fn(
+        PCWSTR,
+        PCWSTR,
+        MSIINSTALLCONTEXT,
+        PCWSTR,
+        PWSTR,
+        *mut u32,
+    ) -> u32,
+}
 
-impl Drop for Handle {
+impl Installer {
+    fn load() -> Result<Self> {
+        let library = SystemLibrary::load("msi.dll")?;
+        // Match the msi.h ABI above and retain the System32 module until
+        // all its database, record and summary handles have been closed.
+        Ok(unsafe {
+            Self {
+                close: library.export(c"MsiCloseHandle")?,
+                database: library.export(c"MsiOpenDatabaseW")?,
+                view: library.export(c"MsiDatabaseOpenViewW")?,
+                execute: library.export(c"MsiViewExecute")?,
+                fetch: library.export(c"MsiViewFetch")?,
+                record_string: library.export(c"MsiRecordGetStringW")?,
+                summary: library.export(c"MsiGetSummaryInformationW")?,
+                summary_property: library.export(c"MsiSummaryInfoGetPropertyW")?,
+                product_info: library.export(c"MsiGetProductInfoExW")?,
+                _library: library,
+            }
+        })
+    }
+}
+
+struct Handle<'a>(MSIHANDLE, &'a Installer);
+
+impl Drop for Handle<'_> {
     fn drop(&mut self) {
-        unsafe { MsiCloseHandle(self.0) };
+        if self.0.0 != 0 {
+            unsafe { (self.1.close)(self.0) };
+        }
     }
 }
 
@@ -46,11 +99,11 @@ fn checked(status: u32, action: &str) -> Result<()> {
     Ok(())
 }
 
-fn database(path: &Path) -> Result<Handle> {
-    let mut result = Handle(MSIHANDLE(0));
+fn database<'a>(installer: &'a Installer, path: &Path) -> Result<Handle<'a>> {
+    let mut result = Handle(MSIHANDLE(0), installer);
     checked(
         unsafe {
-            MsiOpenDatabaseW(
+            (installer.database)(
                 PCWSTR(wide(dos_path(path)?.as_os_str()).as_ptr()),
                 PCWSTR::null(),
                 &mut result.0,
@@ -61,21 +114,20 @@ fn database(path: &Path) -> Result<Handle> {
     Ok(result)
 }
 
-fn property(db: &Handle, name: &str) -> Result<Option<String>> {
+fn property(db: &Handle<'_>, name: &str) -> Result<Option<String>> {
     let query = format!("SELECT `Value` FROM `Property` WHERE `Property`='{name}'");
-    let mut view = Handle(MSIHANDLE(0));
+    let installer = db.1;
+    let mut view = Handle(MSIHANDLE(0), installer);
     checked(
-        unsafe {
-            MsiDatabaseOpenViewW(db.0, PCWSTR(wide(OsStr::new(&query)).as_ptr()), &mut view.0)
-        },
+        unsafe { (installer.view)(db.0, PCWSTR(wide(OsStr::new(&query)).as_ptr()), &mut view.0) },
         "open property query",
     )?;
     checked(
-        unsafe { MsiViewExecute(view.0, MSIHANDLE(0)) },
+        unsafe { (installer.execute)(view.0, MSIHANDLE(0)) },
         "execute property query",
     )?;
-    let mut row = Handle(MSIHANDLE(0));
-    let status = unsafe { MsiViewFetch(view.0, &mut row.0) };
+    let mut row = Handle(MSIHANDLE(0), installer);
+    let status = unsafe { (installer.fetch)(view.0, &mut row.0) };
     if status == 259 {
         return Ok(None);
     }
@@ -83,19 +135,18 @@ fn property(db: &Handle, name: &str) -> Result<Option<String>> {
     let mut value = [0u16; 512];
     let mut length = value.len() as u32;
     checked(
-        unsafe {
-            MsiRecordGetStringW(row.0, 1, Some(PWSTR(value.as_mut_ptr())), Some(&mut length))
-        },
+        unsafe { (installer.record_string)(row.0, 1, PWSTR(value.as_mut_ptr()), &mut length) },
         "read property",
     )?;
     Ok(Some(String::from_utf16(&value[..length as usize])?))
 }
 
 pub(super) fn inspect_candidate(path: &Path, version: &str) -> Result<String> {
-    let db = database(path)?;
-    let mut summary = Handle(MSIHANDLE(0));
+    let installer = Installer::load()?;
+    let db = database(&installer, path)?;
+    let mut summary = Handle(MSIHANDLE(0), &installer);
     checked(
-        unsafe { MsiGetSummaryInformationW(db.0, PCWSTR::null(), 0, &mut summary.0) },
+        unsafe { (installer.summary)(db.0, PCWSTR::null(), 0, &mut summary.0) },
         "open summary",
     )?;
     let mut template = [0u16; 256];
@@ -103,14 +154,14 @@ pub(super) fn inspect_candidate(path: &Path, version: &str) -> Result<String> {
     let mut value_type = 0;
     checked(
         unsafe {
-            MsiSummaryInfoGetPropertyW(
+            (installer.summary_property)(
                 summary.0,
                 7,
                 &mut value_type,
                 std::ptr::null_mut(),
-                None,
-                Some(PWSTR(template.as_mut_ptr())),
-                Some(&mut length),
+                std::ptr::null_mut(),
+                PWSTR(template.as_mut_ptr()),
+                &mut length,
             )
         },
         "read x64 template",
@@ -136,17 +187,21 @@ pub(super) fn inspect_candidate(path: &Path, version: &str) -> Result<String> {
     Ok(product)
 }
 
-fn installed_property(code: &str, property: PCWSTR) -> Result<Option<String>> {
+fn installed_property(
+    installer: &Installer,
+    code: &str,
+    property: PCWSTR,
+) -> Result<Option<String>> {
     let mut buffer = [0u16; 32768];
     let mut length = buffer.len() as u32;
     let status = unsafe {
-        MsiGetProductInfoExW(
+        (installer.product_info)(
             PCWSTR(wide(OsStr::new(code)).as_ptr()),
             PCWSTR::null(),
             MSIINSTALLCONTEXT_USERUNMANAGED,
             property,
-            Some(PWSTR(buffer.as_mut_ptr())),
-            Some(&mut length),
+            PWSTR(buffer.as_mut_ptr()),
+            &mut length,
         )
     };
     if status == 1605 {
@@ -157,20 +212,23 @@ fn installed_property(code: &str, property: PCWSTR) -> Result<Option<String>> {
 }
 
 pub(super) fn verify_installed(root: &Path, code: &str, version: &str) -> Result<()> {
+    let installer = Installer::load()?;
     ensure!(valid_product_code(code), "invalid installed ProductCode");
     ensure!(
-        installed_property(code, w!("State"))?.as_deref() == Some("5")
-            && installed_property(code, w!("VersionString"))?.as_deref() == Some(version)
-            && installed_property(code, w!("InstallLocation"))?.is_some_and(|value| !value
-                .is_empty()
-                && Path::new(&value)
-                    .canonicalize()
-                    .is_ok_and(|path| path == root)),
+        installed_property(&installer, code, w!("State"))?.as_deref() == Some("5")
+            && installed_property(&installer, code, w!("VersionString"))?.as_deref()
+                == Some(version)
+            && installed_property(&installer, code, w!("InstallLocation"))?.is_some_and(|value| {
+                !value.is_empty()
+                    && Path::new(&value)
+                        .canonicalize()
+                        .is_ok_and(|path| path == root)
+            }),
         "MSI registration does not match this installed per-user product"
     );
-    let cache =
-        installed_property(code, w!("LocalPackage"))?.context("MSI package cache missing")?;
-    let db = database(Path::new(&cache))?;
+    let cache = installed_property(&installer, code, w!("LocalPackage"))?
+        .context("MSI package cache missing")?;
+    let db = database(&installer, Path::new(&cache))?;
     ensure!(
         property(&db, "UpgradeCode")?.is_some_and(|value| value.eq_ignore_ascii_case(UPGRADE_CODE))
             && property(&db, "ProductCode")?.is_some_and(|value| value.eq_ignore_ascii_case(code))
@@ -182,7 +240,8 @@ pub(super) fn verify_installed(root: &Path, code: &str, version: &str) -> Result
 
 pub(super) fn require_new_product(code: &str) -> Result<()> {
     ensure!(
-        valid_product_code(code) && installed_property(code, w!("State"))?.is_none(),
+        valid_product_code(code)
+            && installed_property(&Installer::load()?, code, w!("State"))?.is_none(),
         "the candidate ProductCode already exists in this Windows Installer context"
     );
     Ok(())
@@ -197,13 +256,7 @@ pub(super) fn install(
     old_version: &str,
     new_version: &str,
 ) -> Result<()> {
-    let mut buffer = [0u16; 32768];
-    let length = unsafe { GetSystemDirectoryW(Some(&mut buffer)) } as usize;
-    ensure!(
-        length > 0 && length < buffer.len(),
-        "cannot locate Windows Installer system directory"
-    );
-    let executable = PathBuf::from(String::from_utf16(&buffer[..length])?).join("msiexec.exe");
+    let executable = system_directory()?.join("msiexec.exe");
     let package = dos_path(path)?;
     let log = stage.join("msi.log");
     let log = dos_path(&log)?;
@@ -231,7 +284,7 @@ pub(super) fn install(
         0 => {
             verify_installed(root, new, new_version)?;
             ensure!(
-                installed_property(old, w!("State"))?.is_none(),
+                installed_property(&Installer::load()?, old, w!("State"))?.is_none(),
                 "old MSI registration still exists after installation"
             );
             bundle::verify(root, new_version, true)?;
@@ -324,6 +377,7 @@ fn boot_time() -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     #[test]
     fn a_restart_marker_blocks_verification_during_the_same_boot() -> Result<()> {
@@ -371,9 +425,14 @@ mod tests {
         let stage =
             PathBuf::from(env::var_os("MCW_TEST_MSI_PROOF").context("MSI proof path missing")?)
                 .canonicalize()?;
+        let qualification = portable::local_app_data()?
+            .join("MicCamWatchQualification")
+            .join("flutter-b5-ci");
         ensure!(
-            artifact.starts_with(&sandbox) && stage.starts_with(&sandbox),
-            "fixture must be under actual runner temp"
+            [&sandbox, &qualification]
+                .iter()
+                .any(|directory| artifact.starts_with(directory) && stage.starts_with(directory)),
+            "fixture must be under the exact hosted qualification directory"
         );
         let mut package = bundle::pin(&artifact)?;
         ensure!(
