@@ -185,7 +185,10 @@ function Check-Payload($Manifest) {
         $_.FullName.Substring($base.Length + 1).Replace('\','/')
     })
     $names = @($Manifest.files.PSObject.Properties.Name) + $manifestPath
-    if (Compare-Object $names $actual -CaseSensitive) { throw 'Installed payload differs from the exact file list' }
+    $differences = @(Compare-Object $names $actual -CaseSensitive)
+    if ($differences.Count) {
+        $report.installedLayoutDifferences = @($differences | Select-Object InputObject,SideIndicator)
+    }
     foreach ($file in $Manifest.files.PSObject.Properties) {
         if ((Get-FileHash -LiteralPath (Join-Path $base $file.Name) -Algorithm SHA256).Hash -ine $file.Value) {
             throw "Installed payload digest mismatch: $($file.Name)"
@@ -339,6 +342,7 @@ try {
     $report.userDataPreserved = $true
     $report.msiUninstall = $true
     $report.standardUserQualified = $standard
+    if ($report.installedLayoutDifferences) { throw 'Installed payload differs from the exact file list' }
     if ($report.guiError) { throw $report.guiError }
     $report.status = 'passed'
 } catch {
