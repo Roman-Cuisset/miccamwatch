@@ -184,7 +184,13 @@ function Check-Payload($Manifest) {
     $actual = @(Get-ChildItem -LiteralPath $base -Recurse -File -Force | ForEach-Object {
         $_.FullName.Substring($base.Length + 1).Replace('\','/')
     })
-    $names = @($Manifest.files.PSObject.Properties.Name) + $manifestPath
+    # Autostart in the baseline fixture creates this exact native lock. It
+    # belongs to the runtime, while the MSI owns the manifest and payload.
+    $lock = Get-Item -LiteralPath $installationLock -Force
+    if ($lock.PSIsContainer -or $lock.Length -ne 0 -or $lock.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+        throw 'Unexpected native installation lock'
+    }
+    $names = @($Manifest.files.PSObject.Properties.Name) + $manifestPath + $lock.Name
     $differences = @(Compare-Object $names $actual -CaseSensitive)
     if ($differences.Count) {
         $report.installedLayoutDifferences = @($differences | Select-Object InputObject,SideIndicator)
@@ -239,6 +245,8 @@ try {
     $before = @(Get-FileHash -LiteralPath $settings,$history -Algorithm SHA256 | ForEach-Object Hash)
     & "$base\mcw.exe" autostart enable
     if ($LASTEXITCODE -ne 0) { throw 'Baseline autostart setup failed' }
+    $installationLock = Join-Path $base '.mcw-install.lock'
+    if (!(Test-Path -LiteralPath $installationLock -PathType Leaf)) { throw 'Baseline autostart did not create its native lock' }
     $runEntry = @(Read-Autostart)
     if ($runEntry.Count -ne 1 -or !$runEntry[0].Contains($base)) { throw 'Baseline autostart registration missing' }
 
@@ -306,9 +314,11 @@ try {
             }
             if ($diagnostics.Wait(1000)) {
                 [IO.File]::WriteAllText((Join-Path $Proof 'installed-tray-stderr.log'), $diagnostics.Result)
+                $report.installedIpcReady = $diagnostics.Result -match '(?m)^desktop event=ready endpoint=parent_received pid=[1-9][0-9]* '
             }
             $launch.Dispose()
         }
+        if (!$report.installedIpcReady -and !$report.guiError) { $report.guiError = 'Missing installed IPC ready receipt' }
         if (@(Owned 'miccamwatch_desktop' $flutterImage).Count) { throw 'Flutter remains after its owner stopped' }
     }
     # Simulate a future MSI failing after removing this hybrid package. Verify
@@ -336,6 +346,11 @@ try {
         (Test-Path -LiteralPath "$base\mcw.exe") -or (Test-Path -LiteralPath $shortcut)) {
         throw 'Uninstall left hybrid payload or product registrations'
     }
+    $left = @(Get-ChildItem -LiteralPath $base -Recurse -File -Force -ErrorAction SilentlyContinue)
+    if ($left.Count -gt 1 -or ($left.Count -eq 1 -and $left[0].FullName -ine $installationLock)) {
+        throw 'The MSI uninstall left unexpected files'
+    }
+    $report.retainedNativeInstallationLock = $left.Count -eq 1
     if (Compare-Object $before @(Get-FileHash -LiteralPath $settings,$history -Algorithm SHA256 | ForEach-Object Hash)) {
         throw 'Upgrade/rollback/uninstall did not preserve fixture user data'
     }
