@@ -63,10 +63,8 @@ def check_stat(info, path, expected, *, allow_hardlink=False):
     check(allow_hardlink or not stat.S_ISREG(info.st_mode) or info.st_nlink == 1, f"hardlinked file: {path}")
 
 
-def paths(root, expected, *, exact=True):
+def paths(root, expected):
     check_stat(root.lstat(), root, stat.S_ISDIR)
-    if not exact:
-        return {name: root / name for name in sorted(expected)}
     result = {}
     allowed_dirs = {str(parent) for name in expected for parent in Path(name).parents}
     pending = [root]
@@ -142,28 +140,38 @@ def assemble(target, native, flutter, root, revision):
                                   "desktop/miccamwatch_desktop"}
         output.chmod(0o755 if executable else 0o644)
         sums[relative] = sha(output)
-    (root / MANIFEST).write_text(json.dumps({
+    manifest = root / MANIFEST
+    manifest.write_text(json.dumps({
         "schema": 1, "version": version, "ipc": protocol, "target": target,
         "revision": revision, "files": sums,
     }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    manifest.chmod(0o644)
     return verify(root, target, revision)
 
 
 def verify(root, target, revision=None, *, current=True):
     expected = expected_files(target)
     actual = paths(root, expected | {MANIFEST})
-    data = json.loads(actual.pop(MANIFEST).read_text(encoding="utf-8"),
-                      object_pairs_hook=unique_pairs)
+    manifest = actual.pop(MANIFEST)
+    check(manifest.stat().st_size <= 16 * 1024, "oversized bundle manifest")
+    data = json.loads(manifest.read_text(encoding="utf-8"), object_pairs_hook=unique_pairs)
+    check(isinstance(data, dict)
+          and set(data) == {"schema", "version", "ipc", "target", "revision", "files"},
+          "invalid bundle manifest structure")
     version, protocol = release_metadata()
-    version_ok = ((data.get("version"), data.get("ipc")) == (version, protocol) if current else
-                  bool(re.fullmatch(r"\d+\.\d+\.\d+", data.get("version", "")))
-                  and type(data.get("ipc")) is int and 0 < data["ipc"] <= 255)
-    check(set(data) == {"schema", "version", "ipc", "target", "revision", "files"}
-          and data["schema"] == 1 and version_ok
-          and data["target"] == target and re.fullmatch(r"[0-9a-f]{40}", data["revision"])
-          and (revision is None or data["revision"] == revision),
+    revision_value = data["revision"]
+    version_value = data["version"]
+    ipc = data["ipc"]
+    check(isinstance(version_value, str) and re.fullmatch(r"[0-9]+[.][0-9]+[.][0-9]+", version_value)
+          and type(ipc) is int and 0 < ipc <= 255
+          and (not current or (version_value, ipc) == (version, protocol))
+          and type(data["schema"]) is int and data["schema"] == 1
+          and data["target"] == target and isinstance(revision_value, str)
+          and re.fullmatch(r"[0-9a-f]{40}", revision_value)
+          and (revision is None or revision_value == revision),
           "invalid bundle identity")
-    check(data["files"].keys() == expected, "manifest payload differs from platform contract")
+    check(isinstance(data["files"], dict) and data["files"].keys() == expected,
+          "manifest payload differs from platform contract")
     for relative, file in actual.items():
         check(sha(file) == data["files"][relative], f"bundle checksum mismatch: {relative}")
     return data

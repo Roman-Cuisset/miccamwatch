@@ -45,6 +45,7 @@ class WholeBundleTest(unittest.TestCase):
             "schema": 1, "version": version, "ipc": ipc, "target": TARGET,
             "revision": token * 40, "files": files,
         }), encoding="utf-8")
+        (root / MANIFEST).chmod(0o644)
         package = archive_bundle(root, TARGET, output)
         return package, sha(package)
 

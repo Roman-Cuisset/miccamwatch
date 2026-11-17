@@ -18,6 +18,9 @@ on:
       intel-bootstrap-controls:
         type: boolean
         default: false
+      linux-only:
+        type: boolean
+        default: false
       skip-linux-x64:
         type: boolean
         default: false
@@ -41,6 +44,9 @@ on:
       intel-bootstrap-controls:
         type: boolean
         default: false
+      linux-only:
+        type: boolean
+        default: false
       skip-linux-x64:
         type: boolean
         default: false
@@ -56,7 +62,7 @@ permissions:
 
 jobs:
   macos:
-    if: ${{ !inputs.native-gates-only }}
+    if: ${{ !inputs.native-gates-only && !inputs.linux-only }}
     name: macOS 15 ${{ matrix.architecture }} owned qualification
     permissions:
       contents: read

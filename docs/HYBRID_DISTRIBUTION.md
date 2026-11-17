@@ -45,6 +45,7 @@ de récupération restent dans leurs emplacements respectifs. L’installation
 du helper privilégié relève de son installateur dédié et de Polkit.
 
 ```sh
+mkdir -p "$HOME/.local/opt"
 python3 installer/hybrid_linux_install.py --root "$HOME/.local/opt/miccamwatch" install "$archive" --sha256 "$sha256"
 python3 installer/hybrid_linux_install.py --root "$HOME/.local/opt/miccamwatch" rollback "$rollback_slot"
 "$HOME/.local/opt/miccamwatch/bundle/mcw" uninstall
