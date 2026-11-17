@@ -119,10 +119,17 @@ function Check-Installed([string]$Code, [string]$Version) {
     }
 }
 
-function Copy-FailingFixture([string]$Source, [string]$Destination) {
+function Copy-FailingFixture([string]$Source, [string]$Destination, [string]$FixtureCode, [string]$FixtureVersion) {
     Copy-Item -LiteralPath $Source -Destination $Destination
     $db = $installer.OpenDatabase($Destination, 1)
     try {
+        if ($FixtureCode) {
+            $summary = $db.SummaryInformation(1)
+            try {
+                $summary.Property(9) = ([Guid]::NewGuid().ToString('B').ToUpperInvariant())
+                [void]$summary.Persist()
+            } finally { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($summary) }
+        }
         $seq = [int](Read-MsiValue $db "SELECT ``Sequence`` FROM ``InstallExecuteSequence`` WHERE ``Action``='RemoveExistingProducts'")
         if ($seq -le 1500 -or $seq -ge 4000) { throw 'Upgrade removal is outside the expected rollback window' }
         $p = $seq + 1
@@ -130,6 +137,18 @@ function Copy-FailingFixture([string]$Source, [string]$Destination) {
             "INSERT INTO ``CustomAction`` (``Action``, ``Type``, ``Target``) VALUES ('McwFixtureFailure', 19, 'Expected MicCamWatch rollback fixture failure')",
             "INSERT INTO ``InstallExecuteSequence`` (``Action``, ``Condition``, ``Sequence``) VALUES ('McwFixtureFailure', '1', $p)"
         )
+        if ($FixtureCode) {
+            # A higher test-only product code/version lets MSI remove the
+            # installed hybrid as an older product before the injected failure.
+            $statements += @(
+                "UPDATE ``Property`` SET ``Value``='$FixtureCode' WHERE ``Property``='ProductCode'",
+                "UPDATE ``Property`` SET ``Value``='$FixtureVersion' WHERE ``Property``='ProductVersion'",
+                "DELETE FROM ``Upgrade`` WHERE ``ActionProperty``='WIX_UPGRADE_DETECTED'",
+                "DELETE FROM ``Upgrade`` WHERE ``ActionProperty``='WIX_DOWNGRADE_DETECTED'",
+                "INSERT INTO ``Upgrade`` (``UpgradeCode``, ``VersionMax``, ``Attributes``, ``ActionProperty``) VALUES ('$upgradeCode', '$FixtureVersion', 1, 'WIX_UPGRADE_DETECTED')",
+                "INSERT INTO ``Upgrade`` (``UpgradeCode``, ``VersionMin``, ``Attributes``, ``ActionProperty``) VALUES ('$upgradeCode', '$FixtureVersion', 2, 'WIX_DOWNGRADE_DETECTED')"
+            )
+        }
         foreach ($statement in $statements) {
             $view = $db.OpenView($statement)
             try { [void]$view.Execute() }
@@ -137,6 +156,41 @@ function Copy-FailingFixture([string]$Source, [string]$Destination) {
         }
         [void]$db.Commit()
     } finally { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($db) }
+}
+
+function Check-Rollback([string]$Label, [string[]]$Files) {
+    $rollback = Get-Content -LiteralPath (Join-Path $Proof "$Label.log") -Raw
+    $rollbackScript = [regex]::Match($rollback,
+        '(?s)Action ended [^\r\n]+RemoveExistingProducts\. Return value 1\..*?Action ended [^\r\n]+McwFixtureFailure\. Return value 3\..*?Executing op: Header\([^\r\n]*ScriptType=2,[^\r\n]*\)(?<restore>.*)')
+    if (!$rollbackScript.Success -or $rollback -notmatch 'Expected MicCamWatch rollback fixture failure') {
+        throw 'Expected MSI removal, injected failure and rollback script were not observed in order'
+    }
+    foreach ($name in $Files) {
+        $destination = [regex]::Escape((Join-Path $base $name))
+        if ($rollbackScript.Groups['restore'].Value -notmatch
+            ('(?im)^.*Executing op: FileCopy\(SourceName=[^,\r\n]+\.rbf,[^\r\n]*DestName=' + $destination + ',')) {
+            throw "Rollback log has no backup restore for $name"
+        }
+    }
+}
+
+function Check-Payload($Manifest) {
+    $manifestPath = 'miccamwatch-bundle.json'
+    $source = Join-Path (Split-Path $Candidate) "bundle\$manifestPath"
+    if ((Get-FileHash -LiteralPath (Join-Path $base $manifestPath) -Algorithm SHA256).Hash -cne
+        (Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash) {
+        throw 'Installed manifest bytes differ'
+    }
+    $actual = @(Get-ChildItem -LiteralPath $base -Recurse -File -Force | ForEach-Object {
+        $_.FullName.Substring($base.Length + 1).Replace('\','/')
+    })
+    $names = @($Manifest.files.PSObject.Properties.Name) + $manifestPath
+    if (Compare-Object $names $actual -CaseSensitive) { throw 'Installed payload differs from the exact file list' }
+    foreach ($file in $Manifest.files.PSObject.Properties) {
+        if ((Get-FileHash -LiteralPath (Join-Path $base $file.Name) -Algorithm SHA256).Hash -ine $file.Value) {
+            throw "Installed payload digest mismatch: $($file.Name)"
+        }
+    }
 }
 
 function Read-Autostart {
@@ -195,19 +249,7 @@ try {
     if ($installer.ProductState($newCode) -eq 5 -or (Test-Path -LiteralPath "$base\desktop")) {
         throw 'Failed upgrade left the candidate installed'
     }
-    $rollback = Get-Content -LiteralPath (Join-Path $Proof 'upgrade-with-rollback.log') -Raw
-    $rollbackScript = [regex]::Match($rollback,
-        '(?s)Action ended [^\r\n]+RemoveExistingProducts\. Return value 1\..*?Action ended [^\r\n]+McwFixtureFailure\. Return value 3\..*?Executing op: Header\([^\r\n]*ScriptType=2,[^\r\n]*\)(?<restore>.*)')
-    if (!$rollbackScript.Success -or $rollback -notmatch 'Expected MicCamWatch rollback fixture failure') {
-        throw 'Expected MSI removal, injected failure and rollback script were not observed in order'
-    }
-    foreach ($name in @('mcw.exe','mcw-tray.exe')) {
-        $destination = [regex]::Escape((Join-Path $base $name))
-        if ($rollbackScript.Groups['restore'].Value -notmatch
-            ('(?im)^.*Executing op: FileCopy\(SourceName=[^,\r\n]+\.rbf,[^\r\n]*DestName=' + $destination + ',')) {
-            throw "Rollback log has no backup restore for $name"
-        }
-    }
+    Check-Rollback 'upgrade-with-rollback' @('mcw.exe','mcw-tray.exe')
     $report.wholeMsiRollback = $true
 
     Invoke-Msi '/i' $Candidate 'upgrade-hybrid'
@@ -216,38 +258,74 @@ try {
         throw 'Upgrade left the baseline registered or changed autostart'
     }
     $report.msiUpgrade = $true
-    foreach ($file in $bundle.files.PSObject.Properties) {
-        if ((Get-FileHash -LiteralPath (Join-Path $base $file.Name) -Algorithm SHA256).Hash -ine $file.Value) {
-            throw "Installed payload digest mismatch: $($file.Name)"
-        }
-    }
-    if ((Get-Item -LiteralPath "$base\desktop\miccamwatch_desktop.exe").VersionInfo.ProductVersion -notmatch '^0\.22\.0(?:\D|$)') {
-        throw 'Flutter Windows version resource mismatch'
-    }
+    Check-Payload $bundle
     $report.installedPayloadVerified = $true
     if (!$standard) {
         $trayImage = "$base\mcw-tray.exe"
         $flutterImage = "$base\desktop\miccamwatch_desktop.exe"
-        Start-Process -FilePath $trayImage -ArgumentList '--open'
-        $limit = [DateTime]::UtcNow.AddSeconds(45)
-        do {
-            Start-Sleep -Milliseconds 200
-            $tray = @(Owned 'mcw-tray' $trayImage)
-            $ui = @(Owned 'miccamwatch_desktop' $flutterImage | Where-Object { $_.MainWindowHandle -ne [IntPtr]::Zero })
-        } until (($tray.Count -eq 1 -and $ui.Count -eq 1) -or [DateTime]::UtcNow -gt $limit)
-        if ($tray.Count -ne 1 -or $ui.Count -ne 1) { throw 'Installed tray/Flutter did not open exactly once' }
-        $trayId = $tray[0].Id
-        if (!$ui[0].CloseMainWindow() -or !$ui[0].WaitForExit(15000)) { throw 'Installed Flutter window did not close' }
-        $owner = @(Owned 'mcw-tray' $trayImage)
-        if ($owner.Count -ne 1 -or $owner[0].Id -ne $trayId -or @(Owned 'miccamwatch_desktop' $flutterImage).Count) {
-            throw 'Close changed the native owner or retained a Flutter process'
+        $info = [Diagnostics.ProcessStartInfo]::new($trayImage, '--open')
+        $info.UseShellExecute = $false
+        $info.WorkingDirectory = $base
+        $info.RedirectStandardError = $true
+        $launch = [Diagnostics.Process]::Start($info)
+        $diagnostics = $launch.StandardError.ReadToEndAsync()
+        try {
+            $limit = [DateTime]::UtcNow.AddSeconds(45)
+            do {
+                Start-Sleep -Milliseconds 200
+                $tray = @(Owned 'mcw-tray' $trayImage)
+                $flutter = @(Owned 'miccamwatch_desktop' $flutterImage)
+                $ui = @($flutter | Where-Object { $_.MainWindowHandle -ne [IntPtr]::Zero })
+            } until (($tray.Count -eq 1 -and $ui.Count -eq 1) -or $launch.HasExited -or
+                [DateTime]::UtcNow -gt $limit)
+            $report.installedProcessObservation = [ordered]@{trayCount=$tray.Count; flutterCount=$flutter.Count;
+                flutterWindowCount=$ui.Count; startedOwnerExited=$launch.HasExited; trayWindowTitles=@($tray.MainWindowTitle)}
+            if ($launch.HasExited) { $report.installedProcessObservation.ownerExitCode = $launch.ExitCode }
+            if ($tray.Count -ne 1 -or $ui.Count -ne 1 -or $tray[0].Id -ne $launch.Id) {
+                throw 'Installed tray/Flutter did not open exactly once'
+            }
+            if (!$ui[0].CloseMainWindow() -or !$ui[0].WaitForExit(15000)) { throw 'Installed Flutter window did not close' }
+            $owner = @(Owned 'mcw-tray' $trayImage)
+            if ($owner.Count -ne 1 -or $owner[0].Id -ne $launch.Id -or @(Owned 'miccamwatch_desktop' $flutterImage).Count) {
+                throw 'Close changed the native owner or retained a Flutter process'
+            }
+            & "$base\mcw.exe" tray status
+            if ($LASTEXITCODE -ne 0) { throw 'Native status after window close failed' }
+            $report.installedFlutterClosedTrayContinued = $true
+        } catch {
+            $report.guiError = $_.ToString()
+        } finally {
+            if (!$launch.HasExited) {
+                $owner = @(Owned 'mcw-tray' $trayImage)
+                if ($owner.Count -ne 1 -or $owner[0].Id -ne $launch.Id) { throw 'Cannot prove exact tray identity for shutdown' }
+                & "$base\mcw.exe" tray stop
+                if ($LASTEXITCODE -ne 0 -or !$launch.WaitForExit(15000)) { throw 'Installed owner did not stop cooperatively' }
+            }
+            if ($diagnostics.Wait(1000)) {
+                [IO.File]::WriteAllText((Join-Path $Proof 'installed-tray-stderr.log'), $diagnostics.Result)
+            }
+            $launch.Dispose()
         }
-        & "$base\mcw.exe" tray status
-        if ($LASTEXITCODE -ne 0) { throw 'Native status after window close failed' }
-        $report.installedFlutterClosedTrayContinued = $true
-        & "$base\mcw.exe" tray stop
-        if ($LASTEXITCODE -ne 0 -or !$owner[0].WaitForExit(15000)) { throw 'Installed owner did not stop cooperatively' }
+        if (@(Owned 'miccamwatch_desktop' $flutterImage).Count) { throw 'Flutter remains after its owner stopped' }
     }
+    # Simulate a future MSI failing after removing this hybrid package. Verify
+    # rollback against every installed file, including Flutter and the manifest.
+    $future = Join-Path $Proof 'rollback-hybrid-fixture.msi'
+    $futureCode = [Guid]::NewGuid().ToString('B').ToUpperInvariant()
+    $currentVersion = [Version]::Parse($bundle.version)
+    $futureVersion = '{0}.{1}.{2}' -f $currentVersion.Major,$currentVersion.Minor,($currentVersion.Build + 1)
+    Copy-FailingFixture $Candidate $future $futureCode $futureVersion
+    if ((Identity $future $futureVersion) -cne $futureCode) { throw 'Invalid future fixture identity' }
+    Invoke-Msi '/i' $future 'hybrid-upgrade-with-rollback' 1603
+    Check-Rollback 'hybrid-upgrade-with-rollback' @('mcw.exe','mcw-tray.exe','miccamwatch-bundle.json',
+        'desktop\miccamwatch_desktop.exe','desktop\flutter_windows.dll','desktop\data\app.so')
+    Check-Installed $newCode $bundle.version
+    Check-Payload $bundle
+    if ($installer.ProductState($futureCode) -eq 5 -or (Compare-Object $runEntry @(Read-Autostart))) {
+        throw 'Failed hybrid upgrade left the newer fixture installed or changed autostart'
+    }
+    $report.wholeHybridMsiRollback = $true
+
     & "$base\mcw.exe" autostart disable
     if ($LASTEXITCODE -ne 0 -or @(Read-Autostart).Count -ne 0) { throw 'Fixture autostart removal failed' }
     Invoke-Msi '/x' $newCode 'uninstall-hybrid'
@@ -261,6 +339,7 @@ try {
     $report.userDataPreserved = $true
     $report.msiUninstall = $true
     $report.standardUserQualified = $standard
+    if ($report.guiError) { throw $report.guiError }
     $report.status = 'passed'
 } catch {
     $report.status = 'failed'
