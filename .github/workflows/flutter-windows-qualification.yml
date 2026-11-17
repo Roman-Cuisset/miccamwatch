@@ -252,7 +252,9 @@ jobs:
         if: ${{ matrix.context != 'hosted-admin' }}
         run: |
           $msi = Join-Path $env:MCW_REPLAY_PREFIX 'miccamwatch-hybrid-windows-x86_64.msi'
-          & powershell.exe -NoProfile -NonInteractive -File installer/tests/windows-hybrid-standard.ps1 -Candidate $msi -Proof (Join-Path $env:MCW_REPLAY_PREFIX 'replayed') -SourceRevision $env:MCW_PACKAGE_SOURCE
+          $positiveOnly = @()
+          if ('${{ matrix.context }}' -eq 'standard-user-arm') { $positiveOnly += '-PositiveLifecycleOnly' }
+          & powershell.exe -NoProfile -NonInteractive -File installer/tests/windows-hybrid-standard.ps1 -Candidate $msi -Proof (Join-Path $env:MCW_REPLAY_PREFIX 'replayed') -SourceRevision $env:MCW_PACKAGE_SOURCE @positiveOnly
           if ($LASTEXITCODE -ne 0) { throw 'Standard-account MSI qualification failed' }
       - name: Preserve new lifecycle receipts for the verified package bytes
         if: ${{ always() && env.MCW_REPLAY_PREFIX != '' }}

@@ -6,6 +6,7 @@ param(
     [string]$SourceRevision = $env:GITHUB_SHA,
     [switch]$LocalDisposableVm,
     [string]$FixtureRoot,
+    [switch]$PositiveLifecycleOnly,
     [string]$ExpectedMsiSha256
 )
 $ErrorActionPreference = 'Stop'
@@ -64,6 +65,9 @@ if ($LocalDisposableVm) {
 } elseif ($env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or $env:GITHUB_ACTIONS -cne 'true') {
     throw 'This scenario requires a disposable GitHub-hosted Windows runner.'
 }
+if ($PositiveLifecycleOnly -and (!$standard -or $LocalDisposableVm -or $env:PROCESSOR_ARCHITECTURE -cne 'ARM64')) {
+    throw 'The positive-only replay is confined to its ordinary Windows-on-ARM fixture.'
+}
 if ($SourceRevision -notmatch '^[0-9a-f]{40}$') { throw 'Exact source revision required' }
 $base = Join-Path $env:LOCALAPPDATA 'Programs\MicCamWatch'
 $configuration = Join-Path $env:APPDATA 'MicCamWatch'
@@ -87,7 +91,7 @@ $Proof = (Resolve-Path -LiteralPath $Proof).Path
 $Candidate = (Resolve-Path -LiteralPath $Candidate).Path
 $report = [ordered]@{status='running'; source=$SourceRevision; uacExercised=$false; standardUserQualified=$false;
     administratorToken=$isAdmin; standardTokenVerified=$standard; interactiveFlutterRequested=$interactive;
-    localDisposableVm=[bool]$LocalDisposableVm; sessionId=[Diagnostics.Process]::GetCurrentProcess().SessionId}
+    rollbackInjected=!$PositiveLifecycleOnly; localDisposableVm=[bool]$LocalDisposableVm; sessionId=[Diagnostics.Process]::GetCurrentProcess().SessionId}
 
 function Invoke-Msi([string]$Operation, [string]$Payload, [string]$Label, [int]$ExpectedCode = 0) {
     $log = Join-Path $Proof "$Label.log"
@@ -286,18 +290,20 @@ try {
     $runEntry = @(Read-Autostart)
     if ($runEntry.Count -ne 1 -or !$runEntry[0].Contains($base)) { throw 'Baseline autostart registration missing' }
 
-    $faulty = Join-Path $Proof 'rollback-fixture.msi'
-    Copy-FailingFixture $Candidate $faulty
-    Invoke-Msi '/i' $faulty 'upgrade-with-rollback' 1603
-    Check-Installed $oldCode '0.21.0'
-    if (Compare-Object $baselineHashes @(Get-FileHash -LiteralPath "$base\mcw.exe","$base\mcw-tray.exe" -Algorithm SHA256 | ForEach-Object Hash)) {
-        throw 'Rollback did not restore both original Rust executables'
+    if (!$PositiveLifecycleOnly) {
+        $faulty = Join-Path $Proof 'rollback-fixture.msi'
+        Copy-FailingFixture $Candidate $faulty
+        Invoke-Msi '/i' $faulty 'upgrade-with-rollback' 1603
+        Check-Installed $oldCode '0.21.0'
+        if (Compare-Object $baselineHashes @(Get-FileHash -LiteralPath "$base\mcw.exe","$base\mcw-tray.exe" -Algorithm SHA256 | ForEach-Object Hash)) {
+            throw 'Rollback did not restore both original Rust executables'
+        }
+        if ($installer.ProductState($newCode) -eq 5 -or (Test-Path -LiteralPath "$base\desktop")) {
+            throw 'Failed upgrade left the candidate installed'
+        }
+        Check-Rollback 'upgrade-with-rollback' @('mcw.exe','mcw-tray.exe')
+        $report.wholeMsiRollback = $true
     }
-    if ($installer.ProductState($newCode) -eq 5 -or (Test-Path -LiteralPath "$base\desktop")) {
-        throw 'Failed upgrade left the candidate installed'
-    }
-    Check-Rollback 'upgrade-with-rollback' @('mcw.exe','mcw-tray.exe')
-    $report.wholeMsiRollback = $true
 
     Invoke-Msi '/i' $Candidate 'upgrade-hybrid'
     Check-Installed $newCode $bundle.version
@@ -357,23 +363,25 @@ try {
         if (!$report.installedIpcReady -and !$report.guiError) { $report.guiError = 'Missing installed IPC ready receipt' }
         if (@(Owned 'miccamwatch_desktop' $flutterImage).Count) { throw 'Flutter remains after its owner stopped' }
     }
-    # Simulate a future MSI failing after removing this hybrid package. Verify
-    # rollback against every installed file, including Flutter and the manifest.
-    $future = Join-Path $Proof 'rollback-hybrid-fixture.msi'
-    $futureCode = [Guid]::NewGuid().ToString('B').ToUpperInvariant()
-    $currentVersion = [Version]::Parse($bundle.version)
-    $futureVersion = '{0}.{1}.{2}' -f $currentVersion.Major,$currentVersion.Minor,($currentVersion.Build + 1)
-    Copy-FailingFixture $Candidate $future $futureCode $futureVersion
-    if ((Identity $future $futureVersion) -cne $futureCode) { throw 'Invalid future fixture identity' }
-    Invoke-Msi '/i' $future 'hybrid-upgrade-with-rollback' 1603
-    Check-Rollback 'hybrid-upgrade-with-rollback' @('mcw.exe','mcw-tray.exe','miccamwatch-bundle.json',
-        'desktop\miccamwatch_desktop.exe','desktop\flutter_windows.dll','desktop\data\app.so')
-    Check-Installed $newCode $bundle.version
-    Check-Payload $bundle
-    if ($installer.ProductState($futureCode) -eq 5 -or (Compare-Object $runEntry @(Read-Autostart))) {
-        throw 'Failed hybrid upgrade left the newer fixture installed or changed autostart'
+    if (!$PositiveLifecycleOnly) {
+        # Simulate a future MSI failing after removing this hybrid package. Verify
+        # rollback against every installed file, including Flutter and the manifest.
+        $future = Join-Path $Proof 'rollback-hybrid-fixture.msi'
+        $futureCode = [Guid]::NewGuid().ToString('B').ToUpperInvariant()
+        $currentVersion = [Version]::Parse($bundle.version)
+        $futureVersion = '{0}.{1}.{2}' -f $currentVersion.Major,$currentVersion.Minor,($currentVersion.Build + 1)
+        Copy-FailingFixture $Candidate $future $futureCode $futureVersion
+        if ((Identity $future $futureVersion) -cne $futureCode) { throw 'Invalid future fixture identity' }
+        Invoke-Msi '/i' $future 'hybrid-upgrade-with-rollback' 1603
+        Check-Rollback 'hybrid-upgrade-with-rollback' @('mcw.exe','mcw-tray.exe','miccamwatch-bundle.json',
+            'desktop\miccamwatch_desktop.exe','desktop\flutter_windows.dll','desktop\data\app.so')
+        Check-Installed $newCode $bundle.version
+        Check-Payload $bundle
+        if ($installer.ProductState($futureCode) -eq 5 -or (Compare-Object $runEntry @(Read-Autostart))) {
+            throw 'Failed hybrid upgrade left the newer fixture installed or changed autostart'
+        }
+        $report.wholeHybridMsiRollback = $true
     }
-    $report.wholeHybridMsiRollback = $true
 
     & "$base\mcw.exe" autostart disable
     if ($LASTEXITCODE -ne 0 -or @(Read-Autostart).Count -ne 0) { throw 'Fixture autostart removal failed' }

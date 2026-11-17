@@ -2,7 +2,8 @@
 param(
     [Parameter(Mandatory)][string]$Candidate,
     [Parameter(Mandatory)][string]$Proof,
-    [string]$SourceRevision = $env:GITHUB_SHA
+    [string]$SourceRevision = $env:GITHUB_SHA,
+    [switch]$PositiveLifecycleOnly
 )
 $ErrorActionPreference = 'Stop'
 if ($env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or $env:GITHUB_ACTIONS -cne 'true') {
@@ -44,6 +45,7 @@ $params.RedirectStandardOutput = Join-Path $evidence 'standard-stdout.log'
 $params.RedirectStandardError = Join-Path $evidence 'standard-stderr.log'
 $params.ArgumentList = '-NoProfile -NonInteractive -File "{0}" -Candidate "{1}" -Proof "{2}" -StandardAccountSid "{3}" -SourceRevision "{4}"' -f
     $inner,$installer,(Join-Path $evidence 'result'),$user.SID.Value,$SourceRevision
+if ($PositiveLifecycleOnly) { $params.ArgumentList += ' -PositiveLifecycleOnly' }
 $process = Start-Process @params
 if (!$process.WaitForExit(420000)) { throw 'Standard-user fixture timed out; retain the live test runner state' }
 Copy-Item -LiteralPath $evidence -Destination $Proof -Recurse
