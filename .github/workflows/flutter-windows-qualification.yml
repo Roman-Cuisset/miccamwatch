@@ -113,24 +113,9 @@ jobs:
           } finally { Pop-Location }
           python -B installer/tests/windows_distribution_imports.py target/release/mcw.exe target/release/mcw-tray.exe --flutter-bundle "$env:MCW_B5_PROOF/normal-bundle"
           if ($LASTEXITCODE -ne 0) { throw 'Complete hybrid dependency gate failed' }
-      - name: Build distinct semantic proof UI and qualify isolated lifecycle
-        run: |
-          Push-Location desktop/flutter
-          try {
-            flutter build windows --release --no-pub --dart-define=MCW_UI_QUALIFICATION=consultation
-            if ($LASTEXITCODE -ne 0) { throw 'Instrumented consultation build failed' }
-            Copy-Item -Recurse build/windows/x64/runner/Release (Join-Path $env:MCW_B5_PROOF 'consultation-bundle')
-            flutter build windows --release --no-pub --dart-define=MCW_UI_QUALIFICATION=startup
-            if ($LASTEXITCODE -ne 0) { throw 'Instrumented startup build failed' }
-            Copy-Item -Recurse build/windows/x64/runner/Release (Join-Path $env:MCW_B5_PROOF 'startup-bundle')
-          } finally { Pop-Location }
-          $venv = Join-Path $env:RUNNER_TEMP 'mcw-b5-python'
-          python -m venv $venv
-          $python = Join-Path $venv 'Scripts/python.exe'
-          & $python -m pip install psutil==7.2.2 Pillow==12.2.0
-          if ($LASTEXITCODE -ne 0) { throw 'Qualification dependencies failed' }
-          & $python -B desktop/qualification/windows_b5.py --engine-directory target/release --release-bundle "$env:MCW_B5_PROOF/normal-bundle" --instrumented-bundle "$env:MCW_B5_PROOF/consultation-bundle" --startup-bundle "$env:MCW_B5_PROOF/startup-bundle" --proof "$env:MCW_B5_PROOF/runtime" --startup-ci
-          if ($LASTEXITCODE -ne 0) { throw 'Real interactive qualification failed; retain exact evidence, not a no-desktop pass' }
+          $semantic = Join-Path $env:MCW_B5_PROOF 'semantic-native'
+          New-Item -ItemType Directory -Path $semantic | Out-Null
+          Copy-Item target/release/mcw.exe,target/release/mcw-tray.exe $semantic
       - name: Build the complete hybrid ZIP and MSI and verify both container payloads
         run: |
           cargo build --release --locked --features windows-tray,packaged-desktop
@@ -167,6 +152,24 @@ jobs:
             ${{ env.MCW_B5_PROOF }}/hybrid-distribution/lifecycle/*.log
             ${{ env.MCW_B5_PROOF }}/hybrid-distribution/standard/**/*.json
             ${{ env.MCW_B5_PROOF }}/hybrid-distribution/standard/**/*.log
+      - name: Build distinct semantic proof UI and qualify isolated lifecycle
+        run: |
+          Push-Location desktop/flutter
+          try {
+            flutter build windows --release --no-pub --dart-define=MCW_UI_QUALIFICATION=consultation
+            if ($LASTEXITCODE -ne 0) { throw 'Instrumented consultation build failed' }
+            Copy-Item -Recurse build/windows/x64/runner/Release (Join-Path $env:MCW_B5_PROOF 'consultation-bundle')
+            flutter build windows --release --no-pub --dart-define=MCW_UI_QUALIFICATION=startup
+            if ($LASTEXITCODE -ne 0) { throw 'Instrumented startup build failed' }
+            Copy-Item -Recurse build/windows/x64/runner/Release (Join-Path $env:MCW_B5_PROOF 'startup-bundle')
+          } finally { Pop-Location }
+          $venv = Join-Path $env:RUNNER_TEMP 'mcw-b5-python'
+          python -m venv $venv
+          $python = Join-Path $venv 'Scripts/python.exe'
+          & $python -m pip install psutil==7.2.2 Pillow==12.2.0
+          if ($LASTEXITCODE -ne 0) { throw 'Qualification dependencies failed' }
+          & $python -B desktop/qualification/windows_b5.py --engine-directory "$env:MCW_B5_PROOF/semantic-native" --release-bundle "$env:MCW_B5_PROOF/normal-bundle" --instrumented-bundle "$env:MCW_B5_PROOF/consultation-bundle" --startup-bundle "$env:MCW_B5_PROOF/startup-bundle" --proof "$env:MCW_B5_PROOF/runtime" --startup-ci
+          if ($LASTEXITCODE -ne 0) { throw 'Real interactive qualification failed; retain exact evidence, not a no-desktop pass' }
       - name: Preserve only qualification evidence, never publish a release
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -178,3 +181,4 @@ jobs:
             ${{ env.MCW_B5_PROOF }}/
             !${{ env.MCW_B5_PROOF }}/**/sessions/*.jsonl
             !${{ env.MCW_B5_PROOF }}/hybrid-distribution/**
+            !${{ env.MCW_B5_PROOF }}/semantic-native/**

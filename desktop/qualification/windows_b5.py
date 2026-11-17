@@ -198,10 +198,18 @@ def operational_phase(prefix, proof, env, phase):
                 lines.append(dict(line=line.rstrip()))
         reader = threading.Thread(target=drain, daemon=True)
         reader.start()
+        runner = (prefix / 'desktop/miccamwatch_desktop.exe').resolve()
         def report():
             require(owned.poll() is None, 'Operational tray exited before native startup confirmation')
-            matches = [p for p in owner.children() if Path(p.exe()).resolve() ==
-                       (prefix / 'desktop/miccamwatch_desktop.exe').resolve()]
+            matches = []
+            for child in owner.children():
+                try:
+                    image = child.exe()
+                except psutil.NoSuchProcess:
+                    # A short-lived native probe may exit between enumeration and inspection.
+                    continue
+                if Path(image).resolve() == runner:
+                    matches.append(child)
             require(len(matches) <= 1, 'Concurrent Flutter instances')
             return proof_from(lines, matches[0].pid) if matches else None
         value = runtime.until(report, timeout=60)
