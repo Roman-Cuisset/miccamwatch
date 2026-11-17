@@ -74,6 +74,16 @@ pub enum Command {
         parent_pid: u32,
         parent_created: u64,
     },
+    #[cfg(all(windows, feature = "packaged-desktop"))]
+    #[command(name = "__update-worker", hide = true)]
+    UpdateWorker {
+        parent_pid: u32,
+        parent_created: u64,
+        fingerprint: String,
+    },
+    #[cfg(all(windows, feature = "packaged-desktop"))]
+    /// Recover an interrupted Windows update using its retained maintenance executable
+    RecoverUpdate,
     #[cfg(windows)]
     #[command(name = "__portable-receipt", hide = true)]
     PortableReceipt,

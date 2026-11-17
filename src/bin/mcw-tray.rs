@@ -91,6 +91,8 @@ fn run() -> Result<()> {
         }
         return tray::run_read_only_development(Language::detect(), initial_window, theme);
     }
+    #[cfg(feature = "packaged-desktop")]
+    let _package_lease = miccamwatch::updater::hold_runtime_lease()?;
     if tray::reuse_running(initial_window)? {
         return Ok(());
     }

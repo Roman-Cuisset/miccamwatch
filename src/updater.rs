@@ -13,6 +13,17 @@ use std::{
 pub(crate) mod download;
 pub(crate) mod process;
 pub(crate) mod transaction;
+#[cfg(feature = "packaged-desktop")]
+mod bundle;
+#[cfg(feature = "packaged-desktop")]
+mod hybrid;
+#[cfg(feature = "packaged-desktop")]
+mod msi;
+#[cfg(feature = "packaged-desktop")]
+mod portable;
+#[cfg(feature = "packaged-desktop")]
+#[doc(hidden)]
+pub use hybrid::{hold_runtime_lease, recover, remove_portable, run_worker};
 
 pub(crate) fn stop_installed_tray() -> Result<bool> {
     let current = env::current_exe().context("failed to locate mcw executable")?;
@@ -52,6 +63,14 @@ pub(crate) fn check_latest_release() -> Result<(String, bool)> {
 }
 
 pub fn update() -> Result<()> {
+    #[cfg(feature = "packaged-desktop")]
+    return hybrid::update();
+    #[cfg(not(feature = "packaged-desktop"))]
+    legacy_update()
+}
+
+#[cfg_attr(feature = "packaged-desktop", allow(dead_code))]
+fn legacy_update() -> Result<()> {
     crate::uninstall::ensure_hybrid_transaction_qualified()?;
     let current = env::current_exe().context("failed to locate the installed mcw executable")?;
     crate::uninstall::windows::ensure_binary_update_allowed(&current)?;
@@ -214,6 +233,10 @@ fn tray_inspection_error(path: &Path, error: anyhow::Error) -> anyhow::Error {
 }
 
 fn validate_cli_version(path: &Path, version: &str, stage: &Path) -> Result<()> {
+    validate_reported_version(path, &format!("mcw {version}"), stage)
+}
+
+fn validate_reported_version(path: &Path, expected: &str, stage: &Path) -> Result<()> {
     struct ValidationChild(std::process::Child);
     impl Drop for ValidationChild {
         fn drop(&mut self) {
@@ -282,9 +305,9 @@ fn validate_cli_version(path: &Path, version: &str, stage: &Path) -> Result<()> 
     }
     let reported = std::str::from_utf8(&bytes[..length])
         .context("staged CLI version output is not valid UTF-8; installation unchanged")?;
-    if !status.success() || reported.trim().strip_prefix("mcw ") != Some(version) {
+    if !status.success() || reported.trim() != expected {
         bail!(
-            "staged CLI did not report expected version mcw {version} (status {status}, output {:?}); installation unchanged",
+            "binary did not report expected version {expected} (status {status}, output {:?})",
             reported.trim()
         );
     }

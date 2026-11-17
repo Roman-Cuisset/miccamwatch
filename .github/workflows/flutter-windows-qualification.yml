@@ -139,7 +139,17 @@ jobs:
       - name: Install official v0.21.0 and exercise installed hybrid upgrade, rollback and uninstall
         run: |
           $output = Join-Path $env:MCW_B5_PROOF 'hybrid-distribution'
-          & powershell.exe -NoProfile -NonInteractive -STA -File installer/tests/windows-hybrid-install.ps1 -Candidate (Join-Path $output 'miccamwatch-hybrid-windows-x86_64.msi') -Proof (Join-Path $output 'lifecycle')
+          cargo clippy --locked --features packaged-desktop --all-targets -- -D warnings
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged updater Clippy failed' }
+          cargo test --locked --features packaged-desktop --lib updater:: -- --test-threads=1
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged updater tests failed' }
+          $raw = cargo test --locked --features packaged-desktop --lib --no-run --message-format=json
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged updater fixture build failed' }
+          $tests = @($raw | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object {
+              $_.reason -eq 'compiler-artifact' -and $_.target.name -eq 'miccamwatch' -and $_.profile.test -and $_.executable
+          })
+          if ($tests.Count -ne 1) { throw 'Could not identify the exact packaged updater test binary' }
+          & powershell.exe -NoProfile -NonInteractive -STA -File installer/tests/windows-hybrid-install.ps1 -Candidate (Join-Path $output 'miccamwatch-hybrid-windows-x86_64.msi') -Proof (Join-Path $output 'lifecycle') -RustMsiTest $tests[0].executable
           if ($LASTEXITCODE -ne 0) { throw 'Installed hybrid lifecycle failed' }
       - name: Qualify the same per-user MSI transaction under a genuine standard account
         run: |

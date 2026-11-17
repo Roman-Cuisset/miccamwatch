@@ -40,6 +40,7 @@ pub(crate) struct Receipt {
     pub tray_sha256: String,
 }
 
+#[cfg_attr(feature = "packaged-desktop", allow(dead_code))]
 pub(super) fn run() -> Result<u8> {
     ordinary_user()?;
     let current = std::env::current_exe()?;
@@ -363,13 +364,17 @@ impl Snapshot {
     }
 }
 
-fn validate_regular(file: &File) -> Result<(u32, u32, u32)> {
+pub(crate) fn validate_regular(file: &File) -> Result<(u32, u32, u32)> {
+    ensure_owned(file)?;
+    regular_identity(file)
+}
+
+pub(crate) fn regular_identity(file: &File) -> Result<(u32, u32, u32)> {
     let metadata = file.metadata()?;
     ensure!(
         metadata.is_file() && metadata.file_attributes() & 0x400 == 0,
         "uninstall target is not a regular non-reparse file"
     );
-    ensure_owned(file)?;
     let mut info = BY_HANDLE_FILE_INFORMATION::default();
     unsafe { GetFileInformationByHandle(HANDLE(file.as_raw_handle()), &mut info) }?;
     ensure!(
@@ -383,7 +388,7 @@ fn validate_regular(file: &File) -> Result<(u32, u32, u32)> {
     ))
 }
 
-fn ensure_owned(file: &File) -> Result<()> {
+pub(crate) fn ensure_owned(file: &File) -> Result<()> {
     use windows::Win32::Security::{
         Authorization::{ConvertSidToStringSidW, GetSecurityInfo, SE_FILE_OBJECT},
         OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID,
@@ -424,7 +429,7 @@ fn ensure_owned(file: &File) -> Result<()> {
     Ok(())
 }
 
-fn safe_ancestors(path: &Path) -> Result<()> {
+pub(crate) fn safe_ancestors(path: &Path) -> Result<()> {
     ensure!(path.is_absolute(), "installation path must be absolute");
     for ancestor in path.ancestors() {
         let metadata = fs::symlink_metadata(ancestor)?;
@@ -455,7 +460,7 @@ pub(crate) fn digest(file: &mut File) -> Result<String> {
     Ok(hex)
 }
 
-fn process_image(pid: u32) -> Result<PathBuf> {
+pub(crate) fn process_image(pid: u32) -> Result<PathBuf> {
     let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }?;
     let mut buffer = [0u16; 32768];
     let mut length = buffer.len() as u32;
@@ -485,7 +490,7 @@ struct BasicInformation {
     pid: usize,
     parent_pid: usize,
 }
-fn kernel_parent() -> Result<u32> {
+pub(crate) fn kernel_parent() -> Result<u32> {
     let mut information = BasicInformation::default();
     let status = unsafe {
         crate::platform::NtQueryInformationProcess(
@@ -500,7 +505,7 @@ fn kernel_parent() -> Result<u32> {
     Ok(information.parent_pid.try_into()?)
 }
 
-fn ordinary_user() -> Result<()> {
+pub(crate) fn ordinary_user() -> Result<()> {
     use windows::Win32::{
         Security::{GetTokenInformation, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation},
         System::Threading::OpenProcessToken,
@@ -579,12 +584,12 @@ pub(crate) fn owner_guidance(current: &Path, mut report: impl FnMut(std::fmt::Ar
     }
 }
 
-enum RegisteredOwner {
+pub(crate) enum RegisteredOwner {
     Msi(String),
     Managed,
 }
 
-fn registered_owner(parent: &Path) -> Result<Option<RegisteredOwner>> {
+pub(crate) fn registered_owner(parent: &Path) -> Result<Option<RegisteredOwner>> {
     use winreg::{
         RegKey,
         enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE},
@@ -653,7 +658,7 @@ pub(crate) fn ensure_binary_update_allowed(current: &Path) -> Result<()> {
         None => Ok(()),
     }
 }
-fn valid_product_code(value: &str) -> bool {
+pub(crate) fn valid_product_code(value: &str) -> bool {
     value.len() == 38
         && value.starts_with('{')
         && value.ends_with('}')

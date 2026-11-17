@@ -108,6 +108,11 @@ fn run() -> Result<u8> {
             parent_pid,
             parent_created,
         } => return uninstall::run_worker(*parent_pid, *parent_created),
+        #[cfg(feature = "packaged-desktop")]
+        Command::UpdateWorker { parent_pid, parent_created, fingerprint } =>
+            return updater::run_worker(*parent_pid, *parent_created, fingerprint),
+        #[cfg(feature = "packaged-desktop")]
+        Command::RecoverUpdate => return updater::recover(),
         Command::PortableReceipt => {
             println!("{}", uninstall::portable_receipt()?);
             return Ok(0);
@@ -122,6 +127,8 @@ fn run() -> Result<u8> {
         // Dispatch before loading preferences/policy or opening native monitors.
         return updater::update().map(|()| 0);
     }
+    #[cfg(all(windows, feature = "packaged-desktop"))]
+    let _package_lease = updater::hold_runtime_lease()?;
     #[cfg(windows)]
     if let Command::Tray { command, .. } = &cli.command
         && matches!(command, None | Some(TrayCommand::Run | TrayCommand::Open))
@@ -419,6 +426,10 @@ fn run() -> Result<u8> {
         | Command::UninstallWorker { .. }
         | Command::PortableReceipt => {
             unreachable!("internal command dispatched before configuration")
+        }
+        #[cfg(all(windows, feature = "packaged-desktop"))]
+        Command::UpdateWorker { .. } | Command::RecoverUpdate => {
+            unreachable!("Windows maintenance dispatched before configuration")
         }
         Command::Uninstall => unreachable!("uninstall dispatched before configuration"),
         #[cfg(target_os = "macos")]

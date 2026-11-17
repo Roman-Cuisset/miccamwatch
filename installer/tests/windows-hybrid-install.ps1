@@ -7,7 +7,8 @@ param(
     [switch]$LocalDisposableVm,
     [string]$FixtureRoot,
     [switch]$PositiveLifecycleOnly,
-    [string]$ExpectedMsiSha256
+    [string]$ExpectedMsiSha256,
+    [string]$RustMsiTest
 )
 $ErrorActionPreference = 'Stop'
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -305,7 +306,19 @@ try {
         $report.wholeMsiRollback = $true
     }
 
-    Invoke-Msi '/i' $Candidate 'upgrade-hybrid'
+    if ($RustMsiTest) {
+        if ($standard -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or $env:GITHUB_ACTIONS -cne 'true') {
+            throw 'Rust MSI fixture mode requires the disposable administrator runner.'
+        }
+        $env:MCW_TEST_HYBRID_MSI = $Candidate
+        $env:MCW_TEST_MSI_PROOF = $Proof
+        $env:MCW_TEST_MSI_SHA256 = $report.candidateSha256
+        & $RustMsiTest 'updater::msi::tests::install_exact_wix_artifact_on_hosted_fixture' --exact --ignored
+        if ($LASTEXITCODE -ne 0) { throw 'The Rust installer transfer fixture failed.' }
+        $report.rustMsiInstall = $true
+    } else {
+        Invoke-Msi '/i' $Candidate 'upgrade-hybrid'
+    }
     Check-Installed $newCode $bundle.version
     if ($installer.ProductState($oldCode) -eq 5 -or (Compare-Object $runEntry @(Read-Autostart))) {
         throw 'Upgrade left the baseline registered or changed autostart'

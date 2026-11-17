@@ -22,13 +22,14 @@ def wix(parent, tag, **attributes):
     return xml.SubElement(parent, NAMESPACE + tag, attributes)
 
 
-def make_wxs(root, output):
+def make_wxs(root, output, ipc):
     xml.register_namespace("", NAMESPACE[1:-1])
     tree = xml.parse(REPO / "installer/miccamwatch.wxs")
     package = tree.find(NAMESPACE + "Package")
     # Remove the previous product inside the installer transaction, so MSI can
     # restore it if installing the candidate fails before InstallFinalize.
     package.find(NAMESPACE + "MajorUpgrade").set("Schedule", "afterInstallInitialize")
+    wix(package, "Property", Id="MCW_BUNDLE_IPC", Value=str(ipc))
     folder = package.find(f".//{NAMESPACE}Directory[@Id='INSTALLFOLDER']")
     feature = package.find(NAMESPACE + "Feature")
     directories = {Path("."): folder}
@@ -98,7 +99,7 @@ def main():
         with tempfile.TemporaryDirectory(prefix="mcw-wix-", dir=output) as directory:
             staging = Path(directory)
             source = staging / "hybrid.wxs"
-            make_wxs(bundle, source)
+            make_wxs(bundle, source, manifest["ipc"])
             subprocess.run(["dotnet", "wix", "build", "-arch", "x64", str(source),
                             "-d", "Version=" + manifest["version"],
                             "-d", "Executable=" + str(bundle / "mcw.exe"),

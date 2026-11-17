@@ -21,27 +21,7 @@ impl std::fmt::Display for HexDigest<'_> {
 /// Asset URLs and digests are borrowed from the one selected API response. No
 /// tag/latest lookup occurs here, even when repairing a same-version companion.
 pub(crate) fn stage_package(release: &Release, stage: &Path) -> Result<()> {
-    let package = exact_asset(release, PACKAGE)?;
-    let sums = exact_asset(release, SUMS)?;
-    let api_checksum = required_digest(package)?;
-    let sums_path = stage.join(SUMS);
-    transfer(sums, &sums_path, false)?;
-    if sums.digest().is_some() {
-        verify(&sums_path, &required_digest(sums)?)?;
-    }
-    let sums_text = fs::read_to_string(&sums_path)
-        .context("release SHA256SUMS is not readable UTF-8; installation unchanged")?;
-    let published_checksum = exact_sums_checksum(&sums_text, PACKAGE)?;
-    // Require agreement before spending a package transfer. Both checks remain
-    // pinned even if the mutable release's URLs serve different bytes later.
-    if !sha256_hex(&api_checksum)?.eq_ignore_ascii_case(sha256_hex(&published_checksum)?) {
-        bail!(
-            "selected release API digest and SHA256SUMS disagree for {PACKAGE}; installation unchanged"
-        );
-    }
-    let archive = stage.join(PACKAGE);
-    transfer(package, &archive, true)?;
-    verify(&archive, &api_checksum)?;
+    let (archive, _) = download_verified(release, PACKAGE, stage)?;
     let mut extract = Extract::from_source(&archive);
     extract.archive(ArchiveKind::Zip);
     for name in ["mcw.exe", "mcw-tray.exe"] {
@@ -54,6 +34,31 @@ pub(crate) fn stage_package(release: &Release, stage: &Path) -> Result<()> {
         })?;
     }
     Ok(())
+}
+
+pub(super) fn download_verified(release: &Release, name: &str, stage: &Path) -> Result<(std::path::PathBuf, String)> {
+    let package = exact_asset(release, name)?;
+    let sums = exact_asset(release, SUMS)?;
+    let api_checksum = required_digest(package)?;
+    let sums_path = stage.join(SUMS);
+    transfer(sums, &sums_path, false)?;
+    if sums.digest().is_some() {
+        verify(&sums_path, &required_digest(sums)?)?;
+    }
+    let sums_text = fs::read_to_string(&sums_path)
+        .context("release SHA256SUMS is not readable UTF-8; installation unchanged")?;
+    let published_checksum = exact_sums_checksum(&sums_text, name)?;
+    // Require agreement before spending a package transfer. Both checks remain
+    // pinned even if the mutable release's URLs serve different bytes later.
+    if !sha256_hex(&api_checksum)?.eq_ignore_ascii_case(sha256_hex(&published_checksum)?) {
+        bail!(
+            "selected release API digest and SHA256SUMS disagree for {name}; installation unchanged"
+        );
+    }
+    let archive = stage.join(name);
+    transfer(package, &archive, true)?;
+    verify(&archive, &api_checksum)?;
+    Ok((archive, sha256_hex(&api_checksum)?.to_ascii_lowercase()))
 }
 
 fn exact_asset<'a>(release: &'a Release, name: &str) -> Result<&'a ReleaseAsset> {
@@ -178,7 +183,7 @@ fn verify(path: &Path, checksum: &Checksum) -> Result<()> {
         .all(|(actual, pair)| *actual == (hex_digit(pair[0]) << 4 | hex_digit(pair[1])))
     {
         bail!(
-            "Release ZIP SHA-256 mismatch: expected {expected}, computed {}",
+            "Release asset SHA-256 mismatch: expected {expected}, computed {}",
             HexDigest(computed.as_slice())
         );
     }

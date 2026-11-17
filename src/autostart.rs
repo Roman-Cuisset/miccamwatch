@@ -267,6 +267,16 @@ pub(crate) struct UninstallRegistration {
     run: Option<(String, bool)>,
 }
 
+#[cfg(feature = "packaged-desktop")]
+pub(crate) fn require_unregistered_for_portable_removal(current: &Path) -> Result<()> {
+    anyhow::ensure!(
+        !registered_task()?.is_some_and(|task| task.owned_by(current))
+            && !run_registration()?.is_some_and(|(command, _)| owned_command(&command, current)),
+        "disable this installation's autostart with mcw autostart disable before removing it"
+    );
+    Ok(())
+}
+
 impl UninstallRegistration {
     pub(crate) fn prepare(current: &Path, lock: &InstallationLock) -> Result<Self> {
         if current.parent() != Some(lock.directory.as_path()) {

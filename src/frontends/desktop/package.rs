@@ -21,8 +21,16 @@ struct Manifest {
 }
 
 pub(crate) fn verify(
+    manifest: impl Read,
+    open: impl FnMut(&str) -> Result<File>,
+) -> Result<Vec<String>> {
+    verify_version(manifest, open, env!("CARGO_PKG_VERSION"))
+}
+
+pub(crate) fn verify_version(
     mut manifest: impl Read,
     mut open: impl FnMut(&str) -> Result<File>,
+    version: &str,
 ) -> Result<Vec<String>> {
     let mut bytes = Vec::new();
     manifest.by_ref().take(LIMIT + 1).read_to_end(&mut bytes)?;
@@ -41,7 +49,7 @@ pub(crate) fn verify(
     ensure!(
         manifest.schema == 1
             && manifest.target == target
-            && manifest.version == env!("CARGO_PKG_VERSION")
+            && manifest.version == version
             && manifest.ipc == super::PROTOCOL_VERSION
             && manifest.revision.len() == 40
             && manifest

@@ -16,18 +16,28 @@ pub use linux_bundle::hold_process_lease;
 /// Remove this installation, or report its exact owner's procedure without
 /// claiming success. This branch must run before monitor/control startup.
 pub fn run() -> Result<u8> {
+    #[cfg(all(windows, feature = "packaged-desktop"))]
+    {
+        if windows::owner_guidance(&std::env::current_exe()?, |message| eprintln!("{message}"))? {
+            return Ok(2);
+        }
+        crate::updater::remove_portable()
+    }
     #[cfg(all(target_os = "linux", feature = "packaged-desktop"))]
     if let Some(code) = linux_bundle::remove()? {
         return Ok(code);
     }
-    ensure_hybrid_transaction_qualified()?;
-    #[cfg(windows)]
+    #[cfg(not(all(windows, feature = "packaged-desktop")))]
     {
-        windows::run()
-    }
-    #[cfg(unix)]
-    {
-        unix_run()
+        ensure_hybrid_transaction_qualified()?;
+        #[cfg(windows)]
+        {
+            windows::run()
+        }
+        #[cfg(unix)]
+        {
+            unix_run()
+        }
     }
 }
 
