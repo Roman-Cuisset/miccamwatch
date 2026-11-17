@@ -28,6 +28,7 @@ windows-tray = []
 linux-camera-helper = []
 # Opt-in presentation integration; native frontends remain the default.
 flutter-desktop = []
+packaged-desktop = ["flutter-desktop"]
 
 [dependencies]
 anyhow = "1.0"

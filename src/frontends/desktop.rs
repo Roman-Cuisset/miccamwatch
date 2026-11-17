@@ -13,6 +13,8 @@ pub mod session;
 pub mod exit_owner;
 mod applications;
 mod maintenance;
+#[cfg(all(feature = "packaged-desktop", any(windows, target_os = "linux")))]
+mod package;
 #[cfg(windows)]
 pub mod camera_owner;
 #[cfg(windows)]

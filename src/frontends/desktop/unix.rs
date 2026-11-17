@@ -210,6 +210,24 @@ impl Bundle {
         let executable = Self::open_file(path, true)?;
         let mut payload = Vec::new();
         Self::pin_tree(&root, &root, &mut payload)?;
+        #[cfg(all(target_os = "linux", feature = "packaged-desktop", not(test)))]
+        {
+            let bundle = root.parent().context("missing hybrid bundle root")?;
+            let manifest = Self::open_file(&bundle.join(super::package::MANIFEST), false)
+                .context("hybrid manifest missing; reinstall the complete package")?;
+            let expected = super::package::verify(&manifest, |name| {
+                let requested = bundle.join(name);
+                if let Some(pin) = payload.iter().find(|pin| pin.path == requested) {
+                    return Ok(pin.file.try_clone()?);
+                }
+                Self::open_file(&requested, false)
+            })?;
+            let expected: std::collections::BTreeSet<_> = expected.iter().map(|name| bundle.join(name)).collect();
+            for pin in &payload {
+                ensure!(pin.file.metadata()?.is_dir() || expected.contains(&pin.path),
+                    "unexpected Flutter bundle path: {}", pin.path.display());
+            }
+        }
         #[cfg(target_os = "linux")]
         for relative in ["lib/libflutter_linux_gtk.so", "lib/libapp.so"] {
             let library = root.join(relative);
@@ -234,6 +252,8 @@ impl Bundle {
     fn pin_tree(root: &Path, path: &Path, pins: &mut Vec<PayloadPin>) -> Result<()> {
         let metadata = std::fs::symlink_metadata(path)?;
         if metadata.file_type().is_symlink() {
+            ensure!(!cfg!(all(target_os = "linux", feature = "packaged-desktop")),
+                "symbolic link in installed Linux desktop payload");
             ensure!(trusted_owner(&metadata), "unsafe desktop symlink owner");
             let target = std::fs::read_link(path)?;
             let (mut normalized, relative) = if target.is_absolute() {
@@ -506,7 +526,17 @@ impl Supervisor {
         #[cfg(target_os = "linux")]
         let executable = root.join("miccamwatch_desktop");
         #[cfg(target_os = "macos")]
-        let executable = root.join("MicCamWatch.app/Contents/MacOS/MicCamWatch");
+        let executable = {
+            let parent = current.parent().context("native executable has no parent")?;
+            let contents = parent.parent().context("native executable has no enclosing path")?;
+            if parent.ends_with("MacOS") && contents.ends_with("Contents")
+                && contents.join("Resources/miccamwatch-bundle.json").is_file()
+            {
+                contents.join("Helpers/MicCamWatch.app/Contents/MacOS/MicCamWatch")
+            } else {
+                root.join("MicCamWatch.app/Contents/MacOS/MicCamWatch")
+            }
+        };
         Ok(Self { executable, child: None, next_ticket: 0, error: None, open_failure: None,
             consultation_worker: None, context: super::tools::Context::default(), refresh_observation: false })
     }

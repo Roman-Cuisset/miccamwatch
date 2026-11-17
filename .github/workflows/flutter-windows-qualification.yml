@@ -131,6 +131,35 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Qualification dependencies failed' }
           & $python -B desktop/qualification/windows_b5.py --engine-directory target/release --release-bundle "$env:MCW_B5_PROOF/normal-bundle" --instrumented-bundle "$env:MCW_B5_PROOF/consultation-bundle" --startup-bundle "$env:MCW_B5_PROOF/startup-bundle" --proof "$env:MCW_B5_PROOF/runtime" --startup-ci
           if ($LASTEXITCODE -ne 0) { throw 'Real interactive qualification failed; retain exact evidence, not a no-desktop pass' }
+      - name: Build the complete hybrid ZIP and MSI and verify both container payloads
+        run: |
+          cargo build --release --locked --features windows-tray,packaged-desktop
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged Rust build failed' }
+          $output = Join-Path $env:MCW_B5_PROOF 'hybrid-distribution'
+          python -B installer/hybrid_payload.py --target windows-x86_64 --native target/release --flutter "$env:MCW_B5_PROOF/normal-bundle" --revision $env:GITHUB_SHA --output $output
+          if ($LASTEXITCODE -ne 0) { throw 'Hybrid ZIP failed' }
+          python -B installer/hybrid_windows.py $output
+          if ($LASTEXITCODE -ne 0) { throw 'Hybrid MSI or administrative extraction failed' }
+      - name: Install official v0.21.0 and exercise installed hybrid upgrade, rollback and uninstall
+        run: |
+          $output = Join-Path $env:MCW_B5_PROOF 'hybrid-distribution'
+          & powershell.exe -NoProfile -NonInteractive -STA -File installer/tests/windows-hybrid-install.ps1 -Candidate (Join-Path $output 'miccamwatch-hybrid-windows-x86_64.msi') -Proof (Join-Path $output 'lifecycle')
+          if ($LASTEXITCODE -ne 0) { throw 'Installed hybrid lifecycle failed' }
+      - name: Preserve exact hybrid Windows distribution and installation receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: miccamwatch-hybrid-windows-x86_64-${{ github.sha }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            ${{ env.MCW_B5_PROOF }}/hybrid-distribution/*.msi
+            ${{ env.MCW_B5_PROOF }}/hybrid-distribution/*.zip
+            ${{ env.MCW_B5_PROOF }}/hybrid-distribution/*.log
+            ${{ env.MCW_B5_PROOF }}/hybrid-distribution/SHA256SUMS
+            ${{ env.MCW_B5_PROOF }}/hybrid-distribution/bundle/miccamwatch-bundle.json
+            ${{ env.MCW_B5_PROOF }}/hybrid-distribution/lifecycle/*.json
+            ${{ env.MCW_B5_PROOF }}/hybrid-distribution/lifecycle/*.log
       - name: Preserve only qualification evidence, never publish a release
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -141,3 +170,4 @@ jobs:
           path: |
             ${{ env.MCW_B5_PROOF }}/
             !${{ env.MCW_B5_PROOF }}/**/sessions/*.jsonl
+            !${{ env.MCW_B5_PROOF }}/hybrid-distribution/**

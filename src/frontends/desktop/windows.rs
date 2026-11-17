@@ -714,6 +714,43 @@ impl Bundle {
         let file = reserve_file(path).context("reserve fixed desktop executable")?;
         let identity = regular_identity(&file)?;
         reservations.push(file);
+        #[cfg(feature = "packaged-desktop")]
+        {
+            let root = path.parent().and_then(Path::parent).context("missing hybrid bundle root")?;
+            let manifest = reserve_file(&root.join(super::package::MANIFEST))
+                .context("hybrid manifest missing; reinstall the complete package")?;
+            regular_identity(&manifest)?;
+            let mut reserved = std::collections::BTreeSet::new();
+            let expected = super::package::verify(&manifest, |name| {
+                let component = root.join(name);
+                let parent = component.parent().context("missing payload directory")?;
+                for directory in parent.ancestors().take_while(|ancestor| *ancestor != root) {
+                    if reserved.insert(directory.to_owned()) {
+                        let pin = OpenOptions::new()
+                            .access_mode(0x80)
+                            .share_mode(1)
+                            .custom_flags(0x0200_0000 | 0x0020_0000)
+                            .open(directory)?;
+                        let metadata = pin.metadata()?;
+                        validate_directory(metadata.is_dir(), metadata.file_attributes())?;
+                        reservations.push(pin);
+                    }
+                }
+                let pin = reserve_file(&component)?;
+                regular_identity(&pin)?;
+                reservations.push(pin.try_clone()?);
+                Ok(pin)
+            })?;
+            let expected: std::collections::BTreeSet<_> = expected.iter().map(|name| root.join(name)).collect();
+            for directory in &reserved {
+                for entry in std::fs::read_dir(directory)? {
+                    let child = entry?.path();
+                    ensure!(reserved.contains(&child) || expected.contains(&child),
+                        "unexpected Flutter bundle path: {}", child.display());
+                }
+            }
+            reservations.push(manifest);
+        }
         Ok(Self {
             _reservations: reservations,
             identity,
