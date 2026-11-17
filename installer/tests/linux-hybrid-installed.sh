@@ -33,7 +33,8 @@ if "$engine" uninstall > "$fixture/protection-refusal.log" 2>&1; then
     echo 'Refusing protection was expected' >&2
     exit 1
 fi
-grep -F 'automatic protection is requested' "$fixture/protection-refusal.log"
+cat "$fixture/protection-refusal.log"
+grep -F 'automatic protection is requested' "$fixture/protection-refusal.log" >/dev/null
 test -x "$engine"
 sed -i 's/mute_on_lock = true/mute_on_lock = false/' "$settings"
 sha256sum "$settings" "$history" > "$fixture/data.sha256"
@@ -50,6 +51,7 @@ from pathlib import Path
 path, sha, version = sys.argv[1:]
 Path(path).write_text(json.dumps({
     "status": "passed", "source": os.environ.get("GITHUB_SHA"), "archive_sha256": sha,
+    "environment": os.environ.get("MCW_INSTALL_TEST_ENV", "native-host"),
     "installed_version": version, "protection_preflight_refused": True, "exclusive_lease_refused": True,
     "owned_autostart_removed": True, "bundle_removed": True, "user_data_preserved": True,
     "graphical_launch_executed": False,

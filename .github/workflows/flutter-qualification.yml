@@ -464,8 +464,7 @@ jobs:
         if: ${{ !inputs.runtime-replay }}
         run: |
           set -euo pipefail
-          python3 -B installer/tests/test_hybrid_linux_install.py -v
-          bash installer/tests/linux-hybrid-installed.sh \
+          bash installer/tests/linux-hybrid-hosted.sh \
             "$MCW_LINUX_OUTPUT/distribution/miccamwatch-hybrid-linux-x86_64.tar.gz" \
             "$MCW_LINUX_OUTPUT/distribution/installed-lifecycle.json"
       - name: Preserve complete Linux distribution and ABI evidence
@@ -481,6 +480,7 @@ jobs:
             ${{ env.MCW_LINUX_OUTPUT }}/distribution/elf-abi.json
             ${{ env.MCW_LINUX_OUTPUT }}/distribution/bundle/miccamwatch-bundle.json
             ${{ env.MCW_LINUX_OUTPUT }}/distribution/installed-lifecycle.json
+            ${{ env.MCW_LINUX_OUTPUT }}/distribution/hosted-install.log
       - name: Preserve qualification-only Linux bundle and actual build/runtime evidence
         if: ${{ always() && env.MCW_LINUX_OUTPUT != '' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -553,8 +553,7 @@ jobs:
         if: ${{ !inputs.runtime-replay }}
         run: |
           set -euo pipefail
-          python3 -B installer/tests/test_hybrid_linux_install.py -v
-          bash installer/tests/linux-hybrid-installed.sh \
+          bash installer/tests/linux-hybrid-hosted.sh \
             "$MCW_ARM_OUTPUT/distribution/miccamwatch-hybrid-linux-aarch64.tar.gz" \
             "$MCW_ARM_OUTPUT/distribution/installed-lifecycle.json"
       - name: Preserve complete Linux distribution and ABI evidence
@@ -570,6 +569,7 @@ jobs:
             ${{ env.MCW_ARM_OUTPUT }}/distribution/elf-abi.json
             ${{ env.MCW_ARM_OUTPUT }}/distribution/bundle/miccamwatch-bundle.json
             ${{ env.MCW_ARM_OUTPUT }}/distribution/installed-lifecycle.json
+            ${{ env.MCW_ARM_OUTPUT }}/distribution/hosted-install.log
       - name: Preserve provenance logs native ELFs and qualification-only package
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
