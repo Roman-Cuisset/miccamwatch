@@ -56,7 +56,7 @@ New-Item -ItemType Directory -Path $Proof | Out-Null
 $Proof = (Resolve-Path -LiteralPath $Proof).Path
 $Candidate = (Resolve-Path -LiteralPath $Candidate).Path
 $report = [ordered]@{status='running'; source=$SourceRevision; uacExercised=$false; standardUserQualified=$false;
-    administratorToken=$isAdmin; interactiveFlutterRequested=!$standard; sessionId=[Diagnostics.Process]::GetCurrentProcess().SessionId}
+    administratorToken=$isAdmin; standardTokenVerified=$standard; interactiveFlutterRequested=!$standard; sessionId=[Diagnostics.Process]::GetCurrentProcess().SessionId}
 
 function Invoke-Msi([string]$Operation, [string]$Payload, [string]$Label, [int]$ExpectedCode = 0) {
     $log = Join-Path $Proof "$Label.log"
@@ -101,8 +101,15 @@ function Check-Installed([string]$Code, [string]$Version) {
     if ((& "$base\mcw.exe" --version) -cne "mcw $Version" -or
         !(Test-Path -LiteralPath "$base\mcw-tray.exe" -PathType Leaf) -or
         !(Test-Path -LiteralPath $shortcut)) { throw "Installed executables or shortcut version mismatch for $Version" }
-    if ($Version -ne '0.21.0' -and (& "$base\mcw-tray.exe" --version) -cne "mcw-tray $Version") {
-        throw 'Hybrid tray version mismatch'
+    if ($Version -ne '0.21.0') {
+        # PowerShell does not wait for a GUI executable invoked with &.
+        $output = Join-Path $Proof "installed-tray-$Version.txt"
+        $process = Start-Process -FilePath "$base\mcw-tray.exe" -ArgumentList '--version' -WindowStyle Hidden `
+            -RedirectStandardOutput $output -PassThru
+        if (!$process.WaitForExit(5000) -or $process.ExitCode -ne 0 -or
+            (Get-Content -LiteralPath $output -Raw).Trim() -cne "mcw-tray $Version") {
+            throw 'Hybrid tray version mismatch'
+        }
     }
 }
 
