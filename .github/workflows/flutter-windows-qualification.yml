@@ -181,19 +181,19 @@ jobs:
       - name: Install official v0.21.0 and exercise installed hybrid upgrade, rollback and uninstall
         run: |
           $output = Join-Path $env:MCW_B5_PROOF 'hybrid-distribution'
-          cargo clippy --locked --features packaged-desktop --all-targets -- -D warnings
+          cargo clippy --release --locked --features windows-tray,packaged-desktop --all-targets -- -D warnings
           if ($LASTEXITCODE -ne 0) { throw 'Packaged updater Clippy failed' }
-          cargo test --locked --features packaged-desktop --lib updater:: -- --test-threads=1
-          if ($LASTEXITCODE -ne 0) { throw 'Packaged updater tests failed' }
-          $env:MCW_TEST_HYBRID_ZIP = Join-Path $output 'miccamwatch-hybrid-windows-x86_64.zip'
-          cargo test --locked --features packaged-desktop --lib updater::bundle::tests::exact_archive_and_flutter_version_are_read_without_launching_it -- --exact --ignored
-          if ($LASTEXITCODE -ne 0) { throw 'Rust ZIP and Flutter version verification failed' }
-          $raw = cargo test --locked --features packaged-desktop --lib --no-run --message-format=json
+          $raw = cargo test --release --locked --features windows-tray,packaged-desktop --lib --no-run --message-format=json
           if ($LASTEXITCODE -ne 0) { throw 'Packaged updater fixture build failed' }
           $tests = @($raw | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object {
               $_.reason -eq 'compiler-artifact' -and $_.target.name -eq 'miccamwatch' -and $_.profile.test -and $_.executable
           })
           if ($tests.Count -ne 1) { throw 'Could not identify the exact packaged updater test binary' }
+          & $tests[0].executable updater:: --test-threads=1
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged updater tests failed' }
+          $env:MCW_TEST_HYBRID_ZIP = Join-Path $output 'miccamwatch-hybrid-windows-x86_64.zip'
+          & $tests[0].executable updater::bundle::tests::exact_archive_and_flutter_version_are_read_without_launching_it --exact --ignored
+          if ($LASTEXITCODE -ne 0) { throw 'Rust ZIP and Flutter version verification failed' }
           & powershell.exe -NoProfile -NonInteractive -STA -File installer/tests/windows-hybrid-install.ps1 -Candidate (Join-Path $output 'miccamwatch-hybrid-windows-x86_64.msi') -Proof (Join-Path $output 'lifecycle') -RustMsiTest $tests[0].executable
           if ($LASTEXITCODE -ne 0) { throw 'Installed hybrid lifecycle failed' }
       - name: Qualify the same per-user MSI transaction under a genuine standard account

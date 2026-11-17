@@ -616,6 +616,25 @@ pub(crate) fn create_private_update_directory(path: &std::path::Path) -> Result<
         "maintenance directory has an unexpected ACL");
     Ok(())
 }
+
+#[cfg(feature = "packaged-desktop")]
+pub(crate) fn assign_new_maintenance_owner(file: &std::fs::File) -> Result<()> {
+    use std::os::windows::io::AsRawHandle;
+    let identity = current_identity()?;
+    validate_identity(&identity)?;
+    let text = wide(&identity.user);
+    let mut sid = ptr::null_mut();
+    unsafe { check(ConvertStringSidToSidW(text.as_ptr(), &mut sid))? };
+    let _sid = Local(sid);
+    // The caller supplies a retained handle to a just-created object in
+    // the verified private directory. Never adopt an existing foreign file.
+    let status = unsafe {
+        SetSecurityInfo(file.as_raw_handle(), 1, 1, sid, ptr::null_mut(),
+            ptr::null_mut(), ptr::null_mut())
+    };
+    ensure!(status == 0, "cannot set the new maintenance object's owner: Windows error {status}");
+    crate::uninstall::windows::ensure_owned(file)
+}
 fn acquire_named_mutex(
     name: &[u16],
     identity: &ControlIdentity,

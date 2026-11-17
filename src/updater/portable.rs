@@ -4,7 +4,7 @@ use anyhow::{Context, Result, bail, ensure};
 use std::{
     fs::{self, File, OpenOptions},
     io::Write,
-    os::windows::fs::OpenOptionsExt,
+    os::windows::fs::{MetadataExt, OpenOptionsExt},
     path::{Path, PathBuf},
 };
 use windows::{
@@ -13,14 +13,37 @@ use windows::{
 };
 
 pub(super) fn open_owned_directory(path: &Path) -> Result<File> {
+    let directory = open_directory(path, false)?;
+    ensure_owned(&directory)?;
+    Ok(directory)
+}
+
+pub(super) fn pin_parent(path: &Path) -> Result<File> {
+    open_directory(path, false)
+}
+
+fn open_directory(path: &Path, set_owner: bool) -> Result<File> {
     safe_ancestors(path)?;
     let directory = OpenOptions::new()
-        .access_mode(0x0002_0080) // READ_CONTROL | FILE_READ_ATTRIBUTES
+        .access_mode(0x0002_0080 | if set_owner { 0x0008_0000 } else { 0 })
         .share_mode(3) // Keep the directory path stable, allowing normal children.
         .custom_flags(0x0200_0000 | 0x0020_0000) // BACKUP_SEMANTICS | OPEN_REPARSE_POINT
         .open(path)?;
-    ensure_owned(&directory)?;
+    let metadata = directory.metadata()?;
+    ensure!(
+        metadata.is_dir() && metadata.file_attributes() & 0x400 == 0,
+        "unsafe maintenance directory handle"
+    );
     Ok(directory)
+}
+
+pub(super) fn private_job(base: &Path) -> Result<tempfile::TempDir> {
+    let job = tempfile::Builder::new()
+        .prefix("update-")
+        .tempdir_in(base)?;
+    let directory = open_directory(job.path(), true)?;
+    crate::windows_control::assign_new_maintenance_owner(&directory)?;
+    Ok(job)
 }
 
 fn known_folder(folder: &windows::core::GUID) -> Result<PathBuf> {
@@ -60,7 +83,7 @@ pub(super) fn transaction_root(active: &Path) -> Result<Option<PathBuf>> {
     if !parent.starts_with(&local) {
         return Ok(None);
     }
-    let _parent = open_owned_directory(parent)?;
+    safe_ancestors(parent)?;
     let mut name = std::ffi::OsString::from(".");
     name.push(leaf);
     name.push(".mcw-maintenance");
@@ -70,14 +93,26 @@ pub(super) fn transaction_root(active: &Path) -> Result<Option<PathBuf>> {
 pub(super) fn lock(base: &Path, exclusive: bool) -> Result<File> {
     crate::windows_control::create_private_update_directory(base)?;
     let _directory = open_owned_directory(base)?;
-    let file = OpenOptions::new()
+    let path = base.join("lock");
+    let mut options = OpenOptions::new();
+    options
         .read(true)
         .write(true)
-        .create(true)
-        .truncate(false)
         .share_mode(3)
-        .custom_flags(0x0020_0000)
-        .open(base.join("lock"))?;
+        .custom_flags(0x0020_0000);
+    let file = match options
+        .clone()
+        .create_new(true)
+        .access_mode(0xc008_0000)
+        .open(&path)
+    {
+        Ok(file) => {
+            crate::windows_control::assign_new_maintenance_owner(&file)?;
+            file
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => options.open(&path)?,
+        Err(error) => return Err(error.into()),
+    };
     validate_regular(&file)?;
     if exclusive {
         file.try_lock()
@@ -189,6 +224,13 @@ pub(super) fn finish(job: &Path, name: &str) -> Result<()> {
 
 pub(super) fn write_record(job: &Path, name: &str, body: &[u8]) -> Result<()> {
     let mut temporary = tempfile::NamedTempFile::new_in(job)?;
+    let owner_handle = OpenOptions::new()
+        .access_mode(0x000a_0080)
+        .share_mode(3)
+        .custom_flags(0x0020_0000)
+        .open(temporary.path())?;
+    crate::windows_control::assign_new_maintenance_owner(&owner_handle)?;
+    drop(owner_handle);
     temporary.write_all(body)?;
     temporary.as_file().sync_all()?;
     let path = temporary.into_temp_path();
@@ -274,8 +316,8 @@ mod tests {
         let _writer = lock(&base, true)?;
         let active = temporary.path().join("active");
         let original = bundle::tests::fixture(&active, "0.22.0")?;
-        let job = base.join("update-test");
-        fs::create_dir(&job)?;
+        let temporary_job = private_job(&base)?;
+        let job = temporary_job.path();
         fs::write(job.join("partial.zip"), b"simulated interrupted download")?;
         assert!(check_pending(&base).is_ok());
         fs::create_dir(job.join("candidate"))?;
@@ -284,10 +326,10 @@ mod tests {
             b"simulated interrupted extraction",
         )?;
         assert!(check_pending(&base).is_ok());
-        write_record(&job, "plan.json", b"checked fixture journal")?;
+        write_record(job, "plan.json", b"checked fixture journal")?;
         assert!(check_pending(&base).is_err());
         assert_eq!(bundle::verify(&active, "0.22.0", false)?, original);
-        finish(&job, "rolled-back")?;
+        finish(job, "rolled-back")?;
         assert!(check_pending(&base).is_ok());
         Ok(())
     }

@@ -97,7 +97,7 @@ pub(super) fn update() -> Result<()> {
     let root = installation_path(&current)?;
     let base = base(&root)?;
     let _base_directory =
-        portable::open_owned_directory(base.parent().context("maintenance parent missing")?)?;
+        portable::pin_parent(base.parent().context("maintenance parent missing")?)?;
     let lock = portable::lock(&base, true)?;
     let _maintenance_directory = portable::open_owned_directory(&base)?;
     portable::check_pending(&base)?;
@@ -152,9 +152,7 @@ pub(super) fn update() -> Result<()> {
         Ordering::Greater => bail!("refusing to downgrade MicCamWatch {VERSION} to {version}"),
         Ordering::Less => {}
     }
-    let temporary = tempfile::Builder::new()
-        .prefix("update-")
-        .tempdir_in(&base)?;
+    let temporary = portable::private_job(&base)?;
     let job = temporary.path().to_owned();
     let scratch = portable::open_owned_directory(&job)?;
     let name = if installed.is_some() { MSI } else { ZIP };
@@ -264,9 +262,7 @@ pub fn remove_portable() -> Result<u8> {
         new_hash: String::new(),
         kind: Kind::Remove,
     };
-    let temporary = tempfile::Builder::new()
-        .prefix("update-")
-        .tempdir_in(&base)?;
+    let temporary = portable::private_job(&base)?;
     let (job, fingerprint) = prepare_worker(temporary, &current, &plan)?;
     drop(lock);
     hand_off(&job, &fingerprint)?;
