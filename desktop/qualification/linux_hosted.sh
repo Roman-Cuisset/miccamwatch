@@ -62,4 +62,8 @@ PY
   python3 desktop/qualification/linux.py check --prefix "$out/bundle" > "$out/runtime-preflight.json"
   tar -C "$out" -czf "$out/miccamwatch-b3-linux-x64-qualification.tar.gz" bundle
   sha256sum "$out/miccamwatch-b3-linux-x64-qualification.tar.gz" > "$out/archive.SHA256SUMS"
+  cargo build --locked --release --features packaged-desktop,linux-camera-helper --bin mcw --bin mcw-camera-helper
+  python3 -B installer/hybrid_payload.py --target linux-x86_64 --native "$CARGO_TARGET_DIR/release" \
+    --flutter desktop/flutter/build/linux/x64/release/bundle --revision "$GITHUB_SHA" --output "$out/distribution"
+  python3 -B installer/hybrid_linux_abi.py --arch x86_64 "$out/distribution/bundle" --receipt "$out/distribution/elf-abi.json"
 } 2>&1 | tee "$out/build.log"

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Parent-run native ARM64 Flutter build/package/audit; no install or runtime launch.
 
-Run only on disposable non-root ubuntu-24.04-arm GitHub-hosted builders:
+Run only on disposable non-root ubuntu-22.04-arm GitHub-hosted builders:
   python3 -B desktop/qualification/linux_b4_arm.py --sdk OFFICIAL_CHECKOUT --out NEW
 
 An existing official Flutter Git checkout at REVISION must already be bootstrapped
@@ -88,7 +88,7 @@ def audit(prefix, b3, dependencies=False):
     required = {'mcw', 'desktop/miccamwatch_desktop', 'desktop/lib/libflutter_linux_gtk.so', 'desktop/lib/libapp.so'}
     if not required <= paths:
         raise RuntimeError(f'Incomplete actual native Flutter/engine bundle: {required - paths}')
-    return {'elf': rows, 'architecture': 'aarch64', 'baseline': 'Ubuntu24.04 ARM64 host only',
+    return {'elf': rows, 'architecture': 'aarch64', 'baseline': 'Native Ubuntu22.04 ARM64 builder',
             'compatibility': 'No Ubuntu22.04/Mint21 floor claim; measured imported symbol versions are recorded',
             'runtime_limitations': ['No app was launched by this helper', 'No GPU, physical ARM/SBC or capture-control qualification',
                                     'Runtime needs GTK3, GNU libstdc++, session D-Bus, display/graphics, PipeWire >=0.3.45; tray additionally needs an actual SNI host']}
@@ -109,8 +109,8 @@ def main():
             and os.environ.get('ImageVersion')):
         raise RuntimeError('Disposable non-root native GitHub-hosted Linux ARM64 builder required')
     release = dict(line.split('=', 1) for line in Path('/etc/os-release').read_text().splitlines() if '=' in line)
-    if release.get('ID', '').strip('"') != 'ubuntu' or release.get('VERSION_ID', '').strip('"') != '24.04':
-        raise RuntimeError('Pinned ubuntu-24.04-arm baseline required')
+    if release.get('ID', '').strip('"') != 'ubuntu' or release.get('VERSION_ID', '').strip('"') != '22.04':
+        raise RuntimeError('Pinned ubuntu-22.04-arm baseline required')
     for key in ('FLUTTER_STORAGE_BASE_URL', 'PUB_HOSTED_URL', 'FLUTTER_ENGINE',
                 'LOCAL_ENGINE', 'CARGO_BUILD_TARGET', 'RUSTC_WRAPPER', 'RUSTC_WORKSPACE_WRAPPER'):
         if os.environ.get(key):
@@ -189,7 +189,7 @@ def main():
     sdk_cache = {str(path.relative_to(sdk)): b3.sha(path)
                  for path in sorted((sdk / 'bin/cache').rglob('*'))
                  if path.is_file() and not path.is_symlink()}
-    receipt = {'observed_at': datetime.now(timezone.utc).isoformat(), 'builder': 'github-hosted-ubuntu-24.04-arm',
+    receipt = {'observed_at': datetime.now(timezone.utc).isoformat(), 'builder': 'github-hosted-ubuntu-22.04-arm',
                'runner_image_version': os.environ['ImageVersion'], 'machine': platform.machine(),
                'source_revision': revision, 'source_status': status, 'flutter': version, 'rust': rust,
                'sdk_origin': OFFICIAL_GIT, 'sdk_revision': REVISION, 'engine_revision': ENGINE,
@@ -211,6 +211,15 @@ def main():
     with tarfile.open(archive, 'w:gz') as stream:
         stream.add(prefix, arcname='bundle')
     (out / 'archive.SHA256SUMS').write_text(f'{b3.sha(archive)}  {archive.name}\n')
+    build(['cargo', 'build', '--locked', '--release', '--features', 'packaged-desktop,linux-camera-helper',
+           '--bin', 'mcw', '--bin', 'mcw-camera-helper'], out / 'cargo-distribution.log', repo, env)
+    distribution = out / 'distribution'
+    build([sys.executable, '-B', repo / 'installer/hybrid_payload.py', '--target', 'linux-aarch64',
+           '--native', out / 'cargo-target/release', '--flutter', desktop / 'build/linux/arm64/release/bundle',
+           '--revision', revision, '--output', distribution], out / 'distribution-build.log', repo, env)
+    build([sys.executable, '-B', repo / 'installer/hybrid_linux_abi.py', '--arch', 'aarch64',
+           distribution / 'bundle', '--receipt', distribution / 'elf-abi.json'],
+          out / 'distribution-abi.log', repo, env)
     print(json.dumps({'bundle': str(prefix), 'archive': str(archive), 'runtime_executed': False}, indent=2))
 
 

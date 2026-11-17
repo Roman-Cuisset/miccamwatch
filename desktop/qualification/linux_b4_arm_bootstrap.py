@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Parent-run official-source Flutter3.47.8 ARM64 bootstrap, never executed here.
 
-On disposable github-hosted ubuntu-24.04-arm only, non-root:
+On disposable github-hosted ubuntu-22.04-arm only, non-root:
   python3 -B desktop/qualification/linux_b4_arm_bootstrap.py --out NEW_PRIVATE
   python3 -B desktop/qualification/linux_b4_arm.py --sdk NEW_PRIVATE/flutter --out NEW_BUILD
 
@@ -108,8 +108,8 @@ def main():
             and os.environ.get('ImageVersion')):
         raise RuntimeError('Disposable native GitHub-hosted ARM64 runner, non-root, required')
     release = dict(line.split('=', 1) for line in Path('/etc/os-release').read_text().splitlines() if '=' in line)
-    if release.get('ID', '').strip('"') != 'ubuntu' or release.get('VERSION_ID', '').strip('"') != '24.04':
-        raise RuntimeError('ubuntu-24.04-arm required')
+    if release.get('ID', '').strip('"') != 'ubuntu' or release.get('VERSION_ID', '').strip('"') != '22.04':
+        raise RuntimeError('ubuntu-22.04-arm required')
     for key in ('FLUTTER_STORAGE_BASE_URL', 'PUB_HOSTED_URL', 'FLUTTER_ENGINE',
                 'LOCAL_ENGINE', 'FLUTTER_ROOT', 'DART_SDK', 'FLUTTER_PREBUILT_ENGINE_VERSION'):
         if os.environ.get(key):

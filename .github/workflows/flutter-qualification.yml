@@ -223,6 +223,26 @@ jobs:
             ${{ runner.temp }}/mcw-flutter-macos/built-products.SHA256SUMS
             ${{ runner.temp }}/mcw-flutter-macos/environment.log
             ${{ runner.temp }}/mcw-flutter-macos/sdk-pin.json
+      - name: Construct and verify the sealed hybrid app and distribution containers
+        if: ${{ !inputs.runtime-replay }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/mcw-flutter-macos"
+          arch="$EXPECTED_ARCH"
+          if [[ "$arch" == arm64 ]]; then arch=aarch64; fi
+          python3 -B installer/macos/package.py --binary target/release/mcw --arch "$arch" \
+            --flutter "$root/release/MicCamWatch.app" --revision "$GITHUB_SHA" --output "$root/distribution" \
+            2>&1 | tee "$root/distribution-build.log"
+      - name: Preserve exact macOS hybrid distribution artifacts
+        if: ${{ always() && !inputs.runtime-replay }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: miccamwatch-hybrid-macos-${{ matrix.architecture }}-${{ github.sha }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            ${{ runner.temp }}/mcw-flutter-macos/distribution/**
+            ${{ runner.temp }}/mcw-flutter-macos/distribution-build.log
       - name: Inspect bundle seals architectures ACLs and run owned Aqua smoke when available
         timeout-minutes: 10
         run: |
@@ -425,6 +445,18 @@ jobs:
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
               summary.write('## Linux x64 Ubuntu22.04 baseline qualification\n\n```json\n' + json.dumps(value, indent=2) + '\n```\n\nQualification artifact only. Xvfb/software graphics is not physical Mint/GPU qualification. No ARM, hardware-control, release or deploy claim.\n')
           PY
+      - name: Preserve complete Linux distribution and ABI evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: miccamwatch-hybrid-linux-x86_64-${{ github.sha }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            ${{ env.MCW_LINUX_OUTPUT }}/distribution/*.tar.gz
+            ${{ env.MCW_LINUX_OUTPUT }}/distribution/SHA256SUMS
+            ${{ env.MCW_LINUX_OUTPUT }}/distribution/elf-abi.json
+            ${{ env.MCW_LINUX_OUTPUT }}/distribution/bundle/miccamwatch-bundle.json
       - name: Preserve qualification-only Linux bundle and actual build/runtime evidence
         if: ${{ always() && env.MCW_LINUX_OUTPUT != '' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -447,9 +479,9 @@ jobs:
             ${{ runner.temp }}/mcw-flutter-linux-setup/*.json
 
   linux-arm64-native:
-    name: Ubuntu 24.04 ARM64 official-source Flutter build and ELF audit
+    name: Ubuntu 22.04 ARM64 official-source Flutter build and ABI baseline
     if: ${{ !inputs.native-gates-only && !inputs.intel-only && !inputs.arm-only && !inputs.runtime-replay && !inputs.skip-linux-arm64 }}
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-22.04-arm
     timeout-minutes: 60
     env:
       CARGO_TERM_COLOR: never
@@ -469,7 +501,7 @@ jobs:
           test "$RUNNER_ENVIRONMENT" = github-hosted
           test "$(uname -m)" = aarch64
           test "$(id -u)" != 0
-          test "$(. /etc/os-release; printf '%s' "$ID:$VERSION_ID")" = ubuntu:24.04
+          test "$(. /etc/os-release; printf '%s' "$ID:$VERSION_ID")" = ubuntu:22.04
           mkdir -m 700 "$RUNNER_TEMP/mcw-flutter-arm-setup"
           mkdir -p "$HOME/mcw-qualification"
           printf 'MCW_ARM_SDK=%s/mcw-qualification/b4-arm-sdk-%s-%s\n' "$HOME" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" >> "$GITHUB_ENV"
@@ -477,7 +509,7 @@ jobs:
           sudo apt-get update 2>&1 | tee "$RUNNER_TEMP/mcw-flutter-arm-setup/apt-update.log"
           sudo apt-get install -y --no-install-recommends \
             git curl unzip xz-utils zip clang cmake ninja-build pkg-config \
-            libgtk-3-dev liblzma-dev libstdc++-14-dev libpipewire-0.3-dev \
+            libgtk-3-dev liblzma-dev libstdc++-11-dev libpipewire-0.3-dev \
             libclang-dev python3 binutils libx11-dev \
             2>&1 | tee "$RUNNER_TEMP/mcw-flutter-arm-setup/apt-install.log"
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
@@ -493,6 +525,18 @@ jobs:
           set -euo pipefail
           python3 -B desktop/qualification/linux_b4_arm.py \
             --sdk "$MCW_ARM_SDK/flutter" --out "$MCW_ARM_OUTPUT"
+      - name: Preserve complete Linux distribution and ABI evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: miccamwatch-hybrid-linux-aarch64-${{ github.sha }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            ${{ env.MCW_ARM_OUTPUT }}/distribution/*.tar.gz
+            ${{ env.MCW_ARM_OUTPUT }}/distribution/SHA256SUMS
+            ${{ env.MCW_ARM_OUTPUT }}/distribution/elf-abi.json
+            ${{ env.MCW_ARM_OUTPUT }}/distribution/bundle/miccamwatch-bundle.json
       - name: Preserve provenance logs native ELFs and qualification-only package
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
