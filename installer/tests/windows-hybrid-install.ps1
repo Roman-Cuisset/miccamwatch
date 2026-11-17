@@ -3,14 +3,44 @@ param(
     [Parameter(Mandatory)][string]$Candidate,
     [Parameter(Mandatory)][string]$Proof,
     [string]$StandardAccountSid,
-    [string]$SourceRevision = $env:GITHUB_SHA
+    [string]$SourceRevision = $env:GITHUB_SHA,
+    [switch]$LocalDisposableVm,
+    [string]$FixtureRoot,
+    [string]$ExpectedMsiSha256
 )
 $ErrorActionPreference = 'Stop'
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $principal = [Security.Principal.WindowsPrincipal]::new($identity)
 $isAdmin = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-$standard = [bool]$StandardAccountSid
-if ($standard) {
+$standard = [bool]($StandardAccountSid -or $LocalDisposableVm)
+$interactive = !$standard -or $LocalDisposableVm
+if ($LocalDisposableVm) {
+    if ($StandardAccountSid -or $ExpectedMsiSha256 -cnotmatch '^[0-9a-f]{64}$') {
+        throw 'Disposable-guest mode requires an independent MSI SHA-256 and the actual logged-in user.'
+    }
+    . (Join-Path $PSScriptRoot 'windows-fixture-context.ps1')
+    $guest = Assert-McwDisposableFixtureHost -RequireStandardUser -LocalDisposableVm -FixtureRoot $FixtureRoot
+    $rootPrefix = $guest.fixtureRoot.TrimEnd('\') + '\'
+    $candidatePath = (Resolve-Path -LiteralPath $Candidate).Path
+    $proofParent = Assert-McwFixtureRoot -Path (Split-Path ([IO.Path]::GetFullPath($Proof)))
+    $candidateParent = Assert-McwFixtureRoot -Path (Split-Path $candidatePath)
+    foreach ($folder in @($candidateParent, $proofParent)) {
+        if ($folder -ine $guest.fixtureRoot -and !$folder.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+            throw 'The MSI and proof must be under the admitted guest root.'
+        }
+    }
+    $file = Get-Item -LiteralPath $candidatePath -Force
+    if (($file.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
+        (Get-FileHash -LiteralPath $candidatePath -Algorithm SHA256).Hash -ine $ExpectedMsiSha256) {
+        throw 'The guest MSI does not match its independently checked hash.'
+    }
+    $null = Assert-McwFixtureRoot -Path (Join-Path $candidateParent 'bundle')
+    $policy = Get-ItemProperty -LiteralPath 'HKLM:\Software\Policies\Microsoft\Windows\Installer' -ErrorAction SilentlyContinue
+    if ($policy.DisableMSI -in 1,2) { throw "The guest policy DisableMsi=$($policy.DisableMSI) disallows this fixture." }
+    $Candidate = $candidatePath
+} elseif ($FixtureRoot -or $ExpectedMsiSha256) {
+    throw 'FixtureRoot and ExpectedMsiSha256 require LocalDisposableVm mode.'
+} elseif ($standard) {
     $shared = Join-Path $env:PUBLIC 'McwStandard-'
     if ($identity.User.Value -ne $StandardAccountSid -or $isAdmin -or
         $identity.Groups.Value -contains 'S-1-5-32-544' -or
@@ -56,7 +86,8 @@ New-Item -ItemType Directory -Path $Proof | Out-Null
 $Proof = (Resolve-Path -LiteralPath $Proof).Path
 $Candidate = (Resolve-Path -LiteralPath $Candidate).Path
 $report = [ordered]@{status='running'; source=$SourceRevision; uacExercised=$false; standardUserQualified=$false;
-    administratorToken=$isAdmin; standardTokenVerified=$standard; interactiveFlutterRequested=!$standard; sessionId=[Diagnostics.Process]::GetCurrentProcess().SessionId}
+    administratorToken=$isAdmin; standardTokenVerified=$standard; interactiveFlutterRequested=$interactive;
+    localDisposableVm=[bool]$LocalDisposableVm; sessionId=[Diagnostics.Process]::GetCurrentProcess().SessionId}
 
 function Invoke-Msi([string]$Operation, [string]$Payload, [string]$Label, [int]$ExpectedCode = 0) {
     $log = Join-Path $Proof "$Label.log"
@@ -271,7 +302,7 @@ try {
     $report.msiUpgrade = $true
     Check-Payload $bundle
     $report.installedPayloadVerified = $true
-    if (!$standard) {
+    if ($interactive) {
         $trayImage = "$base\mcw-tray.exe"
         $flutterImage = "$base\desktop\miccamwatch_desktop.exe"
         $info = [Diagnostics.ProcessStartInfo]::new($trayImage, '--open')

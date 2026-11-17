@@ -32,6 +32,10 @@ on:
         description: Full source SHA for the MSI qualification artifact
         type: string
         default: ''
+      windows-msi-arm-standard-only:
+        description: Replay the x64 MSI under a standard account on Windows 11 Arm64
+        type: boolean
+        default: false
       flutter-intel-only:
         description: Target only Intel; bootstrap diagnostic controls remain separately opt-in
         type: boolean
@@ -98,6 +102,7 @@ jobs:
     with:
       msi-test-run: ${{ inputs.windows-msi-test-run || '' }}
       msi-test-source: ${{ inputs.windows-msi-test-source || '' }}
+      msi-test-arm-standard-only: ${{ inputs.windows-msi-arm-standard-only || false }}
 
   windows:
     if: ${{ !inputs.native-only && inputs.native-platform != 'flutter' && inputs.native-platform != 'flutter-windows' }}

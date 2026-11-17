@@ -9,6 +9,9 @@ on:
       msi-test-source:
         type: string
         default: ''
+      msi-test-arm-standard-only:
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -198,12 +201,12 @@ jobs:
     permissions:
       contents: read
       actions: read
-    runs-on: windows-latest
+    runs-on: ${{ matrix.context == 'standard-user-arm' && 'windows-11-arm' || 'windows-latest' }}
     timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
-        context: [hosted-admin, standard-user]
+        context: ${{ fromJSON(inputs.msi-test-arm-standard-only && '["standard-user-arm"]' || '["hosted-admin", "standard-user"]') }}
     defaults:
       run:
         shell: pwsh
@@ -246,7 +249,7 @@ jobs:
           & powershell.exe -NoProfile -NonInteractive -STA -File installer/tests/windows-hybrid-install.ps1 -Candidate $msi -Proof (Join-Path $env:MCW_REPLAY_PREFIX 'replayed') -SourceRevision $env:MCW_PACKAGE_SOURCE
           if ($LASTEXITCODE -ne 0) { throw 'Installed hybrid lifecycle failed' }
       - name: Install, roll back and remove the same verified MSI under a genuine standard account
-        if: ${{ matrix.context == 'standard-user' }}
+        if: ${{ matrix.context != 'hosted-admin' }}
         run: |
           $msi = Join-Path $env:MCW_REPLAY_PREFIX 'miccamwatch-hybrid-windows-x86_64.msi'
           & powershell.exe -NoProfile -NonInteractive -File installer/tests/windows-hybrid-standard.ps1 -Candidate $msi -Proof (Join-Path $env:MCW_REPLAY_PREFIX 'replayed') -SourceRevision $env:MCW_PACKAGE_SOURCE
