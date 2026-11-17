@@ -279,7 +279,7 @@ impl ManagedUninstall {
 }
 
 #[cfg(target_os = "linux")]
-fn root_camera_installation_absent() -> Result<()> {
+pub(crate) fn root_camera_installation_absent() -> Result<()> {
     use std::os::unix::fs::MetadataExt;
 
     const GUIDANCE: &str = "User installation was preserved. First explicitly restore with the old matching mcw camera allow, then have an administrator run the reviewed root helper installer --uninstall. After root removal, retry the user update or uninstall. User installation operations never elevate, call camera mutation APIs or remove the root helper; only explicitly set up a matching same-version helper afterward if keeping MCW.";

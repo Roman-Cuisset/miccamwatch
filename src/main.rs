@@ -88,6 +88,12 @@ fn run() -> Result<u8> {
         return Ok(code);
     }
     let cli = Cli::parse_localized();
+    #[cfg(all(target_os = "linux", feature = "packaged-desktop"))]
+    let _package_lease = if matches!(&cli.command, Command::Uninstall) {
+        None
+    } else {
+        uninstall::hold_process_lease()?
+    };
     #[cfg(windows)]
     match &cli.command {
         Command::MicrophoneGuard => {

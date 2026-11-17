@@ -145,6 +145,11 @@ jobs:
           $output = Join-Path $env:MCW_B5_PROOF 'hybrid-distribution'
           & powershell.exe -NoProfile -NonInteractive -STA -File installer/tests/windows-hybrid-install.ps1 -Candidate (Join-Path $output 'miccamwatch-hybrid-windows-x86_64.msi') -Proof (Join-Path $output 'lifecycle')
           if ($LASTEXITCODE -ne 0) { throw 'Installed hybrid lifecycle failed' }
+      - name: Qualify the same per-user MSI transaction under a genuine standard account
+        run: |
+          $output = Join-Path $env:MCW_B5_PROOF 'hybrid-distribution'
+          & powershell.exe -NoProfile -NonInteractive -File installer/tests/windows-hybrid-standard.ps1 -Candidate (Join-Path $output 'miccamwatch-hybrid-windows-x86_64.msi') -Proof (Join-Path $output 'standard')
+          if ($LASTEXITCODE -ne 0) { throw 'Standard-account MSI qualification failed' }
       - name: Preserve exact hybrid Windows distribution and installation receipts
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -160,6 +165,8 @@ jobs:
             ${{ env.MCW_B5_PROOF }}/hybrid-distribution/bundle/miccamwatch-bundle.json
             ${{ env.MCW_B5_PROOF }}/hybrid-distribution/lifecycle/*.json
             ${{ env.MCW_B5_PROOF }}/hybrid-distribution/lifecycle/*.log
+            ${{ env.MCW_B5_PROOF }}/hybrid-distribution/standard/**/*.json
+            ${{ env.MCW_B5_PROOF }}/hybrid-distribution/standard/**/*.log
       - name: Preserve only qualification evidence, never publish a release
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

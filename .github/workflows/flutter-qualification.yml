@@ -233,6 +233,15 @@ jobs:
           python3 -B installer/macos/package.py --binary target/release/mcw --arch "$arch" \
             --flutter "$root/release/MicCamWatch.app" --revision "$GITHUB_SHA" --output "$root/distribution" \
             2>&1 | tee "$root/distribution-build.log"
+      - name: Exercise the installed hybrid app, whole-app rollback and removal
+        if: ${{ !inputs.runtime-replay }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/mcw-flutter-macos"
+          arch="$EXPECTED_ARCH"
+          if [[ "$arch" == arm64 ]]; then arch=aarch64; fi
+          python3 -B installer/tests/macos-hybrid-installed.py "$root/distribution/miccamwatch-hybrid-macos-$arch.dmg" \
+            --proof "$root/distribution/installed-lifecycle"
       - name: Preserve exact macOS hybrid distribution artifacts
         if: ${{ always() && !inputs.runtime-replay }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -445,6 +454,14 @@ jobs:
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
               summary.write('## Linux x64 Ubuntu22.04 baseline qualification\n\n```json\n' + json.dumps(value, indent=2) + '\n```\n\nQualification artifact only. Xvfb/software graphics is not physical Mint/GPU qualification. No ARM, hardware-control, release or deploy claim.\n')
           PY
+      - name: Exercise managed Linux install, rollback and guarded uninstall
+        if: ${{ !inputs.runtime-replay }}
+        run: |
+          set -euo pipefail
+          python3 -B installer/tests/test_hybrid_linux_install.py -v
+          bash installer/tests/linux-hybrid-installed.sh \
+            "$MCW_LINUX_OUTPUT/distribution/miccamwatch-hybrid-linux-x86_64.tar.gz" \
+            "$MCW_LINUX_OUTPUT/distribution/installed-lifecycle.json"
       - name: Preserve complete Linux distribution and ABI evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -457,6 +474,7 @@ jobs:
             ${{ env.MCW_LINUX_OUTPUT }}/distribution/SHA256SUMS
             ${{ env.MCW_LINUX_OUTPUT }}/distribution/elf-abi.json
             ${{ env.MCW_LINUX_OUTPUT }}/distribution/bundle/miccamwatch-bundle.json
+            ${{ env.MCW_LINUX_OUTPUT }}/distribution/installed-lifecycle.json
       - name: Preserve qualification-only Linux bundle and actual build/runtime evidence
         if: ${{ always() && env.MCW_LINUX_OUTPUT != '' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -525,6 +543,14 @@ jobs:
           set -euo pipefail
           python3 -B desktop/qualification/linux_b4_arm.py \
             --sdk "$MCW_ARM_SDK/flutter" --out "$MCW_ARM_OUTPUT"
+      - name: Exercise managed Linux install, rollback and guarded uninstall
+        if: ${{ !inputs.runtime-replay }}
+        run: |
+          set -euo pipefail
+          python3 -B installer/tests/test_hybrid_linux_install.py -v
+          bash installer/tests/linux-hybrid-installed.sh \
+            "$MCW_ARM_OUTPUT/distribution/miccamwatch-hybrid-linux-aarch64.tar.gz" \
+            "$MCW_ARM_OUTPUT/distribution/installed-lifecycle.json"
       - name: Preserve complete Linux distribution and ABI evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -537,6 +563,7 @@ jobs:
             ${{ env.MCW_ARM_OUTPUT }}/distribution/SHA256SUMS
             ${{ env.MCW_ARM_OUTPUT }}/distribution/elf-abi.json
             ${{ env.MCW_ARM_OUTPUT }}/distribution/bundle/miccamwatch-bundle.json
+            ${{ env.MCW_ARM_OUTPUT }}/distribution/installed-lifecycle.json
       - name: Preserve provenance logs native ELFs and qualification-only package
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

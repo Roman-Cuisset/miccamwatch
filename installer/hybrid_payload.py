@@ -149,14 +149,17 @@ def assemble(target, native, flutter, root, revision):
     return verify(root, target, revision)
 
 
-def verify(root, target, revision=None):
+def verify(root, target, revision=None, *, current=True):
     expected = expected_files(target)
     actual = paths(root, expected | {MANIFEST})
     data = json.loads(actual.pop(MANIFEST).read_text(encoding="utf-8"),
                       object_pairs_hook=unique_pairs)
     version, protocol = release_metadata()
+    version_ok = ((data.get("version"), data.get("ipc")) == (version, protocol) if current else
+                  bool(re.fullmatch(r"\d+\.\d+\.\d+", data.get("version", "")))
+                  and type(data.get("ipc")) is int and 0 < data["ipc"] <= 255)
     check(set(data) == {"schema", "version", "ipc", "target", "revision", "files"}
-          and data["schema"] == 1 and data["version"] == version and data["ipc"] == protocol
+          and data["schema"] == 1 and version_ok
           and data["target"] == target and re.fullmatch(r"[0-9a-f]{40}", data["revision"])
           and (revision is None or data["revision"] == revision),
           "invalid bundle identity")

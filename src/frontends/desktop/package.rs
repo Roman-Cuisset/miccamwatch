@@ -6,7 +6,7 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, fs::File, io::Read};
 
-pub(super) const MANIFEST: &str = "miccamwatch-bundle.json";
+pub(crate) const MANIFEST: &str = "miccamwatch-bundle.json";
 const LIMIT: u64 = 16 * 1024;
 
 #[derive(Deserialize)]
@@ -20,7 +20,7 @@ struct Manifest {
     files: BTreeMap<String, String>,
 }
 
-pub(super) fn verify(
+pub(crate) fn verify(
     mut manifest: impl Read,
     mut open: impl FnMut(&str) -> Result<File>,
 ) -> Result<Vec<String>> {

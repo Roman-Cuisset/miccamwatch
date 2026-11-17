@@ -7,9 +7,19 @@ use std::{fs::File, path::Path};
 #[path = "uninstall/windows.rs"]
 pub(crate) mod windows;
 
+#[cfg(all(target_os = "linux", feature = "packaged-desktop"))]
+mod linux_bundle;
+#[cfg(all(target_os = "linux", feature = "packaged-desktop"))]
+#[doc(hidden)]
+pub use linux_bundle::hold_process_lease;
+
 /// Remove this installation, or report its exact owner's procedure without
 /// claiming success. This branch must run before monitor/control startup.
 pub fn run() -> Result<u8> {
+    #[cfg(all(target_os = "linux", feature = "packaged-desktop"))]
+    if let Some(code) = linux_bundle::remove()? {
+        return Ok(code);
+    }
     ensure_hybrid_transaction_qualified()?;
     #[cfg(windows)]
     {

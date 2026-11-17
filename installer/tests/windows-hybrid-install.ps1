@@ -1,9 +1,27 @@
 [CmdletBinding()]
-param([Parameter(Mandatory)][string]$Candidate, [Parameter(Mandatory)][string]$Proof)
+param(
+    [Parameter(Mandatory)][string]$Candidate,
+    [Parameter(Mandatory)][string]$Proof,
+    [string]$StandardAccountSid,
+    [string]$SourceRevision = $env:GITHUB_SHA
+)
 $ErrorActionPreference = 'Stop'
-if ($env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or $env:GITHUB_ACTIONS -cne 'true') {
+$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+$principal = [Security.Principal.WindowsPrincipal]::new($identity)
+$isAdmin = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+$standard = [bool]$StandardAccountSid
+if ($standard) {
+    $shared = Join-Path $env:PUBLIC 'McwStandard-'
+    if ($identity.User.Value -ne $StandardAccountSid -or $isAdmin -or
+        $identity.Groups.Value -contains 'S-1-5-32-544' -or
+        !$Candidate.StartsWith($shared, [StringComparison]::OrdinalIgnoreCase) -or
+        $identity.Name -notmatch '\\mcwqa[0-9a-f]{8}$') {
+        throw 'The process token, account or isolated prefix does not qualify as a standard-user fixture.'
+    }
+} elseif ($env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or $env:GITHUB_ACTIONS -cne 'true') {
     throw 'This scenario requires a disposable GitHub-hosted Windows runner.'
 }
+if ($SourceRevision -notmatch '^[0-9a-f]{40}$') { throw 'Exact source revision required' }
 $base = Join-Path $env:LOCALAPPDATA 'Programs\MicCamWatch'
 $configuration = Join-Path $env:APPDATA 'MicCamWatch'
 $data = Join-Path $env:LOCALAPPDATA 'MicCamWatch'
@@ -24,9 +42,8 @@ foreach ($path in @($base,$configuration,$data,$Proof,$shortcut)) {
 New-Item -ItemType Directory -Path $Proof | Out-Null
 $Proof = (Resolve-Path -LiteralPath $Proof).Path
 $Candidate = (Resolve-Path -LiteralPath $Candidate).Path
-$principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
-$report = [ordered]@{status='running'; source=$env:GITHUB_SHA; uacExercised=$false; standardUserQualified=$false;
-    administratorToken=$principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)}
+$report = [ordered]@{status='running'; source=$SourceRevision; uacExercised=$false; standardUserQualified=$false;
+    administratorToken=$isAdmin; interactiveFlutterRequested=!$standard; sessionId=[Diagnostics.Process]::GetCurrentProcess().SessionId}
 
 function Invoke-Msi([string]$Operation, [string]$Payload, [string]$Label, [int]$ExpectedCode = 0) {
     $log = Join-Path $Proof "$Label.log"
@@ -69,8 +86,11 @@ function Check-Installed([string]$Code, [string]$Version) {
         ([string]$installer.ProductInfo($Code, 'InstallLocation')).TrimEnd('\') -ine $base -or
         ([string]$installer.ProductInfo($Code, 'AssignmentType')) -ne '0') { throw "Invalid per-user MSI status for $Version" }
     if ((& "$base\mcw.exe" --version) -cne "mcw $Version" -or
-        (& "$base\mcw-tray.exe" --version) -cne "mcw-tray $Version" -or
+        !(Test-Path -LiteralPath "$base\mcw-tray.exe" -PathType Leaf) -or
         !(Test-Path -LiteralPath $shortcut)) { throw "Installed executables or shortcut version mismatch for $Version" }
+    if ($Version -ne '0.21.0' -and (& "$base\mcw-tray.exe" --version) -cne "mcw-tray $Version") {
+        throw 'Hybrid tray version mismatch'
+    }
 }
 
 function Copy-FailingFixture([string]$Source, [string]$Destination) {
@@ -119,12 +139,13 @@ try {
     if ($stableSha -cne '4e6145a4e48bff47f08c8341c24c14e7fab563146e36b8338f46441f7f4da3df') { throw 'Public v0.21.0 digest changed' }
     $oldCode = Identity $stable '0.21.0'
     $bundle = Get-Content -LiteralPath (Join-Path (Split-Path $Candidate) 'bundle\miccamwatch-bundle.json') -Raw | ConvertFrom-Json
-    if ($bundle.revision -cne $env:GITHUB_SHA -or $bundle.ipc -ne 10) { throw 'The candidate is not this run source' }
+    if ($bundle.revision -cne $SourceRevision -or $bundle.ipc -ne 10) { throw 'The candidate is not this run source' }
     $newCode = Identity $Candidate $bundle.version
     $report.baselineSha256 = $stableSha
     $report.candidateSha256 = (Get-FileHash -LiteralPath $Candidate -Algorithm SHA256).Hash.ToLowerInvariant()
     Invoke-Msi '/i' $stable 'install-baseline'
     Check-Installed $oldCode '0.21.0'
+    $baselineHashes = @("$base\mcw.exe","$base\mcw-tray.exe" | Get-FileHash -Algorithm SHA256 | ForEach-Object Hash)
     New-Item -ItemType Directory -Path $configuration,$data | Out-Null
     $settings = Join-Path $configuration 'settings.toml'
     $history = Join-Path $data 'history.jsonl'
@@ -142,6 +163,9 @@ try {
     Copy-FailingFixture $Candidate $faulty
     Invoke-Msi '/i' $faulty 'upgrade-with-rollback' 1603
     Check-Installed $oldCode '0.21.0'
+    if (Compare-Object $baselineHashes @("$base\mcw.exe","$base\mcw-tray.exe" | Get-FileHash -Algorithm SHA256 | ForEach-Object Hash)) {
+        throw 'Rollback did not restore both original Rust executables'
+    }
     if ($installer.ProductState($newCode) -eq 5 -or (Test-Path -LiteralPath "$base\desktop")) {
         throw 'Failed upgrade left the candidate installed'
     }
@@ -166,27 +190,29 @@ try {
         throw 'Flutter Windows version resource mismatch'
     }
     $report.installedPayloadVerified = $true
-    $trayImage = "$base\mcw-tray.exe"
-    $flutterImage = "$base\desktop\miccamwatch_desktop.exe"
-    Start-Process -FilePath $trayImage -ArgumentList '--open'
-    $limit = [DateTime]::UtcNow.AddSeconds(45)
-    do {
-        Start-Sleep -Milliseconds 200
-        $tray = @(Owned 'mcw-tray' $trayImage)
-        $ui = @(Owned 'miccamwatch_desktop' $flutterImage | Where-Object { $_.MainWindowHandle -ne [IntPtr]::Zero })
-    } until (($tray.Count -eq 1 -and $ui.Count -eq 1) -or [DateTime]::UtcNow -gt $limit)
-    if ($tray.Count -ne 1 -or $ui.Count -ne 1) { throw 'Installed tray/Flutter did not open exactly once' }
-    $trayId = $tray[0].Id
-    if (!$ui[0].CloseMainWindow() -or !$ui[0].WaitForExit(15000)) { throw 'Installed Flutter window did not close' }
-    $owner = @(Owned 'mcw-tray' $trayImage)
-    if ($owner.Count -ne 1 -or $owner[0].Id -ne $trayId -or @(Owned 'miccamwatch_desktop' $flutterImage).Count) {
-        throw 'Close changed the native owner or retained a Flutter process'
+    if (!$standard) {
+        $trayImage = "$base\mcw-tray.exe"
+        $flutterImage = "$base\desktop\miccamwatch_desktop.exe"
+        Start-Process -FilePath $trayImage -ArgumentList '--open'
+        $limit = [DateTime]::UtcNow.AddSeconds(45)
+        do {
+            Start-Sleep -Milliseconds 200
+            $tray = @(Owned 'mcw-tray' $trayImage)
+            $ui = @(Owned 'miccamwatch_desktop' $flutterImage | Where-Object { $_.MainWindowHandle -ne [IntPtr]::Zero })
+        } until (($tray.Count -eq 1 -and $ui.Count -eq 1) -or [DateTime]::UtcNow -gt $limit)
+        if ($tray.Count -ne 1 -or $ui.Count -ne 1) { throw 'Installed tray/Flutter did not open exactly once' }
+        $trayId = $tray[0].Id
+        if (!$ui[0].CloseMainWindow() -or !$ui[0].WaitForExit(15000)) { throw 'Installed Flutter window did not close' }
+        $owner = @(Owned 'mcw-tray' $trayImage)
+        if ($owner.Count -ne 1 -or $owner[0].Id -ne $trayId -or @(Owned 'miccamwatch_desktop' $flutterImage).Count) {
+            throw 'Close changed the native owner or retained a Flutter process'
+        }
+        & "$base\mcw.exe" tray status
+        if ($LASTEXITCODE -ne 0) { throw 'Native status after window close failed' }
+        $report.installedFlutterClosedTrayContinued = $true
+        & "$base\mcw.exe" tray stop
+        if ($LASTEXITCODE -ne 0 -or !$owner[0].WaitForExit(15000)) { throw 'Installed owner did not stop cooperatively' }
     }
-    & "$base\mcw.exe" tray status
-    if ($LASTEXITCODE -ne 0) { throw 'Native status after window close failed' }
-    $report.installedFlutterClosedTrayContinued = $true
-    & "$base\mcw.exe" tray stop
-    if ($LASTEXITCODE -ne 0 -or !$owner[0].WaitForExit(15000)) { throw 'Installed owner did not stop cooperatively' }
     & "$base\mcw.exe" autostart disable
     if ($LASTEXITCODE -ne 0 -or @(Read-Autostart).Count -ne 0) { throw 'Fixture autostart removal failed' }
     Invoke-Msi '/x' $newCode 'uninstall-hybrid'
@@ -199,6 +225,7 @@ try {
     }
     $report.userDataPreserved = $true
     $report.msiUninstall = $true
+    $report.standardUserQualified = $standard
     $report.status = 'passed'
 } catch {
     $report.status = 'failed'

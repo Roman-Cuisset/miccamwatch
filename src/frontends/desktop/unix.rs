@@ -887,7 +887,8 @@ mod tests {
         symlink("A", framework.join("Versions/Current")).unwrap();
         symlink("Versions/Current/Fixture", framework.join("Fixture")).unwrap();
         symlink("Versions/Current/Resources", framework.join("Resources")).unwrap();
-        assert!(Bundle::open(&executable).is_ok());
+        assert_eq!(Bundle::open(&executable).is_ok(),
+            !cfg!(all(target_os = "linux", feature = "packaged-desktop")));
         let outside = tempfile::tempdir_in("/tmp").unwrap();
         // Even an external alias that resolves back inside is not a trusted route.
         symlink(&framework, outside.path().join("back")).unwrap();
