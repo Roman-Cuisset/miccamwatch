@@ -126,9 +126,14 @@ function Identity([string]$Path, [string]$Version) {
 }
 
 function Check-Installed([string]$Code, [string]$Version) {
-    if ($installer.ProductState($Code) -ne 5 -or
-        ([string]$installer.ProductInfo($Code, 'InstallLocation')).TrimEnd('\') -ine $base -or
-        ([string]$installer.ProductInfo($Code, 'AssignmentType')) -ne '0') { throw "Invalid per-user MSI status for $Version" }
+    $state = $installer.ProductState($Code)
+    $location = ([string]$installer.ProductInfo($Code, 'InstallLocation')).TrimEnd('\')
+    $assignment = [string]$installer.ProductInfo($Code, 'AssignmentType')
+    $report["msiProduct$Version"] = [ordered]@{state=$state; assignmentType=$assignment;
+        actualLocation=$location; expectedLocation=$base; processArchitecture=$env:PROCESSOR_ARCHITECTURE}
+    if ($state -ne 5 -or $location -ine $base -or $assignment -ne '0') {
+        throw "Invalid per-user MSI status for $Version (state=$state, assignment=$assignment, locationMatch=$($location -ieq $base))"
+    }
     if ((& "$base\mcw.exe" --version) -cne "mcw $Version" -or
         !(Test-Path -LiteralPath "$base\mcw-tray.exe" -PathType Leaf) -or
         !(Test-Path -LiteralPath $shortcut)) { throw "Installed executables or shortcut version mismatch for $Version" }
