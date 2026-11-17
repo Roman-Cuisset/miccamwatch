@@ -145,7 +145,7 @@ try {
     $report.candidateSha256 = (Get-FileHash -LiteralPath $Candidate -Algorithm SHA256).Hash.ToLowerInvariant()
     Invoke-Msi '/i' $stable 'install-baseline'
     Check-Installed $oldCode '0.21.0'
-    $baselineHashes = @("$base\mcw.exe","$base\mcw-tray.exe" | Get-FileHash -Algorithm SHA256 | ForEach-Object Hash)
+    $baselineHashes = @(Get-FileHash -LiteralPath "$base\mcw.exe","$base\mcw-tray.exe" -Algorithm SHA256 | ForEach-Object Hash)
     New-Item -ItemType Directory -Path $configuration,$data | Out-Null
     $settings = Join-Path $configuration 'settings.toml'
     $history = Join-Path $data 'history.jsonl'
@@ -153,7 +153,7 @@ try {
       'mute_on_lock = false','block_camera_on_lock = false','restore_on_unlock = true','profile = "meeting"')
     [IO.File]::WriteAllLines($settings, [string[]]$preferences)
     '{"test_fixture":"existing history"}' | Set-Content -LiteralPath $history -Encoding utf8
-    $before = @($settings,$history | Get-FileHash -Algorithm SHA256 | ForEach-Object Hash)
+    $before = @(Get-FileHash -LiteralPath $settings,$history -Algorithm SHA256 | ForEach-Object Hash)
     & "$base\mcw.exe" autostart enable
     if ($LASTEXITCODE -ne 0) { throw 'Baseline autostart setup failed' }
     $runEntry = @(Read-Autostart)
@@ -163,7 +163,7 @@ try {
     Copy-FailingFixture $Candidate $faulty
     Invoke-Msi '/i' $faulty 'upgrade-with-rollback' 1603
     Check-Installed $oldCode '0.21.0'
-    if (Compare-Object $baselineHashes @("$base\mcw.exe","$base\mcw-tray.exe" | Get-FileHash -Algorithm SHA256 | ForEach-Object Hash)) {
+    if (Compare-Object $baselineHashes @(Get-FileHash -LiteralPath "$base\mcw.exe","$base\mcw-tray.exe" -Algorithm SHA256 | ForEach-Object Hash)) {
         throw 'Rollback did not restore both original Rust executables'
     }
     if ($installer.ProductState($newCode) -eq 5 -or (Test-Path -LiteralPath "$base\desktop")) {
@@ -220,7 +220,7 @@ try {
         (Test-Path -LiteralPath "$base\mcw.exe") -or (Test-Path -LiteralPath $shortcut)) {
         throw 'Uninstall left hybrid payload or product registrations'
     }
-    if (Compare-Object $before @($settings,$history | Get-FileHash -Algorithm SHA256 | ForEach-Object Hash)) {
+    if (Compare-Object $before @(Get-FileHash -LiteralPath $settings,$history -Algorithm SHA256 | ForEach-Object Hash)) {
         throw 'Upgrade/rollback/uninstall did not preserve fixture user data'
     }
     $report.userDataPreserved = $true

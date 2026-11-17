@@ -2,12 +2,20 @@ name: Windows hybrid qualification (no release)
 
 on:
   workflow_call:
+    inputs:
+      msi-test-run:
+        type: string
+        default: ''
+      msi-test-source:
+        type: string
+        default: ''
 
 permissions:
   contents: read
 
 jobs:
   windows:
+    if: ${{ inputs.msi-test-run == '' && inputs.msi-test-source == '' }}
     runs-on: windows-latest
     timeout-minutes: 80
     defaults:
@@ -182,3 +190,73 @@ jobs:
             !${{ env.MCW_B5_PROOF }}/**/sessions/*.jsonl
             !${{ env.MCW_B5_PROOF }}/hybrid-distribution/**
             !${{ env.MCW_B5_PROOF }}/semantic-native/**
+
+
+  installed-msi:
+    if: ${{ inputs.msi-test-run != '' || inputs.msi-test-source != '' }}
+    name: Exact Windows MSI installation (${{ matrix.context }})
+    permissions:
+      contents: read
+      actions: read
+    runs-on: windows-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        context: [hosted-admin, standard-user]
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Retrieve and verify byte-identified package from the explicit source run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MCW_BUILD_RUN: ${{ inputs.msi-test-run }}
+          MCW_PACKAGE_SOURCE: ${{ inputs.msi-test-source }}
+        run: |
+          if ($env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or
+              $env:MCW_BUILD_RUN -notmatch '^[0-9]+$' -or $env:MCW_PACKAGE_SOURCE -notmatch '^[0-9a-f]{40}$') {
+            throw 'Disposable hosted runner and exact source run and SHA required'
+          }
+          $run = gh run view $env:MCW_BUILD_RUN --repo $env:GITHUB_REPOSITORY --json headBranch,headSha,status,jobs | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $run.status -cne 'completed' -or
+              $run.headBranch -cne $env:GITHUB_REF_NAME -or $run.headSha -cne $env:MCW_PACKAGE_SOURCE) { throw 'Wrong build provenance' }
+          $build = @($run.jobs.steps | Where-Object name -eq 'Build the complete hybrid ZIP and MSI and verify both container payloads')
+          if ($build.Count -ne 1 -or $build[0].conclusion -cne 'success') { throw 'Package build and audit must have passed' }
+          git merge-base --is-ancestor $env:MCW_PACKAGE_SOURCE $env:GITHUB_SHA
+          if ($LASTEXITCODE -ne 0) { throw 'Package source must be an ancestor of the test harness' }
+          git diff --quiet $env:MCW_PACKAGE_SOURCE $env:GITHUB_SHA -- src native .cargo Cargo.toml Cargo.lock desktop/flutter installer/miccamwatch.wxs installer/hybrid_payload.py installer/hybrid_windows.py installer/hybrid_layout.json
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged product or build contract changed; rebuild required' }
+          $prefix = Join-Path $env:RUNNER_TEMP 'mcw-replay-msi'
+          gh run download $env:MCW_BUILD_RUN --repo $env:GITHUB_REPOSITORY --name "miccamwatch-hybrid-windows-x86_64-$env:MCW_PACKAGE_SOURCE" --dir $prefix
+          if ($LASTEXITCODE -ne 0) { throw 'Exact Windows artifact unavailable' }
+          $msi = Join-Path $prefix 'miccamwatch-hybrid-windows-x86_64.msi'
+          $sums = @(Get-Content -LiteralPath (Join-Path $prefix 'SHA256SUMS') | Where-Object { $_ -cmatch '^[a-f0-9]{64}  miccamwatch-hybrid-windows-x86_64\.msi$' })
+          if ($sums.Count -ne 1 -or ($sums[0] -split '\s+')[0] -ine (Get-FileHash -LiteralPath $msi -Algorithm SHA256).Hash) { throw 'MSI digest did not match exact package' }
+          "MCW_REPLAY_PREFIX=$prefix" >> $env:GITHUB_ENV
+          "MCW_PACKAGE_SOURCE=$env:MCW_PACKAGE_SOURCE" >> $env:GITHUB_ENV
+      - name: Install, roll back and remove the same verified MSI on the hosted desktop
+        if: ${{ matrix.context == 'hosted-admin' }}
+        run: |
+          $msi = Join-Path $env:MCW_REPLAY_PREFIX 'miccamwatch-hybrid-windows-x86_64.msi'
+          & powershell.exe -NoProfile -NonInteractive -STA -File installer/tests/windows-hybrid-install.ps1 -Candidate $msi -Proof (Join-Path $env:MCW_REPLAY_PREFIX 'replayed') -SourceRevision $env:MCW_PACKAGE_SOURCE
+          if ($LASTEXITCODE -ne 0) { throw 'Installed hybrid lifecycle failed' }
+      - name: Install, roll back and remove the same verified MSI under a genuine standard account
+        if: ${{ matrix.context == 'standard-user' }}
+        run: |
+          $msi = Join-Path $env:MCW_REPLAY_PREFIX 'miccamwatch-hybrid-windows-x86_64.msi'
+          & powershell.exe -NoProfile -NonInteractive -File installer/tests/windows-hybrid-standard.ps1 -Candidate $msi -Proof (Join-Path $env:MCW_REPLAY_PREFIX 'replayed') -SourceRevision $env:MCW_PACKAGE_SOURCE
+          if ($LASTEXITCODE -ne 0) { throw 'Standard-account MSI qualification failed' }
+      - name: Preserve new lifecycle receipts for the verified package bytes
+        if: ${{ always() && env.MCW_REPLAY_PREFIX != '' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: installed-msi-${{ matrix.context }}-${{ inputs.msi-test-source }}
+          retention-days: 14
+          path: |
+            ${{ env.MCW_REPLAY_PREFIX }}/replayed/**/*.json
+            ${{ env.MCW_REPLAY_PREFIX }}/replayed/**/*.log

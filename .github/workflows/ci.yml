@@ -24,6 +24,14 @@ on:
         description: With native-platform=flutter, replay audited B5 Mac or Linux x64 products without rebuilding; each artifact retains its exact source
         type: boolean
         default: false
+      windows-msi-test-run:
+        description: Requalify exact already-built MSI bytes from this branch's named Windows CI run
+        type: string
+        default: ''
+      windows-msi-test-source:
+        description: Full source SHA for the MSI qualification artifact
+        type: string
+        default: ''
       flutter-intel-only:
         description: Target only Intel; bootstrap diagnostic controls remain separately opt-in
         type: boolean
@@ -86,6 +94,10 @@ jobs:
     uses: ./.github/workflows/flutter-windows-qualification.yml
     permissions:
       contents: read
+      actions: read
+    with:
+      msi-test-run: ${{ inputs.windows-msi-test-run || '' }}
+      msi-test-source: ${{ inputs.windows-msi-test-source || '' }}
 
   windows:
     if: ${{ !inputs.native-only && inputs.native-platform != 'flutter' && inputs.native-platform != 'flutter-windows' }}
