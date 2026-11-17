@@ -287,8 +287,9 @@ la désinstallation en compte standard et les preuves de distribution sont
 
 ## 14. Qualification des paquets hybrides
 
-Les huit artefacts des cinq cibles, leurs révisions, leurs empreintes et les
-résultats des essais installés figurent dans le [rapport de distribution](HYBRID_DISTRIBUTION.md).
-L’étape 3 reste ouverte pour la mise à jour Rust du bundle Windows et le cycle
-de vie du ZIP portable. La qualification MSI en compte standard requiert un
-environnement Windows jetable qui autorise l’installation par utilisateur.
+Les paquets, les empreintes et leurs sources figurent dans le
+[rapport de distribution](HYBRID_DISTRIBUTION.md).
+Le client Rust prend en charge la délégation au MSI vérifié, la bascule
+et la récupération du ZIP portable. La qualification reste ouverte pour
+le rollback de l’enregistrement MSI en compte standard et les essais
+interactifs Windows x64 et UAC.

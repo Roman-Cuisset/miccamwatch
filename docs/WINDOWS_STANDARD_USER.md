@@ -177,3 +177,29 @@ There is no script-level failure cleanup: do not add an `always()` uninstall/pro
 ### Shared implementation dependencies
 
 The orchestrator depends on shared `Get-McwStandardUserContext`, `Assert-McwStandardUserContext`, `Assert-McwFixtureRoot`, and `Assert-McwDisposableFixtureHost`, returning `kind`, `standardUserContext` and `fixtureRoot`. The native and installed application consumers propagate explicit local flags/root without changing the runner route. Runner mode confines paths to real `RUNNER_TEMP`; local mode confines source/payload/Cargo/proof paths to the admitted guest root. Neither this implementation nor the read-only safety smoke proves that a guest exists or that full Windows standard-user qualification has passed.
+
+## MSI hybride v0.22.0 sur un poste de test jetable
+
+Utiliser la procédure de préparation de la VM ci-dessus et ouvrir une session
+interactive sous le compte local standard `mcw_qa_*`. Vérifier que la
+politique Windows Installer existante autorise les installations par
+utilisateur. Placer le MSI, le dossier `bundle` contenant le manifeste et le
+checkout qualifié sous la racine de test détenue par ce compte. Relever le SHA
+du MSI depuis les preuves de construction. Depuis ce checkout, exécuter ce
+script dans Windows PowerShell sous le jeton standard.
+
+```powershell
+.\installer\tests\windows-hybrid-install.ps1 `
+    -LocalDisposableVm -FixtureRoot 'C:\mcw-fixture' `
+    -Candidate 'C:\mcw-fixture\artifacts\miccamwatch-hybrid-windows-x86_64.msi' `
+    -Proof 'C:\mcw-fixture\proof-v022' -SourceRevision $PackageCommit `
+    -ExpectedMsiSha256 $AuditedMsiSha256
+```
+
+`$PackageCommit` est la révision intégrale du manifeste.
+`$AuditedMsiSha256` est l’empreinte consignée par le job de construction.
+Le script vérifie le profil, l’Explorateur et le bureau interactif avant
+installation. Il refuse les chemins préexistants, les liens, les produits
+présents et une politique MSI restrictive. Le reçu couvre le cycle
+d’installation et la fermeture de Flutter. Les prompts UAC doivent faire
+l’objet de leurs propres observations et ne sont pas inclus dans ce reçu.

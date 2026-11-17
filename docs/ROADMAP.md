@@ -4095,9 +4095,18 @@ consignés dans les [reçus de la qualification fonctionnelle](V0.22.0_PARITY_AU
 porte sur le bundle installé et ses transactions, après accord pour
 démarrer l’étape 3.
 
-## 2026-11-17 — Paquets hybrides v0.22.0
+## 2026-11-17 — Première qualification des paquets hybrides v0.22.0
 
 La disposition Rust et Flutter, les huit SHA-256, la preuve ABI sous Ubuntu
 22.04 et les cycles installés par OS figurent dans le [rapport de distribution](HYBRID_DISTRIBUTION.md).
 L’étape 3 reste incomplète. La mise à jour Rust du bundle Windows et la
 récupération du ZIP portable restent ouvertes.
+
+## 2026-11-17 — Maintenance hybride Windows
+
+Le code de maintenance Rust et les preuves de la bascule ZIP, de la reprise,
+du retrait et de la délégation MSI sont dans le
+[rapport de distribution](HYBRID_DISTRIBUTION.md). Le cycle MSI normal en
+compte standard sous Windows 11 ARM64 a réussi pour le paquet x64 émulé.
+Le rétablissement d’un enregistrement MSI après la panne injectée reste à
+qualifier, ainsi que le bureau x64 standard et UAC. L’étape 3 reste incomplète.

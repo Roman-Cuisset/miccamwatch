@@ -163,24 +163,111 @@ b0c189545b83febb0f944c21384a4155e599e222f1591594f986350be789f34b  miccamwatch-hy
 c215e5bd7003c88b7acb2e40ebdbae98522fb75ce446c868d04c8777b3cabf3e  miccamwatch-hybrid-macos-aarch64.tar.gz
 ```
 
-### Points ouverts
+## Maintenance Windows et reprise
 
-- `mcw update` refuse la transaction historique sur un bundle hybride.
-  Windows Installer gère l’ensemble du MSI. Le transfert du client Rust
-  vers un MSI vérifié et le cycle de mise à jour, retrait et récupération
-  après interruption du ZIP portable restent à implémenter. Le rollback
-  du MSI s’applique pendant la transaction. Un retour à une version
-  antérieure après validation relève d’une autre procédure.
-- Le MSI de qualification est dépourvu de signature Authenticode. Le jeton
-  et le profil d’un véritable compte local standard ont été vérifiés.
-  La politique Windows Installer du runner (`DisableMsi=1`) refuse le
-  MSI de départ avec le statut 1625. Un bureau Windows jetable qui autorise
-  normalement le MSI par utilisateur reste requis pour les essais MSI
-  interactifs en compte standard et les dialogues UAC.
-- La qualification ultérieure doit couvrir les périphériques physiques
-  et les autorisations UAC, Polkit et TCC en environnement isolé. Vérifier
-  les signatures des paquets destinés à la diffusion sous leurs identités
-  de distribution.
+**MSI.** `mcw update` relit l’enregistrement Windows Installer du produit
+par utilisateur, son emplacement et le MSI en cache. Il vérifie
+l’UpgradeCode, le ProductCode, la version, le type d’installation et la
+compatibilité IPC avant de transférer la mise à niveau à Windows Installer.
+La découverte utilise la release officielle du dépôt GitHub. L’empreinte SHA-256
+de l’artefact renvoyé par son API HTTPS doit correspondre à l’entrée de
+`SHA256SUMS` et aux octets téléchargés. Ce contrôle authentifie l’origine
+via GitHub. La signature Authenticode de diffusion reste à effectuer.
 
-**ÉTAPE 3/6 : INCOMPLÈTE.** La maintenance Rust du bundle Windows et la
-récupération du ZIP portable restent ouvertes.
+Le terminal demande de saisir `update` pour confirmer. Les API natives de
+maintenance chargent leurs DLL depuis System32. Le client exige le profil
+Windows réel, la sortie normale du tray et les réservations
+natives qui protègent le micro et la caméra. Il attend le résultat de
+Windows Installer dans un processus distinct dont l’identité est vérifiée.
+Un code de sortie zéro est suivi d’une relecture du nouveau ProductCode,
+de la disparition de l’ancien, du manifeste, des binaires et des versions
+Rust et Flutter. Les refus, les redémarrages requis et les états non
+vérifiables restent distincts dans le reçu. Une interruption sans code de
+sortie ou un redémarrage demandé impose de redémarrer Windows avant de
+revérifier l’installation.
+
+**ZIP portable.** Extraire le paquet vérifié dans un dossier utilisateur
+dédié sous `%LOCALAPPDATA%`, hors du chemin MSI. Lancer la commande depuis
+un autre dossier du terminal. L’extraction vérifie la liste exacte des entrées
+et les empreintes du manifeste. Les répertoires, les liens, les doublons,
+les entrées inattendues, les architectures incompatibles et les versions
+ou protocoles IPC mélangés entraînent un refus. La protection de l’installation
+empêche le lancement de MicCamWatch pendant les deux renommages. Le journal
+est écrit avant la bascule et le bundle précédent est retenu entier jusqu’au
+contrôle final. Les nouveaux objets de maintenance reçoivent le SID exact
+du compte, y compris lorsque le jeton est élevé.
+
+Pour retirer le ZIP, désactiver l’autostart de cette installation avec
+`mcw autostart disable`, quitter normalement le tray puis lancer
+`mcw uninstall` et saisir `uninstall` dans le terminal. Les données de profil
+restent dans leur emplacement usuel. Le retrait de l’instance active précède
+le nettoyage de sa copie vérifiée. Le reçu indique si une copie a dû être
+conservée.
+
+Le client indique le chemin de `result.json` après avoir transmis la
+demande. Le reçu est créé après l’opération. Un dossier
+`.<nom-du-bundle>.mcw-maintenance\update-…` reste à côté de l’installation.
+Pour une transaction inachevée, exécuter le `maintenance.exe` indiqué dans
+le diagnostic avec `recover-update`. Les fichiers `committed` et `rolled-back`
+consignent l’issue de la reprise. Le reçu JSON décrit la tentative initiale.
+Le rollback ZIP relit les arborescences
+avant de rétablir l’ancienne. En présence d’une arborescence inconnue ou d’un
+enregistrement MSI impossible à vérifier, la récupération conserve les
+fichiers et l’état incomplet pour inspection. Le CLI ne relâche aucune
+protection active pour poursuivre l’opération.
+
+### Qualification de la maintenance
+
+- Windows natif, Clippy strict avec et sans le profil empaqueté. Les 31 tests de
+  maintenance couvrent les archives et ressources invalides, les refus de
+  protection, les renommages complets, les interruptions simulées entre les
+  renommages, le rollback et le retrait. Le test de métadonnées a refusé des copies du MSI avec architecture,
+  UpgradeCode ou ProductCode falsifiés et un fichier MSI corrompu. Il a lu un MSI
+  produit par WiX en réutilisant la charge utile historique, sans l’installer.
+  La fixture WiX SHA-256 est
+  `edbb329f0392387cc0f1e2e39f6569e4dc09427ac8428b640cf536fe39df385e`.
+- Le test de panne injectée du MSI historique sur ARM64 a restauré les exécutables
+  de v0.21.0. Les erreurs 1401/1406 et le code Windows 5 dans le registre
+  Windows Installer ont empêché de valider les métadonnées rétablies.
+  Le parcours x64 standard précédent reste bloqué par `DisableMsi=1`
+  et le code 1625. Aucun runner dédié n’est enregistré et l’accès
+  Hyper-V local a été refusé. La procédure reproductible pour un
+  Windows x64 jetable figure dans le [guide compte standard](WINDOWS_STANDARD_USER.md).
+  [Rollback ARM64](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/44122044173/job/134175745899),
+  [règles Windows Installer](https://learn.microsoft.com/en-us/windows/win32/msi/disablemsi).
+- Le nouveau MSI x64 et le ZIP ont été construits depuis
+  `7e5c1fff1e90a7714f4e2c37d3900fdfa5a3864a`, avec les octets Flutter audités
+  de `c36c68498f46b1c7abaac22898efd8bd708325ef` et un arbre Flutter identique.
+  Le job x64 a validé les imports, l’extraction des deux formats, les
+  31 tests Rust, la lecture du ZIP et de la version Flutter, puis la
+  délégation réelle par Rust à Windows Installer depuis v0.21.0. Les deux
+  rollbacks injectés en administrateur, l’acquittement IPC 10, la poursuite
+  du tray après fermeture de Flutter et la désinstallation avec données
+  conservées ont réussi. Le MSI de qualification est dépourvu de signature
+  Authenticode. [Construction et installation x64](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/44131699871/job/134210242949).
+- Le même MSI x64 a réussi le cycle d’installation v0.21.0, upgrade v0.22.0
+  et retrait sur Windows 11 ARM64 en émulation, avec un vrai compte standard.
+  Le reçu confirme les fichiers, l’autostart et la conservation des données.
+  Le job a exercé le parcours normal en mode non interactif. Les scénarios
+  de panne, l’ouverture de la fenêtre et les dialogues UAC relèvent d’autres
+  essais. [Compte standard, nouveau MSI](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/44133319555/job/134216026689),
+  [rejeu historique](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/44124122154/job/134183131331).
+
+Les empreintes suivantes ont été recalculées sur les nouveaux artefacts
+téléchargés et comparées au `SHA256SUMS` du job.
+
+```text
+2d5b508c08baf660bbcf8a27a7ab601b4ec6c5185314666502f9bca16540a110  miccamwatch-hybrid-windows-x86_64.msi
+556c776b064cf324a447be502781d8ac18ee260a7afc8d0925c7ddf696ddf049  miccamwatch-hybrid-windows-x86_64.zip
+```
+- Les gardes natifs Linux x64 et ARM64, macOS Intel et Apple Silicon ont
+  exécuté les deux cas isolés attendus par cible sur
+  `2cb679a9ac96271cfbe8ef5f2b07e97a12c1342a`. Les modifications suivantes
+  concernent le chargement des DLL Windows et son workflow. Les preuves de
+  cycle installé, ABI et signatures Unix ci-dessus gardent leurs sources.
+  [CI gardes Unix](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/44124306625).
+
+**ÉTAPE 3/6 : INCOMPLÈTE.** Le rollback en compte standard a un défaut de
+restauration de l’enregistrement à investiguer. La qualification interactive
+Windows x64, UAC et le téléchargement d’un vrai successeur depuis une release
+officielle restent ouverts.
