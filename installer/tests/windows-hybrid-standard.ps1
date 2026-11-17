@@ -34,22 +34,33 @@ if ($LASTEXITCODE -ne 0) { throw 'Cannot grant the fixture read access' }
 & "$env:WINDIR\System32\icacls.exe" $evidence /grant ('*{0}:(OI)(CI)(M)' -f $user.SID.Value)
 if ($LASTEXITCODE -ne 0) { throw 'Cannot grant the fixture evidence access' }
 $inner = Join-Path $shared 'windows-hybrid-install.ps1'
-$credential = [Management.Automation.PSCredential]::new("$env:COMPUTERNAME\$account", $password)
-$params = @{}
-$params.FilePath = "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe"
-$params.Credential = $credential
-$params.LoadUserProfile = $true
-$params.WorkingDirectory = $shared
-$params.PassThru = $true
-$params.RedirectStandardOutput = Join-Path $evidence 'standard-stdout.log'
-$params.RedirectStandardError = Join-Path $evidence 'standard-stderr.log'
-$params.ArgumentList = '-NoProfile -NonInteractive -File "{0}" -Candidate "{1}" -Proof "{2}" -StandardAccountSid "{3}" -SourceRevision "{4}"' -f
+# Retain the process handle returned by CreateProcessWithLogonW. PowerShell 5
+# Start-Process can return a Process without a readable ExitCode after exit.
+$info = [Diagnostics.ProcessStartInfo]::new("$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe")
+$info.UserName = $account
+$info.Domain = $env:COMPUTERNAME
+$info.Password = $password
+$info.LoadUserProfile = $true
+$info.UseShellExecute = $false
+$info.CreateNoWindow = $true
+$info.WorkingDirectory = $shared
+$info.RedirectStandardOutput = $true
+$info.RedirectStandardError = $true
+$info.Arguments = '-NoProfile -NonInteractive -File "{0}" -Candidate "{1}" -Proof "{2}" -StandardAccountSid "{3}" -SourceRevision "{4}"' -f
     $inner,$installer,(Join-Path $evidence 'result'),$user.SID.Value,$SourceRevision
-if ($PositiveLifecycleOnly) { $params.ArgumentList += ' -PositiveLifecycleOnly' }
-$process = Start-Process @params
-if (!$process.WaitForExit(420000)) { throw 'Standard-user fixture timed out; retain the live test runner state' }
+if ($PositiveLifecycleOnly) { $info.Arguments += ' -PositiveLifecycleOnly' }
+$process = [Diagnostics.Process]::Start($info)
+try {
+    $stdout = $process.StandardOutput.ReadToEndAsync()
+    $stderr = $process.StandardError.ReadToEndAsync()
+    if (!$process.WaitForExit(420000)) { throw 'Standard-user fixture timed out; retain the live test runner state' }
+    $exitCode = $process.ExitCode
+    if (!$stdout.Wait(5000) -or !$stderr.Wait(5000)) { throw 'Standard-user fixture streams did not close' }
+    [IO.File]::WriteAllText((Join-Path $evidence 'standard-stdout.log'), $stdout.Result)
+    [IO.File]::WriteAllText((Join-Path $evidence 'standard-stderr.log'), $stderr.Result)
+} finally { $process.Dispose() }
 Copy-Item -LiteralPath $evidence -Destination $Proof -Recurse
-if ($process.ExitCode -ne 0) { throw "Standard-user fixture failed. See $Proof." }
+if ($exitCode -ne 0) { throw "Standard-user fixture returned $exitCode. See $Proof." }
 $report = Get-Content -LiteralPath (Join-Path $Proof 'result\result.json') -Raw | ConvertFrom-Json
 if ($report.status -cne 'passed' -or $report.standardUserQualified -ne $true -or $report.administratorToken -ne $false) {
     throw 'The standard-account run has no completed token and MSI proof'
