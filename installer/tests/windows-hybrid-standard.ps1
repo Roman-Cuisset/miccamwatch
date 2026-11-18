@@ -50,6 +50,14 @@ $info.CreateNoWindow = $true
 $info.WorkingDirectory = $shared
 $info.RedirectStandardOutput = $true
 $info.RedirectStandardError = $true
+# Alternate-credential launch normally receives a new logon environment.
+# Forward the verified runner markers and system entries only. User profile
+# paths are resolved by the child for the loaded standard account.
+$info.EnvironmentVariables.Clear()
+foreach ($name in 'RUNNER_ENVIRONMENT','GITHUB_ACTIONS','WINDIR','SystemRoot','SystemDrive','COMPUTERNAME','PROCESSOR_ARCHITECTURE') {
+    $value = [Environment]::GetEnvironmentVariable($name)
+    if ($value) { $info.EnvironmentVariables[$name] = $value }
+}
 $info.Arguments = '-NoProfile -NonInteractive -File "{0}" -Candidate "{1}" -Proof "{2}" -StandardAccountSid "{3}" -SourceRevision "{4}"' -f
     $inner,$installer,(Join-Path $evidence 'result'),$user.SID.Value,$SourceRevision
 if ($PositiveLifecycleOnly) { $info.Arguments += ' -PositiveLifecycleOnly' }

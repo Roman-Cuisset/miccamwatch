@@ -65,6 +65,11 @@ if ($LocalDisposableVm) {
     }
     $env:LOCALAPPDATA = $local
     $env:APPDATA = $roaming
+    $env:USERPROFILE = $profile
+    $temp = Join-Path $local 'Temp'
+    New-Item -ItemType Directory -Path $temp -Force | Out-Null
+    $env:TEMP = $temp
+    $env:TMP = $temp
 } elseif ($env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or $env:GITHUB_ACTIONS -cne 'true') {
     throw 'This scenario requires a disposable GitHub-hosted Windows runner.'
 }
