@@ -35,6 +35,9 @@ on:
       runtime-replay:
         type: boolean
         default: false
+      macos-replay-build-run:
+        type: string
+        default: ''
       intel-only:
         type: boolean
         default: false
@@ -87,6 +90,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+          fetch-depth: ${{ inputs.macos-replay-build-run != '' && '0' || '1' }}
       - name: Require disposable native host and pinned Xcode
         run: |
           set -euo pipefail
@@ -113,7 +117,7 @@ jobs:
           toolchain: 1.98.1
           components: clippy
       - name: Restore exact pinned B5 products and retain each original build provenance
-        if: ${{ inputs.runtime-replay }}
+        if: ${{ inputs.runtime-replay && inputs.macos-replay-build-run == '' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -122,6 +126,53 @@ jobs:
           test "$(rustc --version | cut -d ' ' -f 2)" = 1.98.1
           python3 -B desktop/qualification/replay_products.py --platform macos \
             --root "$RUNNER_TEMP/mcw-flutter-macos"
+      - name: Restore exact Intel products from the explicitly chosen construction run
+        if: ${{ inputs.macos-replay-build-run != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MCW_MACOS_BUILD_RUN: ${{ inputs.macos-replay-build-run }}
+        run: |
+          set -euo pipefail
+          test "${{ inputs.runtime-replay }}" = true
+          test "${{ inputs.intel-only }}" = true
+          test "$EXPECTED_ARCH" = x86_64
+          test "$(rustc --version | cut -d ' ' -f 2)" = 1.98.1
+          [[ "$MCW_MACOS_BUILD_RUN" =~ ^[0-9]+$ ]]
+          root="$RUNNER_TEMP/mcw-flutter-macos"
+          gh run view "$MCW_MACOS_BUILD_RUN" --repo "$GITHUB_REPOSITORY" --json headBranch,headSha,status,jobs > "$root/replay-source.json"
+          source="$(jq -er '.headSha | select(test("^[a-f0-9]{40}$"))' "$root/replay-source.json")"
+          jq -e --arg branch "$GITHUB_REF_NAME" '
+            .headBranch == $branch and .status == "completed" and
+            ([.jobs[] | select(.name | endswith("macOS 15 x86_64 owned qualification"))
+             | .steps[] | select(.name == "Upload frozen build proof before any graphical process can fail"
+                                 and .conclusion == "success")] | length == 1)
+          ' "$root/replay-source.json" >/dev/null
+          git merge-base --is-ancestor "$source" "$GITHUB_SHA"
+          git diff --quiet "$source" "$GITHUB_SHA" -- src native .cargo build.rs Cargo.toml Cargo.lock desktop/flutter
+          gh run download "$MCW_MACOS_BUILD_RUN" --repo "$GITHUB_REPOSITORY" \
+            --name "flutter-macos-x86_64-$source-built-products" --dir "$root"
+          read -r expected _ < "$root/built-products.SHA256SUMS"
+          [[ "$expected" =~ ^[0-9a-f]{64}$ ]]
+          test "$(shasum -a 256 "$root/built-products.tar.gz" | cut -d ' ' -f 1)" = "$expected"
+          python3 -B - "$root" <<'PY'
+          import pathlib, sys, tarfile
+          root = pathlib.Path(sys.argv[1])
+          with tarfile.open(root / "built-products.tar.gz") as archive:
+              archive.extractall(root, filter="data")
+          PY
+          built="$root/built-products"
+          test "$(cat "$built/source-commit.txt")" = "$source"
+          mkdir -p target/release
+          test ! -e target/release/mcw
+          install -m 0755 "$built/mcw" target/release/mcw
+          for variant in release instrumented quit; do
+            codesign --verify --deep --strict "$built/$variant/MicCamWatch.app"
+          done
+          {
+            printf 'MCW_FROZEN_RELEASE_APP=%s\n' "$built/release/MicCamWatch.app"
+            printf 'MCW_FROZEN_INSTRUMENTED_APP=%s\n' "$built/instrumented/MicCamWatch.app"
+            printf 'MCW_FROZEN_QUIT_APP=%s\n' "$built/quit/MicCamWatch.app"
+          } >> "$GITHUB_ENV"
       - name: Install exact SHA-256 verified official Flutter study SDK
         if: ${{ !inputs.runtime-replay }}
         run: python3 -B desktop/qualification/macos_sdk.py --proof "$RUNNER_TEMP/mcw-flutter-macos"
@@ -260,7 +311,7 @@ jobs:
             ${{ runner.temp }}/mcw-flutter-macos/distribution/**
             ${{ runner.temp }}/mcw-flutter-macos/distribution-build.log
       - name: Inspect bundle seals architectures ACLs and run owned Aqua smoke when available
-        timeout-minutes: 10
+        timeout-minutes: ${{ inputs.macos-replay-build-run != '' && 15 || 10 }}
         run: |
           set -euo pipefail
           set -- --ui-panels
@@ -274,11 +325,11 @@ jobs:
             "$@" \
             2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/qualification.log"
       - name: Verify rendered Flutter quit confirmation and permanent native owner teardown
-        if: ${{ !inputs.runtime-replay }}
+        if: ${{ !inputs.runtime-replay || inputs.macos-replay-build-run != '' }}
         run: |
           set -euo pipefail
           python3 -B desktop/qualification/macos_quit.py \
-            --app "$RUNNER_TEMP/mcw-flutter-macos/quit/MicCamWatch.app" \
+            --app "${MCW_FROZEN_QUIT_APP:-$RUNNER_TEMP/mcw-flutter-macos/quit/MicCamWatch.app}" \
             --session "$RUNNER_TEMP/mcw-flutter-macos/evidence/session.json" \
             --proof "$RUNNER_TEMP/mcw-flutter-macos/evidence/flutter-quit" \
             2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/quit-qualification.log"

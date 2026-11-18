@@ -24,6 +24,10 @@ on:
         description: With native-platform=flutter, replay audited B5 Mac or Linux x64 products without rebuilding; each artifact retains its exact source
         type: boolean
         default: false
+      flutter-macos-replay-build-run:
+        description: With flutter-runtime-replay and flutter-intel-only, replay the exact built Intel products of this branch's named run
+        type: string
+        default: ''
       windows-msi-test-run:
         description: Requalify exact already-built MSI bytes from this branch's named Windows CI run
         type: string
@@ -93,6 +97,7 @@ jobs:
       actions: read
     with:
       runtime-replay: ${{ inputs.flutter-runtime-replay || false }}
+      macos-replay-build-run: ${{ inputs.flutter-macos-replay-build-run || '' }}
       intel-only: ${{ inputs.flutter-intel-only || false }}
       arm-only: ${{ inputs.flutter-arm-only || false }}
       intel-bootstrap-controls: ${{ inputs.flutter-intel-bootstrap-controls || false }}
