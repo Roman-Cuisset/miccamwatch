@@ -112,6 +112,19 @@ du paquet n’a demandé aucune autorisation de notifications et n’a changé
 aucun réglage TCC. [Job Intel](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/44245427764/job/134603104653),
 [job Apple Silicon](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/44245427764/job/134603104252).
 
+Le premier job Intel a préservé un reçu graphique `passed` pour les panneaux
+et le menu natif. L’étape a atteint sa limite de dix minutes avant que la CI
+valide l’issue et lance le test de fermeture. Le premier rejeu s’est arrêté
+sur un conflit entre deux fichiers `environment.log` pendant la restauration.
+Le rejeu suivant a réutilisé les binaires du build initial à partir d’un
+dossier séparé. Il a vérifié le SHA-256 de l’archive
+`b0f5d96ca770c1727888a3b1afc88b1f3117c31ee2e6089817ac123e7132dc1f`
+et les sceaux des trois variantes avant exécution. Le workflow
+`3a654f663080d89256ef885ef2abc876f22237ad` a terminé avec un bureau Aqua,
+les panneaux en sept langues, le menu natif et la fermeture Flutter
+avec arrêt du moteur dans les deux thèmes. [Premier rejeu](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/44249993339/job/134618042030),
+[rejeu de qualification](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/44250298431/job/134619052671).
+
 Empreintes recalculées sur les quatre archives téléchargées et comparées
 au fichier `SHA256SUMS` publié par la construction.
 
