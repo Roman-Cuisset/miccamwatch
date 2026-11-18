@@ -12,6 +12,9 @@ on:
       msi-test-arm-standard-only:
         type: boolean
         default: false
+      msi-test-standard-rollback:
+        type: boolean
+        default: false
       rebuild-rust-only:
         type: boolean
         default: false
@@ -258,12 +261,12 @@ jobs:
     permissions:
       contents: read
       actions: read
-    runs-on: ${{ matrix.context == 'standard-user-arm' && 'windows-11-arm' || 'windows-latest' }}
+    runs-on: ${{ contains(matrix.context, '-arm') && 'windows-11-arm' || (matrix.context == 'standard-user-x64-2022' && 'windows-2022' || 'windows-latest') }}
     timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
-        context: ${{ fromJSON(inputs.msi-test-arm-standard-only && '["standard-user-arm"]' || '["hosted-admin", "standard-user"]') }}
+        context: ${{ fromJSON(inputs.msi-test-standard-rollback && '["legacy-rollback-arm", "hybrid-rollback-arm", "standard-user-x64-2022"]' || (inputs.msi-test-arm-standard-only && '["standard-user-arm"]' || '["hosted-admin", "standard-user"]')) }}
     defaults:
       run:
         shell: pwsh
@@ -309,9 +312,10 @@ jobs:
         if: ${{ matrix.context != 'hosted-admin' }}
         run: |
           $msi = Join-Path $env:MCW_REPLAY_PREFIX 'miccamwatch-hybrid-windows-x86_64.msi'
-          $positiveOnly = @()
-          if ('${{ matrix.context }}' -eq 'standard-user-arm') { $positiveOnly += '-PositiveLifecycleOnly' }
-          & powershell.exe -NoProfile -NonInteractive -File installer/tests/windows-hybrid-standard.ps1 -Candidate $msi -Proof (Join-Path $env:MCW_REPLAY_PREFIX 'replayed') -SourceRevision $env:MCW_PACKAGE_SOURCE @positiveOnly
+          $scenario = @()
+          if ('${{ matrix.context }}' -eq 'standard-user-arm') { $scenario += '-PositiveLifecycleOnly' }
+          if ('${{ matrix.context }}' -eq 'hybrid-rollback-arm') { $scenario += '-HybridRollbackOnly' }
+          & powershell.exe -NoProfile -NonInteractive -File installer/tests/windows-hybrid-standard.ps1 -Candidate $msi -Proof (Join-Path $env:MCW_REPLAY_PREFIX 'replayed') -SourceRevision $env:MCW_PACKAGE_SOURCE @scenario
           if ($LASTEXITCODE -ne 0) { throw 'Standard-account MSI qualification failed' }
       - name: Preserve new lifecycle receipts for the verified package bytes
         if: ${{ always() && env.MCW_REPLAY_PREFIX != '' }}

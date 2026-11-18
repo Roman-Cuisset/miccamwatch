@@ -7,6 +7,8 @@ param(
     [switch]$LocalDisposableVm,
     [string]$FixtureRoot,
     [switch]$PositiveLifecycleOnly,
+    [switch]$HybridRollbackOnly,
+    [switch]$ObserveRegistration,
     [string]$ExpectedMsiSha256,
     [string]$RustMsiTest
 )
@@ -66,8 +68,13 @@ if ($LocalDisposableVm) {
 } elseif ($env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or $env:GITHUB_ACTIONS -cne 'true') {
     throw 'This scenario requires a disposable GitHub-hosted Windows runner.'
 }
-if ($PositiveLifecycleOnly -and (!$standard -or $LocalDisposableVm -or $env:PROCESSOR_ARCHITECTURE -cne 'ARM64')) {
-    throw 'The positive-only replay is confined to its ordinary Windows-on-ARM fixture.'
+if (($PositiveLifecycleOnly -or $HybridRollbackOnly) -and
+    (!$ObserveRegistration -or $env:PROCESSOR_ARCHITECTURE -cne 'ARM64' -or ($PositiveLifecycleOnly -and $HybridRollbackOnly))) {
+    throw 'The split replay is confined to its ordinary Windows-on-ARM fixture.'
+}
+if ($ObserveRegistration -and (!$StandardAccountSid -or $LocalDisposableVm -or
+    $env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or $env:GITHUB_ACTIONS -cne 'true')) {
+    throw 'The independent observer requires the disposable standard-account wrapper.'
 }
 if ($SourceRevision -notmatch '^[0-9a-f]{40}$') { throw 'Exact source revision required' }
 $base = Join-Path $env:LOCALAPPDATA 'Programs\MicCamWatch'
@@ -113,6 +120,49 @@ function Read-MsiValue($Database, [string]$Query) {
     } finally {
         [void]$view.Close()
         [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($view)
+    }
+}
+
+function Observe-Registration([string]$Phase, [string]$Current, [string]$Other) {
+    if (!$ObserveRegistration) { return }
+    $request = Join-Path $Proof "observe-$Phase.json"
+    @{ current = $Current; other = $Other } | ConvertTo-Json | Set-Content -LiteralPath "$request.tmp" -Encoding utf8
+    Move-Item -LiteralPath "$request.tmp" -Destination $request
+    $receipt = Join-Path $PSScriptRoot "observations\$Phase.json"
+    $timer = [Diagnostics.Stopwatch]::StartNew()
+    while (!(Test-Path -LiteralPath $receipt -PathType Leaf)) {
+        if ($timer.Elapsed.TotalSeconds -gt 30) { throw "Independent observer did not answer $Phase" }
+        Start-Sleep -Milliseconds 200
+    }
+    $result = Get-Content -LiteralPath $receipt -Raw | ConvertFrom-Json
+    $report["independent-$Phase"] = $result
+    if ($result.error -or $result.phase -cne $Phase -or $result.targetSid -cne $StandardAccountSid -or
+        !$result.observerSid -or $result.observerSid -eq $StandardAccountSid) {
+        throw "Independent observation failed for $Phase"
+    }
+}
+
+function Assert-Registration([string]$Phase, [string]$Version) {
+    if (!$ObserveRegistration) { return }
+    $result = $report["independent-$Phase"]
+    $entry = $result.current
+    $p = $entry.properties
+    if ($result.other.properties.State.status -ne 1605 -or $result.other.upgradeIndexError -or $result.other.productInUserUpgradeIndex) {
+        throw "Independent observer could not establish that the other product is absent at $Phase"
+    }
+    if ($Phase -ceq 'removed-hybrid') {
+        if ($p.State.status -ne 1605 -or $entry.upgradeIndexError -or $entry.productInUserUpgradeIndex) {
+            throw 'Independent observer could not establish removal of the hybrid product'
+        }
+        return
+    }
+    # MsiGetProductInfoEx returns "5" for an installed product and "1" for advertised.
+    if ($p.State.status -ne 0 -or $p.State.value -cne '5' -or
+        $p.VersionString.status -ne 0 -or $p.VersionString.value -cne $Version -or
+        $p.InstallLocation.status -ne 0 -or ([string]$p.InstallLocation.value).TrimEnd('\') -ine $base -or
+        !$entry.productInUserUpgradeIndex -or $entry.cacheError -or $entry.cacheIdentity.ProductCode -ine $entry.productCode -or
+        $entry.cacheIdentity.UpgradeCode -ine $upgradeCode -or $entry.cacheIdentity.ProductVersion -cne $Version) {
+        throw "Installed MSI registration could not be verified for $Phase"
     }
 }
 
@@ -263,6 +313,17 @@ function Owned([string]$Name, [string]$Image) {
 }
 
 try {
+    if ($ObserveRegistration) {
+        . (Join-Path $PSScriptRoot 'windows-fixture-context.ps1')
+        $context = Get-McwStandardUserContext
+        $report.clientToken = $context
+        if ($context.elevated -or $context.administratorRole -or $context.elevationType -ne 1 -or
+            $context.restricted -or $context.tokenType -ne 1 -or $context.integritySid -cne 'S-1-16-8192' -or
+            $context.accountLocalGroupSids -contains 'S-1-5-32-544' -or
+            $context.sid -cne $StandardAccountSid -or !$context.profileHiveLoaded) {
+            throw 'The MSI invoker lacks the expected medium-integrity standard primary token'
+        }
+    }
     $stable = Join-Path $Proof 'baseline-v0.21.0.msi'
     Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/Roman-Cuisset/miccamwatch/releases/download/v0.21.0/miccamwatch-windows-x86_64.msi' -OutFile $stable
     $stableSha = (Get-FileHash -LiteralPath $stable -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -274,6 +335,7 @@ try {
     $report.baselineSha256 = $stableSha
     $report.candidateSha256 = (Get-FileHash -LiteralPath $Candidate -Algorithm SHA256).Hash.ToLowerInvariant()
     Invoke-Msi '/i' $stable 'install-baseline'
+    Observe-Registration 'installed-baseline' $oldCode $newCode
     Check-Installed $oldCode '0.21.0'
     $baselineHashes = @(Get-FileHash -LiteralPath "$base\mcw.exe","$base\mcw-tray.exe" -Algorithm SHA256 | ForEach-Object Hash)
     New-Item -ItemType Directory -Path $configuration,$data | Out-Null
@@ -291,20 +353,35 @@ try {
     $runEntry = @(Read-Autostart)
     if ($runEntry.Count -ne 1 -or !$runEntry[0].Contains($base)) { throw 'Baseline autostart registration missing' }
 
-    if (!$PositiveLifecycleOnly) {
+    if (!$PositiveLifecycleOnly -and !$HybridRollbackOnly) {
         $faulty = Join-Path $Proof 'rollback-fixture.msi'
         Copy-FailingFixture $Candidate $faulty
         Invoke-Msi '/i' $faulty 'upgrade-with-rollback' 1603
-        Check-Installed $oldCode '0.21.0'
-        if (Compare-Object $baselineHashes @(Get-FileHash -LiteralPath "$base\mcw.exe","$base\mcw-tray.exe" -Algorithm SHA256 | ForEach-Object Hash)) {
+        Observe-Registration 'restored-baseline' $oldCode $newCode
+        $report.legacyRollbackFiles = @(
+            Get-FileHash -LiteralPath "$base\mcw.exe","$base\mcw-tray.exe" -Algorithm SHA256 -ErrorAction SilentlyContinue
+        )
+        $report.legacyRollbackRustBytes = @(Compare-Object $baselineHashes @($report.legacyRollbackFiles.Hash)).Count -eq 0
+        $report.legacyRollbackShortcut = Test-Path -LiteralPath $shortcut -PathType Leaf
+        $report.legacyRollbackData = @(Compare-Object $before @(Get-FileHash -LiteralPath $settings,$history -Algorithm SHA256 | ForEach-Object Hash)).Count -eq 0
+        $report.legacyRollbackAutostart = @(Compare-Object $runEntry @(Read-Autostart)).Count -eq 0
+        $report.legacyRollbackCandidateFilesAbsent = !(Test-Path -LiteralPath "$base\desktop")
+        if (!$report.legacyRollbackRustBytes) {
             throw 'Rollback did not restore both original Rust executables'
         }
+        if (!$report.legacyRollbackData -or !$report.legacyRollbackAutostart) {
+            throw 'Legacy rollback changed the fixture data or autostart'
+        }
+        Check-Rollback 'upgrade-with-rollback' @('mcw.exe','mcw-tray.exe')
+        Assert-Registration 'installed-baseline' '0.21.0'
+        Assert-Registration 'restored-baseline' '0.21.0'
+        Check-Installed $oldCode '0.21.0'
         if ($installer.ProductState($newCode) -eq 5 -or (Test-Path -LiteralPath "$base\desktop")) {
             throw 'Failed upgrade left the candidate installed'
         }
-        Check-Rollback 'upgrade-with-rollback' @('mcw.exe','mcw-tray.exe')
         $report.wholeMsiRollback = $true
     }
+    Assert-Registration 'installed-baseline' '0.21.0'
 
     if ($RustMsiTest) {
         if ($standard -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or $env:GITHUB_ACTIONS -cne 'true') {
@@ -319,6 +396,8 @@ try {
     } else {
         Invoke-Msi '/i' $Candidate 'upgrade-hybrid'
     }
+    Observe-Registration 'installed-hybrid' $newCode $oldCode
+    Assert-Registration 'installed-hybrid' $bundle.version
     Check-Installed $newCode $bundle.version
     if ($installer.ProductState($oldCode) -eq 5 -or (Compare-Object $runEntry @(Read-Autostart))) {
         throw 'Upgrade left the baseline registered or changed autostart'
@@ -386,10 +465,15 @@ try {
         Copy-FailingFixture $Candidate $future $futureCode $futureVersion
         if ((Identity $future $futureVersion) -cne $futureCode) { throw 'Invalid future fixture identity' }
         Invoke-Msi '/i' $future 'hybrid-upgrade-with-rollback' 1603
+        Observe-Registration 'restored-hybrid' $newCode $futureCode
+        $report.hybridRollbackData = @(Compare-Object $before @(Get-FileHash -LiteralPath $settings,$history -Algorithm SHA256 | ForEach-Object Hash)).Count -eq 0
+        $report.hybridRollbackAutostart = @(Compare-Object $runEntry @(Read-Autostart)).Count -eq 0
+        Check-Payload $bundle
+        $report.hybridRollbackPayload = !$report.installedLayoutDifferences
         Check-Rollback 'hybrid-upgrade-with-rollback' @('mcw.exe','mcw-tray.exe','miccamwatch-bundle.json',
             'desktop\miccamwatch_desktop.exe','desktop\flutter_windows.dll','desktop\data\app.so')
+        Assert-Registration 'restored-hybrid' $bundle.version
         Check-Installed $newCode $bundle.version
-        Check-Payload $bundle
         if ($installer.ProductState($futureCode) -eq 5 -or (Compare-Object $runEntry @(Read-Autostart))) {
             throw 'Failed hybrid upgrade left the newer fixture installed or changed autostart'
         }
@@ -399,6 +483,8 @@ try {
     & "$base\mcw.exe" autostart disable
     if ($LASTEXITCODE -ne 0 -or @(Read-Autostart).Count -ne 0) { throw 'Fixture autostart removal failed' }
     Invoke-Msi '/x' $newCode 'uninstall-hybrid'
+    Observe-Registration 'removed-hybrid' $newCode $oldCode
+    Assert-Registration 'removed-hybrid'
     if ($installer.ProductState($newCode) -eq 5 -or (Test-Path -LiteralPath "$base\desktop") -or
         (Test-Path -LiteralPath "$base\mcw.exe") -or (Test-Path -LiteralPath $shortcut)) {
         throw 'Uninstall left hybrid payload or product registrations'

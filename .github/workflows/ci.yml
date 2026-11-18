@@ -36,6 +36,10 @@ on:
         description: Replay the x64 MSI under a standard account on Windows 11 Arm64
         type: boolean
         default: false
+      windows-msi-standard-rollback:
+        description: Observe injected rollback registration on Windows 11 Arm64 and probe a Windows Server 2022 x64 standard account
+        type: boolean
+        default: false
       windows-rebuild-rust-only:
         description: Rebuild Windows Rust and package it with the audited unchanged Flutter component from the identified source run
         type: boolean
@@ -107,6 +111,7 @@ jobs:
       msi-test-run: ${{ inputs.windows-msi-test-run || '' }}
       msi-test-source: ${{ inputs.windows-msi-test-source || '' }}
       msi-test-arm-standard-only: ${{ inputs.windows-msi-arm-standard-only || false }}
+      msi-test-standard-rollback: ${{ inputs.windows-msi-standard-rollback || false }}
       rebuild-rust-only: ${{ inputs.windows-rebuild-rust-only || false }}
 
   windows:
