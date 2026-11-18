@@ -247,6 +247,7 @@ jobs:
           arch="$EXPECTED_ARCH"
           if [[ "$arch" == arm64 ]]; then arch=aarch64; fi
           python3 -B installer/tests/macos-hybrid-installed.py "$root/distribution/miccamwatch-hybrid-macos-$arch.dmg" \
+            --direct-engine target/release/mcw \
             --proof "$root/distribution/installed-lifecycle"
       - name: Preserve exact macOS hybrid distribution artifacts
         if: ${{ always() && !inputs.runtime-replay }}
@@ -637,6 +638,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
         with:
           toolchain: 1.98.1
+          components: clippy
       - name: Require both exact tests then execute their real isolated bodies
         run: |
           set -euo pipefail
@@ -655,6 +657,10 @@ jobs:
           PY
           cargo test --lib --locked --features flutter-desktop frontends::tray::menu_tests::qualification_ -- --test-threads=1 --nocapture \
             2>&1 | tee "$proof/executed-tests.log"
+          cargo test --lib --locked --features flutter-desktop autostart:: -- --test-threads=1 \
+            2>&1 | tee "$proof/autostart-tests.log"
+          cargo clippy --locked --lib --tests --features flutter-desktop -- -D warnings \
+            2>&1 | tee "$proof/clippy.log"
       - name: Preserve native guard selection and execution evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

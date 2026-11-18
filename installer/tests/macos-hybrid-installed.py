@@ -57,6 +57,54 @@ def version(app):
     return expected
 
 
+def inspect_embedded_helper(app, direct):
+    engine = app / "Contents/MacOS/mcw"
+    parts = ("Info.plist", "MacOS/MicCamWatchHelper", "_CodeSignature/CodeResources")
+    image = engine.read_bytes()
+    candidates = direct.parent.glob("build/miccamwatch-*/out/MicCamWatchHelper.app")
+    matching = [helper for helper in candidates
+                if all((helper / "Contents" / part).read_bytes() in image for part in parts)]
+    require(len(matching) == 1, "could not identify the exact signed Swift helper embedded in the packaged engine")
+    helper, = matching
+    binary = helper / "Contents/MacOS/MicCamWatchHelper"
+    plist = plistlib.loads((helper / "Contents/Info.plist").read_bytes())
+    identity = "com.roman-cuisset.miccamwatch.helper"
+    require(plist["CFBundleIdentifier"] == identity and plist["CFBundlePackageType"] == "APPL"
+            and plist["CFBundleExecutable"] == binary.name
+            and all(plist.get(key) for key in ("NSCameraUsageDescription", "NSMicrophoneUsageDescription")),
+            "Swift helper bundle identity or capture usage descriptions differ")
+    command("/usr/bin/codesign", "--verify", "--deep", "--strict", helper)
+    signature = command("/usr/bin/codesign", "-d", "--verbose=4", helper, capture_output=True, text=True)
+    require(f"Identifier={identity}" in signature.stderr.splitlines(), "Swift helper signing identifier differs")
+    entitlement = command("/usr/bin/codesign", "-d", "--entitlements", "-", helper, capture_output=True)
+    require(not entitlement.stdout or not plistlib.loads(entitlement.stdout),
+            "Unexpected entitlement in the native notification/capture helper")
+    frameworks = ("CoreAudio", "CoreMediaIO", "AVFoundation", "UserNotifications")
+    linkage = command("/usr/bin/otool", "-L", binary, capture_output=True, text=True)
+    require(all(f"/{name}.framework/" in linkage.stdout for name in frameworks),
+            "Missing native capture or user notification framework")
+    return {"bundle_id": identity, "signature_verified": True, "entitlements": {},
+            "frameworks": frameworks, "engine_sha256": digest(engine), "helper_sha256": digest(binary)}
+
+
+def inspect_collectors(engine, env):
+    probe = subprocess.run([engine, "status", "--json"], env=env, capture_output=True, timeout=60)
+    require(probe.returncode in (0, 1, 2), "native status process failed")
+    status = json.loads(probe.stdout)
+    collectors = {item["collector"]: item for item in status["collectors"]}
+    for name in ("coreaudio_input", "coremediaio_video"):
+        item = collectors.get(name, {})
+        require(item.get("state") in {"healthy", "degraded", "unavailable"}
+                and not item.get("detail", "").startswith("macOS capture helper unavailable"),
+                f"{name} did not produce a native response")
+        require(item["state"] == "healthy" or item.get("detail"), f"{name} lacks a native diagnostic")
+    for access in status["accesses"]:
+        if access["resource"] == "camera":
+            require(access["application"] == "Unknown application" and access.get("pid") is None,
+                    "reported camera application without native attribution")
+    return {name: item["state"] for name, item in collectors.items()}
+
+
 def exchange(left, right):
     # macOS renamex_np(RENAME_SWAP); refuse rather than copying part of an app.
     api = ctypes.CDLL(None, use_errno=True).renamex_np
@@ -124,6 +172,7 @@ def run_app(app, env, proof):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("dmg", type=Path)
+    parser.add_argument("--direct-engine", type=Path, required=True)
     parser.add_argument("--proof", type=Path, required=True)
     args = parser.parse_args()
     require(os.environ.get("RUNNER_ENVIRONMENT") == "github-hosted"
@@ -137,6 +186,13 @@ def main():
     source = os.environ["GITHUB_SHA"]
     report = {"status": "failed", "source": source, "target": arch}
     try:
+        applications = Path("/Applications")
+        metadata = applications.lstat()
+        report["system_applications"] = {"uid": metadata.st_uid, "gid": metadata.st_gid,
+                                         "mode": f"{metadata.st_mode & 0o7777:04o}",
+                                         "symlink": applications.is_symlink()}
+        with (proof / "system-applications-acl.log").open("xb") as log:
+            command("/bin/ls", "-ldeO", applications, stdout=log)
         command("/usr/bin/curl", "--fail", "--location", "--silent", "--show-error", "--output", stable,
                 f"https://github.com/Roman-Cuisset/miccamwatch/releases/download/v0.21.0/miccamwatch-macos-{arch}.dmg")
         require(digest(stable) == STABLE[arch], "public stable disk image checksum mismatch")
@@ -177,6 +233,10 @@ def main():
         data = {file: digest(file) for file in (config, history)}
         exchange(installed, staged)
         require(version(installed) == "0.22.0" and version(staged) == "0.21.0", "whole-app update failed")
+        report["notification_capture_helper"] = inspect_embedded_helper(installed, args.direct_engine)
+        report["direct_collectors"] = inspect_collectors(args.direct_engine.resolve(strict=True), env)
+        report["installed_collectors"] = inspect_collectors(installed / "Contents/MacOS/mcw", env)
+        report["native_notification_delivery"] = "not exercised"
         first = run_app(installed, env, proof / "installed-first.log")
         exchange(installed, staged)
         require(version(installed) == "0.21.0", "whole-app rollback lost the stable app")

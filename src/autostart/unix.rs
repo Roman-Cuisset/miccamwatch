@@ -348,10 +348,11 @@ fn enable_in(store: &Store, version: &str, activate: bool) -> Result<()> {
         bail!("autostart refresh must be performed by the matching mcw {version} executable");
     }
     let executable = current_installation_executable()?;
-    let executable_dir = Directory::open(
-        executable.parent().context("mcw has no parent directory")?,
-        false,
-    )?;
+    let parent = executable.parent().context("mcw has no parent directory")?;
+    #[cfg(target_os = "linux")]
+    let executable_dir = Directory::open(parent, false)?;
+    #[cfg(target_os = "macos")]
+    let executable_dir = Directory::walk(parent, false, validate_launch_acl)?;
     let name = executable.file_name().context("mcw has no filename")?;
     let file = executable_dir
         .file(name)?
@@ -360,6 +361,8 @@ fn enable_in(store: &Store, version: &str, activate: bool) -> Result<()> {
     if metadata.mode() & 0o111 == 0 {
         bail!("mcw executable is not executable");
     }
+    #[cfg(target_os = "macos")]
+    validate_launch_acl(&file, &executable)?;
     let new = Registration {
         executable,
         version: version.to_owned(),
@@ -643,6 +646,14 @@ pub(crate) struct Directory(File);
 
 impl Directory {
     pub(crate) fn open(path: &Path, create: bool) -> Result<Self> {
+        Self::walk(path, create, |_, _| Ok(()))
+    }
+
+    fn walk(
+        path: &Path,
+        create: bool,
+        inspect: impl Fn(&File, &Path) -> Result<()>,
+    ) -> Result<Self> {
         if !path.is_absolute() {
             bail!("directory must be absolute: {}", path.display());
         }
@@ -657,6 +668,8 @@ impl Directory {
             return Err(std::io::Error::last_os_error()).context("cannot open filesystem root");
         }
         let mut current = Self(unsafe { File::from_raw_fd(fd) });
+        let mut ancestor = PathBuf::from("/");
+        inspect(&current.0, &ancestor)?;
         for component in path.components() {
             let Component::Normal(name) = component else {
                 if matches!(component, Component::RootDir) {
@@ -667,6 +680,7 @@ impl Directory {
                     path.display()
                 );
             };
+            ancestor.push(name);
             let name = c_name(name)?;
             let mut fd = unsafe {
                 libc::openat(
@@ -696,7 +710,10 @@ impl Directory {
             }
             if fd < 0 {
                 return Err(std::io::Error::last_os_error()).with_context(|| {
-                    format!("cannot open {} without following symlinks", path.display())
+                    format!(
+                        "cannot open {} without following symlinks",
+                        ancestor.display()
+                    )
                 });
             }
             current = Self(unsafe { File::from_raw_fd(fd) });
@@ -704,18 +721,25 @@ impl Directory {
             let uid = unsafe { libc::getuid() };
             if metadata.uid() != uid && metadata.uid() != 0 {
                 bail!(
-                    "directory ancestor is owned by another user: {}",
-                    path.display()
+                    "directory ancestor is owned by another user: {} (uid {}, gid {}, mode {:04o})",
+                    ancestor.display(),
+                    metadata.uid(),
+                    metadata.gid(),
+                    metadata.mode() & 0o7777
                 );
             }
             if metadata.mode() & 0o022 != 0
                 && !(metadata.uid() == 0 && metadata.mode() & 0o1000 != 0)
             {
                 bail!(
-                    "directory ancestor is writable by another user: {}",
-                    path.display()
+                    "directory ancestor is writable by another user: {} (uid {}, gid {}, mode {:04o})",
+                    ancestor.display(),
+                    metadata.uid(),
+                    metadata.gid(),
+                    metadata.mode() & 0o7777
                 );
             }
+            inspect(&current.0, &ancestor)?;
         }
         Ok(current)
     }
@@ -997,6 +1021,76 @@ fn validate_file(file: &File) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// POSIX mode bits do not describe additional write grants in Darwin ACLs.
+#[cfg(target_os = "macos")]
+fn validate_launch_acl(file: &File, path: &Path) -> Result<()> {
+    use libc::{c_int, c_void};
+    unsafe extern "C" {
+        fn acl_get_fd(fd: c_int) -> *mut c_void;
+        fn acl_free(acl: *mut c_void) -> c_int;
+        fn acl_get_entry(acl: *mut c_void, id: c_int, entry: *mut *mut c_void) -> c_int;
+        fn acl_get_tag_type(entry: *mut c_void, tag: *mut c_int) -> c_int;
+        fn acl_get_permset_mask_np(entry: *mut c_void, mask: *mut u64) -> c_int;
+    }
+    struct Acl(*mut c_void);
+    impl Drop for Acl {
+        fn drop(&mut self) {
+            unsafe { acl_free(self.0) };
+        }
+    }
+    // Values from Darwin's <sys/acl.h>. Write/add, delete, append,
+    // delete-child, write metadata, write security and change owner.
+    const MUTATION: u64 =
+        (1 << 2) | (1 << 4) | (1 << 5) | (1 << 6) | (1 << 8) | (1 << 10) | (1 << 12) | (1 << 13);
+    const EXTENDED_ALLOW: c_int = 1;
+    const EXTENDED_DENY: c_int = 2;
+    const FIRST_ENTRY: c_int = 0;
+    const NEXT_ENTRY: c_int = -1;
+    let inspection_failed = || format!("cannot inspect launch path ACL: {}", path.display());
+    let acl = unsafe { acl_get_fd(file.as_raw_fd()) };
+    if acl.is_null() {
+        let error = std::io::Error::last_os_error();
+        return if error.raw_os_error() == Some(libc::ENOENT) {
+            Ok(())
+        } else {
+            Err(error).with_context(inspection_failed)
+        };
+    }
+    let acl = Acl(acl);
+    let mut id = FIRST_ENTRY;
+    loop {
+        let mut entry = std::ptr::null_mut();
+        if unsafe { acl_get_entry(acl.0, id, &mut entry) } != 0 {
+            let error = std::io::Error::last_os_error();
+            // Darwin returns EINVAL after the final entry of a valid ACL.
+            return if error.raw_os_error() == Some(libc::EINVAL) {
+                Ok(())
+            } else {
+                Err(error).with_context(inspection_failed)
+            };
+        }
+        id = NEXT_ENTRY;
+        let mut tag = 0;
+        if unsafe { acl_get_tag_type(entry, &mut tag) } != 0 {
+            return Err(std::io::Error::last_os_error()).with_context(inspection_failed);
+        }
+        if tag == EXTENDED_DENY {
+            continue;
+        }
+        anyhow::ensure!(tag == EXTENDED_ALLOW, "{}", inspection_failed());
+        let mut permissions = 0;
+        if unsafe { acl_get_permset_mask_np(entry, &mut permissions) } != 0 {
+            return Err(std::io::Error::last_os_error()).with_context(inspection_failed);
+        }
+        if permissions & MUTATION != 0 {
+            bail!(
+                "launch path has an ACL granting modification: {}",
+                path.display()
+            );
+        }
+    }
 }
 
 #[cfg(any(target_os = "macos", test))]
@@ -1372,6 +1466,79 @@ mod tests {
         assert!(directory.read("entry").is_err());
         symlink(&temporary.0, temporary.0.join("directory-link"))?;
         assert!(Directory::open(&temporary.0.join("directory-link"), false).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn ownership_reports_the_offending_ancestor_and_preserves_it() -> Result<()> {
+        let temporary = Temporary::new()?;
+        let applications = temporary.0.join("Applications");
+        let inner = applications.join("MicCamWatch.app/Contents/MacOS");
+        std::fs::create_dir_all(&inner)?;
+        std::fs::set_permissions(&applications, std::fs::Permissions::from_mode(0o700))?;
+        Directory::open(&inner, false)?;
+        for mode in [0o775, 0o777] {
+            std::fs::set_permissions(&applications, std::fs::Permissions::from_mode(mode))?;
+            let error = Directory::open(&inner, false)
+                .err()
+                .context("unsafe path admitted")?;
+            assert_eq!(
+                error.to_string(),
+                format!(
+                    "directory ancestor is writable by another user: {} (uid {}, gid {}, mode {mode:04o})",
+                    applications.display(),
+                    applications.metadata()?.uid(),
+                    applications.metadata()?.gid()
+                )
+            );
+            assert_eq!(applications.metadata()?.mode() & 0o777, mode);
+        }
+        Ok(())
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn launch_path_permits_read_acl_and_refuses_write_acl() -> Result<()> {
+        let temporary = Temporary::new()?;
+        let app = temporary.0.join("MicCamWatch.app");
+        let path = app.join("Contents/MacOS");
+        std::fs::create_dir_all(&path)?;
+        let executable = path.join("mcw");
+        std::fs::write(&executable, b"fixture")?;
+        let acl = |entry: &str, target: &Path| -> Result<()> {
+            let status = std::process::Command::new("/bin/chmod")
+                .args(["+a", entry])
+                .arg(target)
+                .status()?;
+            anyhow::ensure!(status.success(), "could not set fixture ACL");
+            Ok(())
+        };
+        acl("everyone allow list,search", &app)?;
+        let directory = Directory::walk(&path, false, validate_launch_acl)?;
+        let file = directory
+            .file(OsStr::new("mcw"))?
+            .context("fixture missing")?;
+        validate_launch_acl(&file, &executable)?;
+        acl("everyone allow write", &executable)?;
+        let error = validate_launch_acl(&file, &executable).expect_err("unsafe file ACL admitted");
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "launch path has an ACL granting modification: {}",
+                executable.display()
+            )
+        );
+        acl("everyone allow add_file", &app)?;
+        let error = Directory::walk(&path, false, validate_launch_acl)
+            .err()
+            .context("unsafe directory ACL admitted")?;
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "launch path has an ACL granting modification: {}",
+                app.display()
+            )
+        );
         Ok(())
     }
 
