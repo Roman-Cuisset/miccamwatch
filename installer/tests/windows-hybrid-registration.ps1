@@ -9,6 +9,10 @@ public static class McwMsiRegistration {
     [DllImport("msi.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
     public static extern uint MsiGetProductInfoExW(string code, string sid, uint context,
         string property, StringBuilder value, ref uint length);
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    [DllImport("msi.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
+    public static extern uint MsiEnumProductsExW(string code, string sid, uint context, uint index,
+        StringBuilder product, out uint actualContext, StringBuilder actualSid, ref uint sidLength);
 }
 '@
 
@@ -35,12 +39,26 @@ function ConvertTo-McwPackedGuid([string]$Code) {
     (-join $packed) + [regex]::Replace(($fields[3] + $fields[4]), '(.)(.)', '$2$1')
 }
 
-function Get-McwMsiRegistration([string]$Code, [string]$Sid) {
+function Get-McwMsiContexts([string]$Code, [string]$Sid) {
+    foreach ($context in 1,2,4) {
+        $requestedSid = $Sid
+        if ($context -eq 4) { $requestedSid = [System.Management.Automation.Language.NullString]::Value }
+        $product = [Text.StringBuilder]::new(39)
+        $user = [Text.StringBuilder]::new(256)
+        [uint32]$sidLength = $user.Capacity
+        [uint32]$actual = 0
+        $status = [McwMsiRegistration]::MsiEnumProductsExW($Code, $requestedSid, $context, 0,
+            $product, [ref]$actual, $user, [ref]$sidLength)
+        @{ requested=$context; status=$status; context=$actual; product=$product.ToString(); sid=$user.ToString() }
+    }
+}
+
+function Get-McwMsiRegistration([string]$Code, [string]$Sid, [string]$UpgradeCode = '{8FC9317B-4517-4E83-9F52-CF3257584BF6}') {
     if ($Code -cnotmatch '^\{[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}\}$') {
         throw 'Invalid product code in observation request'
     }
     $entry = [ordered]@{ productCode = $Code; installContext = 'per-user-unmanaged'; properties = [ordered]@{} }
-    $upgrade = ConvertTo-McwPackedGuid '{8FC9317B-4517-4E83-9F52-CF3257584BF6}'
+    $upgrade = ConvertTo-McwPackedGuid $UpgradeCode
     try {
         $key = [Microsoft.Win32.Registry]::Users.OpenSubKey("$Sid\Software\Microsoft\Installer\UpgradeCodes\$upgrade", $false)
         $entry.userUpgradeIndexPresent = $null -ne $key

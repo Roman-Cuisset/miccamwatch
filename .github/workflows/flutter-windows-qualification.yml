@@ -15,6 +15,9 @@ on:
       msi-test-standard-rollback:
         type: boolean
         default: false
+      msi-forensics:
+        type: boolean
+        default: false
       rebuild-rust-only:
         type: boolean
         default: false
@@ -24,7 +27,7 @@ permissions:
 
 jobs:
   windows:
-    if: ${{ inputs.rebuild-rust-only || (inputs.msi-test-run == '' && inputs.msi-test-source == '') }}
+    if: ${{ !inputs.msi-forensics && (inputs.rebuild-rust-only || (inputs.msi-test-run == '' && inputs.msi-test-source == '')) }}
     runs-on: windows-latest
     timeout-minutes: 80
     defaults:
@@ -255,8 +258,42 @@ jobs:
             !${{ env.MCW_B5_PROOF }}/semantic-native/**
 
 
+  msi-forensics:
+    if: ${{ inputs.msi-forensics }}
+    runs-on: windows-11-arm
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Build text-only per-user probes without touching the product or installer policy
+        run: |
+          if ($env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or $env:PROCESSOR_ARCHITECTURE -cne 'ARM64') {
+            throw 'Disposable native Windows ARM64 runner required'
+          }
+          dotnet tool restore
+          if ($LASTEXITCODE) { throw 'WiX restore failed' }
+          .\installer\tests\windows-msi-probe-build.ps1 -Output (Join-Path $env:RUNNER_TEMP 'mcw-msi-probes')
+      - name: Compare native and injected failures under a genuine standard account
+        run: |
+          .\installer\tests\windows-hybrid-standard.ps1 -ProbePlan (Join-Path $env:RUNNER_TEMP 'mcw-msi-probes\probes.json') -Proof (Join-Path $env:RUNNER_TEMP 'mcw-msi-probe-receipts')
+      - name: Retain registration, security-context samples and verbose MSI logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: msi-forensics-${{ github.sha }}
+          retention-days: 14
+          path: |
+            ${{ runner.temp }}/mcw-msi-probes/probes.json
+            ${{ runner.temp }}/mcw-msi-probes/**/*.wxs
+            ${{ runner.temp }}/mcw-msi-probe-receipts/**/*.json
+            ${{ runner.temp }}/mcw-msi-probe-receipts/**/*.log
+
   installed-msi:
-    if: ${{ !inputs.rebuild-rust-only && (inputs.msi-test-run != '' || inputs.msi-test-source != '') }}
+    if: ${{ !inputs.msi-forensics && !inputs.rebuild-rust-only && (inputs.msi-test-run != '' || inputs.msi-test-source != '') }}
     name: Exact Windows MSI installation (${{ matrix.context }})
     permissions:
       contents: read
