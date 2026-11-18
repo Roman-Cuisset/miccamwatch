@@ -56,16 +56,18 @@ if ($LocalDisposableVm) {
     # application paths inherited from the runner administrator.
     $profileKey = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\$StandardAccountSid"
     $profile = [Environment]::ExpandEnvironmentVariables((Get-ItemProperty -LiteralPath $profileKey).ProfileImagePath)
+    if (!$profile -or $profile -ine [Environment]::GetFolderPath('UserProfile')) {
+        throw 'The loaded standard account does not own this fixture profile.'
+    }
+    $env:USERPROFILE = $profile
     $local = [Environment]::GetFolderPath('LocalApplicationData', 'Create')
     $roaming = [Environment]::GetFolderPath('ApplicationData', 'Create')
-    if (!$profile -or $profile -ine [Environment]::GetFolderPath('UserProfile') -or
-        !$local.StartsWith($profile.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase) -or
+    if (!$local.StartsWith($profile.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase) -or
         !$roaming.StartsWith($profile.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) {
         throw 'The loaded standard account does not own this fixture profile.'
     }
     $env:LOCALAPPDATA = $local
     $env:APPDATA = $roaming
-    $env:USERPROFILE = $profile
     $temp = Join-Path $local 'Temp'
     New-Item -ItemType Directory -Path $temp -Force | Out-Null
     $env:TEMP = $temp

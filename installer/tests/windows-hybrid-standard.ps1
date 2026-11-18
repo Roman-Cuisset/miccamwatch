@@ -54,7 +54,9 @@ $info.RedirectStandardError = $true
 # Forward the verified runner markers and system entries only. User profile
 # paths are resolved by the child for the loaded standard account.
 $info.EnvironmentVariables.Clear()
-foreach ($name in 'RUNNER_ENVIRONMENT','GITHUB_ACTIONS','WINDIR','SystemRoot','SystemDrive','COMPUTERNAME','PROCESSOR_ARCHITECTURE') {
+$systemEnvironment = 'WINDIR','SystemRoot','SystemDrive','PUBLIC','ProgramData','ProgramFiles','ProgramFiles(x86)',
+    'CommonProgramFiles','CommonProgramFiles(x86)','ALLUSERSPROFILE','COMPUTERNAME','PROCESSOR_ARCHITECTURE'
+foreach ($name in ('RUNNER_ENVIRONMENT','GITHUB_ACTIONS' + $systemEnvironment)) {
     $value = [Environment]::GetEnvironmentVariable($name)
     if ($value) { $info.EnvironmentVariables[$name] = $value }
 }
