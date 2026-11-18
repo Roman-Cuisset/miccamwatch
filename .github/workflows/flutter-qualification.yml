@@ -149,8 +149,11 @@ jobs:
           ' "$root/replay-source.json" >/dev/null
           git merge-base --is-ancestor "$source" "$GITHUB_SHA"
           git diff --quiet "$source" "$GITHUB_SHA" -- src native .cargo build.rs Cargo.toml Cargo.lock desktop/flutter
+          download="$root/build-download"
+          mkdir -m 700 "$download"
           gh run download "$MCW_MACOS_BUILD_RUN" --repo "$GITHUB_REPOSITORY" \
-            --name "flutter-macos-x86_64-$source-built-products" --dir "$root"
+            --name "flutter-macos-x86_64-$source-built-products" --dir "$download"
+          cp "$download/built-products.tar.gz" "$download/built-products.SHA256SUMS" "$root/"
           read -r expected _ < "$root/built-products.SHA256SUMS"
           [[ "$expected" =~ ^[0-9a-f]{64}$ ]]
           test "$(shasum -a 256 "$root/built-products.tar.gz" | cut -d ' ' -f 1)" = "$expected"
