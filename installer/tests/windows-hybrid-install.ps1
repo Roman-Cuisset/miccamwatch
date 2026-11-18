@@ -60,6 +60,8 @@ if ($LocalDisposableVm) {
         throw 'The loaded standard account does not own this fixture profile.'
     }
     $env:USERPROFILE = $profile
+    $env:HOMEDRIVE = Split-Path -Qualifier $profile
+    $env:HOMEPATH = Split-Path -NoQualifier $profile
     $local = [Environment]::GetFolderPath('LocalApplicationData', 'Create')
     $roaming = [Environment]::GetFolderPath('ApplicationData', 'Create')
     if (!$local.StartsWith($profile.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase) -or
@@ -75,9 +77,11 @@ if ($LocalDisposableVm) {
 } elseif ($env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or $env:GITHUB_ACTIONS -cne 'true') {
     throw 'This scenario requires a disposable GitHub-hosted Windows runner.'
 }
-if (($PositiveLifecycleOnly -or $HybridRollbackOnly) -and
-    (!$ObserveRegistration -or $env:PROCESSOR_ARCHITECTURE -cne 'ARM64' -or ($PositiveLifecycleOnly -and $HybridRollbackOnly))) {
-    throw 'The split replay is confined to its ordinary Windows-on-ARM fixture.'
+if ($PositiveLifecycleOnly -and ($HybridRollbackOnly -or !$ObserveRegistration -or $env:PROCESSOR_ARCHITECTURE -cne 'ARM64')) {
+    throw 'The positive-only replay is confined to its ordinary Windows-on-ARM fixture.'
+}
+if ($HybridRollbackOnly -and !$LocalDisposableVm -and (!$ObserveRegistration -or $env:PROCESSOR_ARCHITECTURE -cne 'ARM64')) {
+    throw 'The separate hybrid rollback needs a disposable Windows-on-ARM runner or an admitted local VM.'
 }
 if ($ObserveRegistration -and (!$StandardAccountSid -or $LocalDisposableVm -or
     $env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or $env:GITHUB_ACTIONS -cne 'true')) {
@@ -88,7 +92,13 @@ $base = Join-Path $env:LOCALAPPDATA 'Programs\MicCamWatch'
 $configuration = Join-Path $env:APPDATA 'MicCamWatch'
 $data = Join-Path $env:LOCALAPPDATA 'MicCamWatch'
 $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
-$shortcut = Join-Path ([Environment]::GetFolderPath('Programs')) 'MicCamWatch.lnk'
+$programs = [Environment]::GetFolderPath('Programs')
+if ($StandardAccountSid) {
+    # The hosted fixture account is new. Resolve its unredirected per-user
+    # Start menu relative to its verified Roaming folder in the loaded profile.
+    $programs = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
+}
+$shortcut = Join-Path $programs 'MicCamWatch.lnk'
 $upgradeCode = '{8FC9317B-4517-4E83-9F52-CF3257584BF6}'
 $installer = New-Object -ComObject WindowsInstaller.Installer
 $related = $installer.RelatedProducts($upgradeCode)
@@ -196,9 +206,15 @@ function Check-Installed([string]$Code, [string]$Version) {
     if ($state -ne 5 -or $location -ine $base -or $assignment -ne '0') {
         throw "Invalid per-user MSI status for $Version (state=$state, assignment=$assignment, locationMatch=$($location -ieq $base))"
     }
-    if ((& "$base\mcw.exe" --version) -cne "mcw $Version" -or
-        !(Test-Path -LiteralPath "$base\mcw-tray.exe" -PathType Leaf) -or
-        !(Test-Path -LiteralPath $shortcut)) { throw "Installed executables or shortcut version mismatch for $Version" }
+    $cliVersion = & "$base\mcw.exe" --version
+    $cliExit = $LASTEXITCODE
+    $trayPresent = Test-Path -LiteralPath "$base\mcw-tray.exe" -PathType Leaf
+    $shortcutPresent = Test-Path -LiteralPath $shortcut -PathType Leaf
+    $report["installedComponents$Version"] = @{ cliVersion=$cliVersion; cliExit=$cliExit; tray=$trayPresent;
+        shortcut=$shortcutPresent; shortcutPath=$shortcut }
+    if ($cliExit -ne 0 -or $cliVersion -cne "mcw $Version" -or !$trayPresent -or !$shortcutPresent) {
+        throw "Installed executables or shortcut version mismatch for $Version"
+    }
     if ($Version -ne '0.21.0') {
         # Keep the process handle. PowerShell 5 Start-Process can lose the
         # exit status of a GUI program that exits before the first wait.

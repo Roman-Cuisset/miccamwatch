@@ -55,11 +55,14 @@ $info.RedirectStandardError = $true
 # paths are resolved by the child for the loaded standard account.
 $info.EnvironmentVariables.Clear()
 $systemEnvironment = 'WINDIR','SystemRoot','SystemDrive','PUBLIC','ProgramData','ProgramFiles','ProgramFiles(x86)',
-    'CommonProgramFiles','CommonProgramFiles(x86)','ALLUSERSPROFILE','COMPUTERNAME','PROCESSOR_ARCHITECTURE'
+    'CommonProgramFiles','CommonProgramFiles(x86)','ALLUSERSPROFILE','COMPUTERNAME','PROCESSOR_ARCHITECTURE','ComSpec','PATHEXT'
 foreach ($name in ('RUNNER_ENVIRONMENT','GITHUB_ACTIONS' + $systemEnvironment)) {
     $value = [Environment]::GetEnvironmentVariable($name)
     if ($value) { $info.EnvironmentVariables[$name] = $value }
 }
+$info.EnvironmentVariables['Path'] = "$env:WINDIR\System32;$env:WINDIR;$env:WINDIR\System32\Wbem;$env:WINDIR\System32\WindowsPowerShell\v1.0"
+$info.EnvironmentVariables['USERNAME'] = $account
+$info.EnvironmentVariables['USERDOMAIN'] = $env:COMPUTERNAME
 $info.Arguments = '-NoProfile -NonInteractive -File "{0}" -Candidate "{1}" -Proof "{2}" -StandardAccountSid "{3}" -SourceRevision "{4}"' -f
     $inner,$installer,(Join-Path $evidence 'result'),$user.SID.Value,$SourceRevision
 if ($PositiveLifecycleOnly) { $info.Arguments += ' -PositiveLifecycleOnly' }

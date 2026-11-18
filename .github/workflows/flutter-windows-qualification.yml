@@ -292,7 +292,8 @@ jobs:
           if ($build.Count -ne 1 -or $build[0].conclusion -cne 'success') { throw 'Package build and audit must have passed' }
           git merge-base --is-ancestor $env:MCW_PACKAGE_SOURCE $env:GITHUB_SHA
           if ($LASTEXITCODE -ne 0) { throw 'Package source must be an ancestor of the test harness' }
-          git diff --quiet $env:MCW_PACKAGE_SOURCE $env:GITHUB_SHA -- src native .cargo Cargo.toml Cargo.lock desktop/flutter installer/miccamwatch.wxs installer/hybrid_payload.py installer/hybrid_windows.py installer/hybrid_layout.json
+          # src/autostart/unix.rs is included only on Linux and macOS in src/lib.rs.
+          git diff --quiet $env:MCW_PACKAGE_SOURCE $env:GITHUB_SHA -- src native .cargo build.rs Cargo.toml Cargo.lock desktop/flutter installer/miccamwatch.wxs installer/miccamwatch.ico installer/hybrid_payload.py installer/hybrid_windows.py installer/hybrid_layout.json ':(exclude)src/autostart/unix.rs'
           if ($LASTEXITCODE -ne 0) { throw 'Packaged product or build contract changed; rebuild required' }
           $prefix = Join-Path $env:RUNNER_TEMP 'mcw-replay-msi'
           gh run download $env:MCW_BUILD_RUN --repo $env:GITHUB_REPOSITORY --name "miccamwatch-hybrid-windows-x86_64-$env:MCW_PACKAGE_SOURCE" --dir $prefix
