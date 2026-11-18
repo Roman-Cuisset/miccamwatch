@@ -259,7 +259,7 @@ jobs:
 
 
   msi-forensics:
-    if: ${{ inputs.msi-forensics }}
+    if: ${{ inputs.msi-forensics && inputs.msi-test-run == '' && inputs.msi-test-source == '' }}
     runs-on: windows-11-arm
     timeout-minutes: 25
     defaults:
@@ -293,7 +293,7 @@ jobs:
             ${{ runner.temp }}/mcw-msi-probe-receipts/**/*.log
 
   installed-msi:
-    if: ${{ !inputs.msi-forensics && !inputs.rebuild-rust-only && (inputs.msi-test-run != '' || inputs.msi-test-source != '') }}
+    if: ${{ !inputs.rebuild-rust-only && (inputs.msi-test-run != '' || inputs.msi-test-source != '') }}
     name: Exact Windows MSI installation (${{ matrix.context }})
     permissions:
       contents: read
@@ -303,7 +303,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        context: ${{ fromJSON(inputs.msi-test-standard-rollback && '["legacy-rollback-arm", "hybrid-rollback-arm", "standard-user-x64-2022"]' || (inputs.msi-test-arm-standard-only && '["standard-user-arm"]' || '["hosted-admin", "standard-user"]')) }}
+        context: ${{ fromJSON(inputs.msi-forensics && '["legacy-rollback-arm", "hybrid-rollback-arm"]' || (inputs.msi-test-standard-rollback && '["legacy-rollback-arm", "hybrid-rollback-arm", "standard-user-x64-2022"]' || (inputs.msi-test-arm-standard-only && '["standard-user-arm"]' || '["hosted-admin", "standard-user"]'))) }}
     defaults:
       run:
         shell: pwsh
@@ -353,6 +353,7 @@ jobs:
           $scenario = @()
           if ('${{ matrix.context }}' -eq 'standard-user-arm') { $scenario += '-PositiveLifecycleOnly' }
           if ('${{ matrix.context }}' -eq 'hybrid-rollback-arm') { $scenario += '-HybridRollbackOnly' }
+          if ('${{ inputs.msi-forensics }}' -eq 'true') { $scenario += '-CollectMsiTokens' }
           & powershell.exe -NoProfile -NonInteractive -File installer/tests/windows-hybrid-standard.ps1 -Candidate $msi -Proof (Join-Path $env:MCW_REPLAY_PREFIX 'replayed') -SourceRevision $env:MCW_PACKAGE_SOURCE @scenario
           if ($LASTEXITCODE -ne 0) { throw 'Standard-account MSI qualification failed' }
       - name: Preserve new lifecycle receipts for the verified package bytes

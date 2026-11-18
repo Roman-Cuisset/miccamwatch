@@ -45,7 +45,7 @@ on:
         type: boolean
         default: false
       windows-msi-forensics:
-        description: Run isolated per-user MSI rollback probes on a disposable Windows 11 ARM64 runner
+        description: Diagnose per-user MSI rollback on Windows 11 ARM64; with a source run, sample the exact product instead of building probes
         type: boolean
         default: false
       windows-rebuild-rust-only:

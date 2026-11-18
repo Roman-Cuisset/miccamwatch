@@ -122,7 +122,11 @@ function Invoke-Msi([string]$Operation, [string]$Payload, [string]$Label, [int]$
     $log = Join-Path $Proof "$Label.log"
     $arguments = '{0} "{1}" /qn /norestart /l*v "{2}"' -f $Operation,$Payload,$log
     $process = Start-Process -FilePath "$env:WINDIR\System32\msiexec.exe" -WindowStyle Hidden -PassThru -ArgumentList $arguments
+    $transaction = [ordered]@{ pid=$process.Id; parent=$PID; firstUtc=[DateTime]::UtcNow.ToString('O') }
+    $report["transaction-$Label"] = $transaction
     if (!$process.WaitForExit(180000)) { throw "MSI timed out. Retained live fixture; inspect $log." }
+    $transaction.lastUtc = [DateTime]::UtcNow.ToString('O')
+    $transaction.exitCode = $process.ExitCode
     if ($process.ExitCode -ne $ExpectedCode) { throw "MSI $Label returned $($process.ExitCode), expected $ExpectedCode" }
 }
 

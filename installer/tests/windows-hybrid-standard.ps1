@@ -5,7 +5,8 @@ param(
     [Parameter(Mandatory)][string]$Proof,
     [string]$SourceRevision = $env:GITHUB_SHA,
     [Parameter(ParameterSetName='Hybrid')][switch]$PositiveLifecycleOnly,
-    [Parameter(ParameterSetName='Hybrid')][switch]$HybridRollbackOnly
+    [Parameter(ParameterSetName='Hybrid')][switch]$HybridRollbackOnly,
+    [Parameter(ParameterSetName='Hybrid')][switch]$CollectMsiTokens
 )
 $ErrorActionPreference = 'Stop'
 if ($env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or $env:GITHUB_ACTIONS -cne 'true') {
@@ -94,15 +95,17 @@ if ($ProbePlan) {
     $info.Arguments = '-NoProfile -NonInteractive -File "{0}" -Plan "{1}" -Proof "{2}" -StandardAccountSid "{3}"' -f
         $inner,(Join-Path $probes 'probes.json'),$result,$user.SID.Value
     $phases = $probePhases.Keys
-    $serviceBefore = Get-CimInstance Win32_Service -Filter "Name='msiserver'" | Select-Object Name,StartName,State,ProcessId
-    Add-Type -Path (Join-Path $PSScriptRoot 'windows-msi-token-samples.cs')
-    $sampler = [McwMsiTokenSamples]::new($user.SID.Value, $env:WINDIR)
 } else {
     $info.Arguments = '-NoProfile -NonInteractive -File "{0}" -Candidate "{1}" -Proof "{2}" -StandardAccountSid "{3}" -SourceRevision "{4}" -ObserveRegistration' -f
         $inner,$installer,$result,$user.SID.Value,$SourceRevision
     if ($PositiveLifecycleOnly) { $info.Arguments += ' -PositiveLifecycleOnly' }
     if ($HybridRollbackOnly) { $info.Arguments += ' -HybridRollbackOnly' }
     $phases = 'installed-baseline','restored-baseline','installed-hybrid','restored-hybrid','removed-hybrid'
+}
+if ($ProbePlan -or $CollectMsiTokens) {
+    $serviceBefore = Get-CimInstance Win32_Service -Filter "Name='msiserver'" | Select-Object Name,StartName,State,ProcessId
+    Add-Type -Path (Join-Path $PSScriptRoot 'windows-msi-token-samples.cs')
+    $sampler = [McwMsiTokenSamples]::new($user.SID.Value, $env:WINDIR)
 }
 $observed = @{}
 $process = [Diagnostics.Process]::Start($info)
@@ -131,6 +134,10 @@ try {
                 } else {
                     $receipt.current = Get-McwMsiRegistration $ids.current $user.SID.Value
                     $receipt.other = Get-McwMsiRegistration $ids.other $user.SID.Value
+                    if ($CollectMsiTokens) {
+                        $receipt.current.contexts = @(Get-McwMsiContexts $ids.current $user.SID.Value)
+                        $receipt.other.contexts = @(Get-McwMsiContexts $ids.other $user.SID.Value)
+                    }
                 }
             } catch { $receipt.error = $_.ToString() }
             $file = Join-Path $observations "$phase.json"
@@ -149,10 +156,12 @@ try {
     Copy-Item -LiteralPath $observations -Destination $Proof -Recurse
     if ($sampler) {
         try {
+            $windows = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -Name CurrentBuildNumber,UBR
             [ordered]@{
-                source=$SourceRevision; fixtureSid=$user.SID.Value; observerPid=$PID;
+                source=$SourceRevision; harnessSource=$env:GITHUB_SHA; fixtureSid=$user.SID.Value; observerPid=$PID;
                 serviceBefore=$serviceBefore; timeZone=[TimeZoneInfo]::Local.Id;
-                osBuild=(Get-CimInstance Win32_OperatingSystem).BuildNumber;
+                osBuild="$($windows.CurrentBuildNumber).$($windows.UBR)";
+                installerFileVersion=(Get-Item -LiteralPath "$env:WINDIR\System32\msi.dll").VersionInfo.FileVersion;
                 serviceAfter=(Get-CimInstance Win32_Service -Filter "Name='msiserver'" | Select-Object Name,StartName,State,ProcessId);
                 samples=@($sampler.Finish())
             } | ConvertTo-Json -Depth 7 | Set-Content -LiteralPath (Join-Path $Proof 'msi-token-samples.json') -Encoding utf8
