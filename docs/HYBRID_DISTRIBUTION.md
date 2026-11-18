@@ -362,3 +362,7 @@ compte standard échoue sur les deux rollbacks injectés sur Windows ARM64.
 La maintenance ZIP et les scénarios MSI administrateur déjà qualifiés
 restent associés aux octets et aux preuves ci-dessus. Le vrai successeur
 téléchargé depuis une release officielle reste à qualifier.
+
+L’[analyse détaillée du rollback MSI](WINDOWS_MSI_ROLLBACK_FORENSICS.md)
+ajoute une reproduction sans code MicCamWatch, la comparaison x64/ARM64
+et les mesures des jetons sur les deux rollbacks du MSI exact.
