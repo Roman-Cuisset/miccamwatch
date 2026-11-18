@@ -267,7 +267,98 @@ téléchargés et comparées au `SHA256SUMS` du job.
   cycle installé, ABI et signatures Unix ci-dessus gardent leurs sources.
   [CI gardes Unix](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/44124306625).
 
-**ÉTAPE 3/6 : INCOMPLÈTE.** Le rollback en compte standard a un défaut de
-restauration de l’enregistrement à investiguer. La qualification interactive
-Windows x64, UAC et le téléchargement d’un vrai successeur depuis une release
-officielle restent ouverts.
+### Clôture du 18 novembre 2026
+
+Le banc d’essai `fee9514fa1307a4094e8ee39c5793763757f47e6` a rejoué le MSI
+exact du build Windows `7e5c1fff1e90a7714f4e2c37d3900fdfa5a3864a`. Le
+processus qui invoque MSI possède un jeton primaire standard, non élevé,
+de niveau d’intégrité moyen (`S-1-16-8192`), avec le profil et la ruche du
+SID de test chargés. L’Explorateur visible appartient à l’administrateur
+du runner. Les transactions utilisent `/qn` et l’écriture des journaux
+du service est repérée par `MSI(s)`. Le journal mentionne l’emprunt
+d’identité pour l’accès à la base. Le jeton effectif de chaque thread du
+service pendant les écritures de rollback reste non mesuré.
+
+L’observateur administrateur distinct a effectué des lectures pour le SID
+du compte installateur pendant que le profil restait chargé. Il a interrogé
+`MsiGetProductInfoExW` en contexte utilisateur non géré et relu l’index
+`UpgradeCodes` du profil ainsi que les propriétés du cache MSI. Le SID
+standard a seul effectué toutes les transactions MSI de ces essais.
+L’observateur n’a modifié aucune ACL ni politique. [API Windows Installer](https://learn.microsoft.com/en-us/windows/win32/api/msi/nf-msi-msigetproductinfoexw).
+
+| Essai en compte standard | Avant la panne injectée | Après la panne injectée |
+| --- | --- | --- |
+| Windows 11 ARM64, MSI x64, depuis v0.21.0 | ProductCode `{86CDFED5-BA07-4C91-8BC7-8A856198DC33}`, version 0.21.0, état installé 5, chemin `%LOCALAPPDATA%\Programs\MicCamWatch`, cache et index utilisateur présents. | Ancien et nouveau ProductCode inconnus de l’API dans ce contexte (1605), entrées produit absentes de l’index. CLI et tray de v0.21.0 restaurés, empreintes conformes, raccourci présent, réglages, historique et autostart préservés. [Reçu et journal](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/44245924802/job/134604740989). |
+| Windows 11 ARM64, MSI x64, depuis v0.22.0 | ProductCode `{AF3F394D-F615-4D97-815F-CF8873964A6B}`, version 0.22.0, état 5, même chemin, cache et index utilisateur présents. | Ancien produit et produit futur inconnus de l’API (1605), entrées produit absentes de l’index. Manifeste et ensemble des fichiers restaurés, dont les ressources Flutter, réglages, historique et autostart préservés. [Reçu et journal](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/44245924802/job/134604740882). |
+| Windows Server 2022 x64, compte standard | Installation de v0.21.0 refusée par la politique `DisableMsi=1`, code 1625. | Rollback impossible à exercer sur ce runner. Le runner x64 Windows Server actuel avait renvoyé le même refus. [Runner 2022](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/44245924802/job/134604740527), [runner x64 précédent](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/44069702318/job/133992498770). |
+
+Le témoin Windows 11 ARM64, lancé avec le même observateur et le même
+MSI x64, a confirmé l’état 5 après les deux installations, puis 1605 et
+la disparition de l’index après retrait volontaire. Le manifeste hybride,
+les réglages, l’historique et le parcours d’autostart ont été vérifiés.
+[Témoin standard](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/44246770527/job/134607504582).
+
+L’UpgradeCode lu dans les deux packages installés avant la panne est
+`{8FC9317B-4517-4E83-9F52-CF3257584BF6}`. Les deux rollbacks démarrent
+après le succès de `RemoveExistingProducts` et l’erreur de fixture. Les
+fichiers sont recopiés depuis les sauvegardes `.rbf`. En parallèle, le
+service échoue à rouvrir ou à écrire dans les sous-clés `Patches`,
+`Features`, `InstallProperties` et `Usage` de
+`HKLM\…\Installer\UserData\<SID>\Products\<ProductCode compact>`,
+dans `Installer\TempPackages`, dans l’index machine `Installer\UpgradeCodes`
+et dans les entrées de désinstallation HKLM (vue 32 bits pour l’ancienne
+version). Les erreurs MSI 1401 et 1406 sont associées au code système 5
+pour les clés machine. La recréation de l’index sous `HKEY_USERS\<SID>`
+renvoie 1307, propriétaire de sécurité invalide. L’API indépendante montre
+que ces erreurs d’écriture correspondent à une perte réelle d’enregistrement.
+
+Le MSI hybride place `RemoveExistingProducts` après `InstallInitialize`.
+L’examen des packages d’origine repère les mêmes GUID et chemins cibles
+pour `MainExecutable` et `TrayExecutable`, avec attributs 0 dans v0.21.0 et
+256 (composant 64 bits) dans v0.22.0. Un retrait tardif après
+`InstallExecute` installe d’abord les nouveaux composants et suppose des
+règles de partage de composants respectées. Le changement de séquence
+seul reste non qualifié pour cette migration. Placer le retrait après
+`InstallFinalize` répartit la mise à niveau et la suppression entre deux
+transactions. Aucun de ces changements n’a été incorporé au MSI candidat.
+[Séquence Microsoft](https://learn.microsoft.com/en-us/windows/win32/msi/removeexistingproducts-action),
+[règles WiX](https://docs.firegiant.com/wix/schema/wxs/majorupgrade/),
+[attributs des composants](https://learn.microsoft.com/en-us/windows/win32/msi/component-table).
+
+Les deux premiers rejeux du nouvel observateur se sont arrêtés dans le
+banc d’essai avant la panne injectée. Un troisième a confirmé l’état
+installé avant de buter sur le chemin du raccourci. Le dernier rejeu a
+atteint les deux restaurations et conservé les échecs réels dans la CI.
+[Premier lancement](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/44244184034),
+[environnement de test](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/44244973387),
+[installation observée](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/44245361315).
+
+Le parcours Windows standard avec bureau x64, l’annulation visible, le
+refus UAC et le redémarrage éventuel restent à qualifier. Les scénarios
+ARM64 utilisent `/norestart` et le parcours normal vérifié n’a demandé aucun
+redémarrage. Le [protocole VM](WINDOWS_STANDARD_USER.md#cas-interactifs-et-contrôle-de-lenregistrement)
+préserve les politiques, les données et les preuves. Le [suivi macOS](HYBRID_STAGE3_MACOS.md)
+consigne le diagnostic de chemin, les contrôles du helper et les critères
+R1 à R8 du test utilisateur.
+
+| Cible | Preuve de non-régression pertinente |
+| --- | --- |
+| Windows x64 | Le MSI et le ZIP Windows conservent les octets de `7e5c1ff`. Le build natif a validé Clippy strict, la maintenance, les deux rollbacks administrateur et l’IPC 10 installé. Le runner x64 standard reste bloqué par sa politique. [CI Windows x64](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/44131699871/job/134210242949). |
+| Linux x64 | Dix tests d’autostart, deux gardes du menu natif et Clippy strict sur `18feb1a`. La qualification des conteneurs, de glibc 2.35 et de l’IPC reste reliée au paquet antérieur de `9f4963f`. [Tests ciblés](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/44245431361/job/134603116517), [paquet](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/44033985419/job/133872329758). |
+| Linux ARM64 | Dix tests d’autostart, deux gardes du menu natif et Clippy strict sur `18feb1a`. ABI et cycle installé issus de `9f4963f`. [Tests ciblés](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/44245431361/job/134603116548), [paquet](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/44033985419/job/133872330130). |
+| macOS Intel | Neuf tests d’autostart, dont les ACL Darwin, deux gardes du menu natif et Clippy strict sur `18feb1a`. Le DMG installé a passé la mise à niveau, le rollback complet, l’IPC 10 et le retrait. Le helper natif signé du paquet a passé l’audit. [Tests ciblés](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/44245431361/job/134603116440), [paquet](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/44245427764/job/134603104653). |
+| macOS Apple Silicon | Neuf tests d’autostart, dont les ACL Darwin, deux gardes du menu natif et Clippy strict sur `18feb1a`. Le DMG installé a passé les mêmes contrôles de cycle et d’intégrité native qu’Intel. [Tests ciblés](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/44245431361/job/134603116107), [paquet](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/44245427764/job/134603104252). |
+
+Sur le poste principal, l’inscription de la v0.21.0, la présence du tray
+au chemin installé et les SHA-256 des deux exécutables ont été contrôlés
+en lecture seule. Les deux fichiers sont identiques aux exécutables v0.21.0
+vérifiés sur le runner. La branche principale, le tag v0.21.0, la
+candidate historique v0.21.1, le stash et les douze worktrees ont été
+contrôlés. Aucun runner dédié x64 n’était enregistré et la lecture de la
+VM Hyper-V locale a été refusée par le contexte du poste hôte.
+
+**ÉTAPE 3/6 : INCOMPLÈTE.** La restauration de l’enregistrement MSI en
+compte standard échoue sur les deux rollbacks injectés sur Windows ARM64.
+La maintenance ZIP et les scénarios MSI administrateur déjà qualifiés
+restent associés aux octets et aux preuves ci-dessus. Le vrai successeur
+téléchargé depuis une release officielle reste à qualifier.
