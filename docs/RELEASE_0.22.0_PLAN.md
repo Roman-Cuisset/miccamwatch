@@ -78,6 +78,7 @@ Dépendance : une application fonctionnelle et des payloads réels, non un proto
 - Préserver cadence et qualité de surveillance, comparer latences réelles avant/après. Aucune suppression de vérification ou collecte pour embellir CPU/RAM.
 - Étudier le renderer réellement actif sous Mint. Comparer llvmpipe et accéléré seulement si accès déjà autorisé ; pas de modification de groupes/driver/session ou désactivation GPU silencieuse.
 - Corriger thèmes, overflow sept langues, About/version, noms/logos/icônes, clavier/focus/contrastes/lecteurs d'écran dans `desktop/flutter/lib` et runners. Contenu commun ; décorations/permissions natives peuvent différer. Pas de nouveau logo, dépendance décorative lourde ou moteur Flutter gardé chaud.
+- Traiter en priorité le [refus de terminaison macOS signalé pour Vorssaint, UID 501](HYBRID_STAGE3_MACOS.md#arrêt-ciblé-dun-processus-utilisateur). Vérifier le résultat sur un Mac de qualification à l’étape 5 avant publication.
 
 ### Tests, acceptation et arrêt4
 
@@ -293,3 +294,5 @@ Le client Rust prend en charge la délégation au MSI vérifié, la bascule
 et la récupération du ZIP portable. La qualification reste ouverte pour
 le rollback de l’enregistrement MSI en compte standard et les essais
 interactifs Windows x64 et UAC.
+La [transaction multipaquet et la réinstallation silencieuse de la fixture](WINDOWS_MSI_ROLLBACK_FORENSICS.md#19-novembre-2026--transaction-multipaquet-et-récupération)
+ont confirmé que ces stratégies ne permettent pas de lever le blocage.

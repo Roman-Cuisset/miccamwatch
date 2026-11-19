@@ -192,3 +192,87 @@ v0.21.0. Les empreintes du CLI et du tray correspondent aux deux
 exécutables v0.21.0 mesurés sur le runner et le tray tourne depuis ce
 chemin. Les douze worktrees, `main`, le tag public, la candidate
 historique et le stash ont été vérifiés en lecture seule.
+
+## 19 novembre 2026 — transaction multipaquet et récupération
+
+### Disponibilité du x64 natif
+
+L’inventaire actuel GitHub ne contient aucun runner dédié. Les deux runners
+Windows Server x64 de référence avaient refusé les MSI non gérés par
+`DisableMsi=1` (`1625`). La lecture de la VM Hyper‑V désignée est toujours
+refusée. L’inventaire Windows Sandbox était vide. Aucun invité x64
+jetable avec un bureau interactif appartenant à un compte standard n’a
+été admis. Le bac à sable et Hyper‑V n’ont fait l’objet d’aucune
+modification de configuration. Le jeu de trois MSI x64 déjà préparé
+reste disponible pour le rejouer selon la procédure ci-dessus.
+
+### Test discriminant sur ARM64
+
+Le banc `444209f4825629f86b4fcd3c5cbc2f72f4bef4e7` a repris la seule variante
+`x64-early-media` des fixtures existantes. Le runner séparé a construit les
+trois MSI de ce cas à partir de la même source WiX. Les octets du jeu local
+et les trois autres variantes sont restés hors de cet essai. Le build était
+`26200.9974` et `msi.dll` `5.0.26100.9974`. Le compte jetable disposait d’un
+jeton primaire standard non élevé, à intégrité moyenne `S-1-16-8192`.
+Les stratégies `DisableMsi` et `DisableRollback` recherchées étaient
+absentes. Le journal confirme aussi `AlwaysInstallElevated=0` pour les deux
+portées. Le service et le moteur échantillonnés étaient ARM64 natifs, même
+avec le template MSI `x64`. [Job](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/44598008530/job/135821445915) ·
+[Artefact](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/44598008530/artifacts/14565973744).
+
+| Phase | Résultat |
+| --- | --- |
+| État initial | Le compte standard installe v1.0.0. L’observateur vérifie l’état installé, le cache, le chemin, le SID et l’index utilisateur. |
+| Ouverture et retrait | `MsiBeginTransactionW=0` et `MsiConfigureProductExW(..., INSTALLSTATE_ABSENT)=0`. Le marqueur disparaît. Le journal confirme que le retrait et l’installation suivante appartiennent à la même transaction. |
+| Panne | `MsiInstallProductW=1603` après l’erreur native 1311 sur le cabinet externe absent. Le retrait préparatoire est une opération de premier niveau. La transaction ne dépend pas de la désinstallation imbriquée du major upgrade du candidat. |
+| Clôture | `MsiEndTransaction(ROLLBACK)=0`. Le marqueur retrouve son SHA-256 initial depuis le fichier de sauvegarde `.rbf`. Le relevé compte 78 erreurs 1401 avec un code système 5 ou 1307. |
+| État MSI | Les deux ProductCode renvoient 1605. Les trois interrogations `MsiEnumProductsExW` donnent 259 et aucune des deux entrées ne figure dans l’index utilisateur. Le registre est perdu malgré le code zéro retourné à la clôture. |
+| Récupération séparée | Le banc retente le MSI v1.0.0 d’origine, contrôlé par SHA-256, sous le même compte. `RegisterProduct` atteint la vérification `SECUREREPAIR` puis renvoie 1602. Le journal signale que l’invite d’élévation est indisponible en mode silencieux. Les deux enregistrements restent absents. La mise à niveau et le retrait après récupération n’ont pas été qualifiés. |
+
+Les reçus et la trace en lecture seule sont archivés ensemble. Le journal
+de réinstallation ne constitue pas une observation d’une boîte de dialogue
+UAC ni d’un refus par une personne. Le code `1602` est le résultat enregistré
+du parcours silencieux.
+
+| Fichier | SHA-256 |
+| --- | --- |
+| `baseline.log` | `106edb7abd228a4bf535203d542ed8fdea565ed32316c654d2902a9caffa7461` |
+| `failure.log` | `a94e7080e6ccb79a9d3270ff629443dde7f94a9fa27c64e6fb20c45cd3445688` |
+| `reinstall-baseline.log` | `e38fd47c2a1ea74f1d0ffeb60ed9d6d20d179e01caa75ed6c4e9386ed48819aa` |
+
+### Décision pour MicCamWatch
+
+- L’installation `perUser` maintient l’identité du profil. Un changement
+  vers `perMachine` modifie le contexte de sécurité et d’enregistrement de
+  la migration. [Contextes MSI](https://learn.microsoft.com/en-us/windows/win32/msi/installation-context).
+- Une mise à jour mineure conserve le ProductCode et ne permet pas cette
+  migration du template MSI historique `Intel;0` au template `x64;0`.
+  Microsoft exige des ProductCode distincts pour les packages 32 et
+  64 bits. [Mise à jour mineure](https://learn.microsoft.com/en-us/windows/win32/msi/minor-upgrades) ·
+  [Règles ProductCode](https://learn.microsoft.com/en-us/windows/win32/msi/product-codes).
+- La transaction multipaquet utilise des API prises en charge et préserve
+  l’identité du compte. Le défaut apparaît encore avec le retrait séparé.
+  La désinstallation imbriquée du major upgrade n’est donc pas une
+  condition nécessaire à la perte d’enregistrement sur cette build.
+  [Transactions multipaquets MSI](https://learn.microsoft.com/en-us/windows/win32/msi/multiple-package-installations) ·
+  [Clôture de la transaction](https://learn.microsoft.com/en-us/windows/win32/api/msi/nf-msi-msiendtransaction).
+- La réinstallation silencieuse ne constitue pas une récupération
+  qualifiée. Le maintien de `intervention_required`, des journaux et des
+  contrôles indépendants reste le contrat de maintenance. Le MSI et le ZIP
+  de production, le code Rust partagé et les packages Unix sont identiques
+  à leurs révisions déjà évaluées.
+
+**ÉTAPE 3/6 : INCOMPLÈTE.** L’expérience suivante reste la fixture
+`x64-early-media` sur un Windows 11 x64 natif et jetable avec une session
+standard interactive. Sur un second point de contrôle de cette VM,
+exercer la réinstallation du MSI v1.0.0 exact via l’interface ordinaire
+de Windows Installer après une perte d’enregistrement vérifiée.
+Consigner le consentement éventuellement proposé par Windows et valider
+le SID, le cache, le fichier, les deux ProductCode et l’index avant de
+tenter un nouvel upgrade puis un retrait.
+
+Pour une revue ciblée, établir quelle version de Windows ou quel contrat
+MSI documenté permet de retrouver l’enregistrement `USERUNMANAGED`
+lorsque le rollback natif de la transaction renvoie déjà zéro. Si seule
+une reprise via `SECUREREPAIR` est possible, vérifier dans quelles
+conditions l’identité du compte et l’intégrité du bundle sont préservées.

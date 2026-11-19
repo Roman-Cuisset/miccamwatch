@@ -150,3 +150,14 @@ MicCamWatch **v0.21.0**. Ces critères sont transmis à l’étape 4.
 | R6 | Afficher la raison, la portée et le réglage natif des permissions effectivement utilisées. Tester autorisation accordée, absente et refusée. Vérifier que les limitations annoncées correspondent aux collecteurs et à l’action demandée. |
 | R7 | Créer des cas de test distincts pour aucune activité, observation incomplète, caméra inconnue, application non identifiée, protection demandée et protection confirmée. Le dernier état exige une lecture de confirmation du mécanisme natif. |
 | R8 | Sous compte standard, exercer lecture, interface, préférences, notifications et maintenance par utilisateur sans élévation. Pour toute action exigeant une élévation, vérifier l’explication, la portée de l’action et l’état après refus ou annulation. |
+
+### Arrêt ciblé d’un processus utilisateur
+
+Le testeur a signalé un refus de terminaison de Vorssaint, un processus
+utilisateur sous UID 501. Ce cas est prioritaire avant la publication de
+v0.22.0. À l’étape 4, établir séparément le résultat de `task_for_pid`, le
+verdict des contrôles internes de MicCamWatch et le résultat de l’appel
+de terminaison effectivement utilisé. Relever la provenance du refus
+et vérifier que le message indique la bonne cause. Exercer le cas
+autorisé et les refus légitimes avec les protections macOS ordinaires.
+L’étape 5 doit confirmer les résultats sur un Mac de qualification.
