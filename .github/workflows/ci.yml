@@ -48,6 +48,10 @@ on:
         description: Diagnose per-user MSI rollback on Windows 11 ARM64; with a source run, sample the exact product instead of building probes
         type: boolean
         default: false
+      windows-msi-transaction-probe:
+        description: With Windows MSI forensics alone, test a native multi-package transaction on the existing missing-cabinet fixture
+        type: boolean
+        default: false
       windows-rebuild-rust-only:
         description: Rebuild Windows Rust and package it with the audited unchanged Flutter component from the identified source run
         type: boolean
@@ -122,6 +126,7 @@ jobs:
       msi-test-arm-standard-only: ${{ inputs.windows-msi-arm-standard-only || false }}
       msi-test-standard-rollback: ${{ inputs.windows-msi-standard-rollback || false }}
       msi-forensics: ${{ inputs.windows-msi-forensics || false }}
+      msi-transaction-probe: ${{ inputs.windows-msi-transaction-probe || false }}
       rebuild-rust-only: ${{ inputs.windows-rebuild-rust-only || false }}
 
   windows:

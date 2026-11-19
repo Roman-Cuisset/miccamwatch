@@ -2,7 +2,8 @@
 param(
     [Parameter(Mandatory)][string]$Plan,
     [Parameter(Mandatory)][string]$Proof,
-    [Parameter(Mandatory)][string]$StandardAccountSid
+    [Parameter(Mandatory)][string]$StandardAccountSid,
+    [switch]$TransactionProbe
 )
 $ErrorActionPreference = 'Stop'
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -26,7 +27,21 @@ if ($context.elevated -or $context.elevationType -ne 1 -or $context.restricted -
     throw 'Probe invoker does not have a medium-integrity standard primary token and loaded profile'
 }
 $cases = Get-Content -LiteralPath $Plan -Raw | ConvertFrom-Json
+if ($TransactionProbe) {
+    if (@($cases).Count -ne 1 -or $cases[0].Name -cne 'x64-early-media' -or $cases[0].Failure -cne 'native-media') {
+        throw 'Only the existing x64 missing-cabinet fixture is admitted for this experiment'
+    }
+    Add-Type -Path (Join-Path $PSScriptRoot 'windows-msi-transaction-probe.cs')
+}
 $report = [ordered]@{ client=$context; processId=$PID; parentProcessId=(Get-CimInstance Win32_Process -Filter "ProcessId=$PID").ParentProcessId; cases=@() }
+if ($TransactionProbe) {
+    $machine = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Installer' -ErrorAction SilentlyContinue
+    $userPolicy = Get-ItemProperty -LiteralPath 'HKCU:\SOFTWARE\Policies\Microsoft\Windows\Installer' -ErrorAction SilentlyContinue
+    $report.installerPolicy = @{
+        machineDisableMsi=$machine.DisableMSI; machineDisableRollback=$machine.DisableRollback;
+        userDisableRollback=$userPolicy.DisableRollback
+    }
+}
 
 function Invoke-ProbeMsi([string]$Operation, [string]$Package, [string]$Log) {
     $args = '{0} "{1}" /qn /norestart /l*v "{2}"' -f $Operation,$Package,$Log
@@ -79,6 +94,10 @@ foreach ($case in $cases) {
     $report.cases += $item
     $work = (New-Item -ItemType Directory -Path (Join-Path $Proof $case.Name)).FullName
     try {
+        if ($TransactionProbe -and ($machine.DisableMSI -in 1,2 -or
+            $machine.DisableRollback -eq 1 -or $userPolicy.DisableRollback -eq 1)) {
+            throw 'Machine MSI policy or rollback policy refuses this per-user experiment'
+        }
         $source = Join-Path $PSScriptRoot "probes\$($case.Name)"
         $base = Join-Path $env:LOCALAPPDATA $case.TargetFolder
         $marker = Join-Path $base 'marker.txt'
@@ -97,18 +116,45 @@ foreach ($case in $cases) {
         }
         $hash = (Get-FileHash -LiteralPath $marker -Algorithm SHA256).Hash
         $log = Join-Path $work 'failure.log'
-        $item.fault = Invoke-ProbeMsi '/i' $fault $log
+        if ($TransactionProbe) {
+            $item.transaction = [McwMsiTransactionProbe]::FailUpgrade($case.OldCode, $fault, $marker, $log)
+        } else {
+            $item.fault = Invoke-ProbeMsi '/i' $fault $log
+        }
         $item.after = Read-Registration 'rollback' $case
         $item.registered = Test-Registered $item.after.current '1.0.0' $base $case.UpgradeCode
         $item.candidateAbsent = Test-Absent $item.after.other
         $item.markerRestored = (Test-Path -LiteralPath $marker -PathType Leaf) -and (Get-FileHash -LiteralPath $marker -Algorithm SHA256).Hash -ceq $hash
-        $journal = Get-Content -LiteralPath $log -Raw
+        $journal = if (Test-Path -LiteralPath $log -PathType Leaf) { Get-Content -LiteralPath $log -Raw } else { '' }
         $item.deniedRegistry = @($journal -split '\r?\n' | Where-Object { $_ -match 'Note: 1: 1401 .* 3: (5|1307)\s*$' }).Count
         $failure = if ($case.Failure -eq 'native-media') { '(?:Note: 1: 1311|Error 1311)[^\r\n]*probe-media\.cab' } else { 'Action ended [^\r\n]+ProbeFailure\. Return value 3' }
-        $item.qualifiedFault = $item.fault.exitCode -eq 1603 -and $journal -match
-            ("(?s)Action ended [^\r\n]+RemoveExistingProducts\. Return value 1\..*?$failure.*?Executing op: Header\([^\r\n]*ScriptType=2,")
+        if ($TransactionProbe) {
+            $item.qualifiedFault = $item.transaction.BeginCode -eq 0 -and $item.transaction.RemoveCode -eq 0 -and
+                $item.transaction.OldMarkerPresentAfterRemoval -eq $false -and $item.transaction.InstallCode -eq 1603 -and
+                $journal -match $failure
+        } else {
+            $item.qualifiedFault = $item.fault.exitCode -eq 1603 -and $journal -match
+                ("(?s)Action ended [^\r\n]+RemoveExistingProducts\. Return value 1\..*?$failure.*?Executing op: Header\([^\r\n]*ScriptType=2,")
+        }
         if (!$item.qualifiedFault) { throw 'Expected native rollback after previous-product removal was not observed' }
-        if (!$item.registered -or !$item.markerRestored -or !$item.candidateAbsent) { throw 'Rollback did not restore the complete old product' }
+        if ($TransactionProbe -and $item.transaction.EndCode -ne 0) { throw 'The native transaction did not confirm rollback completion' }
+        $item.rollbackVerified = $item.registered -and $item.markerRestored -and $item.candidateAbsent
+        if (!$item.rollbackVerified) {
+            if (!$TransactionProbe -or !$item.markerRestored -or !$item.candidateAbsent -or !(Test-Absent $item.after.current)) {
+                throw 'Rollback did not restore the complete old product'
+            }
+            # An independent recovery experiment, confined to this text fixture.
+            # Preserve the failed rollback receipt and keep the case failed even
+            # when reinstalling the exact baseline restores normal maintenance.
+            $item.reinstall = Invoke-ProbeMsi '/i' $old (Join-Path $work 'reinstall-baseline.log')
+            $item.afterReinstall = Read-Registration 'reinstalled' $case
+            if ($item.reinstall.exitCode -ne 0 -or
+                !(Test-Registered $item.afterReinstall.current '1.0.0' $base $case.UpgradeCode) -or
+                !(Test-Absent $item.afterReinstall.other) -or
+                (Get-FileHash -LiteralPath $marker -Algorithm SHA256).Hash -cne $hash) {
+                throw 'Baseline reinstall did not restore complete registration and payload'
+            }
+        }
         $item.retry = Invoke-ProbeMsi '/i' $good (Join-Path $work 'retry.log')
         $item.afterRetry = Read-Registration 'retry' $case
         if ($item.retry.exitCode -ne 0 -or !(Test-Absent $item.afterRetry.current) -or
@@ -118,6 +164,10 @@ foreach ($case in $cases) {
         $item.afterRemoval = Read-Registration 'remove' $case
         if ($item.remove.exitCode -ne 0 -or !(Test-Absent $item.afterRemoval.current) -or
             !(Test-Absent $item.afterRemoval.other) -or (Test-Path -LiteralPath $marker)) { throw 'Retry product did not uninstall cleanly' }
+        if (!$item.rollbackVerified) {
+            $item.maintenanceAfterReinstall = $true
+            throw 'Native rollback failed; the separate baseline reinstall, retry and removal passed'
+        }
         $item.status = 'passed'
     } catch { $item.error = $_.ToString() }
 }

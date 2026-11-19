@@ -2,6 +2,7 @@
 param(
     [Parameter(Mandatory,ParameterSetName='Hybrid')][string]$Candidate,
     [Parameter(Mandatory,ParameterSetName='Probe')][string]$ProbePlan,
+    [Parameter(ParameterSetName='Probe')][switch]$TransactionProbe,
     [Parameter(Mandatory)][string]$Proof,
     [string]$SourceRevision = $env:GITHUB_SHA,
     [Parameter(ParameterSetName='Hybrid')][switch]$PositiveLifecycleOnly,
@@ -34,6 +35,9 @@ if ($ProbePlan) {
         throw 'Probe inputs must be built in the disposable runner temp directory'
     }
     $plans = @(Get-Content -LiteralPath $plan.FullName -Raw | ConvertFrom-Json)
+    if ($TransactionProbe -and ($plans.Count -ne 1 -or $plans[0].Name -cne 'x64-early-media')) {
+        throw 'The transaction probe requires only the existing x64 missing-cabinet case'
+    }
     $probes = (New-Item -ItemType Directory -Path (Join-Path $shared 'probes')).FullName
     foreach ($case in $plans) {
         if ($case.Name -cnotmatch '^(x64|arm64)-(early|late)-(error|media)$') { throw 'Unknown probe case' }
@@ -42,10 +46,15 @@ if ($ProbePlan) {
             $built = Join-Path $plan.DirectoryName "$($case.Name)\$kind\probe.msi"
             Copy-Item -LiteralPath $built -Destination (Join-Path $destination "$kind.msi")
         }
-        foreach ($phase in 'baseline','rollback','retry','remove') { $probePhases["$($case.Name)-$phase"] = $case }
+        $stages = @('baseline','rollback','retry','remove')
+        if ($TransactionProbe) { $stages += 'reinstalled' }
+        foreach ($phase in $stages) { $probePhases["$($case.Name)-$phase"] = $case }
     }
     Copy-Item -LiteralPath $plan.FullName -Destination $probes
     $script = 'windows-msi-probe-install.ps1'
+    if ($TransactionProbe) {
+        Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'windows-msi-transaction-probe.cs') -Destination $shared
+    }
 } else {
     $bundle = (New-Item -ItemType Directory -Path (Join-Path $shared 'bundle')).FullName
     $installer = Join-Path $shared 'candidate.msi'
@@ -94,6 +103,7 @@ $sampler = $null
 if ($ProbePlan) {
     $info.Arguments = '-NoProfile -NonInteractive -File "{0}" -Plan "{1}" -Proof "{2}" -StandardAccountSid "{3}"' -f
         $inner,(Join-Path $probes 'probes.json'),$result,$user.SID.Value
+    if ($TransactionProbe) { $info.Arguments += ' -TransactionProbe' }
     $phases = $probePhases.Keys
 } else {
     $info.Arguments = '-NoProfile -NonInteractive -File "{0}" -Candidate "{1}" -Proof "{2}" -StandardAccountSid "{3}" -SourceRevision "{4}" -ObserveRegistration' -f

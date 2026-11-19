@@ -1,5 +1,8 @@
 [CmdletBinding()]
-param([Parameter(Mandatory)][string]$Output)
+param(
+    [Parameter(Mandatory)][string]$Output,
+    [ValidateSet('x64-early-media')][string]$OnlyCase
+)
 $ErrorActionPreference = 'Stop'
 if (Test-Path -LiteralPath $Output) { throw 'MSI probe output directory must be new' }
 $root = (New-Item -ItemType Directory -Path $Output).FullName
@@ -9,6 +12,7 @@ $cases = @(
     @{ Name='arm64-early-media'; Arch='arm64'; Schedule='afterInstallInitialize'; Failure='native-media' },
     @{ Name='x64-late-error'; Arch='x64'; Schedule='afterInstallExecute'; Failure='type19' }
 )
+if ($OnlyCase) { $cases = @($cases | Where-Object Name -ceq $OnlyCase) }
 
 function New-Package($Case, [string]$Folder, [string]$Variant, [string]$Version, [string]$Code) {
     $dir = (New-Item -ItemType Directory -Path (Join-Path $Folder $Variant)).FullName
@@ -67,4 +71,4 @@ foreach ($case in $cases) {
     $case.FaultHash = New-Package $case $folder 'fault' '2.0.0' $case.NewCode
     $case.GoodHash = New-Package $case $folder 'good' '2.0.0' $case.NewCode
 }
-$cases | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $root 'probes.json') -Encoding utf8
+ConvertTo-Json -InputObject $cases -Depth 4 | Set-Content -LiteralPath (Join-Path $root 'probes.json') -Encoding utf8

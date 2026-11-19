@@ -18,6 +18,9 @@ on:
       msi-forensics:
         type: boolean
         default: false
+      msi-transaction-probe:
+        type: boolean
+        default: false
       rebuild-rust-only:
         type: boolean
         default: false
@@ -276,10 +279,14 @@ jobs:
           }
           dotnet tool restore
           if ($LASTEXITCODE) { throw 'WiX restore failed' }
-          .\installer\tests\windows-msi-probe-build.ps1 -Output (Join-Path $env:RUNNER_TEMP 'mcw-msi-probes')
+          $probe = @{}
+          if ('${{ inputs.msi-transaction-probe }}' -eq 'true') { $probe.OnlyCase = 'x64-early-media' }
+          .\installer\tests\windows-msi-probe-build.ps1 -Output (Join-Path $env:RUNNER_TEMP 'mcw-msi-probes') @probe
       - name: Compare native and injected failures under a genuine standard account
         run: |
-          .\installer\tests\windows-hybrid-standard.ps1 -ProbePlan (Join-Path $env:RUNNER_TEMP 'mcw-msi-probes\probes.json') -Proof (Join-Path $env:RUNNER_TEMP 'mcw-msi-probe-receipts')
+          $probe = @{}
+          if ('${{ inputs.msi-transaction-probe }}' -eq 'true') { $probe.TransactionProbe = $true }
+          .\installer\tests\windows-hybrid-standard.ps1 -ProbePlan (Join-Path $env:RUNNER_TEMP 'mcw-msi-probes\probes.json') -Proof (Join-Path $env:RUNNER_TEMP 'mcw-msi-probe-receipts') @probe
       - name: Retain registration, security-context samples and verbose MSI logs
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
