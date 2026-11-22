@@ -3,10 +3,9 @@
   "name": "日本語",
   "ogLocale": "ja_JP",
   "messages": {
-    "theme.label": "テーマ",
-    "theme.system": "システム",
-    "theme.light": "ライト",
-    "theme.dark": "ダーク",
+    "theme.system": "テーマ：システム。ライトに切り替える",
+    "theme.light": "テーマ：ライト。ダークに切り替える",
+    "theme.dark": "テーマ：ダーク。システム設定に従う",
     "home.upcoming.title": "MicCamWatch v0.22.0 を開発中",
     "home.upcoming.lead": "Windows、Linux、macOS 向けのデスクトップ画面を Flutter で刷新しています。監視と保護の機能は引き続き Rust エンジンが担います。",
     "home.upcoming.status": "現在、開発と検証を進めています。公開日は未定です。",

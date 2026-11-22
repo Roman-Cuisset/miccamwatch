@@ -3,10 +3,9 @@
   "name": "Русский",
   "ogLocale": "ru_RU",
   "messages": {
-    "theme.label": "Тема",
-    "theme.system": "Системная",
-    "theme.light": "Светлая",
-    "theme.dark": "Тёмная",
+    "theme.system": "Тема: системная. Переключить на светлую",
+    "theme.light": "Тема: светлая. Переключить на тёмную",
+    "theme.dark": "Тема: тёмная. Следовать настройкам системы",
     "home.upcoming.title": "MicCamWatch v0.22.0 в разработке",
     "home.upcoming.lead": "Мы обновляем интерфейс для Windows, Linux и macOS с помощью Flutter. За мониторинг и защиту по-прежнему отвечает ядро на Rust.",
     "home.upcoming.status": "Разработка и тестирование продолжаются. Дата выпуска пока не определена.",

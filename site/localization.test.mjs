@@ -80,7 +80,7 @@ test("theme and upcoming version are translated in all seven catalogs", () => {
   const template = readFileSync(new URL("./templates/index.html", import.meta.url), "utf8");
   for (const lang of languages) {
     const current = validateCatalog(catalog(lang.code), lang, master);
-    for (const key of ["theme.label", "theme.system", "theme.light", "theme.dark",
+    for (const key of ["theme.system", "theme.light", "theme.dark",
       "home.upcoming.title", "home.upcoming.lead", "home.upcoming.status", "home.upcoming.stable"]) {
       assert.ok(current.messages[key]?.trim(), lang.code + ": " + key);
     }
@@ -93,52 +93,50 @@ test("theme and upcoming version are translated in all seven catalogs", () => {
 
 function launchTheme(storage) {
   const root = { dataset: {} };
-  const label = { hidden: true };
-  let select;
+  const icons = ["system", "light", "dark"].map((themeIcon) => ({
+    dataset: { themeIcon, label: themeIcon }, hidden: true,
+  }));
+  let click;
   let ready;
   const control = {
-    value: "",
-    closest: () => label,
-    addEventListener(_event, change) { select = change; },
+    hidden: true,
+    querySelectorAll: () => icons,
+    setAttribute(name, value) { this[name] = value; },
+    addEventListener(_event, listener) { click = listener; },
   };
-  const document = {
-    documentElement: root,
-    querySelector: () => control,
-    addEventListener(_event, listener) { ready = listener; },
-  };
+  const document = { documentElement: root, querySelector: () => control,
+    addEventListener(_event, listener) { ready = listener; } };
   runInNewContext(readFileSync(new URL("./theme.js", import.meta.url), "utf8"), { document, localStorage: storage });
-  return { root, control, label, ready, choose(value) { control.value = value; select(); } };
+  return { root, control, icons, ready, click: () => click() };
 }
 
-test("a saved theme applies before the control loads and persists on navigation", () => {
-  let saved = "dark";
+test("the theme button cycles system, light, dark and back with a single visible icon", () => {
+  let saved = null;
   const storage = { getItem: () => saved, setItem(_key, value) { saved = value; }, removeItem() { saved = null; } };
-  const first = launchTheme(storage);
-  assert.equal(first.root.dataset.theme, "dark");
-  assert.equal(first.label.hidden, true);
-  first.ready();
-  assert.equal(first.control.value, "dark");
-  assert.equal(first.label.hidden, false);
-  first.choose("light");
-  const next = launchTheme(storage);
-  assert.equal(next.root.dataset.theme, "light");
-  next.ready();
-  next.choose("system");
-  assert.equal(next.root.dataset.theme, undefined);
-  assert.equal(saved, null);
-  assert.equal(launchTheme(storage).root.dataset.theme, undefined);
+  const page = launchTheme(storage);
+  assert.equal(page.control.hidden, true);
+  page.ready();
+  assert.equal(page.control.hidden, false);
+  for (const mode of ["system", "light", "dark", "system"]) {
+    assert.equal(page.control.title, mode);
+    assert.equal(page.control["aria-label"], mode);
+    assert.deepEqual(page.icons.filter((icon) => !icon.hidden).map((icon) => icon.dataset.themeIcon), [mode]);
+    assert.equal(page.root.dataset.theme, mode === "system" ? undefined : mode);
+    assert.equal(saved, mode === "system" ? null : mode);
+    const reloaded = launchTheme(storage);
+    assert.equal(reloaded.root.dataset.theme, page.root.dataset.theme);
+    page.click();
+  }
   saved = "unknown";
   assert.equal(launchTheme(storage).root.dataset.theme, undefined);
 });
 
-test("storage failures leave automatic mode and the page selector usable", () => {
+test("the theme button remains usable if storage is unavailable", () => {
   const denied = () => { throw new Error("Storage denied"); };
   const page = launchTheme({ getItem: denied, setItem: denied, removeItem: denied });
-  assert.equal(page.root.dataset.theme, undefined);
   page.ready();
-  assert.equal(page.control.value, "system");
-  page.choose("dark");
-  assert.equal(page.root.dataset.theme, "dark");
-  page.choose("system");
-  assert.equal(page.root.dataset.theme, undefined);
+  for (const mode of ["system", "light", "dark", "system"]) {
+    assert.equal(page.control["aria-label"], mode);
+    page.click();
+  }
 });

@@ -3,10 +3,9 @@
   "name": "Deutsch",
   "ogLocale": "de_DE",
   "messages": {
-    "theme.label": "Farbschema",
-    "theme.system": "System",
-    "theme.light": "Hell",
-    "theme.dark": "Dunkel",
+    "theme.system": "Farbschema: System. Zu Hell wechseln",
+    "theme.light": "Farbschema: Hell. Zu Dunkel wechseln",
+    "theme.dark": "Farbschema: Dunkel. Zum System wechseln",
     "home.upcoming.title": "MicCamWatch v0.22.0 ist in Entwicklung",
     "home.upcoming.lead": "Wir gestalten die Benutzeroberfläche mit Flutter für Windows, Linux und macOS neu. Die Überwachung und die Schutzfunktionen übernimmt weiterhin der Rust-Kern.",
     "home.upcoming.status": "Die Entwicklung und die Tests laufen. Ein Veröffentlichungstermin steht noch nicht fest.",

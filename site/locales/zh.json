@@ -3,10 +3,9 @@
   "name": "简体中文",
   "ogLocale": "zh_CN",
   "messages": {
-    "theme.label": "主题",
-    "theme.system": "跟随系统",
-    "theme.light": "浅色",
-    "theme.dark": "深色",
+    "theme.system": "主题：跟随系统。切换到浅色",
+    "theme.light": "主题：浅色。切换到深色",
+    "theme.dark": "主题：深色。切换到跟随系统",
     "home.upcoming.title": "MicCamWatch v0.22.0 正在开发中",
     "home.upcoming.lead": "我们正在使用 Flutter 重新设计 Windows、Linux 和 macOS 的桌面界面。监控和防护功能仍由 Rust 引擎负责。",
     "home.upcoming.status": "开发和测试仍在进行，发布日期尚未确定。",

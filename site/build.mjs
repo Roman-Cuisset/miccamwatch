@@ -90,10 +90,14 @@ function configuredOrigin(productionOrigin) {
 }
 
 function themeControl(catalog) {
-  const label = escapeMarkup(catalog.messages["theme.label"]);
-  const options = ["system", "light", "dark"].map((value) =>
-    `<option value="${value}">${escapeMarkup(catalog.messages[`theme.${value}`])}</option>`).join("");
-  return `<label class="theme-control" hidden><span class="sr-only">${label}</span><select data-theme-control>${options}</select></label>`;
+  const icons = {
+    system: "<rect x=\"3\" y=\"4\" width=\"18\" height=\"13\" rx=\"2\"/><path d=\"M8 21h8m-4-4v4\"/>",
+    light: "<circle cx=\"12\" cy=\"12\" r=\"4\"/><path d=\"M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.4 1.4m11.2 11.2L19 19M5 19l1.4-1.4m11.2-11.2L19 5\"/>",
+    dark: "<path d=\"M20.7 15.8A9 9 0 0 1 8.2 3.3 9 9 0 1 0 20.7 15.8Z\"/>",
+  };
+  const states = Object.entries(icons).map(([mode, graphic]) =>
+    `<span data-theme-icon="${mode}" data-label="${escapeMarkup(catalog.messages[`theme.${mode}`])}" aria-hidden="true" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" focusable="false">${graphic}</svg></span>`).join("");
+  return `<button type="button" class="theme-control" data-theme-control hidden>${states}</button>`;
 }
 
 function renderText(content, filename, release, origin, catalog = null, privacy = null) {

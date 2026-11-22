@@ -3,10 +3,9 @@
   "name": "Español",
   "ogLocale": "es_ES",
   "messages": {
-    "theme.label": "Tema",
-    "theme.system": "Sistema",
-    "theme.light": "Claro",
-    "theme.dark": "Oscuro",
+    "theme.system": "Tema: Sistema. Cambiar a Claro",
+    "theme.light": "Tema: Claro. Cambiar a Oscuro",
+    "theme.dark": "Tema: Oscuro. Usar el tema del sistema",
     "home.upcoming.title": "MicCamWatch v0.22.0 está en desarrollo",
     "home.upcoming.lead": "Estamos rediseñando la interfaz de escritorio con Flutter para Windows, Linux y macOS. El motor en Rust seguirá encargándose de la supervisión y la protección.",
     "home.upcoming.status": "El desarrollo y las pruebas siguen en curso. Aún no hay fecha de publicación.",

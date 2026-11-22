@@ -3,10 +3,9 @@
   "name": "English",
   "ogLocale": "en_US",
   "messages": {
-    "theme.label": "Theme",
-    "theme.system": "System",
-    "theme.light": "Light",
-    "theme.dark": "Dark",
+    "theme.system": "Theme: System. Switch to Light",
+    "theme.light": "Theme: Light. Switch to Dark",
+    "theme.dark": "Theme: Dark. Switch to System",
     "home.upcoming.title": "MicCamWatch v0.22.0 is in development",
     "home.upcoming.lead": "We’re redesigning the desktop interface with Flutter for Windows, Linux and macOS. The Rust engine continues to handle monitoring and protection.",
     "home.upcoming.status": "Development and testing are ongoing, and there is no release date yet.",
