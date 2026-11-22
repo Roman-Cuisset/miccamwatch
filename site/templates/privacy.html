@@ -16,6 +16,8 @@
   <title>{{ privacy.title }} — MicCamWatch</title>
   <!-- MCW_ORIGIN_META -->
   <link rel="icon" href="/assets/mark.svg" type="image/svg+xml">
+  <meta name="color-scheme" content="light dark">
+  <script src="/theme.js"></script>
   <link rel="stylesheet" href="/main.css">
 </head>
 <body>
@@ -24,7 +26,7 @@
     <div class="shell header-inner">
       <a class="brand" href="/" aria-label="{{@ home.aria-label.brand }}"><img src="/assets/mark.svg" width="36" height="36" alt=""><span>MicCam<span class="brand-accent">Watch</span></span></a>
       <nav aria-label="{{@ home.aria-label.navigation-principale }}"><a href="/#fonctions">{{ home.a.fonctions }}</a><a href="/#compatibilite">{{ home.a.compatibilite }}</a><a href="/#guide">{{ home.a.guide }}</a><a href="/#faq">{{ home.a.faq }}</a></nav>
-      <a class="button button-small" href="/#installer">{{ home.a.button-button-small }}</a>
+      <div class="header-actions"><a class="button button-small" href="/#installer">{{ home.a.button-button-small }}</a>__MCW_THEME_CONTROL__</div>
     </div>
   </header>
   <nav class="language-switch shell" aria-label="{{@ ui.language-navigation }}">__MCW_LANGUAGE_LINKS__</nav>

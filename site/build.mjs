@@ -12,7 +12,7 @@ const markerName = '.mcw-site-export.json';
 const owner = 'miccamwatch-static-site';
 const originMarker = '<!-- MCW_ORIGIN_META -->';
 const textExtensions = new Set(['.html', '.css', '.js', '.json', '.svg', '.txt', '.xml']);
-const entryFiles = ['main.css', 'main.js', '_headers', '_redirects', 'robots.txt', 'googlee33354524297c2d0.html'];
+const entryFiles = ['main.css', 'main.js', 'theme.js', '_headers', '_redirects', 'robots.txt', 'googlee33354524297c2d0.html'];
 
 
 // The privacy notice remains the audited 0.20.0 policy, not a new release review.
@@ -89,6 +89,13 @@ function configuredOrigin(productionOrigin) {
   return url.origin;
 }
 
+function themeControl(catalog) {
+  const label = escapeMarkup(catalog.messages["theme.label"]);
+  const options = ["system", "light", "dark"].map((value) =>
+    `<option value="${value}">${escapeMarkup(catalog.messages[`theme.${value}`])}</option>`).join("");
+  return `<label class="theme-control" hidden><span class="sr-only">${label}</span><select data-theme-control>${options}</select></label>`;
+}
+
 function renderText(content, filename, release, origin, catalog = null, privacy = null) {
   const tokens = {
     __MCW_VERSION__: release.version,
@@ -98,6 +105,7 @@ function renderText(content, filename, release, origin, catalog = null, privacy 
   if (catalog) Object.assign(tokens, {
     __MCW_LANG__: catalog.language,
     __MCW_OG_LOCALE__: catalog.ogLocale,
+    __MCW_THEME_CONTROL__: themeControl(catalog),
     __MCW_LANGUAGE_LINKS__: languageLinks(catalog.language, filename),
     __MCW_PRIVACY_URL__: catalog.language === 'en' ? '/privacy' : `/${catalog.language}/privacy`,
     __MCW_PRIVACY_UPDATED__: privacy.lastUpdated,
