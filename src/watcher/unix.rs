@@ -4,8 +4,8 @@ use crate::{
     history,
     i18n::Language,
     model::{
-        Access, AccessEvent, Action, Activity, CollectorHealth, CollectorState, EnforcementDecision,
-        Resource, Risk, SCHEMA_VERSION, Snapshot, event_code,
+        Access, AccessEvent, Action, Activity, CollectorHealth, CollectorState,
+        EnforcementDecision, Resource, Risk, SCHEMA_VERSION, Snapshot, event_code,
     },
     output,
     platform::{self, PlatformMonitor},
@@ -203,7 +203,10 @@ pub fn watch(
             let changed = previous_health != snapshot.collectors
                 || previous_gaps != snapshot.observation_gaps;
             let incomplete = !snapshot.observation_gaps.is_empty()
-                || snapshot.collectors.iter().any(|health| health.state != CollectorState::Healthy);
+                || snapshot
+                    .collectors
+                    .iter()
+                    .any(|health| health.state != CollectorState::Healthy);
             if changed && (previous.is_some() || incomplete) {
                 output::print_status(&snapshot, true, filter.risk, lang)?;
             }
@@ -233,9 +236,15 @@ fn changed_collector_health<'a>(
     current: &'a [CollectorHealth],
 ) -> impl Iterator<Item = &'a CollectorHealth> {
     current.iter().filter(move |health| {
-        match previous.iter().find(|old| old.collector == health.collector) {
-            Some(old) => old != *health
-                && (old.state != CollectorState::Healthy || health.state != CollectorState::Healthy),
+        match previous
+            .iter()
+            .find(|old| old.collector == health.collector)
+        {
+            Some(old) => {
+                old != *health
+                    && (old.state != CollectorState::Healthy
+                        || health.state != CollectorState::Healthy)
+            }
             None => health.state != CollectorState::Healthy,
         }
     })
@@ -302,8 +311,8 @@ pub(super) fn enforce_policy_with(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::watcher::transitions::reconcile;
     use crate::model::Confidence;
+    use crate::watcher::transitions::reconcile;
 
     fn access() -> Access {
         Access {
@@ -360,17 +369,29 @@ mod tests {
             detail: None,
         };
         let initial = [camera.clone(), microphone.clone()];
-        assert_eq!(changed_collector_health(&[], &initial).collect::<Vec<_>>(), [&camera]);
+        assert_eq!(
+            changed_collector_health(&[], &initial).collect::<Vec<_>>(),
+            [&camera]
+        );
         assert_eq!(changed_collector_health(&initial, &initial).count(), 0);
 
         microphone.state = CollectorState::Unavailable;
         let failed = [camera.clone(), microphone.clone()];
-        assert_eq!(changed_collector_health(&initial, &failed).collect::<Vec<_>>(), [&microphone]);
+        assert_eq!(
+            changed_collector_health(&initial, &failed).collect::<Vec<_>>(),
+            [&microphone]
+        );
 
         camera.detail = Some("one device has no running state".into());
         let changed = [camera.clone(), microphone];
-        assert_eq!(changed_collector_health(&failed, &changed).collect::<Vec<_>>(), [&camera]);
-        assert_eq!(changed_collector_health(&failed, &initial).collect::<Vec<_>>(), [&initial[1]]);
+        assert_eq!(
+            changed_collector_health(&failed, &changed).collect::<Vec<_>>(),
+            [&camera]
+        );
+        assert_eq!(
+            changed_collector_health(&failed, &initial).collect::<Vec<_>>(),
+            [&initial[1]]
+        );
     }
 
     #[test]

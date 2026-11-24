@@ -302,7 +302,7 @@ class _MicCamWatchAppState extends State<MicCamWatchApp> {
               Text(l[sequence == 0 ? 'connecting' : session.state.name],
                 style: c.type(13).copyWith(color: session.isLive && sequence != 0 ? c.accent : c.warning)),
               if (session.error != null) Text(session.error!, style: c.type(12, muted: true)),
-              if (snapshot != null) Text('Engine ${snapshot.engine['version']} · ${snapshot.engine['platform']} · ${l[snapshot.engine['state'] as String]}', style: c.type(12, muted: true)),
+              if (snapshot != null) Text('${l['reportVersion']} ${snapshot.engine['version']} · ${snapshot.engine['platform']} · ${l[snapshot.engine['state'] as String]}', style: c.type(12, muted: true)),
               if (snapshot?.engine['detail'] != null) Text(snapshot!.engine['detail'] as String, style: c.type(12, muted: true)),
             ])),
             const SizedBox(height: 14),

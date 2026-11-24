@@ -105,6 +105,18 @@ def inspect_collectors(engine, env):
     return {name: item["state"] for name, item in collectors.items()}
 
 
+def inspect_notification_settings(engine, env):
+    output = subprocess.check_output(
+        [engine, "notifications", "native-status"], env=env, text=True, timeout=45
+    )
+    rows = dict(line.split("=", 1) for line in output.splitlines())
+    require(rows.get("macos_authorization") in {
+        "not_determined", "denied", "authorized", "authorized_without_alerts", "provisional", "unknown"
+    }, "Missing native notification authorization state")
+    require(rows.get("banner_delivery") == "unverified", "Banner delivery was not observed")
+    return rows
+
+
 def exchange(left, right):
     # macOS renamex_np(RENAME_SWAP); refuse rather than copying part of an app.
     api = ctypes.CDLL(None, use_errno=True).renamex_np
@@ -236,6 +248,9 @@ def main():
         report["notification_capture_helper"] = inspect_embedded_helper(installed, args.direct_engine)
         report["direct_collectors"] = inspect_collectors(args.direct_engine.resolve(strict=True), env)
         report["installed_collectors"] = inspect_collectors(installed / "Contents/MacOS/mcw", env)
+        report["installed_notification_settings"] = inspect_notification_settings(
+            installed / "Contents/MacOS/mcw", env
+        )
         report["native_notification_delivery"] = "not exercised"
         first = run_app(installed, env, proof / "installed-first.log")
         exchange(installed, staged)

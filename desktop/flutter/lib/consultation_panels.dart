@@ -279,13 +279,24 @@ class DetailedDiagnosticsPanel extends StatelessWidget {
                             const SizedBox(width: 8),
                             Expanded(
                               child: SelectableText(
-                                '${check.name} · ${l['check${check.status.name}']}',
+                                '${l[check.name]} · ${l['check${check.status.name}']}',
                                 style: theme.textTheme.titleSmall,
                               ),
                             ),
                           ],
                         ),
                         const SizedBox(height: 5),
+                        if (check.name == 'notification_authorization') ...[
+                          Text(l[switch (check.detail.split(';').first) {
+                            'macos_authorization=not_determined' => 'macosNotificationsNotDetermined',
+                            'macos_authorization=denied' => 'macosNotificationsDenied',
+                            'macos_authorization=authorized' => 'macosNotificationsAuthorized',
+                            'macos_authorization=authorized_without_alerts' => 'macosNotificationsNoAlerts',
+                            'macos_authorization=provisional' => 'macosNotificationsProvisional',
+                            _ => 'macosNotificationsUnknown',
+                          }]),
+                          Text(l['macosBannerUnverified']),
+                        ],
                         SelectableText(check.detail),
                         if (check.remedy != null)
                           Padding(

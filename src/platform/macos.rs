@@ -229,7 +229,9 @@ impl PlatformMonitor {
             Err(error) => DiagnosticCheck {
                 name: "notification_authorization",
                 status: DiagnosticStatus::Warning,
-                detail: format!("macos_authorization=unknown; banner_delivery=unverified; {error:#}"),
+                detail: format!(
+                    "macos_authorization=unknown; banner_delivery=unverified; {error:#}"
+                ),
             },
         });
         checks.push(DiagnosticCheck {
@@ -460,7 +462,10 @@ fn microphone_access(process: AudioProcess, index: usize) -> Access {
 }
 
 fn append_camera_observation(snapshot: &mut Snapshot, video: VideoResult) {
-    let has_running_state = video.devices.iter().any(|camera| camera.running_somewhere.is_some());
+    let has_running_state = video
+        .devices
+        .iter()
+        .any(|camera| camera.running_somewhere.is_some());
     let unknown_state = video
         .devices
         .iter()
@@ -866,6 +871,39 @@ mod tests {
     use super::*;
 
     #[test]
+    fn native_termination_rejects_parent_and_stale_observation() -> Result<()> {
+        let request = |pid: u32| {
+            native_request::<serde_json::Value>(
+                "terminate",
+                &[&pid.to_string(), "stale-observation"],
+                Duration::from_secs(5),
+            )
+        };
+        let parent = request(std::process::id())?;
+        assert_eq!(parent["effect"]["ok"], false);
+        assert!(
+            parent["effect"]["error"]
+                .as_str()
+                .is_some_and(|detail| detail.contains("protected"))
+        );
+
+        let mut child = Command::new("/bin/sleep").arg("20").spawn()?;
+        let result = (|| -> Result<_> { Ok((request(child.id())?, child.try_wait()?.is_none())) })();
+        // The fixture owns this child handle and is responsible for reaping it.
+        let _ = child.kill();
+        child.wait()?;
+        let (reply, still_running) = result?;
+        assert!(still_running);
+        assert_eq!(reply["effect"]["ok"], false);
+        assert!(
+            reply["effect"]["error"]
+                .as_str()
+                .is_some_and(|detail| detail.contains("birth identity changed"))
+        );
+        Ok(())
+    }
+
+    #[test]
     fn active_input_requires_verified_process_identity_for_pid() {
         let observation: Observation = serde_json::from_str(r#"{"audio":{"available":true,"processes":[{"pid":51,"startSeconds":1710000000,"startMicroseconds":3,"executable":"/Applications/Recorder.app/Contents/MacOS/Recorder"},{"pid":51,"startSeconds":null,"startMicroseconds":null,"executable":null}],"error":null}}"#).unwrap();
         let processes = observation.audio.unwrap().processes;
@@ -1024,11 +1062,19 @@ mod tests {
     #[test]
     fn camera_unknown_null_missing_empty_and_error_are_observation_gaps() {
         for (document, state) in [
-            (r#"{"devices":[{"id":"c","name":"cam","runningSomewhere":null}]}"#, CollectorState::Unavailable),
-            (r#"{"devices":[{"id":"c","name":"cam"}]}"#, CollectorState::Unavailable),
+            (
+                r#"{"devices":[{"id":"c","name":"cam","runningSomewhere":null}]}"#,
+                CollectorState::Unavailable,
+            ),
+            (
+                r#"{"devices":[{"id":"c","name":"cam"}]}"#,
+                CollectorState::Unavailable,
+            ),
             (r#"{"devices":[]}"#, CollectorState::Unavailable),
-            (r#"{"devices":[{"id":"c","name":"cam","runningSomewhere":false}],"error":"CoreMediaIO lookup failed"}"#,
-                CollectorState::Degraded),
+            (
+                r#"{"devices":[{"id":"c","name":"cam","runningSomewhere":false}],"error":"CoreMediaIO lookup failed"}"#,
+                CollectorState::Degraded,
+            ),
         ] {
             let snapshot = camera_snapshot(document);
             assert!(snapshot.accesses.is_empty());

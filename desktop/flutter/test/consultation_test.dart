@@ -796,6 +796,33 @@ void main() {
     );
 
     testWidgets(
+      'macOS notification denial and unverified banner are visible separately',
+      (tester) async {
+        final client = clientFor([])..update(view(), sessionA, 1, true);
+        await tester.pumpWidget(host(client, diagnostics: true));
+        await tester.tap(find.byKey(const ValueKey('diagnostics.run')));
+        await tester.pump();
+        final native = report()
+          ..['platform'] = 'macos'
+          ..['checks'] = [{
+            'name': 'notification_authorization',
+            'status': 'warning',
+            'detail': 'macos_authorization=denied; banner_delivery=unverified',
+            'remedy': null,
+          }];
+        client.update(
+          view(completion: result(operation: 'diagnostics', diagnostics: native)),
+          sessionA,
+          2,
+          true,
+        );
+        await tester.pump();
+        expect(find.text('Permission denied. Check Notifications in System Settings.'), findsOneWidget);
+        expect(find.text('Banner display unverified.'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
       'keyboard activation submits one query and pending disables refresh',
       (tester) async {
         final sent = <Map<String, dynamic>>[];

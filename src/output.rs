@@ -167,10 +167,11 @@ pub fn print_status(
         .peekable();
 
     if visible.peek().is_none() {
-        if !snapshot.observation_gaps.is_empty() || snapshot
-            .collectors
-            .iter()
-            .any(|health| health.state != crate::model::CollectorState::Healthy)
+        if !snapshot.observation_gaps.is_empty()
+            || snapshot
+                .collectors
+                .iter()
+                .any(|health| health.state != crate::model::CollectorState::Healthy)
         {
             println!("{}", lang.observation_incomplete().yellow());
         } else if snapshot.accesses.is_empty() {
@@ -179,9 +180,11 @@ pub fn print_status(
             println!("{}", lang.no_matching_activity().yellow());
         }
     }
-    for collector in snapshot.collectors.iter().filter(|collector| {
-        collector.state != crate::model::CollectorState::Healthy
-    }) {
+    for collector in snapshot
+        .collectors
+        .iter()
+        .filter(|collector| collector.state != crate::model::CollectorState::Healthy)
+    {
         print_collector_health(collector);
     }
     for access in visible {
@@ -468,9 +471,13 @@ mod tests {
                 None,
                 #[cfg(windows)]
                 None,
-            )).unwrap()
+            ))
+            .unwrap()
         };
-        assert_eq!(encode(&snapshot)["observation_gaps"], serde_json::json!(["camera"]));
+        assert_eq!(
+            encode(&snapshot)["observation_gaps"],
+            serde_json::json!(["camera"])
+        );
         assert_eq!(encode(&snapshot)["accesses"].as_array().unwrap().len(), 1);
         snapshot.observation_gaps.clear();
         assert!(encode(&snapshot).get("observation_gaps").is_none());
