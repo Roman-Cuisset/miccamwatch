@@ -83,7 +83,17 @@ pub enum Command {
     },
     #[cfg(all(windows, feature = "packaged-desktop"))]
     /// Recover an interrupted Windows update using its retained maintenance executable
-    RecoverUpdate,
+    RecoverUpdate {
+        /// Review and explicitly approve one verified MSI recovery operation
+        #[arg(long)]
+        repair: bool,
+    },
+    #[cfg(all(windows, feature = "packaged-desktop"))]
+    /// Prepare recovery of an incomplete official Windows MSI v0.21.0 installation
+    RecoverMsi {
+        /// Path to the original official Windows x64 v0.21.0 MSI
+        msi: std::path::PathBuf,
+    },
     #[cfg(windows)]
     #[command(name = "__portable-receipt", hide = true)]
     PortableReceipt,

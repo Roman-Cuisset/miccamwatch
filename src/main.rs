@@ -112,7 +112,9 @@ fn run() -> Result<u8> {
         Command::UpdateWorker { parent_pid, parent_created, fingerprint } =>
             return updater::run_worker(*parent_pid, *parent_created, fingerprint),
         #[cfg(feature = "packaged-desktop")]
-        Command::RecoverUpdate => return updater::recover(),
+        Command::RecoverUpdate { repair } => return updater::recover(*repair),
+        #[cfg(feature = "packaged-desktop")]
+        Command::RecoverMsi { msi } => return updater::prepare_legacy_recovery(msi),
         Command::PortableReceipt => {
             println!("{}", uninstall::portable_receipt()?);
             return Ok(0);
@@ -428,7 +430,7 @@ fn run() -> Result<u8> {
             unreachable!("internal command dispatched before configuration")
         }
         #[cfg(all(windows, feature = "packaged-desktop"))]
-        Command::UpdateWorker { .. } | Command::RecoverUpdate => {
+        Command::UpdateWorker { .. } | Command::RecoverUpdate { .. } | Command::RecoverMsi { .. } => {
             unreachable!("Windows maintenance dispatched before configuration")
         }
         Command::Uninstall => unreachable!("uninstall dispatched before configuration"),

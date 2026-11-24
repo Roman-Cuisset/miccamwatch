@@ -1,4 +1,6 @@
-use super::{bundle, download, msi, portable, process, transaction::ProtectionReservation};
+use super::{
+    bundle, download, msi, portable, process, recovery, transaction::ProtectionReservation,
+};
 use crate::frontends::desktop::package::MANIFEST;
 use crate::uninstall::windows::{
     RegisteredOwner, digest, ensure_owned, kernel_parent, ordinary_user, process_image,
@@ -32,13 +34,23 @@ struct Plan {
     old_hash: String,
     new_version: String,
     new_hash: String,
+    #[serde(default)]
+    recovery: Option<RecoverySource>,
     kind: Kind,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RecoverySource {
+    sha256: String,
+    user: String,
 }
 
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "installation", deny_unknown_fields)]
 enum Kind {
     Msi { old_code: String, new_code: String },
+    LegacyMsi,
     Portable,
     Remove,
 }
@@ -103,6 +115,8 @@ pub(super) fn update() -> Result<()> {
     portable::check_pending(&base)?;
     let installed = match registered_owner(&root)? {
         Some(RegisteredOwner::Msi(code)) => {
+            ordinary_user()?;
+            msi::require_idle()?;
             msi::verify_installed(&root, &code, VERSION)?;
             Some(code)
         }
@@ -168,6 +182,7 @@ pub(super) fn update() -> Result<()> {
     }
     let (artifact, mut new_hash) = download::download_verified(release, name, &job)?;
     fs::remove_file(job.join("SHA256SUMS"))?;
+    let mut recovery_source = None;
     let kind = if let Some(old_code) = installed {
         let new_code = msi::inspect_candidate(&artifact, version)?;
         ensure!(
@@ -175,6 +190,27 @@ pub(super) fn update() -> Result<()> {
             "MSI major upgrade reused the installed ProductCode"
         );
         msi::require_new_product(&new_code)?;
+        let target = recovery::Target {
+            root: &root,
+            version: VERSION,
+            code: &old_code,
+            bundle_hash: &old_hash,
+            candidate_code: Some(&new_code),
+        };
+        let sha256 = recovery::retain_official(&job, &target)?;
+        let previous_size = fs::metadata(job.join(recovery::ARCHIVE))?.len();
+        let candidate_size = fs::metadata(&artifact)?.len();
+        msi::require_space(
+            &root,
+            previous_size
+                .saturating_add(candidate_size)
+                .saturating_mul(4)
+                + 128 * 1024 * 1024,
+        )?;
+        recovery_source = Some(RecoverySource {
+            sha256,
+            user: crate::windows_control::current_identity()?.user,
+        });
         Kind::Msi { old_code, new_code }
     } else {
         let candidate = job.join("candidate");
@@ -198,6 +234,7 @@ pub(super) fn update() -> Result<()> {
             old_hash,
             new_version: version.to_owned(),
             new_hash,
+            recovery: recovery_source,
             kind,
         },
     )?;
@@ -260,6 +297,7 @@ pub fn remove_portable() -> Result<u8> {
         old_hash,
         new_version: VERSION.to_owned(),
         new_hash: String::new(),
+        recovery: None,
         kind: Kind::Remove,
     };
     let temporary = portable::private_job(&base)?;
@@ -283,12 +321,12 @@ fn prepare_worker(
     Ok((temporary.keep(), fingerprint))
 }
 
-fn official_asset_url(url: &str) -> bool {
+pub(super) fn official_asset_url(url: &str) -> bool {
     url.strip_prefix("https://api.github.com/repos/Roman-Cuisset/miccamwatch/releases/assets/")
         .is_some_and(|id| !id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
-fn confirm(message: &str, keyword: &str) -> Result<()> {
+pub(super) fn confirm(message: &str, keyword: &str) -> Result<()> {
     ensure!(
         std::io::stdin().is_terminal() && std::io::stdout().is_terminal(),
         "run MicCamWatch maintenance from an interactive terminal to approve the operation"
@@ -359,6 +397,16 @@ fn read_plan(job: &Path, expected: Option<&str>) -> Result<Plan> {
     let plan: Plan = serde_json::from_slice(&bytes)?;
     let valid_target = match plan.kind {
         Kind::Remove => plan.new_version == VERSION && plan.new_hash.is_empty(),
+        Kind::LegacyMsi => {
+            plan.old_version == recovery::LEGACY_VERSION
+                && plan.new_version.is_empty()
+                && plan.new_hash.is_empty()
+                && plan.active
+                    == portable::local_app_data()?
+                        .join("Programs")
+                        .join("MicCamWatch")
+                && plan.recovery.is_some()
+        }
         _ => {
             version_supported(&plan.new_version)
                 && self_update::version::cmp_versions(&plan.old_version, &plan.new_version)?
@@ -366,7 +414,9 @@ fn read_plan(job: &Path, expected: Option<&str>) -> Result<Plan> {
         }
     };
     ensure!(
-        plan.schema == 1 && plan.old_version == VERSION && valid_target,
+        plan.schema == 1
+            && (plan.old_version == VERSION || matches!(plan.kind, Kind::LegacyMsi))
+            && valid_target,
         "incompatible maintenance plan"
     );
     Ok(plan)
@@ -400,7 +450,7 @@ fn read_context(expected: Option<&str>) -> Result<(PathBuf, Plan, File, File)> {
     Ok((job, plan, lock, directory))
 }
 
-fn require_idle(active: &Path) -> Result<()> {
+pub(super) fn require_idle(active: &Path) -> Result<()> {
     ensure!(
         process::installed_running_tray(&active.join("mcw.exe"), &active.join("mcw-tray.exe"))?
             .is_none(),
@@ -409,7 +459,7 @@ fn require_idle(active: &Path) -> Result<()> {
     Ok(())
 }
 
-fn binaries(job: &Path, active: &Path, version: &str) -> Result<()> {
+pub(super) fn binaries(job: &Path, active: &Path, version: &str) -> Result<()> {
     bundle::verify_flutter_version(active, version)?;
     let scratch = tempfile::tempdir_in(job)?;
     super::validate_reported_version(
@@ -462,7 +512,7 @@ pub fn run_worker(pid: u32, created: u64, fingerprint: &str) -> Result<u8> {
         );
         let _protection = ProtectionReservation::acquire()?;
         let artifact = job.join(MSI);
-        let pinned = match &plan.kind {
+        let (pinned, _retained) = match &plan.kind {
             Kind::Msi { old_code, new_code } => {
                 msi::verify_installed(&plan.active, old_code, VERSION)?;
                 msi::require_new_product(new_code)?;
@@ -472,14 +522,32 @@ pub fn run_worker(pid: u32, created: u64, fingerprint: &str) -> Result<u8> {
                         && msi::inspect_candidate(&artifact, &plan.new_version)? == *new_code,
                     "MSI bytes or identity changed after confirmation"
                 );
-                Some(file)
+                let source = plan
+                    .recovery
+                    .as_ref()
+                    .context("a verified previous MSI is required before updating")?;
+                ensure!(
+                    source.user == identity.user,
+                    "maintenance belongs to a different user"
+                );
+                let previous = job.join(recovery::ARCHIVE);
+                let mut retained = bundle::pin(&previous)?;
+                ensure!(
+                    digest(&mut retained)? == source.sha256
+                        && msi::inspect_recovery_package(&previous, VERSION)?
+                            .eq_ignore_ascii_case(old_code),
+                    "recovery MSI changed after confirmation"
+                );
+                recovery::capture_backup(&job)?;
+                (Some(file), Some(retained))
             }
+            Kind::LegacyMsi => bail!("legacy recovery cannot enter the automatic update worker"),
             Kind::Portable | Kind::Remove => {
                 verify_portable_owner(&plan.active)?;
                 if matches!(plan.kind, Kind::Remove) {
                     crate::autostart::require_unregistered_for_portable_removal(&caller)?;
                 }
-                None
+                (None, None)
             }
         };
         ensure!(
@@ -514,8 +582,10 @@ pub fn run_worker(pid: u32, created: u64, fingerprint: &str) -> Result<u8> {
                     &plan.new_version,
                 )
                 .and_then(|()| binaries(&job, &plan.active, &plan.new_version))
+                .and_then(|()| recovery::verify_backup(&job))
                 .and_then(|()| portable::finish(&job, "committed"))
             }
+            Kind::LegacyMsi => bail!("legacy recovery cannot enter the automatic update worker"),
             Kind::Portable => {
                 swap(&job, &plan).apply(|| binaries(&job, &plan.active, &plan.new_version))
             }
@@ -527,10 +597,14 @@ pub fn run_worker(pid: u32, created: u64, fingerprint: &str) -> Result<u8> {
         && !job.join("rolled-back").try_exists()?
         && bundle::verify(&plan.active, VERSION, true).is_ok_and(|hash| hash == plan.old_hash)
         && match &plan.kind {
-            Kind::Msi { old_code, .. } => {
+            Kind::Msi { old_code, new_code } => {
                 msi::require_restart_completed(&job).is_ok()
                     && msi::verify_installed(&plan.active, old_code, VERSION).is_ok()
+                    && msi::require_new_product(new_code).is_ok()
+                    && (!job.join("msi-started").try_exists()?
+                        || recovery::verify_backup(&job).is_ok())
             }
+            Kind::LegacyMsi => false,
             Kind::Portable | Kind::Remove => !job.join("previous").try_exists()?,
         }
     {
@@ -557,12 +631,13 @@ pub fn run_worker(pid: u32, created: u64, fingerprint: &str) -> Result<u8> {
     Ok(0)
 }
 
-pub fn recover() -> Result<u8> {
+pub fn recover(repair: bool) -> Result<u8> {
     portable::require_real_profile()?;
     let (job, plan, _lock, _directory) = read_context(None)?;
-    let _protection = ProtectionReservation::acquire()?;
     match &plan.kind {
         Kind::Portable | Kind::Remove => {
+            ensure!(!repair, "the repair option is only for MSI recovery");
+            let _protection = ProtectionReservation::acquire()?;
             verify_portable_owner(&plan.active)?;
             if plan.active.try_exists()? {
                 require_idle(&plan.active)?;
@@ -571,22 +646,189 @@ pub fn recover() -> Result<u8> {
             println!("The previous portable bundle was verified and restored.");
         }
         Kind::Msi { old_code, new_code } => {
+            ordinary_user()?;
             msi::require_restart_completed(&job)?;
+            msi::require_idle()?;
+            recovery::confirmed_removal(&job)?;
+            if let Some(source) = &plan.recovery {
+                ensure!(
+                    source.user == crate::windows_control::current_identity()?.user,
+                    "maintenance belongs to a different profile"
+                );
+            }
+            if msi::verify_installed(&plan.active, new_code, &plan.new_version).is_ok() {
+                let _protection = ProtectionReservation::acquire()?;
+                msi::require_new_product(old_code)?;
+                bundle::verify(&plan.active, &plan.new_version, true)?;
+                binaries(&job, &plan.active, &plan.new_version)?;
+                if plan.recovery.is_some() {
+                    recovery::verify_backup(&job)?;
+                }
+                portable::finish(&job, "committed")?;
+                println!("The installed MSI upgrade was verified.");
+                return Ok(0);
+            }
+            if repair {
+                let source = plan
+                    .recovery
+                    .as_ref()
+                    .context("no authenticated recovery MSI was prepared for this update")?;
+                ensure!(
+                    source.user == crate::windows_control::current_identity()?.user,
+                    "maintenance belongs to a different profile"
+                );
+                recovery::recover(
+                    &job,
+                    &recovery::Target {
+                        root: &plan.active,
+                        version: &plan.old_version,
+                        code: old_code,
+                        bundle_hash: &plan.old_hash,
+                        candidate_code: Some(new_code),
+                    },
+                    &source.sha256,
+                )?;
+                println!("The previous MSI product and bundle were verified.");
+                return Ok(0);
+            }
+            let _protection = ProtectionReservation::acquire()?;
             if msi::verify_installed(&plan.active, old_code, VERSION).is_ok() {
+                msi::require_new_product(new_code)?;
                 ensure!(
                     bundle::verify(&plan.active, VERSION, true)? == plan.old_hash,
                     "previous MSI bundle differs"
                 );
+                if plan.recovery.is_some() {
+                    recovery::verify_backup(&job)?;
+                }
                 portable::finish(&job, "rolled-back")?;
                 println!("The previous MSI product and bundle are intact.");
             } else {
-                msi::verify_installed(&plan.active, new_code, &plan.new_version)?;
-                bundle::verify(&plan.active, &plan.new_version, true)?;
-                binaries(&job, &plan.active, &plan.new_version)?;
-                portable::finish(&job, "committed")?;
-                println!("The installed MSI upgrade was verified.");
+                bail!(
+                    "intervention_required: the previous MSI registration is incomplete; run recover-update --repair to review recovery"
+                );
             }
+        }
+        Kind::LegacyMsi => {
+            ensure!(
+                repair,
+                "review and approve each MSI recovery step with recover-update --repair"
+            );
+            let source = plan
+                .recovery
+                .as_ref()
+                .context("legacy recovery source is missing")?;
+            ensure!(
+                source.user == crate::windows_control::current_identity()?.user,
+                "maintenance belongs to a different profile"
+            );
+            recovery::recover(
+                &job,
+                &recovery::Target {
+                    root: &plan.active,
+                    version: recovery::LEGACY_VERSION,
+                    code: msi::LEGACY_CODE,
+                    bundle_hash: "",
+                    candidate_code: None,
+                },
+                &source.sha256,
+            )?;
+            println!("The previous MSI product and bundle were verified.");
         }
     }
     Ok(0)
+}
+
+pub fn prepare_legacy_recovery(source: &Path) -> Result<u8> {
+    portable::require_real_profile()?;
+    ordinary_user()?;
+    let local = portable::local_app_data()?;
+    let root = local.join("Programs").join("MicCamWatch");
+    let current = env::current_exe()?.canonicalize()?;
+    ensure!(
+        !current.starts_with(&root),
+        "run the recovery tool from a verified bundle outside the MSI installation"
+    );
+    msi::require_idle()?;
+    msi::require_family_owner(msi::LEGACY_CODE)?;
+    ensure!(
+        msi::registration(&root, msi::LEGACY_CODE, recovery::LEGACY_VERSION)?
+            != msi::Registration::Complete,
+        "the legacy MSI installation is already registered correctly"
+    );
+    recovery::verify_payload(&recovery::Target {
+        root: &root,
+        version: recovery::LEGACY_VERSION,
+        code: msi::LEGACY_CODE,
+        bundle_hash: "",
+        candidate_code: None,
+    })?;
+    let base = base(&root)?;
+    let _lock = portable::lock(&base, true)?;
+    portable::check_pending(&base)?;
+    let temporary = portable::private_job(&base)?;
+    let sha256 = recovery::retain_legacy(source, temporary.path())?;
+    let (job, _) = prepare_worker(
+        temporary,
+        &current,
+        &Plan {
+            schema: 1,
+            active: root,
+            old_version: recovery::LEGACY_VERSION.to_owned(),
+            old_hash: String::new(),
+            new_version: String::new(),
+            new_hash: String::new(),
+            recovery: Some(RecoverySource {
+                sha256,
+                user: crate::windows_control::current_identity()?.user,
+            }),
+            kind: Kind::LegacyMsi,
+        },
+    )?;
+    println!(
+        "Recovery prepared. Review the next step with \"{}\" recover-update --repair",
+        job.join(WORKER).display()
+    );
+    Ok(0)
+}
+
+pub(crate) fn recovery_guidance(current: &Path) -> Result<Option<String>> {
+    let root = current.parent().context("installation directory missing")?;
+    let Some(base) = portable::transaction_root(root)? else {
+        return Ok(None);
+    };
+    if !base.try_exists()? {
+        return Ok(None);
+    }
+    let _directory = portable::open_owned_directory(&base)?;
+    for entry in fs::read_dir(base)? {
+        let job = entry?.path();
+        if !job
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().starts_with("update-"))
+        {
+            continue;
+        }
+        let _job_directory = portable::open_owned_directory(&job)?;
+        if !job.join(PLAN).try_exists()?
+            || job.join("committed").try_exists()?
+            || job.join("rolled-back").try_exists()?
+        {
+            continue;
+        }
+        let plan = read_plan(&job, None)?;
+        if plan.active == root && matches!(plan.kind, Kind::Msi { .. } | Kind::LegacyMsi) {
+            let repair = if plan.recovery.is_some() {
+                " --repair"
+            } else {
+                ""
+            };
+            return Ok(Some(format!(
+                "Windows Installer needs verification before another update. In your original Windows account, close the tray normally and run \"{}\" recover-update{repair}. Diagnostics: {}",
+                job.join(WORKER).display(),
+                job.join("result.json").display()
+            )));
+        }
+    }
+    Ok(None)
 }

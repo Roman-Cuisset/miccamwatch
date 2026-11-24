@@ -9,13 +9,22 @@ use windows::{
     Win32::{
         Foundation::FILETIME,
         System::ApplicationInstallationAndServicing::{
-            MSIHANDLE, MSIINSTALLCONTEXT, MSIINSTALLCONTEXT_USERUNMANAGED,
+            MSIHANDLE, MSIINSTALLCONTEXT, MSIINSTALLCONTEXT_MACHINE, MSIINSTALLCONTEXT_USERMANAGED,
+            MSIINSTALLCONTEXT_USERUNMANAGED,
         },
     },
     core::{PCWSTR, PWSTR, w},
 };
 
 const UPGRADE_CODE: &str = "{8FC9317B-4517-4E83-9F52-CF3257584BF6}";
+pub(super) const LEGACY_CODE: &str = "{86CDFED5-BA07-4C91-8BC7-8A856198DC33}";
+
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum Registration {
+    Absent,
+    PresentWithoutIndex,
+    Complete,
+}
 
 struct Installer {
     _library: SystemLibrary,
@@ -43,6 +52,7 @@ struct Installer {
         PWSTR,
         *mut u32,
     ) -> u32,
+    enum_related: unsafe extern "system" fn(PCWSTR, u32, u32, PWSTR) -> u32,
 }
 
 impl Installer {
@@ -61,6 +71,7 @@ impl Installer {
                 summary: library.export(c"MsiGetSummaryInformationW")?,
                 summary_property: library.export(c"MsiSummaryInfoGetPropertyW")?,
                 product_info: library.export(c"MsiGetProductInfoExW")?,
+                enum_related: library.export(c"MsiEnumRelatedProductsW")?,
                 _library: library,
             }
         })
@@ -84,7 +95,7 @@ pub(super) fn wide(value: &OsStr) -> Vec<u16> {
 // Windows Installer still uses Win32 DOS paths in its source list. The
 // updater canonicalizes paths for identity checks, then supplies the same
 // local path without the extended-length prefix to Windows Installer.
-fn dos_path(path: &Path) -> Result<&Path> {
+pub(super) fn dos_path(path: &Path) -> Result<&Path> {
     let value = path.to_str().context("MSI path is not Unicode")?;
     let value = value.strip_prefix(r"\\?\").unwrap_or(value);
     ensure!(
@@ -114,12 +125,11 @@ fn database<'a>(installer: &'a Installer, path: &Path) -> Result<Handle<'a>> {
     Ok(result)
 }
 
-fn property(db: &Handle<'_>, name: &str) -> Result<Option<String>> {
-    let query = format!("SELECT `Value` FROM `Property` WHERE `Property`='{name}'");
+fn first_string(db: &Handle<'_>, query: &str) -> Result<Option<String>> {
     let installer = db.1;
     let mut view = Handle(MSIHANDLE(0), installer);
     checked(
-        unsafe { (installer.view)(db.0, PCWSTR(wide(OsStr::new(&query)).as_ptr()), &mut view.0) },
+        unsafe { (installer.view)(db.0, PCWSTR(wide(OsStr::new(query)).as_ptr()), &mut view.0) },
         "open property query",
     )?;
     checked(
@@ -141,7 +151,22 @@ fn property(db: &Handle<'_>, name: &str) -> Result<Option<String>> {
     Ok(Some(String::from_utf16(&value[..length as usize])?))
 }
 
+fn property(db: &Handle<'_>, name: &str) -> Result<Option<String>> {
+    first_string(
+        db,
+        &format!("SELECT `Value` FROM `Property` WHERE `Property`='{name}'"),
+    )
+}
+
 pub(super) fn inspect_candidate(path: &Path, version: &str) -> Result<String> {
+    inspect_package(path, version, false)
+}
+
+pub(super) fn inspect_recovery_package(path: &Path, version: &str) -> Result<String> {
+    inspect_package(path, version, version == "0.21.0")
+}
+
+fn inspect_package(path: &Path, version: &str, legacy: bool) -> Result<String> {
     let installer = Installer::load()?;
     let db = database(&installer, path)?;
     let mut summary = Handle(MSIHANDLE(0), &installer);
@@ -168,8 +193,8 @@ pub(super) fn inspect_candidate(path: &Path, version: &str) -> Result<String> {
     )?;
     let template = String::from_utf16(&template[..length as usize])?;
     ensure!(
-        template.starts_with("x64;"),
-        "candidate MSI architecture is not x64"
+        template.starts_with("x64;") || legacy && template.starts_with("Intel;"),
+        "unexpected MSI architecture"
     );
     ensure!(
         property(&db, "ProductName")?.as_deref() == Some("MicCamWatch")
@@ -177,13 +202,61 @@ pub(super) fn inspect_candidate(path: &Path, version: &str) -> Result<String> {
             && property(&db, "UpgradeCode")?
                 .is_some_and(|value| value.eq_ignore_ascii_case(UPGRADE_CODE))
             && property(&db, "ProductVersion")?.as_deref() == Some(version)
-            && property(&db, "MCW_BUNDLE_IPC")?.as_deref()
-                == Some(&crate::frontends::desktop::PROTOCOL_VERSION.to_string())
+            && (legacy
+                || property(&db, "MCW_BUNDLE_IPC")?.as_deref()
+                    == Some(&crate::frontends::desktop::PROTOCOL_VERSION.to_string()))
             && property(&db, "ALLUSERS")?.is_none_or(|value| value.is_empty()),
         "candidate MSI has incompatible product identity, version, scope or IPC"
     );
     let product = property(&db, "ProductCode")?.context("missing MSI ProductCode")?;
     ensure!(valid_product_code(&product), "invalid MSI ProductCode");
+    ensure!(
+        !legacy || product.eq_ignore_ascii_case(LEGACY_CODE),
+        "unexpected legacy ProductCode"
+    );
+    let mut media = Handle(MSIHANDLE(0), &installer);
+    checked(
+        unsafe { (installer.view)(db.0, w!("SELECT `Cabinet` FROM `Media`"), &mut media.0) },
+        "open cabinet query",
+    )?;
+    checked(
+        unsafe { (installer.execute)(media.0, MSIHANDLE(0)) },
+        "read cabinet table",
+    )?;
+    let mut count = 0;
+    loop {
+        let mut row = Handle(MSIHANDLE(0), &installer);
+        let status = unsafe { (installer.fetch)(media.0, &mut row.0) };
+        if status == 259 {
+            break;
+        }
+        checked(status, "fetch cabinet")?;
+        let mut value = [0u16; 256];
+        let mut size = value.len() as u32;
+        checked(
+            unsafe { (installer.record_string)(row.0, 1, PWSTR(value.as_mut_ptr()), &mut size) },
+            "read cabinet name",
+        )?;
+        ensure!(
+            size > 1 && value[0] == u16::from(b'#'),
+            "MSI needs external media"
+        );
+        let cabinet = String::from_utf16(&value[1..size as usize])?;
+        ensure!(
+            cabinet
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
+                && first_string(
+                    &db,
+                    &format!("SELECT `Name` FROM `_Streams` WHERE `Name`='{cabinet}'")
+                )?
+                .as_deref()
+                    == Some(cabinet.as_str()),
+            "MSI embedded cabinet is missing or has an unsupported name"
+        );
+        count += 1;
+    }
+    ensure!(count > 0, "MSI lacks an embedded cabinet");
     Ok(product)
 }
 
@@ -192,13 +265,22 @@ fn installed_property(
     code: &str,
     property: PCWSTR,
 ) -> Result<Option<String>> {
+    product_property(installer, code, MSIINSTALLCONTEXT_USERUNMANAGED, property)
+}
+
+fn product_property(
+    installer: &Installer,
+    code: &str,
+    context: MSIINSTALLCONTEXT,
+    property: PCWSTR,
+) -> Result<Option<String>> {
     let mut buffer = [0u16; 32768];
     let mut length = buffer.len() as u32;
     let status = unsafe {
         (installer.product_info)(
             PCWSTR(wide(OsStr::new(code)).as_ptr()),
             PCWSTR::null(),
-            MSIINSTALLCONTEXT_USERUNMANAGED,
+            context,
             property,
             PWSTR(buffer.as_mut_ptr()),
             &mut length,
@@ -212,10 +294,63 @@ fn installed_property(
 }
 
 pub(super) fn verify_installed(root: &Path, code: &str, version: &str) -> Result<()> {
+    ensure!(
+        registration(root, code, version)? == Registration::Complete,
+        "MSI ProductCode or UpgradeCode index does not match this per-user product"
+    );
+    Ok(())
+}
+
+fn require_other_contexts_absent(installer: &Installer, code: &str) -> Result<()> {
+    for context in [MSIINSTALLCONTEXT_MACHINE, MSIINSTALLCONTEXT_USERMANAGED] {
+        ensure!(
+            product_property(installer, code, context, w!("State"))?.is_none(),
+            "a matching ProductCode exists in a different MSI context"
+        );
+    }
+    Ok(())
+}
+
+fn related_product(installer: &Installer) -> Result<Option<String>> {
+    let family = wide(OsStr::new(UPGRADE_CODE));
+    let mut value = [0u16; 39];
+    let code = unsafe {
+        (installer.enum_related)(PCWSTR(family.as_ptr()), 0, 0, PWSTR(value.as_mut_ptr()))
+    };
+    if code == 259 {
+        return Ok(None);
+    }
+    checked(code, "enumerate products by UpgradeCode")?;
+    let product = String::from_utf16(&value[..38])?;
+    ensure!(
+        valid_product_code(&product) && value[38] == 0,
+        "invalid related ProductCode"
+    );
+    let next = unsafe {
+        (installer.enum_related)(PCWSTR(family.as_ptr()), 0, 1, PWSTR(value.as_mut_ptr()))
+    };
+    ensure!(
+        next == 259,
+        "multiple related products or incomplete MSI index enumeration"
+    );
+    Ok(Some(product))
+}
+
+pub(super) fn registration(root: &Path, code: &str, version: &str) -> Result<Registration> {
     let installer = Installer::load()?;
     ensure!(valid_product_code(code), "invalid installed ProductCode");
+    require_other_contexts_absent(&installer, code)?;
+    let related = related_product(&installer)?;
+    let state = installed_property(&installer, code, w!("State"))?;
+    if state.is_none() {
+        ensure!(
+            !related.is_some_and(|product| product.eq_ignore_ascii_case(code)),
+            "UpgradeCode finds a ProductCode absent from its installation context"
+        );
+        return Ok(Registration::Absent);
+    }
     ensure!(
-        installed_property(&installer, code, w!("State"))?.as_deref() == Some("5")
+        state.as_deref() == Some("5")
             && installed_property(&installer, code, w!("VersionString"))?.as_deref()
                 == Some(version)
             && installed_property(&installer, code, w!("InstallLocation"))?.is_some_and(|value| {
@@ -232,19 +367,127 @@ pub(super) fn verify_installed(root: &Path, code: &str, version: &str) -> Result
     ensure!(
         property(&db, "UpgradeCode")?.is_some_and(|value| value.eq_ignore_ascii_case(UPGRADE_CODE))
             && property(&db, "ProductCode")?.is_some_and(|value| value.eq_ignore_ascii_case(code))
-            && property(&db, "ProductName")?.as_deref() == Some("MicCamWatch"),
+            && property(&db, "ProductName")?.as_deref() == Some("MicCamWatch")
+            && property(&db, "ProductVersion")?.as_deref() == Some(version)
+            && property(&db, "Manufacturer")?.as_deref() == Some("Roman Cuisset"),
         "cached MSI does not belong to the official MicCamWatch upgrade family"
+    );
+    match related {
+        Some(found) if found.eq_ignore_ascii_case(code) => Ok(Registration::Complete),
+        None => Ok(Registration::PresentWithoutIndex),
+        Some(_) => bail!("UpgradeCode resolves a different installed product"),
+    }
+}
+
+pub(super) fn require_new_product(code: &str) -> Result<()> {
+    let installer = Installer::load()?;
+    ensure!(valid_product_code(code), "invalid candidate ProductCode");
+    require_other_contexts_absent(&installer, code)?;
+    ensure!(
+        installed_property(&installer, code, w!("State"))?.is_none()
+            && !related_product(&installer)?
+                .is_some_and(|product| product.eq_ignore_ascii_case(code)),
+        "the candidate ProductCode already exists in this Windows Installer context"
     );
     Ok(())
 }
 
-pub(super) fn require_new_product(code: &str) -> Result<()> {
+pub(super) fn require_family_owner(code: &str) -> Result<()> {
     ensure!(
-        valid_product_code(code)
-            && installed_property(&Installer::load()?, code, w!("State"))?.is_none(),
-        "the candidate ProductCode already exists in this Windows Installer context"
+        related_product(&Installer::load()?)?.is_none_or(|found| found.eq_ignore_ascii_case(code)),
+        "another product is discoverable in the MicCamWatch MSI family"
     );
     Ok(())
+}
+
+pub(super) fn require_idle() -> Result<()> {
+    use windows::Win32::{
+        Foundation::{CloseHandle, ERROR_FILE_NOT_FOUND, WAIT_OBJECT_0},
+        System::Threading::{
+            OpenMutexW, ReleaseMutex, SYNCHRONIZATION_ACCESS_RIGHTS, WaitForSingleObject,
+        },
+    };
+    for name in [w!("Global\\_MSIExecute"), w!("_MSIExecute")] {
+        let handle = match unsafe {
+            OpenMutexW(SYNCHRONIZATION_ACCESS_RIGHTS(0x0010_0001), false, name)
+        } {
+            Ok(handle) => handle,
+            Err(error) if error.code() == ERROR_FILE_NOT_FOUND.to_hresult() => continue,
+            Err(error) => return Err(error).context("cannot verify Windows Installer activity"),
+        };
+        let wait = unsafe { WaitForSingleObject(handle, 0) };
+        let released = if matches!(wait.0, 0 | 0x80) {
+            unsafe { ReleaseMutex(handle) }
+        } else {
+            Ok(())
+        };
+        unsafe { CloseHandle(handle) }?;
+        released?;
+        ensure!(
+            wait == WAIT_OBJECT_0,
+            "Windows Installer transaction or ambiguous mutex state"
+        );
+    }
+    Ok(())
+}
+
+pub(super) fn require_space(directory: &Path, bytes: u64) -> Result<()> {
+    use windows::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+    let system = system_directory()?;
+    for directory in [directory, system.as_path()] {
+        let mut available = 0;
+        unsafe {
+            GetDiskFreeSpaceExW(
+                PCWSTR(wide(directory.as_os_str()).as_ptr()),
+                Some(&mut available),
+                None,
+                None,
+            )
+        }?;
+        ensure!(
+            available >= bytes,
+            "insufficient space on an installation or Windows Installer volume"
+        );
+    }
+    Ok(())
+}
+
+pub(super) fn run_recovery(
+    step: &Path,
+    operation: &str,
+    target: &OsStr,
+    interactive: bool,
+) -> Result<()> {
+    require_idle()?;
+    let arguments = if interactive { &[][..] } else { &["/qn"][..] };
+    let code = run_installer(step, operation, target, arguments)?;
+    ensure!(
+        code == 0,
+        "{} ({code}); inspect the recovery receipt before continuing",
+        rejection(code)
+    );
+    Ok(())
+}
+
+fn run_installer(stage: &Path, operation: &str, target: &OsStr, ui: &[&str]) -> Result<i32> {
+    let executable = system_directory()?.join("msiexec.exe");
+    let log = stage.join("msi.log");
+    let log = dos_path(&log)?;
+    portable::write_record(stage, "msi-started", &boot_time()?.to_le_bytes())?;
+    let status = Command::new(executable)
+        .arg(operation)
+        .arg(target)
+        .args(ui)
+        .args(["/norestart", "MSIRESTARTMANAGERCONTROL=Disable", "/l*v"])
+        .arg(log)
+        .current_dir(stage)
+        .status()
+        .context("cannot start Windows Installer")?;
+    let code = status
+        .code()
+        .context("Windows Installer did not provide an exit code")?;
+    portable::write_record(stage, "msi-status", &code.to_le_bytes())?;
+    Ok(code)
 }
 
 pub(super) fn install(
@@ -256,46 +499,25 @@ pub(super) fn install(
     old_version: &str,
     new_version: &str,
 ) -> Result<()> {
-    let executable = system_directory()?.join("msiexec.exe");
     let package = dos_path(path)?;
-    let log = stage.join("msi.log");
-    let log = dos_path(&log)?;
-    portable::write_record(stage, "msi-started", &boot_time()?.to_le_bytes())?;
     // Windows Installer handles any elevation or policy refusal itself.
     // Keep reboots and restart-manager shutdown/restart out of this invocation.
-    let status = Command::new(executable)
-        .arg("/i")
-        .arg(package)
-        .args([
-            "/passive",
-            "/norestart",
-            "MSIRESTARTMANAGERCONTROL=Disable",
-            "/l*v",
-        ])
-        .arg(log)
-        .current_dir(stage)
-        .status()
-        .context("cannot start Windows Installer")?;
-    let code = status
-        .code()
-        .context("Windows Installer did not provide an exit code")?;
-    portable::write_record(stage, "msi-status", &code.to_le_bytes())?;
+    require_idle()?;
+    let code = run_installer(stage, "/i", package.as_os_str(), &["/passive"])?;
     match code {
         0 => {
             verify_installed(root, new, new_version)?;
-            ensure!(
-                installed_property(&Installer::load()?, old, w!("State"))?.is_none(),
-                "old MSI registration still exists after installation"
-            );
+            require_new_product(old)
+                .context("old MSI registration still exists after installation")?;
             bundle::verify(root, new_version, true)?;
             Ok(())
         }
         1641 | 3010 => {
-            bail!("Windows Installer requires a restart ({status}); completion is unverified");
+            bail!("Windows Installer requires a restart ({code}); completion is unverified");
         }
         _ => {
             let reason = rejection(code);
-            verify_installed(root, old, old_version)
+            require_new_product(new).and_then(|()| verify_installed(root, old, old_version))
                 .and_then(|()| bundle::verify(root, old_version, true).map(|_| ()))
                 .with_context(|| format!("{reason} ({code}); previous MSI registration and bundle could not be revalidated"))?;
             bail!("{reason} ({code}); the verified previous bundle is still installed");
@@ -309,6 +531,7 @@ fn rejection(code: i32) -> &'static str {
         1223 | 1602 => "Windows Installer was cancelled",
         1618 => "another Windows Installer transaction is active",
         1625 => "Windows Installer policy refused the transaction",
+        1641 | 3010 => "Windows Installer requires a restart",
         _ => "Windows Installer failed",
     }
 }

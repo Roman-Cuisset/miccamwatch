@@ -22,10 +22,14 @@ mod msi;
 #[cfg(feature = "packaged-desktop")]
 mod portable;
 #[cfg(feature = "packaged-desktop")]
+mod recovery;
+#[cfg(feature = "packaged-desktop")]
 mod system_library;
 #[cfg(feature = "packaged-desktop")]
 #[doc(hidden)]
-pub use hybrid::{hold_runtime_lease, recover, remove_portable, run_worker};
+pub use hybrid::{hold_runtime_lease, prepare_legacy_recovery, recover, remove_portable, run_worker};
+#[cfg(feature = "packaged-desktop")]
+pub(crate) use hybrid::recovery_guidance;
 
 pub(crate) fn stop_installed_tray() -> Result<bool> {
     let current = env::current_exe().context("failed to locate mcw executable")?;

@@ -36,7 +36,25 @@ pub(crate) fn stage_package(release: &Release, stage: &Path) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn download_verified(release: &Release, name: &str, stage: &Path) -> Result<(std::path::PathBuf, String)> {
+pub(super) fn download_verified(
+    release: &Release,
+    name: &str,
+    stage: &Path,
+) -> Result<(std::path::PathBuf, String)> {
+    let package = exact_asset(release, name)?;
+    let api_checksum = release_checksum(release, name, stage)?;
+    let archive = stage.join(name);
+    transfer(package, &archive, true)?;
+    verify(&archive, &api_checksum)?;
+    Ok((archive, sha256_hex(&api_checksum)?.to_ascii_lowercase()))
+}
+
+#[cfg(feature = "packaged-desktop")]
+pub(super) fn authenticated_sha256(release: &Release, name: &str, stage: &Path) -> Result<String> {
+    Ok(sha256_hex(&release_checksum(release, name, stage)?)?.to_ascii_lowercase())
+}
+
+fn release_checksum(release: &Release, name: &str, stage: &Path) -> Result<Checksum> {
     let package = exact_asset(release, name)?;
     let sums = exact_asset(release, SUMS)?;
     let api_checksum = required_digest(package)?;
@@ -55,10 +73,7 @@ pub(super) fn download_verified(release: &Release, name: &str, stage: &Path) -> 
             "selected release API digest and SHA256SUMS disagree for {name}; installation unchanged"
         );
     }
-    let archive = stage.join(name);
-    transfer(package, &archive, true)?;
-    verify(&archive, &api_checksum)?;
-    Ok((archive, sha256_hex(&api_checksum)?.to_ascii_lowercase()))
+    Ok(api_checksum)
 }
 
 fn exact_asset<'a>(release: &'a Release, name: &str) -> Result<&'a ReleaseAsset> {

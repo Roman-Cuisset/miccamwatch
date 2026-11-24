@@ -18,6 +18,13 @@ fn inspect_at(current: &Path) -> Result<Value> {
     #[cfg(unix)]
     let recognized = crate::uninstall::unix_owner_guidance(&current,
         |message| guidance = Some(message.to_string()))?;
+    #[cfg(all(windows, feature = "packaged-desktop"))]
+    let recognized = if let Some(recovery) = crate::updater::recovery_guidance(&current)? {
+        guidance = Some(recovery);
+        true
+    } else {
+        recognized
+    };
     ensure!(guidance.as_ref().is_none_or(|text| text.len() <= 4096),
         "Native owner guidance exceeds the consultation limit; no command was run");
     ensure!(recognized == guidance.is_some(), "Native ownership guidance is incomplete");

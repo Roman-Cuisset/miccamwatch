@@ -96,6 +96,16 @@ pub fn state() -> Result<AutostartState> {
     Ok(AutostartState::Disabled)
 }
 
+#[cfg(feature = "packaged-desktop")]
+pub(crate) fn maintenance_snapshot() -> Result<serde_json::Value> {
+    let task = registered_task()?.map(|task| serde_json::json!({
+        "enabled": task.enabled,
+        "command": task.command,
+        "simple_logon": task.simple_logon
+    }));
+    Ok(serde_json::json!({"task": task, "run": run_registration()?}))
+}
+
 pub fn enable() -> Result<()> {
     enable_for_version(env!("CARGO_PKG_VERSION"))
 }
