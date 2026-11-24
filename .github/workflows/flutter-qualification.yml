@@ -733,6 +733,8 @@ jobs:
             2>&1 | tee "$proof/executed-tests.log"
           cargo test --lib --locked --features flutter-desktop autostart:: -- --test-threads=1 \
             2>&1 | tee "$proof/autostart-tests.log"
+          cargo test --lib --locked --features flutter-desktop watcher::unix::tests \
+            2>&1 | tee "$proof/watch-notification-tests.log"
           cargo clippy --locked --lib --tests --features flutter-desktop -- -D warnings \
             2>&1 | tee "$proof/clippy.log"
       - name: Preserve native guard selection and execution evidence

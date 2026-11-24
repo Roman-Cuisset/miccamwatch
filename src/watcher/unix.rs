@@ -18,7 +18,12 @@ use std::{
     fs::OpenOptions,
     io::{BufWriter, Write},
     path::Path,
-    sync::mpsc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
+    thread,
     time::{Duration, Instant},
 };
 
@@ -32,7 +37,79 @@ pub struct EventDispatcher {
     history_enabled: bool,
     min_risk: Option<Risk>,
     cooldown: HashMap<String, Instant>,
-    last_notification_error: Option<String>,
+    alert_worker: Option<AlertWorker>,
+    alert_queue_full: bool,
+}
+
+struct Alert {
+    access: Access,
+    action: Action,
+    notify: bool,
+    sound: bool,
+}
+
+struct AlertWorker {
+    sender: mpsc::SyncSender<Alert>,
+    stopped: Arc<AtomicBool>,
+}
+
+impl AlertWorker {
+    fn start(lang: Language) -> Result<Self> {
+        let (sender, receiver) = mpsc::sync_channel(32);
+        let stopped = Arc::new(AtomicBool::new(false));
+        let stopping = Arc::clone(&stopped);
+        thread::Builder::new()
+            .name("mcw-notifications".into())
+            .spawn(move || deliver_alerts(receiver, &stopping, lang))
+            .context("cannot start notification worker")?;
+        Ok(Self { sender, stopped })
+    }
+}
+
+impl Drop for AlertWorker {
+    fn drop(&mut self) {
+        self.stopped.store(true, Ordering::Release);
+    }
+}
+
+fn deliver_alerts(receiver: mpsc::Receiver<Alert>, stopped: &AtomicBool, lang: Language) {
+    let mut last_failure = None;
+    while let Ok(alert) = receiver.recv() {
+        if stopped.load(Ordering::Acquire) {
+            break;
+        }
+        let result = (|| -> Result<bool> {
+            // A queued event cannot use settings that have since been disabled.
+            let settings = Settings::load()?;
+            let (notify, sound) = alert_delivery(
+                &settings,
+                alert.notify,
+                alert.sound,
+                alert.access.activity,
+                alert.action,
+            );
+            if sound && let Err(error) = platform::play_chime() {
+                eprintln!("chime failed: {error:#}");
+            }
+            if notify && !stopped.load(Ordering::Acquire) {
+                crate::notify::notify_access(&alert.access, alert.action, lang)
+                    .context("notification failed")?;
+                return Ok(true);
+            }
+            Ok(false)
+        })();
+        match result {
+            Ok(true) => last_failure = None,
+            Ok(false) => {}
+            Err(error) => {
+                let reason = format!("{error:#}");
+                if last_failure.as_ref() != Some(&reason) {
+                    eprintln!("{reason}");
+                    last_failure = Some(reason);
+                }
+            }
+        }
+    }
 }
 
 impl EventDispatcher {
@@ -66,7 +143,8 @@ impl EventDispatcher {
             history_enabled,
             min_risk: None,
             cooldown: HashMap::new(),
-            last_notification_error: None,
+            alert_worker: None,
+            alert_queue_full: false,
         })
     }
 
@@ -102,23 +180,40 @@ impl EventDispatcher {
         let (notify, sound) =
             alert_delivery(&settings, self.notify, self.sound, access.activity, action);
         if (notify || sound) && self.alert_due(&access.key) {
-            if sound && let Err(error) = platform::play_chime() {
-                eprintln!("chime failed: {error:#}");
-            }
-            if notify {
-                match crate::notify::notify_access(access, action, self.lang) {
-                    Ok(()) => self.last_notification_error = None,
-                    Err(error) => {
-                        let reason = format!("{error:#}");
-                        if self.last_notification_error.as_ref() != Some(&reason) {
-                            eprintln!("notification failed: {reason}");
-                            self.last_notification_error = Some(reason);
-                        }
-                    }
-                }
-            }
+            self.enqueue_alert(Alert {
+                access: event.access,
+                action,
+                notify,
+                sound,
+            });
         }
         Ok(())
+    }
+
+    fn enqueue_alert(&mut self, alert: Alert) {
+        let worker = match &self.alert_worker {
+            Some(worker) => worker,
+            None => match AlertWorker::start(self.lang) {
+                Ok(worker) => self.alert_worker.insert(worker),
+                Err(error) => {
+                    eprintln!("{error:#}");
+                    return;
+                }
+            },
+        };
+        match worker.sender.try_send(alert) {
+            Ok(()) => self.alert_queue_full = false,
+            Err(mpsc::TrySendError::Full(_)) => {
+                if !self.alert_queue_full {
+                    eprintln!("{}", self.lang.notification_queue_full());
+                    self.alert_queue_full = true;
+                }
+            }
+            Err(mpsc::TrySendError::Disconnected(_)) => {
+                eprintln!("notification worker is unavailable");
+                self.alert_worker = None;
+            }
+        }
     }
 
     fn alert_due(&mut self, key: &str) -> bool {
@@ -392,6 +487,37 @@ mod tests {
             changed_collector_health(&failed, &initial).collect::<Vec<_>>(),
             [&initial[1]]
         );
+    }
+
+    #[test]
+    fn stalled_alert_worker_never_blocks_the_dispatcher_queue() -> Result<()> {
+        let mut dispatcher =
+            EventDispatcher::new(Language::En, false, true, None, false, false, false)?;
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let stopped = Arc::new(AtomicBool::new(false));
+        dispatcher.alert_worker = Some(AlertWorker {
+            sender,
+            stopped: Arc::clone(&stopped),
+        });
+        let alert = || Alert {
+            access: access(),
+            action: Action::Start,
+            notify: true,
+            sound: false,
+        };
+        dispatcher.enqueue_alert(alert());
+        dispatcher.enqueue_alert(alert());
+        assert!(dispatcher.alert_queue_full);
+        assert!(receiver.try_recv().is_ok());
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        dispatcher.enqueue_alert(alert());
+        assert!(!dispatcher.alert_queue_full);
+        drop(dispatcher);
+        assert!(stopped.load(Ordering::Acquire));
+        Ok(())
     }
 
     #[test]
