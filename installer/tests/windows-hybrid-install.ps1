@@ -10,7 +10,8 @@ param(
     [switch]$HybridRollbackOnly,
     [switch]$ObserveRegistration,
     [string]$ExpectedMsiSha256,
-    [string]$RustMsiTest
+    [string]$RustMsiTest,
+    [switch]$SampleDesktopResources
 )
 $ErrorActionPreference = 'Stop'
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -88,6 +89,10 @@ if ($ObserveRegistration -and (!$StandardAccountSid -or $LocalDisposableVm -or
     throw 'The independent observer requires the disposable standard-account wrapper.'
 }
 if ($SourceRevision -notmatch '^[0-9a-f]{40}$') { throw 'Exact source revision required' }
+if ($SampleDesktopResources -and ($standard -or !$isAdmin -or
+    $env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or $env:GITHUB_ACTIONS -cne 'true')) {
+    throw 'Desktop resource sampling requires the disposable native administrator runner.'
+}
 $base = Join-Path $env:LOCALAPPDATA 'Programs\MicCamWatch'
 $configuration = Join-Path $env:APPDATA 'MicCamWatch'
 $data = Join-Path $env:LOCALAPPDATA 'MicCamWatch'
@@ -339,6 +344,81 @@ function Owned([string]$Name, [string]$Image) {
     $all
 }
 
+function Read-ResourceCoverage {
+    $status = (& "$base\mcw.exe" status --json --no-color) -join "`n" | ConvertFrom-Json
+    if (!$status.collectors) { throw 'No native collector status for resource sample' }
+    [ordered]@{
+        collectorStates = @($status.collectors | Select-Object collector,state)
+        observationGaps = @($status.observation_gaps | Where-Object { $_ })
+        observedActive = @($status.accesses | Where-Object activity -eq 'active').Count
+    }
+}
+
+function Measure-DesktopResources([string]$Label, [Diagnostics.Process[]]$Processes) {
+    try {
+        $beforeCoverage = Read-ResourceCoverage
+        $timer = [Diagnostics.Stopwatch]::StartNew()
+        $samples = @(foreach ($index in 0..15) {
+            if ($index) { Start-Sleep -Seconds 1 }
+            foreach ($item in $Processes) {
+                $item.Refresh()
+                if ($item.HasExited) { throw "Process exited during sample: $($item.Id)" }
+            }
+            [ordered]@{
+                seconds = $timer.Elapsed.TotalSeconds
+                processCount = $Processes.Count
+                cpuSeconds = ($Processes | ForEach-Object { $_.TotalProcessorTime.TotalSeconds } | Measure-Object -Sum).Sum
+                rssBytes = ($Processes | Measure-Object WorkingSet64 -Sum).Sum
+                privateCommitBytes = ($Processes | Measure-Object PrivateMemorySize64 -Sum).Sum
+                threadCount = ($Processes | ForEach-Object { $_.Threads.Count } | Measure-Object -Sum).Sum
+            }
+        })
+        $afterCoverage = Read-ResourceCoverage
+        $report.desktopResources[$Label] = [ordered]@{
+            coverageBefore = $beforeCoverage
+            coverageAfter = $afterCoverage
+            samples = $samples
+        }
+    } catch {
+        $report.desktopResources[$Label] = [ordered]@{error = $_.ToString()}
+    }
+}
+
+function Measure-BaselineDesktop {
+    $image = "$base\mcw-tray.exe"
+    $timer = [Diagnostics.Stopwatch]::StartNew()
+    $launch = Start-Process -FilePath $image -ArgumentList '--open' -PassThru
+    try {
+        do {
+            Start-Sleep -Milliseconds 200
+            $launch.Refresh()
+        } until ($launch.HasExited -or $launch.MainWindowHandle -ne [IntPtr]::Zero -or $timer.Elapsed.TotalSeconds -ge 30)
+        if ($launch.HasExited -or $launch.MainWindowHandle -eq [IntPtr]::Zero) {
+            throw 'Native v0.21.0 window was not observed'
+        }
+        $report.desktopResources.baselineWindowVisibleMs = $timer.ElapsedMilliseconds
+        Measure-DesktopResources 'baseline-open' @($launch)
+        if (!$launch.CloseMainWindow()) { throw 'Native v0.21.0 window did not accept close' }
+        do {
+            Start-Sleep -Milliseconds 200
+            $launch.Refresh()
+        } until ($launch.HasExited -or $launch.MainWindowHandle -eq [IntPtr]::Zero -or $timer.Elapsed.TotalSeconds -ge 55)
+        if ($launch.HasExited -or $launch.MainWindowHandle -ne [IntPtr]::Zero) {
+            throw 'Native v0.21.0 tray persistence after close was not observed'
+        }
+        Measure-DesktopResources 'baseline-closed' @($launch)
+    } catch {
+        $report.desktopResources.baselineError = $_.ToString()
+    } finally {
+        if (!$launch.HasExited) {
+            $owner = @(Owned 'mcw-tray' $image)
+            if ($owner.Count -ne 1 -or $owner[0].Id -ne $launch.Id) { throw 'Cannot prove baseline tray identity for shutdown' }
+            & "$base\mcw.exe" tray stop
+            if ($LASTEXITCODE -ne 0 -or !$launch.WaitForExit(15000)) { throw 'Baseline owner did not stop cooperatively' }
+        }
+    }
+}
+
 try {
     if ($ObserveRegistration) {
         . (Join-Path $PSScriptRoot 'windows-fixture-context.ps1')
@@ -409,6 +489,13 @@ try {
         $report.wholeMsiRollback = $true
     }
     Assert-Registration 'installed-baseline' '0.21.0'
+    if ($SampleDesktopResources) {
+        $report.desktopResources = [ordered]@{
+            scope = 'Single hosted sample, observed tray and visible UI only, no capture injection'
+            processAccounting = 'Exact tray/UI handles, with no OS process or transient helper accounting'
+        }
+        Measure-BaselineDesktop
+    }
 
     if ($RustMsiTest) {
         if ($standard -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or $env:GITHUB_ACTIONS -cne 'true') {
@@ -439,6 +526,7 @@ try {
         $info.UseShellExecute = $false
         $info.WorkingDirectory = $base
         $info.RedirectStandardError = $true
+        $openTimer = [Diagnostics.Stopwatch]::StartNew()
         $launch = [Diagnostics.Process]::Start($info)
         $diagnostics = [Collections.Generic.List[string]]::new()
         $readyPids = [Collections.Generic.HashSet[int]]::new()
@@ -477,7 +565,15 @@ try {
             }
             if (!$ready) { throw 'Missing installed IPC ready receipt before closing Flutter' }
             $report.installedIpcReady = $true
+            if ($SampleDesktopResources) {
+                $report.desktopResources.candidateWindowVisibleAndIpcMs = $openTimer.ElapsedMilliseconds
+                Measure-DesktopResources 'candidate-open' @($launch, $ui[0])
+            }
+            $closeTimer = [Diagnostics.Stopwatch]::StartNew()
             if (!$ui[0].CloseMainWindow() -or !$ui[0].WaitForExit(15000)) { throw 'Installed Flutter window did not close' }
+            if ($SampleDesktopResources) {
+                $report.desktopResources.candidateCloseMs = $closeTimer.ElapsedMilliseconds
+            }
             $owner = @(Owned 'mcw-tray' $trayImage)
             if ($owner.Count -ne 1 -or $owner[0].Id -ne $launch.Id -or @(Owned 'miccamwatch_desktop' $flutterImage).Count) {
                 throw 'Close changed the native owner or retained a Flutter process'
@@ -485,6 +581,9 @@ try {
             & "$base\mcw.exe" tray status
             if ($LASTEXITCODE -ne 0) { throw 'Native status after window close failed' }
             $report.installedFlutterClosedTrayContinued = $true
+            if ($SampleDesktopResources) {
+                Measure-DesktopResources 'candidate-closed' @($launch)
+            }
         } catch {
             $report.guiError = $_.ToString()
         } finally {

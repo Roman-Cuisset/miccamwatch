@@ -203,7 +203,7 @@ jobs:
           $env:MCW_TEST_HYBRID_ZIP = Join-Path $output 'miccamwatch-hybrid-windows-x86_64.zip'
           & $tests[0].executable updater::bundle::tests::exact_archive_and_flutter_version_are_read_without_launching_it --exact --ignored
           if ($LASTEXITCODE -ne 0) { throw 'Rust ZIP and Flutter version verification failed' }
-          & powershell.exe -NoProfile -NonInteractive -STA -File installer/tests/windows-hybrid-install.ps1 -Candidate (Join-Path $output 'miccamwatch-hybrid-windows-x86_64.msi') -Proof (Join-Path $output 'lifecycle') -RustMsiTest $tests[0].executable
+          & powershell.exe -NoProfile -NonInteractive -STA -File installer/tests/windows-hybrid-install.ps1 -Candidate (Join-Path $output 'miccamwatch-hybrid-windows-x86_64.msi') -Proof (Join-Path $output 'lifecycle') -RustMsiTest $tests[0].executable -SampleDesktopResources
           if ($LASTEXITCODE -ne 0) { throw 'Installed hybrid lifecycle failed' }
       - name: Qualify the same per-user MSI transaction under a genuine standard account
         if: ${{ !inputs.rebuild-rust-only }}
