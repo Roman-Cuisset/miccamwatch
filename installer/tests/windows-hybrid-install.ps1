@@ -440,7 +440,24 @@ try {
         $info.WorkingDirectory = $base
         $info.RedirectStandardError = $true
         $launch = [Diagnostics.Process]::Start($info)
-        $diagnostics = $launch.StandardError.ReadToEndAsync()
+        $diagnostics = [Collections.Generic.List[string]]::new()
+        $readyPids = [Collections.Generic.HashSet[int]]::new()
+        $pendingDiagnostic = $launch.StandardError.ReadLineAsync()
+        $drainDiagnostics = {
+            param([int]$WaitMilliseconds)
+            while ($pendingDiagnostic -and $pendingDiagnostic.Wait($WaitMilliseconds)) {
+                $line = $pendingDiagnostic.GetAwaiter().GetResult()
+                if ($null -eq $line) {
+                    $pendingDiagnostic = $null
+                    break
+                }
+                $diagnostics.Add($line)
+                if ($line -match '^desktop event=ready endpoint=parent_received pid=([1-9][0-9]*) ') {
+                    [void]$readyPids.Add([int]$Matches[1])
+                }
+                $pendingDiagnostic = $launch.StandardError.ReadLineAsync()
+            }
+        }
         try {
             $limit = [DateTime]::UtcNow.AddSeconds(45)
             do {
@@ -448,7 +465,9 @@ try {
                 $tray = @(Owned 'mcw-tray' $trayImage)
                 $flutter = @(Owned 'miccamwatch_desktop' $flutterImage)
                 $ui = @($flutter | Where-Object { $_.MainWindowHandle -ne [IntPtr]::Zero })
-            } until (($tray.Count -eq 1 -and $ui.Count -eq 1) -or $launch.HasExited -or
+                . $drainDiagnostics 0
+                $ready = $ui.Count -eq 1 -and $readyPids.Contains($ui[0].Id)
+            } until (($tray.Count -eq 1 -and $ready) -or $launch.HasExited -or
                 [DateTime]::UtcNow -gt $limit)
             $report.installedProcessObservation = [ordered]@{trayCount=$tray.Count; flutterCount=$flutter.Count;
                 flutterWindowCount=$ui.Count; startedOwnerExited=$launch.HasExited; trayWindowTitles=@($tray.MainWindowTitle)}
@@ -456,6 +475,8 @@ try {
             if ($tray.Count -ne 1 -or $ui.Count -ne 1 -or $tray[0].Id -ne $launch.Id) {
                 throw 'Installed tray/Flutter did not open exactly once'
             }
+            if (!$ready) { throw 'Missing installed IPC ready receipt before closing Flutter' }
+            $report.installedIpcReady = $true
             if (!$ui[0].CloseMainWindow() -or !$ui[0].WaitForExit(15000)) { throw 'Installed Flutter window did not close' }
             $owner = @(Owned 'mcw-tray' $trayImage)
             if ($owner.Count -ne 1 -or $owner[0].Id -ne $launch.Id -or @(Owned 'miccamwatch_desktop' $flutterImage).Count) {
@@ -473,10 +494,8 @@ try {
                 & "$base\mcw.exe" tray stop
                 if ($LASTEXITCODE -ne 0 -or !$launch.WaitForExit(15000)) { throw 'Installed owner did not stop cooperatively' }
             }
-            if ($diagnostics.Wait(1000)) {
-                [IO.File]::WriteAllText((Join-Path $Proof 'installed-tray-stderr.log'), $diagnostics.Result)
-                $report.installedIpcReady = $diagnostics.Result -match '(?m)^desktop event=ready endpoint=parent_received pid=[1-9][0-9]* '
-            }
+            . $drainDiagnostics 1000
+            [IO.File]::WriteAllLines((Join-Path $Proof 'installed-tray-stderr.log'), $diagnostics)
             $launch.Dispose()
         }
         if (!$report.installedIpcReady -and !$report.guiError) { $report.guiError = 'Missing installed IPC ready receipt' }
