@@ -292,10 +292,11 @@ la désinstallation en compte standard et les preuves de distribution sont
 Les paquets, les empreintes et leurs sources figurent dans le
 [rapport de distribution](HYBRID_DISTRIBUTION.md).
 Le client Rust prend en charge la délégation au MSI vérifié, la bascule
-et la récupération du ZIP portable. La qualification reste ouverte pour
-le rollback de l’enregistrement MSI en compte standard et les essais
-interactifs Windows x64 et UAC.
+et la récupération du ZIP portable. La qualification Windows 11 x64
+en compte standard couvre désormais la mise à niveau, la récupération
+après perte d’enregistrement, les refus UAC, la reprise après
+redémarrage de la VM et la désinstallation.
 La [transaction multipaquet et la réinstallation silencieuse de la fixture](WINDOWS_MSI_ROLLBACK_FORENSICS.md#19-novembre-2026--transaction-multipaquet-et-récupération)
 ont confirmé que ces stratégies ne permettent pas de lever le blocage.
 Le [contrat de récupération MSI Windows](WINDOWS_MSI_MAINTENANCE.md)
-documente le parcours intégré et les preuves x64 de référence.
+documente le parcours qualifié et les limites de provenance et de simulation.

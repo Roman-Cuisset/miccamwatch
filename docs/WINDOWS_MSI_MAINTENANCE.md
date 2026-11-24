@@ -85,3 +85,64 @@ ont réussi, avec conservation des données de test.
 Les reçus d’origine restent dans le laboratoire, avec les journaux MSI et
 leurs empreintes. Ces observations précèdent l’intégration du mécanisme
 et servent de référence à sa qualification.
+
+## Qualification du mécanisme intégré
+
+Le pilote `e74a86d` a reconnu l’annonce MSI résiduelle dans la VM x64 et
+a préparé la récupération à partir du MSI officiel v0.21.0 déjà vérifié.
+Le même pilote a refusé une récupération superflue après la panne avant
+retrait, un MSI absent et un MSI d’une autre version. Le refus UAC lors de
+la réinstallation interactive a renvoyé `1602`. Le journal du pilote
+contient `msi_cancelled` et une observation suivante confirme la
+conservation des données de test.
+
+Une seconde tentative interactive a rétabli le ProductCode sans rétablir
+l’index. Le retrait explicite a rendu `0` et l’observateur indépendant a
+confirmé l’absence des deux ProductCode. Après fermeture du terminal et
+relance du pilote, la réinstallation a rétabli le ProductCode, le cache
+et l’index dans le compte standard. La mise à niveau vers le MSI hybride
+`e74a86d` a ensuite validé les 16 fichiers, l’IPC 10, la fermeture de
+Flutter avec le tray encore actif et la désinstallation. Les données
+de test et l’état d’autostart ont été conservés.
+
+L’échec injecté après retrait du bundle `e74a86d` a également produit
+`1603`. L’observateur a relevé l’absence des deux ProductCode et de
+l’index, tandis que les 16 fichiers ont conservé leurs empreintes.
+Pour ce scénario hors ligne, la copie de test du pilote utilise
+l’empreinte du paquet GitHub Actions authentifié. La compilation
+diffusée conserve la vérification de provenance de la release.
+Dans la VM, le pilote a refusé un lancement sous jeton élevé. Un
+mutex MSI occupé artificiellement dans la VM a confirmé le refus de
+récupération, en simulation d’une transaction concurrente.
+
+Après une réinstallation interactive avec UAC, le ProductCode du
+bundle v0.22.0 était enregistré dans le compte standard et restait
+introuvable via l’UpgradeCode. Le retrait confirmé l’a rendu absent.
+Le redémarrage de Windows dans la VM a eu lieu après ce retrait.
+Le pilote a retrouvé le journal et proposé l’installation propre.
+L’annulation à ce stade a produit `cancelled_before_msi` sans lancer
+Windows Installer. La tentative suivante a rétabli le ProductCode,
+le cache, l’index UpgradeCode et les 16 fichiers attendus.
+La désinstallation du bundle rétabli a réussi et les données
+de test sont restées identiques.
+
+Le mécanisme compense la perte d’enregistrement constatée dans le
+compte standard. Pour la récupération du bundle v0.22.0, la VM hors
+ligne a utilisé le paquet GitHub Actions authentifié et l’empreinte
+intégrée à la copie de test. La récupération diffusée utilise la
+provenance de la release et laisse l’intervention en attente lorsque
+celle-ci ne peut pas être vérifiée.
+
+Le MSI hybride `e74a86d` de qualification Windows a pour SHA-256
+`8355bdf7e36aa395b5f4c379d4020cc3daa8f5e6fb5403f08b846f78f885ed83`.
+Le [rejeu administrateur du même MSI](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/45378171795/job/138389905265)
+valide la mise à niveau, les rollbacks du scénario administrateur,
+l’IPC 10 et le retrait. Le test attend l’accusé de réception IPC du PID
+Flutter observé avant de fermer sa fenêtre. Le
+[rejeu en compte standard hébergé](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/45378171795/job/138389904643)
+est bloqué dès l’installation de v0.21.0 par `DisableMsi=1` et `1625`.
+
+Les [gardes natifs ciblés](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/45363900624)
+ont réussi sur Linux x64 et ARM64 et macOS Intel et Apple Silicon à
+`f7e3d87`. Les corrections suivantes concernent Windows et son banc de
+test.
