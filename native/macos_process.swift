@@ -71,6 +71,22 @@ private struct ProcessEffectIdentity {
     }
 }
 
+private func validateEffectIdentity(_ target: ProcessEffectIdentity, expectedInstance: String, uid: uid_t) throws {
+    guard target.instance == expectedInstance else {
+        throw ProcessEffectError(description: "the observed process has exited or its birth identity changed; refresh the capture list")
+    }
+    guard target.info.pbi_uid == uid, target.info.pbi_ruid == uid,
+          target.info.pbi_svuid == uid, (target.info.pbi_flags & UInt32(PROC_FLAG_SYSTEM)) == 0 else {
+        throw ProcessEffectError(description: "the target is a system process or its real, effective or saved user differs from yours")
+    }
+    let name = URL(fileURLWithPath: target.executable).lastPathComponent
+    let protected = ["launchd", "loginwindow", "WindowServer", "kernel_task", "securityd",
+                     "taskgated", "taskgated-helper", "trustd", "notifyd", "opendirectoryd"]
+    guard !protected.contains(name) else {
+        throw ProcessEffectError(description: "refusing to terminate a protected session/system executable")
+    }
+}
+
 private func readEffectIdentity(_ pid: Int32) throws -> ProcessEffectIdentity {
     var info = proc_bsdinfo()
     let size = Int32(MemoryLayout<proc_bsdinfo>.size)
@@ -109,10 +125,18 @@ private func effectAuditToken(_ task: mach_port_t) throws -> audit_token_t {
 }
 
 private func terminateObservedTask(pid: Int32, expectedInstance: String) throws {
+    let uid = getuid()
+    guard uid != 0, uid == geteuid() else {
+        throw ProcessEffectError(description: "run MicCamWatch as the target application's ordinary user, without sudo")
+    }
+    let before = try readEffectIdentity(pid)
+    try validateEffectIdentity(before, expectedInstance: expectedInstance, uid: uid)
+    let callerAudit = try effectAuditToken(mach_task_self_)
+
     var task = mach_port_t(MACH_PORT_NULL)
     let authority = task_for_pid(mach_task_self_, pid, &task)
     guard authority == KERN_SUCCESS, task != mach_port_t(MACH_PORT_NULL) else {
-        throw ProcessEffectError(description: "macOS denied stable task termination authority (task_for_pid Mach \(authority)); protected/hardened targets require authority allowed by the OS; no elevation, entitlement fabrication, SIP bypass or kill(pid) fallback is attempted")
+        throw ProcessEffectError(description: "macOS did not grant a task port (task_for_pid Mach \(authority)); quit the application from its own menu or use macOS Force Quit if available")
     }
     defer { _ = mach_port_deallocate(mach_task_self_, task) }
 
@@ -122,19 +146,9 @@ private func terminateObservedTask(pid: Int32, expectedInstance: String) throws 
     guard audit_token_to_pid(auditBefore) == pid, version != 0 else {
         throw ProcessEffectError(description: "retained task audit PID/PID-version identity is unavailable or mismatched")
     }
-    let before = try readEffectIdentity(pid)
-    guard before.instance == expectedInstance else {
-        throw ProcessEffectError(description: "process birth identity changed or the observed instance is unavailable")
-    }
-    guard before.info.pbi_uid != 0, before.info.pbi_uid == geteuid(),
-          (before.info.pbi_flags & UInt32(PROC_FLAG_SYSTEM)) == 0 else {
-        throw ProcessEffectError(description: "refusing to terminate a system process or another user's process")
-    }
-    let name = URL(fileURLWithPath: before.executable).lastPathComponent
-    let protected = ["launchd", "loginwindow", "WindowServer", "kernel_task", "securityd",
-                     "taskgated", "taskgated-helper", "trustd", "notifyd", "opendirectoryd"]
-    guard !protected.contains(name) else {
-        throw ProcessEffectError(description: "refusing to terminate a protected session/system executable")
+    guard audit_token_to_ruid(auditBefore) == uid, audit_token_to_euid(auditBefore) == uid,
+          audit_token_to_asid(auditBefore) == audit_token_to_asid(callerAudit) else {
+        throw ProcessEffectError(description: "the retained target belongs to a different user or macOS audit session")
     }
     var resolvedPID: pid_t = 0
     let resolved = pid_for_task(task, &resolvedPID)
@@ -142,10 +156,9 @@ private func terminateObservedTask(pid: Int32, expectedInstance: String) throws 
         throw ProcessEffectError(description: "retained task no longer belongs to the expected process (Mach \(resolved))")
     }
     let after = try readEffectIdentity(pid)
+    try validateEffectIdentity(after, expectedInstance: expectedInstance, uid: uid)
     let auditAfter = try effectAuditToken(task)
-    guard after.instance == before.instance, after.executable == before.executable,
-          after.info.pbi_uid == before.info.pbi_uid,
-          (after.info.pbi_flags & UInt32(PROC_FLAG_SYSTEM)) == 0,
+    guard after.executable == before.executable,
           audit_token_to_pid(auditAfter) == pid,
           audit_token_to_pidversion(auditAfter) == version,
           withUnsafeBytes(of: auditBefore, { first in
