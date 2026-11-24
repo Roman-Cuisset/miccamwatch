@@ -9,6 +9,9 @@ on:
       msi-test-source:
         type: string
         default: ''
+      msi-resource-replay:
+        type: boolean
+        default: false
       msi-test-arm-standard-only:
         type: boolean
         default: false
@@ -30,7 +33,7 @@ permissions:
 
 jobs:
   windows:
-    if: ${{ !inputs.msi-forensics && (inputs.rebuild-rust-only || (inputs.msi-test-run == '' && inputs.msi-test-source == '')) }}
+    if: ${{ !inputs.msi-resource-replay && !inputs.msi-forensics && (inputs.rebuild-rust-only || (inputs.msi-test-run == '' && inputs.msi-test-source == '')) }}
     runs-on: windows-latest
     timeout-minutes: 80
     defaults:
@@ -300,7 +303,7 @@ jobs:
             ${{ runner.temp }}/mcw-msi-probe-receipts/**/*.log
 
   installed-msi:
-    if: ${{ !inputs.rebuild-rust-only && (inputs.msi-test-run != '' || inputs.msi-test-source != '') }}
+    if: ${{ !inputs.rebuild-rust-only && (inputs.msi-resource-replay || inputs.msi-test-run != '' || inputs.msi-test-source != '') }}
     name: Exact Windows MSI installation (${{ matrix.context }})
     permissions:
       contents: read
@@ -310,7 +313,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        context: ${{ fromJSON(inputs.msi-forensics && '["legacy-rollback-arm", "hybrid-rollback-arm"]' || (inputs.msi-test-standard-rollback && '["legacy-rollback-arm", "hybrid-rollback-arm", "standard-user-x64-2022"]' || (inputs.msi-test-arm-standard-only && '["standard-user-arm"]' || '["hosted-admin", "standard-user"]'))) }}
+        context: >-
+          ${{ fromJSON(
+            inputs.msi-resource-replay && '["hosted-admin"]' ||
+            inputs.msi-forensics && '["legacy-rollback-arm", "hybrid-rollback-arm"]' ||
+            inputs.msi-test-standard-rollback && '["legacy-rollback-arm", "hybrid-rollback-arm", "standard-user-x64-2022"]' ||
+            inputs.msi-test-arm-standard-only && '["standard-user-arm"]' ||
+            '["hosted-admin", "standard-user"]') }}
     defaults:
       run:
         shell: pwsh
@@ -336,9 +345,11 @@ jobs:
           if ($build.Count -ne 1 -or $build[0].conclusion -cne 'success') { throw 'Package build and audit must have passed' }
           git merge-base --is-ancestor $env:MCW_PACKAGE_SOURCE $env:GITHUB_SHA
           if ($LASTEXITCODE -ne 0) { throw 'Package source must be an ancestor of the test harness' }
-          # src/autostart/unix.rs is included only on Linux and macOS in src/lib.rs.
-          git diff --quiet $env:MCW_PACKAGE_SOURCE $env:GITHUB_SHA -- src native .cargo build.rs Cargo.toml Cargo.lock desktop/flutter installer/miccamwatch.wxs installer/miccamwatch.ico installer/hybrid_payload.py installer/hybrid_windows.py installer/hybrid_layout.json ':(exclude)src/autostart/unix.rs'
-          if ($LASTEXITCODE -ne 0) { throw 'Packaged product or build contract changed; rebuild required' }
+          if ('${{ inputs.msi-resource-replay }}' -ne 'true') {
+            # src/autostart/unix.rs is included only on Linux and macOS in src/lib.rs.
+            git diff --quiet $env:MCW_PACKAGE_SOURCE $env:GITHUB_SHA -- src native .cargo build.rs Cargo.toml Cargo.lock desktop/flutter installer/miccamwatch.wxs installer/miccamwatch.ico installer/hybrid_payload.py installer/hybrid_windows.py installer/hybrid_layout.json ':(exclude)src/autostart/unix.rs'
+            if ($LASTEXITCODE -ne 0) { throw 'Packaged product or build contract changed; rebuild required' }
+          }
           $prefix = Join-Path $env:RUNNER_TEMP 'mcw-replay-msi'
           gh run download $env:MCW_BUILD_RUN --repo $env:GITHUB_REPOSITORY --name "miccamwatch-hybrid-windows-x86_64-$env:MCW_PACKAGE_SOURCE" --dir $prefix
           if ($LASTEXITCODE -ne 0) { throw 'Exact Windows artifact unavailable' }
@@ -351,7 +362,9 @@ jobs:
         if: ${{ matrix.context == 'hosted-admin' }}
         run: |
           $msi = Join-Path $env:MCW_REPLAY_PREFIX 'miccamwatch-hybrid-windows-x86_64.msi'
-          & powershell.exe -NoProfile -NonInteractive -STA -File installer/tests/windows-hybrid-install.ps1 -Candidate $msi -Proof (Join-Path $env:MCW_REPLAY_PREFIX 'replayed') -SourceRevision $env:MCW_PACKAGE_SOURCE
+          $options = @()
+          if ('${{ inputs.msi-resource-replay }}' -eq 'true') { $options += '-SampleDesktopResources' }
+          & powershell.exe -NoProfile -NonInteractive -STA -File installer/tests/windows-hybrid-install.ps1 -Candidate $msi -Proof (Join-Path $env:MCW_REPLAY_PREFIX 'replayed') -SourceRevision $env:MCW_PACKAGE_SOURCE @options
           if ($LASTEXITCODE -ne 0) { throw 'Installed hybrid lifecycle failed' }
       - name: Install, roll back and remove the same verified MSI under a genuine standard account
         if: ${{ matrix.context != 'hosted-admin' }}

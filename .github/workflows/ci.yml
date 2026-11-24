@@ -36,6 +36,10 @@ on:
         description: Full source SHA for the MSI qualification artifact
         type: string
         default: ''
+      windows-msi-resource-replay:
+        description: Measure an exact archived Windows MSI and the stable MSI on the same hosted desktop
+        type: boolean
+        default: false
       windows-msi-arm-standard-only:
         description: Replay the x64 MSI under a standard account on Windows 11 Arm64
         type: boolean
@@ -128,6 +132,7 @@ jobs:
     with:
       msi-test-run: ${{ inputs.windows-msi-test-run || '' }}
       msi-test-source: ${{ inputs.windows-msi-test-source || '' }}
+      msi-resource-replay: ${{ inputs.windows-msi-resource-replay || false }}
       msi-test-arm-standard-only: ${{ inputs.windows-msi-arm-standard-only || false }}
       msi-test-standard-rollback: ${{ inputs.windows-msi-standard-rollback || false }}
       msi-forensics: ${{ inputs.windows-msi-forensics || false }}

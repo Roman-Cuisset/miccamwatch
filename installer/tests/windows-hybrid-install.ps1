@@ -93,6 +93,23 @@ if ($SampleDesktopResources -and ($standard -or !$isAdmin -or
     $env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or $env:GITHUB_ACTIONS -cne 'true')) {
     throw 'Desktop resource sampling requires the disposable native administrator runner.'
 }
+if ($SampleDesktopResources) {
+    Add-Type @'
+using System;
+using System.Runtime.InteropServices;
+public static class McwInstalledBaselineWindow {
+    [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern IntPtr FindWindow(string className, string title);
+    [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr window);
+    [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr window, out uint pid);
+    public static bool IsVisibleFor(uint owner) {
+        var window = FindWindow("MicCamWatchDesktopClass", null);
+        uint actual;
+        return window != IntPtr.Zero && GetWindowThreadProcessId(window, out actual) != 0 &&
+               actual == owner && IsWindowVisible(window);
+    }
+}
+'@
+}
 $base = Join-Path $env:LOCALAPPDATA 'Programs\MicCamWatch'
 $configuration = Join-Path $env:APPDATA 'MicCamWatch'
 $data = Join-Path $env:LOCALAPPDATA 'MicCamWatch'
@@ -386,27 +403,31 @@ function Measure-DesktopResources([string]$Label, [Diagnostics.Process[]]$Proces
 
 function Measure-BaselineDesktop {
     $image = "$base\mcw-tray.exe"
-    $timer = [Diagnostics.Stopwatch]::StartNew()
-    $launch = Start-Process -FilePath $image -ArgumentList '--open' -PassThru
+    $launch = Start-Process -FilePath $image -PassThru
     try {
+        $timer = [Diagnostics.Stopwatch]::StartNew()
         do {
             Start-Sleep -Milliseconds 200
-            $launch.Refresh()
-        } until ($launch.HasExited -or $launch.MainWindowHandle -ne [IntPtr]::Zero -or $timer.Elapsed.TotalSeconds -ge 30)
-        if ($launch.HasExited -or $launch.MainWindowHandle -eq [IntPtr]::Zero) {
+            & "$base\mcw.exe" tray status | Out-Null
+            $ready = $LASTEXITCODE -eq 0
+        } until ($ready -or $launch.HasExited -or $timer.Elapsed.TotalSeconds -ge 30)
+        $owner = @(Owned 'mcw-tray' $image)
+        if (!$ready -or $launch.HasExited -or $owner.Count -ne 1 -or $owner[0].Id -ne $launch.Id) {
+            throw 'Native v0.21.0 tray owner was not verified'
+        }
+        Measure-DesktopResources 'baseline-closed' @($launch)
+        $timer.Restart()
+        & "$base\mcw.exe" tray open | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'Native v0.21.0 open request failed' }
+        do {
+            Start-Sleep -Milliseconds 200
+            $visible = [McwInstalledBaselineWindow]::IsVisibleFor([uint32]$launch.Id)
+        } until ($visible -or $launch.HasExited -or $timer.Elapsed.TotalSeconds -ge 30)
+        if (!$visible -or $launch.HasExited) {
             throw 'Native v0.21.0 window was not observed'
         }
         $report.desktopResources.baselineWindowVisibleMs = $timer.ElapsedMilliseconds
         Measure-DesktopResources 'baseline-open' @($launch)
-        if (!$launch.CloseMainWindow()) { throw 'Native v0.21.0 window did not accept close' }
-        do {
-            Start-Sleep -Milliseconds 200
-            $launch.Refresh()
-        } until ($launch.HasExited -or $launch.MainWindowHandle -eq [IntPtr]::Zero -or $timer.Elapsed.TotalSeconds -ge 55)
-        if ($launch.HasExited -or $launch.MainWindowHandle -ne [IntPtr]::Zero) {
-            throw 'Native v0.21.0 tray persistence after close was not observed'
-        }
-        Measure-DesktopResources 'baseline-closed' @($launch)
     } catch {
         $report.desktopResources.baselineError = $_.ToString()
     } finally {
