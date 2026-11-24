@@ -260,11 +260,25 @@ def sample(pid):
 
 def tree(parent):
     result = [parent]
+    seen = {parent}
     for pid in result:
         try:
-            result.extend(int(v) for v in Path(f'/proc/{pid}/task/{pid}/children').read_text().split())
-        except FileNotFoundError:
+            tasks = list(Path(f'/proc/{pid}/task').iterdir())
+        except (FileNotFoundError, ProcessLookupError):
             pass
+        else:
+            # Linux associates children with the calling thread. The owner's
+            # process leader alone does not enumerate every launched window.
+            for task in tasks:
+                try:
+                    children = (task/'children').read_text().split()
+                except (FileNotFoundError, ProcessLookupError):
+                    continue
+                for value in children:
+                    child = int(value)
+                    if child not in seen:
+                        seen.add(child)
+                        result.append(child)
     return result
 
 

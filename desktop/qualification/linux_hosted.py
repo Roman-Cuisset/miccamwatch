@@ -72,8 +72,9 @@ def main():
         if panel.poll() is not None:
             raise RuntimeError('Real desktop SNI host exited')
         script=Path(__file__).with_name('linux.py')
+        cycles = '1' if args.performance_only else '3'
         common=[sys.executable,'-B',str(script),'qualify','--prefix',str(args.prefix.resolve()),
-                '--xwindow',str(args.xwindow.resolve()),'--tray','--cycles','3',
+                '--xwindow',str(args.xwindow.resolve()),'--tray','--cycles',cycles,
                 '--seconds','15','--stabilize','15','--captures']
         # Retain complete basic lifecycle/SNI evidence even if actual AT-SPI
         # semantics are unavailable on this particular hosted Flutter backend.

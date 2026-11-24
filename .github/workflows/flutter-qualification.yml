@@ -515,10 +515,12 @@ jobs:
             --prefix "$MCW_LINUX_OUTPUT/bundle" --xwindow "$MCW_LINUX_OUTPUT/linux_xwindow")
           if [ "${{ inputs.linux-renderer-probe }}" = "true" ]; then
             export MCW_LINUX_THREAD_SAMPLE=1
+            failed=0
             env -u FLUTTER_LINUX_RENDERER "${command[@]}" --performance-only --out "$MCW_LINUX_OUTPUT/runtime" \
-              2>&1 | tee "$RUNNER_TEMP/mcw-flutter-linux-setup/runtime.log"
+              2>&1 | tee "$RUNNER_TEMP/mcw-flutter-linux-setup/runtime.log" || failed=1
             FLUTTER_LINUX_RENDERER=software "${command[@]}" --performance-only --out "$MCW_LINUX_OUTPUT/runtime-software" \
-              2>&1 | tee "$RUNNER_TEMP/mcw-flutter-linux-setup/runtime-software.log"
+              2>&1 | tee "$RUNNER_TEMP/mcw-flutter-linux-setup/runtime-software.log" || failed=1
+            exit "$failed"
           else
             "${command[@]}" --out "$MCW_LINUX_OUTPUT/runtime" \
               2>&1 | tee "$RUNNER_TEMP/mcw-flutter-linux-setup/runtime.log"

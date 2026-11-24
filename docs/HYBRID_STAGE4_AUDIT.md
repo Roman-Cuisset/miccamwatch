@@ -144,3 +144,66 @@ ce choix, puis Flutter quitte avec SIGABRT sur le rendu de texte
 Impeller dans Skia. La consultation native se rouvre. Le runner Linux
 désactive désormais Impeller quand le compositeur logiciel est choisi
 explicitement. Le rendu par défaut reste celui du SDK.
+
+## Comparaison Windows x64 sur les MSI installés
+
+Le [rejeu administrateur](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/45435090256/job/138590609217)
+compare la v0.21.0 officielle et le MSI `7252421` sur le même runner.
+Le SHA-256 de la candidate est
+`5f5b358a916d7fc1da427ea183c554b6c418e570b032afecbcd2c24f39c6b0ff`.
+Les quatre intervalles durent environ 15 secondes chacun, avec un
+échantillon par seconde. Aucun accès actif n’est relevé aux bornes.
+WASAPI, `sensor_activity` et `process_context` sont sains dans les
+quatre intervalles. `privacy_store` et `module_scanner` sont
+indisponibles dans les deux versions.
+Le CPU est normalisé à un cœur. La mémoire privée correspond au commit
+privé et la RSS au working set médian de l’arbre suivi.
+
+| Version et état | CPU moyen | Pic sur 1 s | RSS | Commit privé | Processus | Threads |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| v0.21.0, tray seul | 1,75 % | 3,11 % | 16,66 Mio | 3,34 Mio | 1 | 9 |
+| v0.22.0, tray après fermeture | 0,52 % | 1,56 % | 18,44 Mio | 3,93 Mio | 1 | 9–13 |
+| v0.21.0, fenêtre native | 2,07 % | 3,12 % | 25,18 Mio | 4,08 Mio | 1 | 7–9 |
+| v0.22.0, fenêtre Flutter | 0,93 % | 3,12 % | 96,14 Mio | 63,82 Mio | 2 | 34–37 |
+
+La fenêtre native a été détectée 298 ms après la demande d’ouverture
+adressée au tray actif. La candidate a été détectée visible avec
+acquittement IPC après 1 105 ms depuis le lancement du tray. Ce sont
+deux points de départ différents. Le processus Flutter a quitté en
+539 ms après la demande de fermeture. Le trajet administrateur de
+mise à niveau, rollback et désinstallation a réussi sur les mêmes
+octets. Le [compte standard hébergé](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/45430142440/job/138572874073)
+a encore rencontré `DisableMsi=1` et 1625 sur la stable avant la candidate.
+
+Le relevé Windows qualifie un cycle court au repos. Les différences
+de CPU ne permettent pas de conclure sur la charge durable, le micro,
+la caméra, la reprise ou les changements de thème et de langue.
+
+## File de notifications Unix
+
+Le worker relit les préférences avant la livraison et démarre au
+premier besoin. La file de 32 alertes a un envoi non bloquant
+et signale la saturation. Un dialogue prolongé de macOS peut occuper
+ce worker pendant que la boucle de collecte continue. Le test remplit
+une file dont le destinataire est bloqué, contrôle la reprise de
+l’envoi et vérifie le signal d’arrêt. La
+[qualification `c4d3b3b`](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/45433644412)
+réussit sur Linux x64/ARM64 et macOS Intel/Apple Silicon, Clippy inclus.
+Ce résultat n’établit pas la persistance du consentement ou la visibilité
+d’une bannière réelle.
+
+## Inspection visuelle et accessibilité
+
+Les captures claires et sombres du [job Linux x64 `b3350bc`](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/45402576893/job/138474736513)
+montrent le panneau d’aperçu avec « Unknown » pour les ressources
+indisponibles et une grille qui tient dans la fenêtre d’essai.
+Le panneau de préférences restitue l’erreur de lecture volontairement
+injectée. Le test AT-SPI du même bureau exerce la modification et
+la restauration du son, la pause, la reprise et l’échec d’écriture
+sur le processus Flutter vérifié. Les tests Flutter exercent les
+descriptions de profils dans les sept langues et la distinction
+entre refus macOS et affichage de bannière non vérifié.
+
+La preuve AT-SPI couvre les actions exercées dans ce contexte.
+Le parcours complet avec lecteur d’écran, le zoom extrême, le
+multi-écrans et la réduction de mouvement restent à qualifier.
