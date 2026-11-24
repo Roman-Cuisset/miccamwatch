@@ -41,7 +41,7 @@ impl NotificationCooldowns {
     }
 }
 
-fn incomplete(snapshot: &Snapshot, resource: Resource) -> bool {
+pub(crate) fn incomplete(snapshot: &Snapshot, resource: Resource) -> bool {
     snapshot.observation_gaps.contains(&resource) || snapshot.collectors.iter().any(|collector| {
         collector.state != CollectorState::Healthy && match collector.collector {
             "wasapi" => resource == Resource::Microphone,
