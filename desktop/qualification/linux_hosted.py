@@ -23,6 +23,7 @@ def main():
     parser.add_argument('--prefix',type=Path,required=True)
     parser.add_argument('--out',type=Path,required=True)
     parser.add_argument('--xwindow',type=Path,required=True)
+    parser.add_argument('--performance-only', action='store_true')
     args=parser.parse_args()
     if os.environ.get('GITHUB_ACTIONS')!='true' or os.environ.get('RUNNER_OS')!='Linux':
         raise RuntimeError('Disposable hosted Linux desktop only; never attach this fixture to a user bus')
@@ -40,7 +41,8 @@ def main():
                    'XDG_RUNTIME_DIR'],env=env)
     owned=[]; streams=[]
     evidence={'complete':False,'environment':'GitHub-hosted Ubuntu22.04 x64/Xvfb software-rendered desktop, not physical Mint/GPU/Wayland',
-              'no_device_actions':True,'cases':[]}
+              'no_device_actions':True,'cases':[],
+              'renderer_request': env.get('FLUTTER_LINUX_RENDERER', 'default')}
     def save():
         linux.save(out/'hosted-result.json',evidence)
     def launch(name, command):
@@ -75,7 +77,8 @@ def main():
                 '--seconds','15','--stabilize','15','--captures']
         # Retain complete basic lifecycle/SNI evidence even if actual AT-SPI
         # semantics are unavailable on this particular hosted Flutter backend.
-        for name,extra in [('lifecycle',[]),('preferences',['--preferences'])]:
+        cases = [('lifecycle', [])] if args.performance_only else [('lifecycle', []), ('preferences', ['--preferences'])]
+        for name,extra in cases:
             with (out/f'{name}-harness.log').open('w') as log:
                 result=subprocess.run([*common,'--out',str(out/name),*extra],env=env,
                                       stdout=log,stderr=subprocess.STDOUT,timeout=480)

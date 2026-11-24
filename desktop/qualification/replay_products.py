@@ -29,6 +29,11 @@ PINS = {
         zip_sha256='eadf89691b1c4a6992014d8e383b59026bcd9ec3626a708e46e01201237edffc',
         native_sha256='67a6f101708bbe49e5ece263bb02ed97b83ce6b9ad31e1a288c3516f4f5e1444'),
 }
+LINUX_RENDERER_PIN = dict(
+    run=45402576893, source='b3350bce9e11d397d75f3804b08039d46e5b2161', artifact=14923384790,
+    zip_sha256='2782e043f4fb00132cebd9215e739b25aeed925beb03d0a36d92763d752ba6d8',
+    native_sha256='e45e26f855bd2b98385e33bf112e0eac9e48fd99626437e1f9942f809103754f',
+)
 
 
 def require(condition, message):
@@ -84,6 +89,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--platform', choices=['macos', 'linux'], required=True)
     parser.add_argument('--root', type=Path, required=True)
+    parser.add_argument('--linux-renderer-probe', action='store_true')
     args = parser.parse_args()
     require(os.environ.get('RUNNER_ENVIRONMENT') == 'github-hosted' and os.geteuid() != 0,
             'Disposable non-root GitHub-hosted replay only')
@@ -97,8 +103,11 @@ def main():
     replay = root/'replay'
     replay.mkdir(mode=0o700)
     architecture = platform.machine()
+    if args.linux_renderer_probe:
+        require(args.platform == 'linux' and architecture == 'x86_64',
+                'Renderer comparison requires the pinned Linux x64 product')
     require((args.platform, architecture) in PINS, 'No audited B5 replay artifact for this platform/architecture')
-    pin = PINS[(args.platform, architecture)]
+    pin = LINUX_RENDERER_PIN if args.linux_renderer_probe else PINS[(args.platform, architecture)]
     product_source, run, artifact_id = pin['source'], pin['run'], pin['artifact']
     zip_digest, native_digest = pin['zip_sha256'], pin['native_sha256']
     expected_name = ('flutter-macos-'+architecture if args.platform == 'macos'
@@ -119,8 +128,11 @@ def main():
         # Do not exempt it for a Mac replay: the renderer is product configuration.
         allowed_exact.add('desktop/flutter/macos/Runner/Info.plist')
     changed = [row['filename'] for row in comparison['files']]
-    require(all(name in allowed_exact or name.startswith(('desktop/qualification/', 'docs/'))
-                for name in changed), 'Product source changed since frozen build; rebuild required')
+    # The renderer probe repeats a measurement from the exact archived source.
+    # Its results describe that product alone, even when the harness is newer.
+    if not args.linux_renderer_probe:
+        require(all(name in allowed_exact or name.startswith(('desktop/qualification/', 'docs/'))
+                    for name in changed), 'Product source changed since frozen build; rebuild required')
     (replay/'artifact.json').write_text(json.dumps(metadata, indent=2))
     archive = replay/'original-artifact.zip'
     with archive.open('xb') as output:
@@ -182,6 +194,7 @@ def main():
                    harness_source=os.environ['GITHUB_SHA'], original_run=run,
                    artifact_id=artifact_id, zip_sha256=zip_digest, native_tar_sha256=native_digest,
                    changed_controller_paths=changed,
+                   purpose='pinned renderer comparison' if args.linux_renderer_probe else 'runtime qualification',
                    builds_and_unit_suites='NOT rerun in replay; source run retains original results',
                    runtime='Not established by restoration; subsequent owned tests must pass')
     (root/'replay-products.json').write_text(json.dumps(receipt, indent=2))

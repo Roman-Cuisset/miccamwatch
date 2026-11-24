@@ -240,6 +240,21 @@ def sample(pid):
             values[filename] = {k:int(v)*1024 for k,v in re.findall(r'^(VmRSS|RssAnon|RssFile|RssShmem|Pss|Private_Clean|Private_Dirty):\s+(\d+) kB', text, re.M)}
         except (FileNotFoundError, ProcessLookupError, PermissionError) as error:
             values[filename] = {'unavailable': str(error)}
+    if os.environ.get('MCW_LINUX_THREAD_SAMPLE') == '1':
+        ticks = os.sysconf('SC_CLK_TCK')
+        values['threads'] = {}
+        for task in (root/'task').iterdir():
+            try:
+                stat = (task/'stat').read_text()
+            except (FileNotFoundError, ProcessLookupError):
+                continue
+            name, rest = stat.rsplit(')', 1)
+            parts = rest.split()
+            values['threads'][task.name] = {
+                'name': name.split('(', 1)[1],
+                'start_ticks': int(parts[19]),
+                'cpu_seconds': (int(parts[11]) + int(parts[12])) / ticks,
+            }
     return values
 
 

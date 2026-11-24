@@ -111,3 +111,27 @@ propre paquet. Le comparatif Windows ajouté après cette révision
 échantillonne les processus du paquet installé sur le même runner, avec
 la v0.21.0 et la candidate, avant/après fermeture. Il fournit un premier
 relevé court à interpréter selon la couverture aux deux bornes.
+
+### Linux x64, fenêtre ouverte sous Xvfb
+
+Dans le reçu `runtime/lifecycle/result.json` de `b3350bc`, les deux
+échantillons de 15 s avec tray seul donnent 0,20 à 0,27 % d’un cœur et
+environ 9,45 Mio de RSS. Après fermeture, il reste un processus à
+9,83–9,90 Mio de RSS et 0,13 % d’un cœur. Les deux premières fenêtres
+ouvertes utilisent 159,88–162,09 % d’un cœur pour l’arbre, avec
+299,06–299,38 Mio de RSS et 251,18–251,33 Mio de PSS. Dans le premier
+échantillon clair, Flutter a consommé 24,32 s de CPU et Rust 0,03 s.
+Le moteur graphique logiciel est observé dans les deux essais.
+L’ouverture jusqu’à fenêtre native prête a pris 145–327 ms sur six
+cycles, et l’arrêt du processus Flutter 107–318 ms.
+
+Cette charge rend la performance de la fenêtre Linux ouverte
+insuffisamment qualifiée. Les mesures portent sur Xvfb et un runtime
+de qualification sans capture physique. Elles localisent la charge
+au processus Flutter. Le coût par thread et la cause exacte restent
+à départager entre rendu logiciel, moteur et rafraîchissements de
+l’interface. Le même binaire devra être mesuré en Xvfb avec chaque
+renderer pris en charge et sur une session accélérée, avec CPU par
+thread. Aucun changement de renderer ni de cadence native n’a été
+déduit de ces chiffres. [Reçu Linux x64](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/45402576893/job/138474736513)
+· [Options du moteur de rendu Flutter](https://docs.flutter.dev/perf/impeller).

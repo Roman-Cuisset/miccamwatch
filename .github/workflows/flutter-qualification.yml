@@ -59,6 +59,9 @@ on:
       native-gates-only:
         type: boolean
         default: false
+      linux-renderer-probe:
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -500,16 +503,26 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          extra=()
+          if [ "${{ inputs.linux-renderer-probe }}" = "true" ]; then extra+=(--linux-renderer-probe); fi
           python3 -B desktop/qualification/replay_products.py --platform linux \
-            --root "$MCW_LINUX_OUTPUT"
+            --root "$MCW_LINUX_OUTPUT" "${extra[@]}"
       - name: Exercise owned X11 lifecycle native SNI and safe preferences in private virtual desktop
         run: |
           set -euo pipefail
-          dbus-run-session -- xvfb-run -a -s '-screen 0 1280x1000x24' \
-            python3 -B desktop/qualification/linux_hosted.py \
-              --prefix "$MCW_LINUX_OUTPUT/bundle" --out "$MCW_LINUX_OUTPUT/runtime" \
-              --xwindow "$MCW_LINUX_OUTPUT/linux_xwindow" \
-            2>&1 | tee "$RUNNER_TEMP/mcw-flutter-linux-setup/runtime.log"
+          command=(dbus-run-session -- xvfb-run -a -s '-screen 0 1280x1000x24'
+            python3 -B desktop/qualification/linux_hosted.py
+            --prefix "$MCW_LINUX_OUTPUT/bundle" --xwindow "$MCW_LINUX_OUTPUT/linux_xwindow")
+          if [ "${{ inputs.linux-renderer-probe }}" = "true" ]; then
+            export MCW_LINUX_THREAD_SAMPLE=1
+            env -u FLUTTER_LINUX_RENDERER "${command[@]}" --performance-only --out "$MCW_LINUX_OUTPUT/runtime" \
+              2>&1 | tee "$RUNNER_TEMP/mcw-flutter-linux-setup/runtime.log"
+            FLUTTER_LINUX_RENDERER=software "${command[@]}" --performance-only --out "$MCW_LINUX_OUTPUT/runtime-software" \
+              2>&1 | tee "$RUNNER_TEMP/mcw-flutter-linux-setup/runtime-software.log"
+          else
+            "${command[@]}" --out "$MCW_LINUX_OUTPUT/runtime" \
+              2>&1 | tee "$RUNNER_TEMP/mcw-flutter-linux-setup/runtime.log"
+          fi
       - name: Summarize observed baseline bundle and hosted desktop evidence
         if: always()
         run: |
@@ -553,6 +566,7 @@ jobs:
           path: |
             ${{ env.MCW_LINUX_OUTPUT }}/bundle/**
             ${{ env.MCW_LINUX_OUTPUT }}/runtime/**
+            ${{ env.MCW_LINUX_OUTPUT }}/runtime-software/**
             ${{ env.MCW_LINUX_OUTPUT }}/*.json
             ${{ env.MCW_LINUX_OUTPUT }}/*.log
             ${{ env.MCW_LINUX_OUTPUT }}/*.txt
