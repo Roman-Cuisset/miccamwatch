@@ -98,6 +98,11 @@ static void my_application_activate(GApplication* application) {
   gtk_window_set_geometry_hints(window, nullptr, &minimum, GDK_HINT_MIN_SIZE);
 
   g_autoptr(FlDartProject) project = fl_dart_project_new();
+  // The Linux software compositor draws through Skia. Impeller text aborts
+  // there, so honor the explicit software choice before creating the view.
+  if (g_strcmp0(g_getenv("FLUTTER_LINUX_RENDERER"), "software") == 0) {
+    fl_dart_project_set_enable_impeller(project, FALSE);
+  }
   fl_dart_project_set_dart_entrypoint_arguments(
       project, self->dart_entrypoint_arguments);
 

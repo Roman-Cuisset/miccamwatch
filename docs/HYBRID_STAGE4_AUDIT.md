@@ -135,3 +135,12 @@ renderer pris en charge et sur une session accélérée, avec CPU par
 thread. Aucun changement de renderer ni de cadence native n’a été
 déduit de ces chiffres. [Reçu Linux x64](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/45402576893/job/138474736513)
 · [Options du moteur de rendu Flutter](https://docs.flutter.dev/perf/impeller).
+
+Le [rejeu du binaire `b3350bc`](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/45432747842/job/138582228862)
+reproduit 153,77–154,17 % d’un cœur au rendu par défaut. Quatre threads
+`llvmpipe` totalisent environ 22,8 secondes de CPU sur une fenêtre de
+15 secondes. Avec `FLUTTER_LINUX_RENDERER=software`, le moteur confirme
+ce choix, puis Flutter quitte avec SIGABRT sur le rendu de texte
+Impeller dans Skia. La consultation native se rouvre. Le runner Linux
+désactive désormais Impeller quand le compositeur logiciel est choisi
+explicitement. Le rendu par défaut reste celui du SDK.
