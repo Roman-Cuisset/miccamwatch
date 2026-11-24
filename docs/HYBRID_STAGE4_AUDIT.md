@@ -145,6 +145,27 @@ Impeller dans Skia. La consultation native se rouvre. Le runner Linux
 désactive désormais Impeller quand le compositeur logiciel est choisi
 explicitement. Le rendu par défaut reste celui du SDK.
 
+Le premier job de `199436c` a compilé le paquet, puis le contrôleur
+a dépassé son délai après un acquittement du troisième enfant
+Flutter. Le contrôleur lisait seulement les enfants du thread
+principal. Il inspecte désormais les enfants de tous les threads
+du propriétaire, avec déduplication. Le [rejeu sans rebuild](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/45436952897/job/138597253458)
+vérifie l’empreinte de l’archive native de `199436c` et utilise les
+mêmes octets pour les deux options. Il ouvre et ferme Flutter
+avec acquittement IPC dans les deux thèmes pour chaque mode.
+
+| Mode, fenêtre ouverte sous Xvfb | CPU moyen par cœur | RSS | PSS |
+| --- | ---: | ---: | ---: |
+| Impeller, GL avec llvmpipe | 272,81–273,17 % | 284,45–298,30 Mio | 237,77–251,73 Mio |
+| Compositeur logiciel explicite, Skia | 1,40–1,60 % | 134,42–136,24 Mio | 88,22–90,17 Mio |
+
+Après fermeture, l’arbre revient à un processus, 9,88–10,03 Mio
+de RSS et 0,27–0,33 % d’un cœur. Ces mesures courtes portent sur
+un bureau Xvfb et une option de rendu. Elles ne justifient aucun
+changement de renderer par défaut sur GPU ou sur Wayland.
+Le [build ARM64 de `199436c`](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/45434112736/job/138587158032)
+réussit. Le comparatif graphique est propre à x64.
+
 ## Comparaison Windows x64 sur les MSI installés
 
 Le [rejeu administrateur](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/45435090256/job/138590609217)
@@ -207,3 +228,40 @@ entre refus macOS et affichage de bannière non vérifié.
 La preuve AT-SPI couvre les actions exercées dans ce contexte.
 Le parcours complet avec lecteur d’écran, le zoom extrême, le
 multi-écrans et la réduction de mouvement restent à qualifier.
+
+## macOS Intel, paquet `7252421`
+
+Le [job Intel](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/45430151547/job/138572904825)
+a réussi, y compris le refus du processus parent et d’une identité
+périmée, les états caméra partiels, les descriptions de profils
+dans sept langues et la distinction notification/bannière.
+Le paquet installé a rapporté `macos_authorization=not_determined`
+et `banner_delivery=unverified`. Le job Apple Silicon de ce même
+run a été annulé avant sa première étape. La qualification native
+Rust Apple Silicon a ensuite réussi dans le run `45433644412`.
+
+La [qualification Apple Silicon sur `199436c`](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/45434107392/job/138587111004)
+a réussi, cycle installé et retrait du propriétaire natif compris.
+Le helper du paquet observe lui aussi `not_determined` et
+`unverified`. CoreMediaIO
+rapporte `unavailable` sur ce runner. La preuve caméra physique et
+l’affichage d’une bannière avec permission réelle restent ouverts.
+
+## Critères encore ouverts
+
+- Terminer avec autorité native une application macOS durcie du compte
+  courant et confirmer sa sortie. Vorssaint reste le cas de référence.
+- Vérifier le cycle caméra physique, l’attribution quand l’API la
+  fournit, la veille et les alertes réelles sur les Mac autorisés.
+- Rejouer la candidate Windows en compte standard dans la VM x64.
+  Le runner hébergé a interdit la stable par politique et l’inventaire
+  local de la VM a exigé une autorité Hyper-V absente de cette session.
+- Étendre les mesures à la capture active, à la reprise, aux transitions
+  de langue et de thème et à une session Linux accélérée.
+- Vérifier la géométrie après changements d’écran ainsi que les parcours
+  complets en accessibilité sur les systèmes pris en charge.
+
+Les reçus de récupération de l’étape 3 sont conservés. L’enregistrement
+MSI v0.21.0 sur le PC hôte, les deux empreintes de ses exécutables
+et le PID du tray concordent avec le reçu de l’étape 3. La vérification
+a lu le registre, les fichiers et le processus.
