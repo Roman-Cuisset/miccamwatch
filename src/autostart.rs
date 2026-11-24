@@ -98,11 +98,13 @@ pub fn state() -> Result<AutostartState> {
 
 #[cfg(feature = "packaged-desktop")]
 pub(crate) fn maintenance_snapshot() -> Result<serde_json::Value> {
-    let task = registered_task()?.map(|task| serde_json::json!({
-        "enabled": task.enabled,
-        "command": task.command,
-        "simple_logon": task.simple_logon
-    }));
+    let task = registered_task()?.map(|task| {
+        serde_json::json!({
+            "enabled": task.enabled,
+            "command": task.command,
+            "simple_logon": task.simple_logon
+        })
+    });
     Ok(serde_json::json!({"task": task, "run": run_registration()?}))
 }
 

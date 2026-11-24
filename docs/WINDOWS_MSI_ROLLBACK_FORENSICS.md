@@ -1,5 +1,12 @@
 # MicCamWatch v0.22.0 — diagnostic du rollback MSI par utilisateur
 
+Le [contrat de maintenance MSI](WINDOWS_MSI_MAINTENANCE.md) contient
+les mesures Hyper-V x64 sur les MSI produit. Après retrait, le relevé
+administrateur renvoie `1605`. Dans le compte d’installation, le même
+ProductCode peut rester annoncé (`State=1`) sans cache ni index
+UpgradeCode. Ce cas exige la vérification du PackageCode et une
+réinstallation du MSI authentifié avant tout retrait ciblé.
+
 ## Conclusion
 
 Le défaut est reproductible dans Windows Installer avec un paquet qui

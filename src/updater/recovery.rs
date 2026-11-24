@@ -232,7 +232,9 @@ fn next_action(
     use msi::Registration;
     match (registration, intact, empty, removed) {
         (Registration::Complete, true, _, _) => Ok(None),
-        (Registration::Absent, true, _, false) => Ok(Some(Action::InteractiveInstall)),
+        (Registration::Absent | Registration::AdvertisedWithoutIndex { .. }, true, _, false) => {
+            Ok(Some(Action::InteractiveInstall))
+        }
         (Registration::PresentWithoutIndex, true, _, _) => Ok(Some(Action::TargetedRemoval)),
         (Registration::Absent, false, true, true) => Ok(Some(Action::CleanInstall)),
         _ => anyhow::bail!("intervention_required: MSI registration or files are ambiguous"),
@@ -382,6 +384,16 @@ fn verify_runtime(job: &Path, target: &Target<'_>) -> Result<()> {
     super::validate_reported_version(&target.root.join("mcw.exe"), "mcw 0.21.0", scratch.path())
 }
 
+fn verify_advertisement(job: &Path, target: &Target<'_>) -> Result<()> {
+    if let msi::Registration::AdvertisedWithoutIndex { package_code } = observe(target)? {
+        ensure!(
+            msi::package_code(&job.join(ARCHIVE))?.eq_ignore_ascii_case(&package_code),
+            "the advertised MSI does not match the authenticated recovery package"
+        );
+    }
+    Ok(())
+}
+
 pub(super) fn recover(job: &Path, target: &Target<'_>, retained_hash: &str) -> Result<()> {
     ordinary_user()?;
     ensure!(
@@ -401,6 +413,7 @@ pub(super) fn recover(job: &Path, target: &Target<'_>, retained_hash: &str) -> R
         return Ok(());
     };
     let package = pin_source(job, target, retained_hash)?;
+    verify_advertisement(job, target)?;
     msi::require_space(
         job,
         package.metadata()?.len().saturating_mul(4) + 128 * 1024 * 1024,
@@ -441,6 +454,7 @@ pub(super) fn recover(job: &Path, target: &Target<'_>, retained_hash: &str) -> R
         classify(job, target)? == Some(action),
         "MSI state changed after confirmation"
     );
+    verify_advertisement(job, target)?;
     verify_backup(job)?;
     portable::write_record(&step, "intent.json", &serde_json::to_vec(&action)?)?;
     let path = job.join(ARCHIVE);
@@ -486,6 +500,18 @@ mod tests {
     fn loss_requires_interactive_registration_before_removal() {
         assert_eq!(
             next_action(Absent, true, false, false).unwrap(),
+            Some(Action::InteractiveInstall)
+        );
+        assert_eq!(
+            next_action(
+                AdvertisedWithoutIndex {
+                    package_code: "fixture".into()
+                },
+                true,
+                false,
+                false
+            )
+            .unwrap(),
             Some(Action::InteractiveInstall)
         );
         assert_eq!(

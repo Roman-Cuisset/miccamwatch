@@ -22,6 +22,7 @@ pub(super) const LEGACY_CODE: &str = "{86CDFED5-BA07-4C91-8BC7-8A856198DC33}";
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum Registration {
     Absent,
+    AdvertisedWithoutIndex { package_code: String },
     PresentWithoutIndex,
     Complete,
 }
@@ -169,29 +170,7 @@ pub(super) fn inspect_recovery_package(path: &Path, version: &str) -> Result<Str
 fn inspect_package(path: &Path, version: &str, legacy: bool) -> Result<String> {
     let installer = Installer::load()?;
     let db = database(&installer, path)?;
-    let mut summary = Handle(MSIHANDLE(0), &installer);
-    checked(
-        unsafe { (installer.summary)(db.0, PCWSTR::null(), 0, &mut summary.0) },
-        "open summary",
-    )?;
-    let mut template = [0u16; 256];
-    let mut length = template.len() as u32;
-    let mut value_type = 0;
-    checked(
-        unsafe {
-            (installer.summary_property)(
-                summary.0,
-                7,
-                &mut value_type,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                PWSTR(template.as_mut_ptr()),
-                &mut length,
-            )
-        },
-        "read x64 template",
-    )?;
-    let template = String::from_utf16(&template[..length as usize])?;
+    let template = summary_string(&db, 7)?;
     ensure!(
         template.starts_with("x64;") || legacy && template.starts_with("Intel;"),
         "unexpected MSI architecture"
@@ -258,6 +237,41 @@ fn inspect_package(path: &Path, version: &str, legacy: bool) -> Result<String> {
     }
     ensure!(count > 0, "MSI lacks an embedded cabinet");
     Ok(product)
+}
+
+fn summary_string(db: &Handle<'_>, property: u32) -> Result<String> {
+    let installer = db.1;
+    let mut summary = Handle(MSIHANDLE(0), installer);
+    checked(
+        unsafe { (installer.summary)(db.0, PCWSTR::null(), 0, &mut summary.0) },
+        "open MSI summary",
+    )?;
+    let mut value = [0u16; 256];
+    let mut length = value.len() as u32;
+    let mut value_type = 0;
+    checked(
+        unsafe {
+            (installer.summary_property)(
+                summary.0,
+                property,
+                &mut value_type,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                PWSTR(value.as_mut_ptr()),
+                &mut length,
+            )
+        },
+        "read MSI summary property",
+    )?;
+    Ok(String::from_utf16(&value[..length as usize])?)
+}
+
+pub(super) fn package_code(path: &Path) -> Result<String> {
+    let installer = Installer::load()?;
+    let db = database(&installer, path)?;
+    let value = summary_string(&db, 9)?;
+    ensure!(valid_product_code(&value), "invalid MSI PackageCode");
+    Ok(value)
 }
 
 fn installed_property(
@@ -349,6 +363,19 @@ pub(super) fn registration(root: &Path, code: &str, version: &str) -> Result<Reg
         );
         return Ok(Registration::Absent);
     }
+    if state.as_deref() == Some("1") {
+        ensure!(
+            related.is_none(),
+            "advertised MSI is indexed; recovery context is ambiguous"
+        );
+        let package_code = installed_property(&installer, code, w!("PackageCode"))?
+            .context("advertised MSI has no PackageCode")?;
+        ensure!(
+            valid_product_code(&package_code),
+            "invalid advertised MSI PackageCode"
+        );
+        return Ok(Registration::AdvertisedWithoutIndex { package_code });
+    }
     ensure!(
         state.as_deref() == Some("5")
             && installed_property(&installer, code, w!("VersionString"))?.as_deref()
@@ -363,7 +390,24 @@ pub(super) fn registration(root: &Path, code: &str, version: &str) -> Result<Reg
     );
     let cache = installed_property(&installer, code, w!("LocalPackage"))?
         .context("MSI package cache missing")?;
-    let db = database(&installer, Path::new(&cache))?;
+    let cache = Path::new(&cache);
+    let system = system_directory()?;
+    let installer_cache = system
+        .parent()
+        .context("missing Windows directory")?
+        .join("Installer");
+    ensure!(
+        cache.parent().is_some_and(|parent| parent
+            .as_os_str()
+            .eq_ignore_ascii_case(installer_cache.as_os_str()))
+            && cache
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("msi")),
+        "MSI cache is outside the Windows Installer directory"
+    );
+    crate::uninstall::windows::safe_ancestors(&installer_cache)?;
+    let _cache_file = bundle::pin(cache)?;
+    let db = database(&installer, cache)?;
     ensure!(
         property(&db, "UpgradeCode")?.is_some_and(|value| value.eq_ignore_ascii_case(UPGRADE_CODE))
             && property(&db, "ProductCode")?.is_some_and(|value| value.eq_ignore_ascii_case(code))

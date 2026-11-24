@@ -16,6 +16,7 @@ les opérations mutatrices.
 | Mise à niveau refusée ou annulée, ancien produit cohérent | Conserver l’installation et qualifier à nouveau avant de retenter. |
 | Rollback avec ancien produit et fichiers cohérents | Clore le journal comme restauration vérifiée. |
 | Fichiers anciens intacts, ProductCode absent | Conserver `intervention_required`. Proposer le MSI d’origine vérifié en mode interactif. |
+| Fichiers anciens intacts, produit seulement annoncé (`State=1`) sans index | Vérifier aussi le PackageCode contre le MSI authentifié. Seule la réinstallation interactive est proposée. |
 | ProductCode rétabli dans le bon profil, index incomplet | Demander une confirmation distincte avant une désinstallation explicite par ProductCode. |
 | Ancien produit absent après désinstallation ciblée | Vérifier l’absence avant de proposer une nouvelle installation du MSI d’origine. |
 | Ancien produit, index, cache et fichiers cohérents | Valider la récupération et permettre les opérations normales. |
@@ -68,7 +69,10 @@ Sur Windows 11 Pro x64 dans un compte standard, la mise à niveau normale
 v0.21.0 → v0.22.0 (16 composants, IPC 10) et la désinstallation ont réussi.
 La panne avant retrait a préservé l’ancien produit. La panne après retrait
 a restauré les fichiers à l’identique tandis que les deux ProductCode
-renvoyaient `1605`. Le journal MSI contient 79 refus d’écriture. Le résultat
+renvoyaient `1605` depuis l’observateur administrateur distinct. Depuis le
+compte d’installation, l’ancienne version reste annoncée (`State=1`), avec
+son PackageCode et sans chemin d’installation, cache ni index UpgradeCode.
+Le journal MSI contient 79 refus d’écriture. Le résultat
 correspond à la perte d’enregistrement observée avec le MSI minimal.
 
 La réinstallation interactive du MSI d’origine avec UAC a renvoyé `0`
