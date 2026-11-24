@@ -225,7 +225,7 @@ case "signature":
     output.signature = nativeSignature(path: args[0], online: args[1] == "online")
 case "session-lock", "terminate":
     output.effect = processEffect(mode: mode, args: args)
-case "notification-identity", "notify", "sound", "log":
+case "notification-identity", "notification-status", "notify", "sound", "log":
     output.effect = desktopEffect(mode: mode, args: args)
 default:
     invalidArguments()

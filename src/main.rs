@@ -502,6 +502,13 @@ fn run() -> Result<u8> {
         Command::Notifications { command } => {
             match command {
                 NotificationCommand::Status => {}
+                #[cfg(target_os = "macos")]
+                NotificationCommand::NativeStatus => {
+                    let state = miccamwatch::notify::native_status()?;
+                    println!("macos_authorization={state}");
+                    println!("banner_delivery=unverified");
+                    return Ok(0);
+                }
                 NotificationCommand::Pause { minutes } => {
                     let minutes = i64::try_from(minutes)?;
                     settings = Settings::update(|current| {

@@ -220,6 +220,9 @@ pub enum ProfileArg {
 #[derive(Debug, Subcommand)]
 pub enum NotificationCommand {
     Status,
+    /// Read macOS notification authorization without prompting or sending an alert
+    #[cfg(target_os = "macos")]
+    NativeStatus,
     /// Pause notifications for a bounded number of minutes
     Pause {
         #[arg(value_parser = clap::value_parser!(u64).range(1..=10080))]

@@ -27,6 +27,21 @@ pub fn ensure_identity() -> Result<()> {
     }
 }
 
+#[cfg(target_os = "macos")]
+pub fn native_status() -> Result<&'static str> {
+    use anyhow::bail;
+
+    match crate::platform::unix::native_effect("notification-status", &[])?.as_deref() {
+        Some("not_determined") => Ok("not_determined"),
+        Some("denied") => Ok("denied"),
+        Some("authorized") => Ok("authorized"),
+        Some("authorized_without_alerts") => Ok("authorized_without_alerts"),
+        Some("provisional") => Ok("provisional"),
+        Some("unknown") => Ok("unknown"),
+        _ => bail!("macOS helper returned an invalid notification authorization state"),
+    }
+}
+
 /// The watcher owns deduplication; this function reports native delivery errors.
 pub fn notify_access(access: &Access, action: Action, lang: Language) -> Result<()> {
     let (title, detail) = access_content(access, action, lang);

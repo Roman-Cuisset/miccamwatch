@@ -216,6 +216,22 @@ impl PlatformMonitor {
                 detail: format!("Cannot read camera profile metadata: {error:#}; no administrator requirement inferred"),
             },
         });
+        checks.push(match crate::notify::native_status() {
+            Ok(state) => DiagnosticCheck {
+                name: "notification_authorization",
+                status: if state == "authorized" {
+                    DiagnosticStatus::Ok
+                } else {
+                    DiagnosticStatus::Warning
+                },
+                detail: format!("macos_authorization={state}; banner_delivery=unverified"),
+            },
+            Err(error) => DiagnosticCheck {
+                name: "notification_authorization",
+                status: DiagnosticStatus::Warning,
+                detail: format!("macos_authorization=unknown; banner_delivery=unverified; {error:#}"),
+            },
+        });
         checks.push(DiagnosticCheck {
             name: "session_lock_api",
             status: DiagnosticStatus::Warning,
@@ -444,6 +460,7 @@ fn microphone_access(process: AudioProcess, index: usize) -> Access {
 }
 
 fn append_camera_observation(snapshot: &mut Snapshot, video: VideoResult) {
+    let has_running_state = video.devices.iter().any(|camera| camera.running_somewhere.is_some());
     let unknown_state = video
         .devices
         .iter()
@@ -469,7 +486,11 @@ fn append_camera_observation(snapshot: &mut Snapshot, video: VideoResult) {
     // Empty discovery, missing states and API errors independently suppress STOP.
     snapshot.collectors.push(health(
         "coremediaio_video",
-        CollectorState::Degraded,
+        if has_running_state {
+            CollectorState::Degraded
+        } else {
+            CollectorState::Unavailable
+        },
         Some(detail),
     ));
 }
@@ -769,6 +790,7 @@ fn validate_request(mode: &str, args: &[&str]) -> Result<()> {
         | "locale"
         | "session-lock"
         | "notification-identity"
+        | "notification-status"
         | "sound" => args.is_empty(),
         "control" | "log" => args.len() == 1,
         "terminate" | "notify" => args.len() == 2,
@@ -1001,16 +1023,17 @@ mod tests {
 
     #[test]
     fn camera_unknown_null_missing_empty_and_error_are_observation_gaps() {
-        for document in [
-            r#"{"devices":[{"id":"c","name":"cam","runningSomewhere":null}]}"#,
-            r#"{"devices":[{"id":"c","name":"cam"}]}"#,
-            r#"{"devices":[]}"#,
-            r#"{"devices":[{"id":"c","name":"cam","runningSomewhere":false}],"error":"CoreMediaIO lookup failed"}"#,
+        for (document, state) in [
+            (r#"{"devices":[{"id":"c","name":"cam","runningSomewhere":null}]}"#, CollectorState::Unavailable),
+            (r#"{"devices":[{"id":"c","name":"cam"}]}"#, CollectorState::Unavailable),
+            (r#"{"devices":[]}"#, CollectorState::Unavailable),
+            (r#"{"devices":[{"id":"c","name":"cam","runningSomewhere":false}],"error":"CoreMediaIO lookup failed"}"#,
+                CollectorState::Degraded),
         ] {
             let snapshot = camera_snapshot(document);
             assert!(snapshot.accesses.is_empty());
             assert_eq!(snapshot.observation_gaps, vec![Resource::Camera]);
-            assert_eq!(snapshot.collectors[0].state, CollectorState::Degraded);
+            assert_eq!(snapshot.collectors[0].state, state);
         }
     }
 

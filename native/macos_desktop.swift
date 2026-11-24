@@ -1307,6 +1307,33 @@ func desktopMain(args: [String]) -> Never {
 private func desktopFailure(_ error: String) -> NativeEffectReply {
     NativeEffectReply(ok: false, error: error, state: nil)
 }
+
+private func readNotificationSettings(_ center: UNUserNotificationCenter) -> UNNotificationSettings? {
+    var settings: UNNotificationSettings?
+    center.getNotificationSettings { result in
+        DispatchQueue.main.async { settings = result }
+    }
+    let deadline = Date().addingTimeInterval(5)
+    while settings == nil && Date() < deadline {
+        RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+    }
+    return settings
+}
+
+private func notificationStatus(_ settings: UNNotificationSettings) -> String {
+    switch settings.authorizationStatus {
+    case .notDetermined: return "not_determined"
+    case .denied: return "denied"
+    case .authorized:
+        if settings.alertSetting != .enabled || settings.alertStyle == .none {
+            return "authorized_without_alerts"
+        }
+        return "authorized"
+    case .provisional: return "provisional"
+    default: return "unknown"
+    }
+}
+
 // Native effect requests are explicit side effects. Passive observation never reaches here.
 func desktopEffect(mode: String, args: [String]) -> NativeEffectReply {
     if mode == "log" {
@@ -1326,25 +1353,48 @@ func desktopEffect(mode: String, args: [String]) -> NativeEffectReply {
         if sound.isPlaying { sound.stop(); return desktopFailure("system sound playback timed out") }
         return NativeEffectReply(ok: true, error: nil, state: "played")
     }
-    guard mode == "notify" || mode == "notification-identity" else { return desktopFailure("unknown desktop effect") }
+    guard mode == "notify" || mode == "notification-identity" || mode == "notification-status" else {
+        return desktopFailure("unknown desktop effect")
+    }
     guard Bundle.main.bundleIdentifier == "com.roman-cuisset.miccamwatch.helper",
           Bundle.main.bundleURL.pathExtension == "app" else {
         return desktopFailure("notification helper must run with its installed stable application identity")
     }
-    guard (mode == "notify" && args.count == 2) || (mode == "notification-identity" && args.isEmpty) else {
+    guard args.count == (mode == "notify" ? 2 : 0) else {
         return desktopFailure("invalid notification arguments")
     }
     let center = UNUserNotificationCenter.current()
-    // Callbacks mutate their result only on the main queue; the main run loop waits boundedly.
-    var authorization: Bool? = nil
-    var failure: String? = nil
-    center.requestAuthorization(options: [.alert, .sound]) { accepted, error in
-        DispatchQueue.main.async { authorization = accepted; failure = error?.localizedDescription }
+    guard let settings = readNotificationSettings(center) else {
+        return desktopFailure("cannot read macOS notification settings")
     }
-    let deadline = Date().addingTimeInterval(45)
-    while authorization == nil && Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.02)) }
-    guard authorization == true else { return desktopFailure(failure ?? (authorization == nil ? "notification authorization timed out" : "notification authorization denied")) }
-    if mode == "notification-identity" { return NativeEffectReply(ok: true, error: nil, state: "authorized") }
+    var state = notificationStatus(settings)
+    if mode == "notification-status" {
+        return NativeEffectReply(ok: true, error: nil, state: state)
+    }
+
+    var failure: String? = nil
+    if settings.authorizationStatus == .notDetermined {
+        // Request once, while sending an enabled notification or checking identity explicitly.
+        var authorization: Bool?
+        center.requestAuthorization(options: [.alert, .sound]) { accepted, error in
+            DispatchQueue.main.async { authorization = accepted; failure = error?.localizedDescription }
+        }
+        let deadline = Date().addingTimeInterval(45)
+        while authorization == nil && Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+        }
+        if let error = failure { return desktopFailure(error) }
+        guard authorization != nil, let updated = readNotificationSettings(center) else {
+            return desktopFailure("notification authorization could not be confirmed")
+        }
+        state = notificationStatus(updated)
+    }
+    guard state == "authorized" || state == "authorized_without_alerts" || state == "provisional" else {
+        return desktopFailure("macOS notification permission: \(state)")
+    }
+    if mode == "notification-identity" {
+        return NativeEffectReply(ok: true, error: nil, state: state)
+    }
     let content = UNMutableNotificationContent()
     content.title = args[0]; content.body = args[1]
     let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)

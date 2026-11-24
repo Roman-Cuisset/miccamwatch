@@ -325,7 +325,7 @@ struct EffectReply {
 #[cfg(target_os = "macos")]
 pub(crate) fn native_effect(mode: &str, args: &[&str]) -> Result<Option<String>> {
     let timeout = if matches!(mode, "notification-identity" | "notify") {
-        60
+        70
     } else {
         35
     };

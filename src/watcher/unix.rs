@@ -4,8 +4,8 @@ use crate::{
     history,
     i18n::Language,
     model::{
-        Access, AccessEvent, Action, Activity, CollectorState, EnforcementDecision, Risk,
-        SCHEMA_VERSION, Snapshot, event_code,
+        Access, AccessEvent, Action, Activity, CollectorHealth, CollectorState, EnforcementDecision,
+        Resource, Risk, SCHEMA_VERSION, Snapshot, event_code,
     },
     output,
     platform::{self, PlatformMonitor},
@@ -32,6 +32,7 @@ pub struct EventDispatcher {
     history_enabled: bool,
     min_risk: Option<Risk>,
     cooldown: HashMap<String, Instant>,
+    last_notification_error: Option<String>,
 }
 
 impl EventDispatcher {
@@ -65,6 +66,7 @@ impl EventDispatcher {
             history_enabled,
             min_risk: None,
             cooldown: HashMap::new(),
+            last_notification_error: None,
         })
     }
 
@@ -103,8 +105,17 @@ impl EventDispatcher {
             if sound && let Err(error) = platform::play_chime() {
                 eprintln!("chime failed: {error:#}");
             }
-            if notify && let Err(error) = crate::notify::notify_access(access, action, self.lang) {
-                eprintln!("notification failed: {error:#}");
+            if notify {
+                match crate::notify::notify_access(access, action, self.lang) {
+                    Ok(()) => self.last_notification_error = None,
+                    Err(error) => {
+                        let reason = format!("{error:#}");
+                        if self.last_notification_error.as_ref() != Some(&reason) {
+                            eprintln!("notification failed: {reason}");
+                            self.last_notification_error = Some(reason);
+                        }
+                    }
+                }
             }
         }
         Ok(())
@@ -180,23 +191,29 @@ pub fn watch(
     )?;
     dispatcher.min_risk = filter.risk;
     let mut tracker = TransitionTracker::default();
-    let mut previous_health = Vec::new();
+    let mut previous_coverage: Option<(Vec<CollectorHealth>, Vec<Resource>)> = None;
     let mut denial_observations = HashMap::new();
     let mut attempted = HashSet::new();
     loop {
         let snapshot = monitor.snapshot(filter.into())?;
-        let changed = previous_health != snapshot.collectors;
-        if changed
-            && snapshot
-                .collectors
-                .iter()
-                .any(|health| health.state != CollectorState::Healthy)
-        {
-            output::print_status(&snapshot, json, filter.risk, lang)?;
-        } else if changed && !previous_health.is_empty() && json {
-            // Report recovery explicitly, without guessing which capture stopped during
-            // the outage. JSON watch lines with `collectors` are status documents.
-            output::print_status(&snapshot, true, filter.risk, lang)?;
+        let previous = previous_coverage.as_ref();
+        let previous_health = previous.map_or(&[][..], |(health, _)| health.as_slice());
+        let previous_gaps = previous.map_or(&[][..], |(_, gaps)| gaps.as_slice());
+        if json {
+            let changed = previous_health != snapshot.collectors
+                || previous_gaps != snapshot.observation_gaps;
+            let incomplete = !snapshot.observation_gaps.is_empty()
+                || snapshot.collectors.iter().any(|health| health.state != CollectorState::Healthy);
+            if changed && (previous.is_some() || incomplete) {
+                output::print_status(&snapshot, true, filter.risk, lang)?;
+            }
+        } else {
+            if !snapshot.observation_gaps.is_empty() && previous_gaps != snapshot.observation_gaps {
+                println!("{}", lang.observation_incomplete());
+            }
+            for collector in changed_collector_health(previous_health, &snapshot.collectors) {
+                output::print_collector_health(collector);
+            }
         }
         tracker.reconcile(&snapshot, |access, action| {
             dispatcher.dispatch(access, action)
@@ -204,11 +221,24 @@ pub fn watch(
         if defensive_kill {
             enforce_policy(&snapshot, &mut denial_observations, &mut attempted);
         }
-        previous_health = snapshot.collectors;
+        previous_coverage = Some((snapshot.collectors, snapshot.observation_gaps));
         if stop_rx.recv_timeout(interval).is_ok() {
             return Ok(());
         }
     }
+}
+
+fn changed_collector_health<'a>(
+    previous: &'a [CollectorHealth],
+    current: &'a [CollectorHealth],
+) -> impl Iterator<Item = &'a CollectorHealth> {
+    current.iter().filter(move |health| {
+        match previous.iter().find(|old| old.collector == health.collector) {
+            Some(old) => old != *health
+                && (old.state != CollectorState::Healthy || health.state != CollectorState::Healthy),
+            None => health.state != CollectorState::Healthy,
+        }
+    })
 }
 
 fn enforce_policy(
@@ -273,7 +303,7 @@ pub(super) fn enforce_policy_with(
 mod tests {
     use super::*;
     use crate::watcher::transitions::reconcile;
-    use crate::model::{Activity, CollectorHealth, Confidence, EnforcementDecision, Resource, Risk};
+    use crate::model::Confidence;
 
     fn access() -> Access {
         Access {
@@ -315,6 +345,32 @@ mod tests {
             accesses,
             observation_gaps: Vec::new(),
         }
+    }
+
+    #[test]
+    fn watch_reports_only_new_changed_and_recovered_collector_warnings() {
+        let mut camera = CollectorHealth {
+            collector: "coremediaio_video",
+            state: CollectorState::Degraded,
+            detail: Some("client unknown".into()),
+        };
+        let mut microphone = CollectorHealth {
+            collector: "coreaudio_input",
+            state: CollectorState::Healthy,
+            detail: None,
+        };
+        let initial = [camera.clone(), microphone.clone()];
+        assert_eq!(changed_collector_health(&[], &initial).collect::<Vec<_>>(), [&camera]);
+        assert_eq!(changed_collector_health(&initial, &initial).count(), 0);
+
+        microphone.state = CollectorState::Unavailable;
+        let failed = [camera.clone(), microphone.clone()];
+        assert_eq!(changed_collector_health(&initial, &failed).collect::<Vec<_>>(), [&microphone]);
+
+        camera.detail = Some("one device has no running state".into());
+        let changed = [camera.clone(), microphone];
+        assert_eq!(changed_collector_health(&failed, &changed).collect::<Vec<_>>(), [&camera]);
+        assert_eq!(changed_collector_health(&failed, &initial).collect::<Vec<_>>(), [&initial[1]]);
     }
 
     #[test]
