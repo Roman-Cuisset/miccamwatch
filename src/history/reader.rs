@@ -397,10 +397,26 @@ impl ReverseFile {
                 self.position = start;
                 self.buffered = count;
             }
-            self.buffered -= 1;
-            *budget -= 1;
-            let byte = self.buffer[self.buffered];
-            if byte == b'\n' {
+            // Consume a span within the current buffer and page budget. Long
+            // records can be copied or dropped in blocks while retaining the
+            // exact boundary at which the next page resumes.
+            let start = self.buffered.saturating_sub(*budget);
+            let remaining = &self.buffer[start..self.buffered];
+            let newline = remaining.iter().rposition(|&byte| byte == b'\n');
+            let span = &remaining[newline.map_or(0, |index| index + 1)..];
+            if !self.oversized {
+                if span.len() > MAX_LINE_BYTES - self.line.len() {
+                    self.oversized = true;
+                    self.line.clear();
+                } else {
+                    self.line.extend(span.iter().rev().copied());
+                }
+            }
+            self.buffered -= span.len();
+            *budget -= span.len();
+            if newline.is_some() {
+                self.buffered -= 1;
+                *budget -= 1;
                 if !self.terminated {
                     self.terminated = true;
                     let incomplete = !self.line.is_empty() || self.oversized;
@@ -422,14 +438,6 @@ impl ReverseFile {
                 }
                 self.line.reverse();
                 return Ok(Record::Line(std::mem::take(&mut self.line)));
-            }
-            if !self.oversized {
-                if self.line.len() == MAX_LINE_BYTES {
-                    self.oversized = true;
-                    self.line.clear();
-                } else {
-                    self.line.push(byte);
-                }
             }
         }
     }
@@ -860,6 +868,40 @@ mod tests {
         assert!(last.incomplete);
         assert!(last.next_cursor.is_none());
         assert!(last.issues.iter().any(|issue| issue.contains("64 KiB")));
+    }
+
+    #[test]
+    fn reverse_scan_preserves_partial_lines_across_byte_budget_and_io_blocks() {
+        use std::io::Write;
+
+        let expected: Vec<u8> = (0..20_000).map(|index| b'a' + (index % 26) as u8).collect();
+        let mut file = tempfile::tempfile().unwrap();
+        file.write_all(b"older\n").unwrap();
+        file.write_all(&expected).unwrap();
+        file.write_all(b"\n").unwrap();
+        let length = file.metadata().unwrap().len();
+        let mut scanner = ReverseFile::new(file, length);
+
+        let mut budget = 8192;
+        assert!(matches!(
+            scanner.next_record(&mut budget).unwrap(),
+            Record::Budget
+        ));
+        assert_eq!(budget, 0);
+        budget = PAGE_SCAN_BYTES;
+        let Record::Line(actual) = scanner.next_record(&mut budget).unwrap() else {
+            panic!("missing record after resuming the byte budget");
+        };
+        assert_eq!(actual, expected);
+        let mut budget = 10;
+        let Record::Line(older) = scanner.next_record(&mut budget).unwrap() else {
+            panic!("missing older record");
+        };
+        assert_eq!(older, b"older");
+        assert!(matches!(
+            scanner.next_record(&mut budget).unwrap(),
+            Record::Finished
+        ));
     }
 
     #[test]
