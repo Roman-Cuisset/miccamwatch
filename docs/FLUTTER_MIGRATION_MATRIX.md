@@ -1,5 +1,7 @@
 # Native feature migration inventory — A–B5 and v0.22.0 stage 2
 
+> The [stage 4 audit](HYBRID_STAGE4_AUDIT.md) records the current protocol 10 window, profiles, diagnostics and qualification scope. Profiles describe effects actually implemented by each native observer.
+
 > **Prochaine publication publique prévue pour v0.22.0.** Le §9 de l’[audit de parité](V0.22.0_PARITY_AUDIT.md#matrice-des-44-familles) actualise les 44 familles. Les [reçus de la qualification fonctionnelle](V0.22.0_PARITY_AUDIT.md#qualification-etape-2) sur `945d69c` établissent l’état logiciel de l’étape 2. Le [plan en six étapes](RELEASE_0.22.0_PLAN.md) définit les validations installées et matérielles à venir.
 
 Source baseline: `b5cf391c1905cbc391c47220f1347c55ba8e24cc`, 27 October 2026. Inspection only; runtime qualification is recorded separately. This inventory preserves every native/public CLI capability and its actual limitations.

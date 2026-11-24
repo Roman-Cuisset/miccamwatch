@@ -888,7 +888,10 @@ mod tests {
         );
 
         let mut child = Command::new("/bin/sleep").arg("20").spawn()?;
-        let result = (|| -> Result<_> { Ok((request(child.id())?, child.try_wait()?.is_none())) })();
+        let result = (|| -> Result<_> {
+            let reply = request(child.id())?;
+            Ok((reply, child.try_wait()?.is_none()))
+        })();
         // The fixture owns this child handle and is responsible for reaping it.
         let _ = child.kill();
         child.wait()?;

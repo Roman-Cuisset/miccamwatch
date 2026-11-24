@@ -300,3 +300,11 @@ La [transaction multipaquet et la réinstallation silencieuse de la fixture](WIN
 ont confirmé que ces stratégies ne permettent pas de lever le blocage.
 Le [contrat de récupération MSI Windows](WINDOWS_MSI_MAINTENANCE.md)
 documente le parcours qualifié et les limites de provenance et de simulation.
+
+## 15. Audit et corrections de l’étape 4
+
+Le [registre des 20 domaines](HYBRID_STAGE4_AUDIT.md) recense les
+corrections, les tests et les critères ouverts. La mesure du lecteur
+d’historique est ciblée. La comparaison CPU/RAM v0.21.0/v0.22.0 sur
+les cinq cibles et la preuve de terminaison sur une application macOS
+durcie gardent leurs propres critères.

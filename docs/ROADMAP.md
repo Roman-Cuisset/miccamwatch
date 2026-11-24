@@ -4110,3 +4110,13 @@ du retrait et de la délégation MSI sont dans le
 compte standard sous Windows 11 ARM64 a réussi pour le paquet x64 émulé.
 Le rétablissement d’un enregistrement MSI après la panne injectée reste à
 qualifier, ainsi que le bureau x64 standard et UAC. L’étape 3 reste incomplète.
+
+## 2026-11-24 — Audit multiplateforme de l’étape 4
+
+La reprise part de `e773cbf`, après la clôture de l’étape 3 dans la
+[preuve de récupération MSI](WINDOWS_MSI_MAINTENANCE.md). Les correctifs
+de diagnostic macOS, les fenêtres Flutter, l’explication des profils et
+la mesure du lecteur d’historique figurent dans le
+[registre d’audit](HYBRID_STAGE4_AUDIT.md). La qualification de la
+terminaison native, des bannières et du matériel garde des critères
+spécifiques.

@@ -1,5 +1,25 @@
 # MicCamWatch v0.22.0 sur macOS
 
+Les commandes de reproduction ci-dessous décrivent l’historique de
+l’étape 3. Le [suivi de l’étape 4](HYBRID_STAGE4_AUDIT.md#terminaison-et-autorité-macos)
+consigne les nouvelles vérifications. Aucune nouvelle manipulation ne
+s’appuie sur le Mac du testeur.
+
+### Comportement en développement à l’étape 4
+
+- Le helper lit l’autorisation native avant d’envoyer. La commande
+  `mcw notifications native-status` et le diagnostic Flutter sont en
+  lecture seule. Le réglage de MicCamWatch reste visible dans Préférences.
+  L’autorisation, l’absence d’alertes et l’affichage effectif ont des
+  preuves distinctes. L’identité ad hoc du helper et les bannières après
+  redémarrage restent à qualifier.
+- CoreMediaIO signale un collecteur indisponible quand aucun état caméra
+  n’est lu. La couverture peut être dégradée avec des observations valides.
+  Les captures anonymes restent visibles avec un motif de limitation.
+- Sous `/Applications`, `root:admin 0775` autorise les écritures du groupe.
+  Une installation personnelle sous `~/Applications` reste éligible à
+  l’autostart si les contrôles de chemin, de propriété et d’ACL passent.
+
 ## Démarrage automatique et chemin de l’application
 
 Le message rapporté sur un vrai Mac équipé de v0.21.0 provient du contrôle
