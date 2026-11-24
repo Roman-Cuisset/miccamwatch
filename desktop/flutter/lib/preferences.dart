@@ -202,9 +202,15 @@ class _PendingPreference {
 
 /// The caller owns the client; leaving this panel never cancels or resends work.
 class PreferencesPanel extends StatelessWidget {
-  const PreferencesPanel({super.key, required this.client, required this.locale});
+  const PreferencesPanel({
+    super.key,
+    required this.client,
+    required this.locale,
+    this.nativePlatform,
+  });
   final PreferenceCommandClient client;
   final String locale;
+  final String? nativePlatform;
 
   @override
   Widget build(BuildContext context) {
@@ -333,6 +339,11 @@ class PreferencesPanel extends StatelessWidget {
             ),
             note('${labels['appliedProfile']}: '
                 '${view.appliedProfile == null ? labels['unknown'] : labels[view.appliedProfile!]}'),
+            if (nativePlatform != null)
+              note(labels[nativePlatform == 'windows'
+                  ? 'profileEffect_${values.profile}'
+                  : 'profileEffect_unix'],
+                  key: const ValueKey('preferences.profileEffect')),
             if (client.disabledReasonFor(PreferenceKey.profile) == 'profileReadOnly')
               note(labels['profileReadOnly']),
           ]),
@@ -478,6 +489,11 @@ const _labels = <String, List<String>>{
   ],
   'savedProfile': ['Saved profile', 'Profil enregistré', 'Gespeichertes Profil', 'Perfil guardado', '保存済みプロファイル', '已保存的配置', 'Сохранённый профиль'],
   'appliedProfile': ['Applied profile', 'Profil appliqué', 'Angewandtes Profil', 'Perfil aplicado', '適用中のプロファイル', '已应用的配置', 'Применённый профиль'],
+  'profileEffect_balanced': ['Uses the standard capture assessment.', 'Applique l’évaluation standard des accès.', 'Verwendet die Standardbewertung für Aufnahmezugriffe.', 'Aplica la evaluación estándar de los accesos de captura.', '標準のキャプチャ評価を適用します。', '使用标准采集访问评估。', 'Применяет стандартную оценку доступа к захвату.'],
+  'profileEffect_meeting': ['Uses the same capture assessment as Balanced.', 'Applique la même évaluation des accès que le profil Équilibré.', 'Bewertet Aufnahmezugriffe wie das Profil Ausgewogen.', 'Evalúa los accesos de captura igual que el perfil Equilibrado.', 'バランスと同じキャプチャ評価を適用します。', '使用与均衡配置相同的采集访问评估。', 'Оценивает доступ к захвату так же, как сбалансированный профиль.'],
+  'profileEffect_development': ['Uses the conservative assessment setting. Capture risk is evaluated as in Balanced.', 'Sélectionne l’évaluation prudente. Le risque des accès est évalué comme avec le profil Équilibré.', 'Wählt die zurückhaltende Bewertung. Das Aufnahmerisiko wird wie im Profil Ausgewogen bewertet.', 'Selecciona la evaluación conservadora. El riesgo de captura se evalúa igual que en Equilibrado.', '保守的な評価設定を選びます。キャプチャのリスク評価はバランスと同じです。', '选择保守评估设置。采集风险的评估与均衡配置相同。', 'Выбирает консервативную настройку. Риск захвата оценивается как в сбалансированном профиле.'],
+  'profileEffect_private': ['The strict assessment classifies unexplained capture as suspicious.', 'L’évaluation stricte classe les accès inexpliqués comme suspects.', 'Die strenge Bewertung stuft ungeklärte Aufnahmen als verdächtig ein.', 'La evaluación estricta clasifica la captura sin explicación como sospechosa.', '厳格な評価では、理由が不明なキャプチャを不審と判定します。', '严格评估会将无法解释的采集标为可疑。', 'Строгая оценка относит необъяснённый захват к подозрительному.'],
+  'profileEffect_unix': ['All four profiles currently use the same capture risk assessment on this system.', 'Sur ce système, les quatre profils évaluent actuellement le risque des accès de la même manière.', 'Auf diesem System bewerten derzeit alle vier Profile das Aufnahmerisiko gleich.', 'En este sistema, los cuatro perfiles evalúan actualmente el riesgo de captura del mismo modo.', 'このシステムでは、現在どのプロファイルでもキャプチャのリスク評価は同じです。', '在此系统上，四个配置目前采用相同的采集风险评估。', 'В этой системе все четыре профиля сейчас одинаково оценивают риск захвата.'],
   'unknown': ['Unknown', 'Inconnu', 'Unbekannt', 'Desconocido', '不明', '未知', 'Неизвестно'],
   'private': ['Private', 'Privé', 'Privat', 'Privado', 'プライベート', '私密', 'Приватный'],
   'meeting': ['Meeting', 'Réunion', 'Besprechung', 'Reunión', '会議', '会议', 'Встреча'],

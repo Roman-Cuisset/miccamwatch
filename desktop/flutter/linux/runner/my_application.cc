@@ -83,10 +83,18 @@ static void my_application_activate(GApplication* application) {
     gtk_window_set_titlebar(window, GTK_WIDGET(header_bar));
   }
 
-  gtk_window_set_default_size(window, 1040, 700);
+  GdkRectangle work = {0, 0, 1040, 700};
+  GdkDisplay* display = gtk_widget_get_display(GTK_WIDGET(window));
+  GdkMonitor* monitor = gdk_display_get_primary_monitor(display);
+  if (monitor == nullptr) monitor = gdk_display_get_monitor(display, 0);
+  if (monitor != nullptr) gdk_monitor_get_workarea(monitor, &work);
+  // Reserve room for the window manager's decorations.
+  const int available_width = MAX(1, work.width - 24);
+  const int available_height = MAX(1, work.height - 64);
+  gtk_window_set_default_size(window, MIN(1040, available_width), MIN(700, available_height));
   GdkGeometry minimum = {};
-  minimum.min_width = 780;
-  minimum.min_height = 540;
+  minimum.min_width = MIN(640, available_width);
+  minimum.min_height = MIN(440, available_height);
   gtk_window_set_geometry_hints(window, nullptr, &minimum, GDK_HINT_MIN_SIZE);
 
   g_autoptr(FlDartProject) project = fl_dart_project_new();

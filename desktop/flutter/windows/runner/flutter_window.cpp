@@ -1,5 +1,6 @@
 #include "flutter_window.h"
 
+#include <algorithm>
 #include <optional>
 
 #include "flutter/generated_plugin_registrant.h"
@@ -72,14 +73,21 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
   if (message == WM_GETMINMAXINFO) {
     const UINT window_dpi = GetDpiForWindow(hwnd);
     const UINT dpi = window_dpi == 0 ? 96 : window_dpi;
-    RECT minimum = {0, 0, MulDiv(780, static_cast<int>(dpi), 96),
-                    MulDiv(540, static_cast<int>(dpi), 96)};
+    RECT minimum = {0, 0, MulDiv(640, static_cast<int>(dpi), 96),
+                    MulDiv(440, static_cast<int>(dpi), 96)};
     AdjustWindowRectExForDpi(
         &minimum, static_cast<DWORD>(GetWindowLongPtr(hwnd, GWL_STYLE)), FALSE,
         static_cast<DWORD>(GetWindowLongPtr(hwnd, GWL_EXSTYLE)), dpi);
     auto* limits = reinterpret_cast<MINMAXINFO*>(lparam);
     limits->ptMinTrackSize.x = minimum.right - minimum.left;
     limits->ptMinTrackSize.y = minimum.bottom - minimum.top;
+    MONITORINFO monitor_info = {};
+    monitor_info.cbSize = sizeof(monitor_info);
+    if (GetMonitorInfo(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &monitor_info)) {
+      const RECT& work = monitor_info.rcWork;
+      limits->ptMinTrackSize.x = std::min(limits->ptMinTrackSize.x, work.right - work.left);
+      limits->ptMinTrackSize.y = std::min(limits->ptMinTrackSize.y, work.bottom - work.top);
+    }
     return 0;
   }
   // Give Flutter, including plugins, an opportunity to handle window messages.

@@ -255,7 +255,8 @@ class _MicCamWatchAppState extends State<MicCamWatchApp> {
         return Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         Container(width: compact ? 76 : 180, padding: const EdgeInsets.fromLTRB(12, 22, 12, 16),
           decoration: BoxDecoration(color: c.card, border: Border(right: BorderSide(color: c.border))),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          child: SingleChildScrollView(child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start, children: [
             Padding(padding: const EdgeInsets.only(left: 8), child: Row(children: [
               Image.asset('assets/miccamwatch.png', width: 28, height: 28, excludeFromSemantics: true),
               if (!compact) ...[
@@ -282,9 +283,7 @@ class _MicCamWatchAppState extends State<MicCamWatchApp> {
                       Icon(destination.icon, size: 18),
                       const SizedBox(width: 10), Expanded(child: Text(titles[destination]!)),
                     ]))))),
-            const Spacer(),
-            if (!compact) Text('Protocol ${wire.protocolVersion}', style: c.type(11, muted: true)),
-          ])),
+          ]))),
         Expanded(child: SingleChildScrollView(key: ValueKey(page), padding: const EdgeInsets.all(22),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Wrap(alignment: WrapAlignment.spaceBetween, crossAxisAlignment: WrapCrossAlignment.center,
@@ -324,7 +323,11 @@ class _MicCamWatchAppState extends State<MicCamWatchApp> {
               const SizedBox(height: 16),
               AutostartPanel(client: consultation, locale: locale),
               const SizedBox(height: 16),
-              PreferencesPanel(client: preferenceCommands, locale: locale),
+              PreferencesPanel(
+                client: preferenceCommands,
+                locale: locale,
+                nativePlatform: snapshot?.engine['platform'] as String?,
+              ),
             ],
             if (page == AppPage.diagnostics) ...[
               DetailedDiagnosticsPanel(client: consultation, locale: locale),

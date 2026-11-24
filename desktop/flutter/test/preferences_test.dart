@@ -85,10 +85,10 @@ PreferenceCommandClient makeClient(List<Map<String, dynamic>> sent, {
   return client;
 }
 
-Widget host(PreferenceCommandClient client, {String locale = 'en'}) => MaterialApp(
+Widget host(PreferenceCommandClient client, {String locale = 'en', String? platform}) => MaterialApp(
   theme: ThemeData(useMaterial3: true),
   home: Scaffold(body: SingleChildScrollView(child: PreferencesPanel(
-    client: client, locale: locale))),
+    client: client, locale: locale, nativePlatform: platform))),
 );
 
 void main() {
@@ -518,6 +518,26 @@ void main() {
     expect(find.byKey(const ValueKey('preferences.notificationsUnsupported')),
       findsNothing);
     expect(find.byKey(const ValueKey('preferences.soundsUnsupported')), findsNothing);
+  });
+
+  testWidgets('profile descriptions reflect platform behavior in each locale', (tester) async {
+    final client = makeClient([]);
+    final effect = find.byKey(const ValueKey('preferences.profileEffect'));
+    const locales = ['en', 'fr', 'de', 'es', 'ja', 'zh', 'ru'];
+    var sequence = 0;
+    for (final platform in ['windows', 'linux', 'macos']) {
+      for (final locale in locales) {
+        final descriptions = <String>{};
+        for (final profile in assessmentProfiles) {
+          client.update(view(profile: profile, applied: profile), sessionA, ++sequence, true);
+          await tester.pumpWidget(host(client, locale: locale, platform: platform));
+          descriptions.add(tester.widget<Text>(
+            find.descendant(of: effect, matching: find.byType(Text))).data!);
+          expect(tester.takeException(), isNull);
+        }
+        expect(descriptions, hasLength(platform == 'windows' ? 4 : 1));
+      }
+    }
   });
 
   group('native notification pause contract', () {

@@ -3,6 +3,8 @@
 #include <dwmapi.h>
 #include <flutter_windows.h>
 
+#include <algorithm>
+
 #include "resource.h"
 
 namespace {
@@ -125,16 +127,29 @@ bool Win32Window::Create(const std::wstring& title,
                               static_cast<LONG>(origin.y)};
   HMONITOR monitor = MonitorFromPoint(target_point, MONITOR_DEFAULTTONEAREST);
   UINT dpi = FlutterDesktopGetDpiForMonitor(monitor);
+  if (dpi == 0) dpi = 96;
   double scale_factor = dpi / 96.0;
   // Preserve logical client dimensions across display scaling.
   RECT frame = {0, 0, Scale(size.width, scale_factor),
                 Scale(size.height, scale_factor)};
   AdjustWindowRectExForDpi(&frame, WS_OVERLAPPEDWINDOW, FALSE, 0, dpi);
 
+  LONG width = frame.right - frame.left;
+  LONG height = frame.bottom - frame.top;
+  LONG x = target_point.x;
+  LONG y = target_point.y;
+  MONITORINFO monitor_info = {};
+  monitor_info.cbSize = sizeof(monitor_info);
+  if (GetMonitorInfo(monitor, &monitor_info)) {
+    const RECT& work = monitor_info.rcWork;
+    width = std::min(width, work.right - work.left);
+    height = std::min(height, work.bottom - work.top);
+    x = std::clamp(x, work.left, work.right - width);
+    y = std::clamp(y, work.top, work.bottom - height);
+  }
+
   HWND window = CreateWindow(
-      window_class, title.c_str(), WS_OVERLAPPEDWINDOW,
-      Scale(origin.x, scale_factor), Scale(origin.y, scale_factor),
-      frame.right - frame.left, frame.bottom - frame.top,
+      window_class, title.c_str(), WS_OVERLAPPEDWINDOW, x, y, width, height,
       nullptr, nullptr, GetModuleHandle(nullptr), this);
 
   if (!window) {
