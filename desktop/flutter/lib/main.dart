@@ -280,8 +280,13 @@ class _MicCamWatchAppState extends State<MicCamWatchApp> {
       theme: dark ? _darkTheme : _lightTheme,
       home: Scaffold(body: LayoutBuilder(builder: (context, constraints) {
         final compact = constraints.maxWidth < 680;
+        final textScale = MediaQuery.textScalerOf(context).scale(14) / 14;
+        final sidebarWidth = compact
+            ? 76.0
+            : (180.0 * textScale.clamp(1.0, 1.35))
+                .clamp(180.0, (constraints.maxWidth * 0.32).clamp(180.0, 240.0));
         return Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        Container(width: compact ? 76 : 180, padding: const EdgeInsets.fromLTRB(12, 22, 12, 16),
+        Container(width: sidebarWidth, padding: const EdgeInsets.fromLTRB(12, 22, 12, 16),
           decoration: BoxDecoration(color: c.card, border: Border(right: BorderSide(color: c.border))),
           child: SingleChildScrollView(child: Column(
             crossAxisAlignment: CrossAxisAlignment.start, children: [
