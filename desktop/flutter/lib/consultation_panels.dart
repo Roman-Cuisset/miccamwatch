@@ -287,7 +287,7 @@ class DetailedDiagnosticsPanel extends StatelessWidget {
                         ),
                         const SizedBox(height: 5),
                         if (check.name == 'notification_authorization') ...[
-                          Text(l[switch (check.detail.split(';').first) {
+                          SelectableText(l[switch (check.detail.split(';').first.trim()) {
                             'macos_authorization=not_determined' => 'macosNotificationsNotDetermined',
                             'macos_authorization=denied' => 'macosNotificationsDenied',
                             'macos_authorization=authorized' => 'macosNotificationsAuthorized',
@@ -295,7 +295,7 @@ class DetailedDiagnosticsPanel extends StatelessWidget {
                             'macos_authorization=provisional' => 'macosNotificationsProvisional',
                             _ => 'macosNotificationsUnknown',
                           }]),
-                          Text(l['macosBannerUnverified']),
+                          SelectableText(l['macosBannerUnverified']),
                         ],
                         SelectableText(check.detail),
                         if (check.remedy != null)
@@ -518,9 +518,11 @@ class _Status extends StatelessWidget {
     crossAxisAlignment: CrossAxisAlignment.stretch,
     children: [
       if (status.busy)
-        const Padding(
-          padding: EdgeInsets.only(top: 10),
-          child: LinearProgressIndicator(),
+        Padding(
+          padding: const EdgeInsets.only(top: 10),
+          child: LinearProgressIndicator(
+            value: MediaQuery.disableAnimationsOf(context) ? 0.5 : null,
+          ),
         ),
       if (status.state != QueryState.idle)
         Padding(

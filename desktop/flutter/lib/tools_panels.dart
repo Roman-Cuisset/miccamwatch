@@ -164,7 +164,8 @@ class _NativeToolsPanelState extends State<NativeToolsPanel> {
           ]),
           if (!client.operational) Padding(padding: const EdgeInsets.only(top: 8), child: Text(l['nativeReadOnly'])),
           if (client.disabledReason case final reason?) Text(l[reason]),
-          if (client.toolsStatus.busy) const Padding(padding: EdgeInsets.only(top: 8), child: LinearProgressIndicator()),
+          if (client.toolsStatus.busy) Padding(padding: const EdgeInsets.only(top: 8),
+            child: LinearProgressIndicator(value: MediaQuery.disableAnimationsOf(context) ? 0.5 : null)),
           if (issue != null) Semantics(liveRegion: true, child: Padding(
             padding: const EdgeInsets.only(top: 10), child: SelectableText(issue!))),
           if (state != null) ...[

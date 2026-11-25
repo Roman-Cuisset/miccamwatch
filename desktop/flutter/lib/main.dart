@@ -85,8 +85,17 @@ enum AppPage {
 }
 
 class MicCamWatchApp extends StatefulWidget {
-  const MicCamWatchApp({super.key, required this.dark});
+  const MicCamWatchApp({
+    super.key,
+    required this.dark,
+    this.inputStream,
+    this.sendCommandOverride,
+    this.onTransportDone,
+  });
   final bool dark;
+  final Stream<List<int>>? inputStream;
+  final Future<void> Function(Map<String, dynamic>)? sendCommandOverride;
+  final VoidCallback? onTransportDone;
   @override
   State<MicCamWatchApp> createState() => _MicCamWatchAppState();
 }
@@ -136,17 +145,18 @@ class _MicCamWatchAppState extends State<MicCamWatchApp> {
   @override
   void initState() {
     super.initState();
-    microphoneCommands = MicrophoneCommandClient(send: sendCommand);
-    preferenceCommands = PreferenceCommandClient(send: sendCommand);
-    consultation = ConsultationClient(send: sendCommand);
+    final sender = widget.sendCommandOverride ?? sendCommand;
+    microphoneCommands = MicrophoneCommandClient(send: sender);
+    preferenceCommands = PreferenceCommandClient(send: sender);
+    consultation = ConsultationClient(send: sender);
     session.addListener(_changed);
     clock = Timer.periodic(const Duration(seconds: 1), (_) => session.tick());
-    input = wire.SnapshotInput(stdin, session, onSnapshot: () {
+    input = wire.SnapshotInput(widget.inputStream ?? stdin, session, onSnapshot: () {
       if (!receivedTiming && (session.sequence ?? 0) > 0) {
         receivedTiming = true;
-        timing('snapshot_received');
+        if (widget.sendCommandOverride == null) timing('snapshot_received');
       }
-    }, onDone: _close);
+    }, onDone: widget.onTransportDone ?? _close);
     WidgetsBinding.instance.addPostFrameCallback((_) => _frameTheme());
     if (UiQualification.enabled) {
       qualification = UiQualification(
@@ -251,7 +261,15 @@ class _MicCamWatchAppState extends State<MicCamWatchApp> {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!ready && mounted && session.transportLive && session.sequence == sequence) {
           ready = true;
-          emit({'type': 'ready', 'sequence': sequence});
+          if (widget.sendCommandOverride != null) {
+            unawaited(widget.sendCommandOverride!({
+              'protocol_version': wire.protocolVersion,
+              'type': 'ready',
+              'sequence': sequence,
+            }));
+          } else {
+            emit({'type': 'ready', 'sequence': sequence});
+          }
         }
       });
     }
@@ -271,13 +289,14 @@ class _MicCamWatchAppState extends State<MicCamWatchApp> {
               Image.asset('assets/miccamwatch.png', width: 28, height: 28, excludeFromSemantics: true),
               if (!compact) ...[
                 const SizedBox(width: 7),
-                Text('MicCamWatch', style: c.type(15, bold: true)),
+                Expanded(child: Text('MicCamWatch', style: c.type(15, bold: true),
+                  maxLines: 1, overflow: TextOverflow.ellipsis)),
               ],
             ])),
             const SizedBox(height: 26),
             for (final destination in AppPage.values) Padding(
               padding: const EdgeInsets.only(bottom: 6),
-              child: Tooltip(message: titles[destination]!, child: Semantics(
+              child: Tooltip(message: titles[destination]!, excludeFromSemantics: true, child: Semantics(
                 identifier: 'navigation.${destination.name}',
                 selected: page == destination,
                 child: TextButton(
@@ -296,12 +315,14 @@ class _MicCamWatchAppState extends State<MicCamWatchApp> {
           ]))),
         Expanded(child: SingleChildScrollView(key: ValueKey(page), padding: const EdgeInsets.all(22),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Wrap(alignment: WrapAlignment.spaceBetween, crossAxisAlignment: WrapCrossAlignment.center,
+            SizedBox(width: double.infinity, child: Wrap(
+              alignment: WrapAlignment.spaceBetween, crossAxisAlignment: WrapCrossAlignment.center,
               spacing: 16, runSpacing: 8, children: [Text(titles[page]!, style: c.type(27, bold: true)),
-              TextButton.icon(onPressed: _theme,
+              Semantics(identifier: 'theme.toggle', child: TextButton.icon(
+                key: const ValueKey('theme.toggle'), onPressed: _theme,
                 icon: Icon(dark ? Icons.light_mode_outlined : Icons.dark_mode_outlined, size: 18),
-                label: Text(l[dark ? 'light' : 'dark'])),
-            ]),
+                label: Text(l[dark ? 'light' : 'dark']))),
+            ])),
             const SizedBox(height: 10),
             _panel(c, Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text(l[snapshot?.engine['mode'] == 'read_only_development' ? 'readOnly'
@@ -360,10 +381,18 @@ class _MicCamWatchAppState extends State<MicCamWatchApp> {
     );
   }
 
-  Widget _panel(Palette c, Widget child) => Container(
-    width: double.infinity, padding: const EdgeInsets.all(16),
-    decoration: BoxDecoration(color: c.card, borderRadius: BorderRadius.circular(10),
-      border: Border.all(color: c.border)), child: child);
+  Widget _panel(Palette c, Widget child) => Material(
+    color: c.card,
+    shape: RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(10),
+      side: BorderSide(color: c.border),
+    ),
+    clipBehavior: Clip.antiAlias,
+    child: SizedBox(
+      width: double.infinity,
+      child: Padding(padding: const EdgeInsets.all(16), child: child),
+    ),
+  );
 
   List<Widget> _overview(Palette c, Labels l, wire.Snapshot? snapshot) => [
     if (!session.isLive && snapshot != null) Padding(padding: const EdgeInsets.only(bottom: 10),
@@ -465,7 +494,12 @@ class _MicCamWatchAppState extends State<MicCamWatchApp> {
 
   List<Widget> _about(Palette c, Labels l, wire.Snapshot? snapshot) => [
     _panel(c, Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Text('MicCamWatch · ${snapshot?.engine['version'] ?? '—'} · ${l['development']}', style: c.type(18, bold: true)),
+      Text(
+        snapshot?.engine['mode'] == 'operational'
+            ? 'MicCamWatch · ${snapshot?.engine['version'] ?? '—'}'
+            : 'MicCamWatch · ${snapshot?.engine['version'] ?? '—'} · ${l['development']}',
+        style: c.type(18, bold: true),
+      ),
       const SizedBox(height: 12),
       Text(l['hybrid'], style: c.type(14, bold: true)),
       const SizedBox(height: 8),
