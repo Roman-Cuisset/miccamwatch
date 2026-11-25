@@ -222,7 +222,9 @@ Ce qui **n'a pas pu être exécuté ni prouvé** dans cette session (distinction
 | 1 | `f50b4778c0bd0b449a04d5d6eae533af4dec4c1e` | `[CF-Pages-Skip] [skip ci] Explain applied Windows profile and variable pause durations` |
 | 2 | `22ffd9852752cff51259248a5b74470049bcf62e` | `[CF-Pages-Skip] [skip ci] Cache Flutter themes and suppress unchanged idle rebuilds` |
 | 3 | `a256748da020ab3b26b9518f1eb91df7617941cb` | `[CF-Pages-Skip] [skip ci] Fix Flutter shell overflow, Material panel ink/focus, accessibility and add shell tests` |
-| 4 | *(commit documentaire suivant)* | `[CF-Pages-Skip] [skip ci] Record independent stage 4 review and Neon handoff` |
+| 4 | `9baf1788830d108f58786f9da8027168710f2534` | `[CF-Pages-Skip] [skip ci] Record independent stage 4 review and Neon handoff` |
+| 5 | `c14c2807ed217915ad2ce73ee543a4325860729b` | `[CF-Pages-Skip] [skip ci] Scale zoomed Flutter sidebar width and add stage 4 regression tests` |
+| 6 | *(commit documentaire final)* | `[CF-Pages-Skip] [skip ci] Record Flutter 3.47.8 qualification and before/after benchmarks` |
 
 ---
 
@@ -232,14 +234,137 @@ Périmètre strictement limité à `desktop/flutter/lib/`, `desktop/flutter/test
 - **0 fichier Rust (`src/`) modifié.**
 - **0 fichier natif Swift/C++ (`native/`, `desktop/flutter/{windows,linux,macos}/`) modifié.**
 - **0 fichier MSI, installateur, workflow CI ou site web modifié.**
-- Diff code + tests Flutter (`16d3012..a256748`) : 11 fichiers, `+493 / -52` lignes (dont 205 lignes dans le nouveau `desktop/flutter/test/app_shell_test.dart`).
+- **Protocole IPC 10 et cadence de collecte Rust strictement inchangés.**
+- **Installation quotidienne hôte `v0.21.0`, VM Hyper-V et `work/flutter-hybrid-0220` strictement intacts.**
 
 ---
 
 ## 13. Étapes de reprise proposées pour Codex (GPT-6.2 Sol)
 
-1. **Relire et cherry-picker (ou fusionner après revue)** les 3 commits de code (`f50b477`, `22ffd98`, `a256748`) + ce rapport depuis `work/stage4-neon-review` vers `work/flutter-hybrid-0220` si validés.
-2. **Valider en CI sur Flutter 3.47.8 épinglé** (`flutter analyze` + `flutter test` + scénarios `UiQualification`) pour confirmer 0 avertissement sur le SDK CI exact et valider l'absence de régression dans les scénarios instrumentés (`consultation`, `parity`, `filters`, `maintenance`, `quit`).
-3. **Traiter le petit point P3 Unix** dans `src/watcher/unix.rs` (`deliver_alerts` : garder `play_chime()` avec `!stopped.load(Ordering::Acquire)`).
+1. **Relire et intégrer** les 4 commits de code/tests (`f50b477`, `22ffd98`, `a256748`, `c14c280`) + les commits documentaires depuis `work/stage4-neon-review` vers `work/flutter-hybrid-0220` (application vérifiée sans conflit sur branche temporaire isolée, voir §14.11).
+2. **Valider en CI sur Flutter 3.47.8** les scénarios instrumentés `UiQualification` (`consultation`, `parity`, `filters`, `maintenance`, `quit`) et mesurer l'effet sous Linux Xvfb/GPU accéléré et Windows MSI installé.
+3. **Traiter le point P3 Unix** dans `src/watcher/unix.rs` (`deliver_alerts` : garder `play_chime()` avec `!stopped.load(Ordering::Acquire)`).
 4. **Trancher les décisions de sécurité P0/P1 macOS** (§10 : voie `NSRunningApplication.terminate()` explicite vs documentation de limite pour Vorssaint ; chemin stable du helper de notifications dans `.app` vs temp dir).
 5. **Rejouer la qualification MSI compte standard** dans `MCW-Win11-x64-Lab` sur le MSI consolidé et compléter les campagnes de performance comparatives (capture active, reprise, Linux accéléré) avant d'évaluer la clôture de l'étape 4.
+
+---
+
+## 14. Mission Neon 2 — Qualification Flutter 3.47.8, mesures avant/après et préparation de l'intégration
+
+### 14.1 Résultats sur la version Flutter officielle (épinglée par la CI)
+
+- **Version vérifiée dans les workflows (`.github/workflows/flutter-windows-qualification.yml` et `flutter-qualification.yml`) :**
+  - Flutter `3.47.8` (`channel: stable`, `dart_sdk_arch: x64`)
+  - `frameworkRevision`: `737ba8f885dc774b53b442759999a312c9461e4e`
+  - `engineRevision`: `cf636b1dfb818dd6a3ff16e390e93b1a036969c8`
+  - `dartSdkVersion`: `3.13.7`
+  - Archive officielle vérifiée par SHA-256 exact : `11e19ea3409808fe3b3765ea8149640c299e58cce6eda7c9f38fc1b4a193eb6e`
+- **Isolation :** téléchargée et extraite dans un répertoire temporaire isolé (`target/flutter-3.47.8-isolated`, supprimé après qualification), sans écraser `C:\taily-build\flutter` (`3.50.0`) ni modifier `PATH`.
+- **Résultats sur `c14c280` avec Flutter 3.47.8 officiel :**
+  - `flutter pub get --enforce-lockfile` : **PASS** (lockfile respecté sans dérive).
+  - `flutter analyze --no-pub` : **`No issues found! (ran in 12.3s)`** — **0 erreur, 0 avertissement, 0 info** (les 16 informations de dépréciation `package:flutter/material.dart` observées en Mission 1 étaient bien spécifiques au SDK local `3.50.0`).
+  - `flutter build windows --release --no-pub` : **PASS** pour **Version A (`16d3012`, 115,1 s)** et **Version B (`c14c280`, 108,7 s)**.
+
+### 14.2 Tests exécutés et décompte
+
+| Révision | SDK Flutter | `flutter analyze --no-pub` | `flutter test --no-pub` | Couverture ajoutée |
+| --- | --- | --- | --- | --- |
+| `16d3012` (avant Neon) | local | — | **120 / 120** | Référence initiale |
+| `9baf178` (fin Mission 1) | `3.50.0` local | 0 err / 0 warn (16 info SDK) | **126 / 126** | +6 tests (`preferences`, `snapshot`, `commands`, `app_shell`) |
+| **`c14c280` (Mission 2)** | **`3.47.8` officiel** | **`No issues found!` (0/0/0)** | **129 / 129** (28 s) | +3 suites `app_shell_test.dart` : 7 langues × 6 pages × zoom 2× en mode `operational` à 640×440 & 680×440 ; toutes les transitions d'états critiques (micro/caméra actifs, surveillance dégradée/indisponible, profil enregistré ≠ appliqué & config explicite, préférences confirmées/refusées, historique actualisé, autorisations notifications macOS, péremption/reconnexion/déconnexion IPC) ; sémantique `UiQualification`, infobulles sans doublon, `Material` `_panel` et horloge locale indépendante |
+
+### 14.3 Résultats avant/après — Benchmark déterministe Flutter 3.47.8 (`16d3012` vs `c14c280`)
+
+Exécuté dans un harnais de test temporaire isolé (non conservé dans le produit) sur le SDK officiel **Flutter 3.47.8** avec le même code non modifié pour A (`16d3012`, extrait en lecture seule par `git archive`) et B (`c14c280`).
+
+#### Contrôleurs (60 s au repos : 1 snapshot/2 s + tick/1 s, puis 10 s de silence → péremption → reconnexion)
+
+| Métrique | Version A (`16d3012`) | Version B (`c14c280`) | Écart |
+| --- | ---: | ---: | ---: |
+| Notifications `SnapshotSession` (60 s repos) | 91 | **31** | **−65,9 %** |
+| Notifications `MicrophoneCommandClient` (60 s) | 91 | **31** | **−65,9 %** |
+| Notifications `PreferenceCommandClient` (60 s) | 91 | **31** | **−65,9 %** |
+| Notifications `ConsultationClient` (total avec péremption) | 37 | **33** | **−10,8 %** |
+| Notifications `SnapshotSession` (10 s silence → reconnexion) | 11 | **2** | **−81,8 %** |
+| Détection péremption (`stale`) et reconnexion (`live`) | `true` / `true` | `true` / `true` | Identique |
+
+#### Arbre de widgets (`debugOnRebuildDirtyWidget`, 60 s au repos + interactions)
+
+| Scénario | Version A (`16d3012`) | Version B (`c14c280`) | Écart |
+| --- | ---: | ---: | ---: |
+| **60 s au repos — Total widgets reconstruits** | **37 740** | **120** | **−99,68 % (314× moins)** |
+| **60 s au repos — Reconstructions `MicCamWatchApp`** | **60** | **0** | **−100 %** |
+| **60 s au repos — Reconstructions `MaterialApp`** | **60** | **0** | **−100 %** |
+| **60 s au repos — Reconstructions `Scaffold`** | **60** | **0** | **−100 %** |
+| **60 s au repos — Reconstructions `Text`** | **2 460** | **60** (`_LocalClockText` seul) | **−97,6 %** |
+| **60 s au repos — Temps mur test (`wall_ms`)** | **4 830,68 ms** | **406,65 ms** | **−91,6 % (11,9×)** |
+| **Exceptions framework `ListTile/DecoratedBox`** | **74 exceptions** | **0 exception** | **Corrigé (`a256748`)** |
+| 12 changements de page (moyenne / changement) | 6 324 rebuilds · 149,97 ms | 6 468 rebuilds · 177,86 ms | Équivalent (bruit debug + nœud `Material` `_panel`) |
+| 10 changements de thème (moyenne / bascule) | 6 310 rebuilds · 98,09 ms | 6 530 rebuilds · 134,27 ms | Équivalent |
+| 7 changements de langue (moyenne / bascule) | 5 865 rebuilds · 203,29 ms | 5 907 rebuilds · 211,15 ms | Équivalent |
+
+### 14.4 Mesures CPU/RAM — Binaires Windows Release Flutter 3.47.8 (AB/BA)
+
+Protocole exécuté sur le poste Windows 11 x64 local (`Intel Core i5-1235U`, `Intel Iris Xe`, 32 Gio RAM, 2× HiDPI) en alternance **AB/BA** (4 essais : `A → B → B → A`), avec les binaires `miccamwatch_desktop.exe` Release compilés par le même SDK officiel **Flutter 3.47.8** et pilotés par un parent IPC protocole 10 identique (warmup 3 s, 20 s à cadence nominale 2 s puis 20 s à cadence 5 s, 41 échantillons noyau `GetProcessTimes` + `GetProcessMemoryInfo` espacés de 0,5 s, puis fermeture propre sur EOF `stdin`).
+
+| Métrique (processus `miccamwatch_desktop.exe` Release) | Version A (`16d3012`) Essais 1 & 4 | Version B (`c14c280`) Essais 2 & 3 | Moyenne A → B |
+| --- | --- | --- | --- |
+| **CPU moyen — cadence 2 s (% d'un cœur)** | 0,780 % · 0,936 % | 0,624 % · 0,078 % | **0,858 % → 0,351 %** |
+| **Pic CPU (0,5 s) — cadence 2 s (% d'un cœur)** | 9,358 % · 6,239 % | 12,485 % · 3,123 % | 7,80 % → 7,80 % |
+| **CPU moyen — cadence 5 s (% d'un cœur)** | 0,624 % · 0,546 % | 0,390 % · 0,858 % | 0,585 % → 0,624 % |
+| **Mémoire RSS médiane (2 s / 5 s)** | 130,61–132,94 / 130,64–132,76 Mio | 129,89–129,73 / 130,48–130,19 Mio | 131,78 → 129,81 Mio |
+| **Mémoire privée médiane (2 s / 5 s)** | 128,02–130,24 / 127,54–130,13 Mio | 127,74–127,17 / 127,27–127,52 Mio | 129,13 → 127,46 Mio |
+| **Mémoire privée max observée** | 130,02–138,93 Mio | 129,61–130,25 Mio | 134,5 → 130,0 Mio |
+| **Ouverture (`ready_wall_ms`, essais chauds 2–4)** | 344,9 ms (1er essai froid : 583,9 ms) | 323,5 ms · 315,0 ms | 344,9 → 319,3 ms (`first_frame` 55 → 38–44 ms) |
+| **Fermeture propre (`close_exit_ms`, code 0, stderr vide)** | 64,8 ms · 67,6 ms | 66,0 ms · 72,3 ms | 66,2 → 69,2 ms |
+| **Rust/tray seul (poste local)** | — | — | **Non mesuré localement** (`mcw-tray.exe --read-only-development` quitte avec code 2 dans cette session terminal) |
+| **Rust/tray après fermeture Flutter (poste local)** | — | — | **Non mesuré localement** (même contrainte de session ; voir reçu CI audité sur `7252421` en §8 : 0,52 % CPU / 18,44 Mio RSS, non mélangé aux chiffres locaux) |
+
+### 14.5 Gains démontrés
+
+1. **Réduction massive des reconstructions au repos (`22ffd98`) :** −99,68 % de widgets reconstruits sur 60 s (`37 740` → `120`), −100 % de reconstructions racine `MaterialApp`/`Scaffold` (`60` → `0`), −65,9 % de notifications contrôleurs en régime nominal et −81,8 % lors d'une coupure/péremption, pour un temps de boucle test divisé par 11,9× (`4 830,68 ms` → `406,65 ms`).
+2. **Suppression complète des 74 assertions framework `ListTile/DecoratedBox` (`a256748`)** qui survenaient sur `16d3012` et masquaient le focus/ink du `SwitchListTile` dans `ObservationView`.
+3. **Baisse cohérente du CPU moyen Windows Release à cadence nominale 2 s** sur les 2 essais B (`0,624 %` et `0,078 %`) par rapport aux 2 essais A (`0,780 %` et `0,936 %`).
+4. **Conformité exacte sur Flutter 3.47.8 officiel :** `flutter analyze --no-pub` passe à `No issues found!` et `129 / 129` tests réussissent.
+5. **Lisibilité visuelle au zoom 150–200 % (`c14c280`) :** l'adaptation bornée de `sidebarWidth` supprime les coupures en milieu de mot (`Vue d'ensembl / e`, `Einstellung / en`) sur les captures vérifiées, sans changer la largeur (`180 px`) au zoom 100 %.
+
+### 14.6 Résultats non concluants (déclarés honnêtement)
+
+- **Mémoire RSS et privée de la fenêtre Flutter ouverte :** quasi identiques entre A et B (~130–132 Mio RSS, ~127–130 Mio privé). **Aucune réduction mémoire significative n'est revendiquée.**
+- **CPU moyen à cadence 5 s et pics CPU sur 0,5 s :** non concluants à <1 % CPU sur 20 s (la granularité `GetProcessTimes` Windows est de 15,6 ms, soit 0,078 % par quantum, et un seul passage GC inverse le classement d'un essai court).
+- **Latences de changement de page / thème / langue en mode test widget :** équivalentes (sans régression notable ; `Material` `_panel` ajoute 2 widgets par carte, ce qui reste négligeable en release).
+- **Temps d'ouverture à chaud et de fermeture :** écart faible à l'ouverture (~25 ms sur 2 essais chauds) et fermeture équivalente (~66–72 ms).
+
+### 14.7 Régressions trouvées et 14.8 Corrections supplémentaires
+
+- **Aucune régression fonctionnelle ou de sécurité** détectée dans les 3 commits de Mission 1 (`f50b477`, `22ffd98`, `a256748`) après audit ligne par ligne et exécution des nouvelles suites de transitions critiques.
+- **Défaut visuel P2 détecté lors de la vérification visuelle des PNG (`02`, `05`) :** au zoom 150 % sur fenêtre large (`1040×700` et `680×440`), la barre latérale fixe à `180 px` coupait certains libellés de navigation en milieu de mot (`Vue d'ensembl / e`, `Einstellung / en`). **Corrigé dans `c14c280`** (`desktop/flutter/lib/main.dart`) en conservant `180 px` à 100 % et en élargissant la barre latérale jusqu'à `min(240 px, 32 % largeur)` au zoom > 1×, vérifié visuellement par regénération et inspection des 6 captures PNG.
+- **Dépréciation mineure détectée par Flutter 3.47.8 officiel :** `tester.binding.pipelineOwner` dans le nouveau test d'accessibilité (`test/app_shell_test.dart`) remplacé par `tester.binding.renderViews.single.owner` (motif identique à `ui_qualification.dart`), ramenant `flutter analyze` à `No issues found!`.
+- **Captures visuelles conservées (contexte `c14c280`, Flutter, polices système Segoe UI + MaterialIcons, hors dépôt Git) :** 6 PNG générés et inspectés dans `scratch/visual_captures/` couvrant `640×440`, `680×440`, `1040×700`, zooms `100 %` / `150 %` / `200 %`, thèmes clair et sombre, et langues `fr`, `de`, `ru`, `en` (les langues `es`, `ja`, `zh` étant vérifiées sur les 6 pages à 200 % par `app_shell_test.dart`).
+
+### 14.9 Commits créés et 14.10 HEAD final
+
+- Commits de Mission 1 : `f50b477`, `22ffd98`, `a256748`, `9baf178`.
+- Commits de Mission 2 : `c14c280` (code + 3 nouvelles suites de tests) + commit documentaire actualisant ce fichier.
+- Branche de travail : `work/stage4-neon-review` (worktree `C:/Users/stcui/Documents/miccamwatch/target/stage4-neon-review`).
+
+### 14.11 Vérification d'intégration Git (sans modifier `work/flutter-hybrid-0220`)
+
+- `work/flutter-hybrid-0220` reste strictement intact sur `16d301245626cd63744c676aa64dbfd1b1be62be`.
+- Vérification sur branche temporaire isolée (supprimée immédiatement après contrôle) + `git merge-tree --write-tree work/flutter-hybrid-0220 work/stage4-neon-review` : **0 conflit**, historique linéaire descendant directement de `16d3012` (fast-forward ou cherry-pick propre de `f50b477`, `22ffd98`, `a256748`, `c14c280` et des commits documentaires).
+- Aucun push, aucun reset destructeur, aucune fusion vers `work/flutter-hybrid-0220` ou `main`, aucune publication.
+
+### 14.12 Points à réserver à Sol (Codex)
+
+1. Décision et implémentation P0 macOS (terminaison d'application utilisateur durcie, cas Vorssaint).
+2. Décision P1 macOS sur l'identité/persistance du helper de notifications et preuve sur Mac réel.
+3. Qualification MSI en compte standard dans `MCW-Win11-x64-Lab` sur la révision consolidée.
+4. Rejeu CI `UiQualification` + mesures comparatives longue durée (Linux GPU accéléré, capture active, Windows MSI installé).
+5. Points mineurs P2/P3 hors périmètre Flutter pur (`WM_DISPLAYCHANGE` C++ Windows, persistance géométrie Windows/Linux, garde `!stopped` autour de `play_chime()` dans `src/watcher/unix.rs`).
+
+### 14.13 Limites des environnements de test
+
+- Les transitions de périphériques (microphone/caméra actifs, collecteurs dégradés/indisponibles, autorisations notifications macOS) sont vérifiées côté Flutter sur flux IPC 10 simulés : elles valident la fidélité de l'interface, **pas** le fonctionnement d'un matériel physique ou d'un collecteur OS.
+- Les mesures Windows Release AB/BA portent sur le binaire réel `miccamwatch_desktop.exe` piloté par IPC 10 (sans `mcw-tray.exe` local qui quitte avec code 2 dans cette session terminal) et sur des fenêtres courtes de 20 s au repos.
+- Aucun test natif macOS, Linux GPU/Wayland, MSI Hyper-V ou lecteur d'écran réel (NVDA/Narrator/Orca/VoiceOver) n'a été exécuté ici.
+- L'étape 4/6 reste **en cours / non clôturée** ; l'étape 5 n'est pas commencée.
