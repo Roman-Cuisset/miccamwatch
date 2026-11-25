@@ -228,6 +228,7 @@ class SnapshotSession extends ChangeNotifier {
   DateTime? receivedAt;
   String? error;
   ConnectionState state = ConnectionState.connecting;
+  bool _notifiedTransportLive = false;
   int? get sequence => snapshot?.sequence;
   bool get isLive => state == ConnectionState.live;
   Duration get _freshnessWindow {
@@ -259,25 +260,33 @@ class SnapshotSession extends ChangeNotifier {
       fail('Invalid snapshot / incompatible protocol');
       return;
     }
+    _notifiedTransportLive = transportLive;
     notifyListeners();
   }
 
   void tick() {
+    final previousState = state;
+    final currentTransportLive = transportLive;
     if (state == ConnectionState.live &&
-        (!transportLive || !_observationFresh)) {
+        (!currentTransportLive || !_observationFresh)) {
       state = ConnectionState.stale;
     }
-    notifyListeners();
+    if (state != previousState || currentTransportLive != _notifiedTransportLive) {
+      _notifiedTransportLive = currentTransportLive;
+      notifyListeners();
+    }
   }
 
   void fail(String message) {
     state = ConnectionState.error;
     error = message;
+    _notifiedTransportLive = false;
     notifyListeners();
   }
 
   void disconnect() {
     state = ConnectionState.disconnected;
+    _notifiedTransportLive = false;
     notifyListeners();
   }
 }

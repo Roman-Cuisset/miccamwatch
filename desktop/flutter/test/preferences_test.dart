@@ -253,6 +253,22 @@ void main() {
     expect(client.view!.values!.historyEnabled, isTrue);
   });
 
+  test('identical re-delivery suppresses redundant notifications while connectivity changes still notify', () {
+    final client = makeClient([]);
+    var notifications = 0;
+    client.addListener(() => notifications++);
+    client.update(view(), sessionA, 1, true);
+    expect(notifications, 1);
+    client.update(view(), sessionA, 1, true);
+    expect(notifications, 1);
+    client.update(view(), sessionA, 1, false);
+    expect(notifications, 2);
+    client.update(view(), sessionA, 1, false);
+    expect(notifications, 2);
+    client.update(view(), sessionA, 1, true);
+    expect(notifications, 3);
+  });
+
   test('CAS uses the newest authoritative value despite reordered snapshots', () async {
     // A minimal native compare-and-set peer rejects stale expected values.
     // This tests the outcome of concurrent storage changes, not field echoes.

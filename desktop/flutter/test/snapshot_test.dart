@@ -213,6 +213,54 @@ void main() {
     session.dispose();
   });
 
+  test('tick suppresses unchanged notifications and still notifies on stale or transport expiry', () {
+    final base = DateTime.parse('2026-10-27T08:00:00Z');
+    var elapsed = Duration.zero;
+    final session = SnapshotSession(elapsed: () => elapsed, now: () => base.add(elapsed));
+    var notifications = 0;
+    session.addListener(() => notifications++);
+
+    session.tick();
+    expect(notifications, 0);
+
+    session.accept(encode(frame()));
+    expect(notifications, 1);
+    expect(session.state, ConnectionState.live);
+    expect(session.transportLive, isTrue);
+
+    elapsed = const Duration(seconds: 2);
+    session.tick();
+    expect(notifications, 1);
+
+    // Observation expires at 5s+1ms -> live transitions to stale and notifies once.
+    elapsed = const Duration(seconds: 5, milliseconds: 1);
+    session.tick();
+    expect(session.state, ConnectionState.stale);
+    expect(session.transportLive, isFalse);
+    expect(notifications, 2);
+
+    // Further ticks while already stale and offline do not spam rebuilds.
+    elapsed = const Duration(seconds: 8);
+    session.tick();
+    expect(notifications, 2);
+
+    // Transport-live stale observation (old observed_at) must still notify when transport expires.
+    final oldObservation = frame(sequence: 2)..['observed_at'] = '2026-10-27T07:00:00Z';
+    session.accept(encode(oldObservation));
+    expect(session.state, ConnectionState.stale);
+    expect(session.transportLive, isTrue);
+    expect(notifications, 3);
+    elapsed += const Duration(seconds: 2);
+    session.tick();
+    expect(notifications, 3);
+    elapsed += const Duration(seconds: 4);
+    session.tick();
+    expect(session.transportLive, isFalse);
+    expect(notifications, 4);
+
+    session.dispose();
+  });
+
   test('command publications cannot refresh stale capture evidence', () {
     final base = DateTime.parse('2026-10-27T08:00:00Z');
     var elapsed = Duration.zero;

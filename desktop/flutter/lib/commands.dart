@@ -80,6 +80,8 @@ class MicrophoneCommandClient extends ChangeNotifier {
       }
       return;
     }
+    final wasConnected = _connected;
+    final wasValid = _valid;
     _connected = connected;
     final microphone = controls['microphone'];
     if (incomingSession is! String ||
@@ -95,7 +97,9 @@ class MicrophoneCommandClient extends ChangeNotifier {
         (microphone['generation'] as int) > _maxCounter ||
         (microphone['reason'] != null && microphone['reason'] is! String)) {
       _valid = false;
-      notifyListeners();
+      if (_connected != wasConnected || _valid != wasValid) {
+        notifyListeners();
+      }
       return;
     }
     if (incomingSession != _session) {
@@ -114,7 +118,9 @@ class MicrophoneCommandClient extends ChangeNotifier {
     // Re-delivery for a connection change must not replay an old result or
     // replace capabilities with another payload bearing the same sequence.
     if (observedSequence == _observedSequence) {
-      notifyListeners();
+      if (_connected != wasConnected || _valid != wasValid) {
+        notifyListeners();
+      }
       return;
     }
     _observedSequence = observedSequence;

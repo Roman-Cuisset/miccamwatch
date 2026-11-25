@@ -113,6 +113,25 @@ class _MicCamWatchAppState extends State<MicCamWatchApp> {
   bool autostartVisited = false;
   bool closing = false;
   static const window = MethodChannel('miccamwatch/window');
+  static final ThemeData _lightTheme = _buildTheme(false);
+  static final ThemeData _darkTheme = _buildTheme(true);
+
+  static ThemeData _buildTheme(bool dark) {
+    final c = Palette(dark);
+    return ThemeData(
+      brightness: dark ? Brightness.dark : Brightness.light,
+      fontFamily: Platform.isWindows ? 'Segoe UI' : null,
+      scaffoldBackgroundColor: c.background,
+      cardColor: c.card,
+      dividerColor: c.border,
+      colorScheme: ColorScheme.fromSeed(
+        seedColor: c.accent,
+        brightness: dark ? Brightness.dark : Brightness.light,
+      ),
+      splashFactory: NoSplash.splashFactory,
+      useMaterial3: true,
+    );
+  }
 
   @override
   void initState() {
@@ -240,16 +259,7 @@ class _MicCamWatchAppState extends State<MicCamWatchApp> {
     return MaterialApp(
       title: 'MicCamWatch', debugShowCheckedModeBanner: false,
       themeAnimationDuration: Duration.zero,
-      theme: ThemeData(
-        brightness: dark ? Brightness.dark : Brightness.light,
-        fontFamily: Platform.isWindows ? 'Segoe UI' : null,
-        scaffoldBackgroundColor: c.background,
-        cardColor: c.card, dividerColor: c.border,
-        colorScheme: ColorScheme.fromSeed(seedColor: c.accent,
-          brightness: dark ? Brightness.dark : Brightness.light),
-        splashFactory: NoSplash.splashFactory,
-        useMaterial3: true,
-      ),
+      theme: dark ? _darkTheme : _lightTheme,
       home: Scaffold(body: LayoutBuilder(builder: (context, constraints) {
         final compact = constraints.maxWidth < 680;
         return Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
@@ -341,7 +351,7 @@ class _MicCamWatchAppState extends State<MicCamWatchApp> {
             Text(l['limits'], style: c.type(12, muted: true)),
             const SizedBox(height: 12),
             Wrap(spacing: 18, runSpacing: 5, children: [
-              Text('${l['clock']}: ${_time(DateTime.now())}', style: c.type(11, muted: true)),
+              _LocalClockText(label: l['clock'], style: c.type(11, muted: true)),
               Text('${l['lastUpdate']}: ${session.receivedAt == null ? '—' : _time(session.receivedAt!)}', style: c.type(11, muted: true)),
               if (snapshot != null) Text('${l['observedAt']}: ${snapshot.data['observed_at']} · #${snapshot.sequence}', style: c.type(11, muted: true)),
             ]),
@@ -469,6 +479,37 @@ class _MicCamWatchAppState extends State<MicCamWatchApp> {
 
 String _time(DateTime date) => '${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}:${date.second.toString().padLeft(2, '0')}';
 String _truth(Labels l, Object? value) => l[value == true ? 'yes' : value == false ? 'no' : 'unknown'];
+
+class _LocalClockText extends StatefulWidget {
+  const _LocalClockText({required this.label, required this.style});
+  final String label;
+  final TextStyle style;
+  @override
+  State<_LocalClockText> createState() => _LocalClockTextState();
+}
+
+class _LocalClockTextState extends State<_LocalClockText> {
+  late final Timer _timer;
+  DateTime _now = DateTime.now();
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) setState(() => _now = DateTime.now());
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) =>
+      Text('${widget.label}: ${_time(_now)}', style: widget.style);
+}
 
 /// Presentation only: native CLI/policy language and preferences are never changed.
 class InterfaceLanguagePicker extends StatelessWidget {

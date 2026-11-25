@@ -72,13 +72,18 @@ class PreferenceCommandClient extends ChangeNotifier {
       }
       return;
     }
+    final wasConnected = _connected;
+    final wasValid = _valid;
     _connected = connected;
     if (!_sessionPattern.hasMatch(session) || observedSequence <= 0 ||
         observedSequence > 0x7fffffffffffffff) {
       _valid = false;
       // A read-only initial snapshot can still explain native availability.
+      final viewChanged = _session.isEmpty && !identical(_view, view);
       if (_session.isEmpty) _view = view;
-      notifyListeners();
+      if (_connected != wasConnected || _valid != wasValid || viewChanged) {
+        notifyListeners();
+      }
       return;
     }
     if (session != _session) {
@@ -95,7 +100,9 @@ class PreferenceCommandClient extends ChangeNotifier {
     }
     _valid = true;
     if (observedSequence == _observedSequence) {
-      notifyListeners();
+      if (_connected != wasConnected || _valid != wasValid) {
+        notifyListeners();
+      }
       return;
     }
     _observedSequence = observedSequence;

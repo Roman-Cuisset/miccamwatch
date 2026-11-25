@@ -150,9 +150,15 @@ class ConsultationClient extends ChangeNotifier {
         sequence > 0 &&
         sequence <= 0x7fffffffffffffff;
     if (!live || !valid) {
+      final changed = _live || _ticket != null || _cursor != null ||
+          _usedCursors.isNotEmpty ||
+          (historyLoaded && !historyStale) ||
+          (report != null && !diagnosticsStale) ||
+          (autostart != null && !autostartStale) ||
+          (toolsReport != null && !toolsStale);
       _live = false;
       _invalidate();
-      notifyListeners();
+      if (changed) notifyListeners();
       return;
     }
     if (_retiredSessions.contains(session) ||
