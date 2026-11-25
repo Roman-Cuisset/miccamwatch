@@ -540,6 +540,49 @@ void main() {
     }
   });
 
+  testWidgets('Windows profile description follows applied policy, not saved choice', (tester) async {
+    final client = makeClient([]);
+    final effect = find.byKey(const ValueKey('preferences.profileEffect'));
+    String readEffect() => tester.widget<Text>(
+      find.descendant(of: effect, matching: find.byType(Text))).data!;
+
+    client.update(view(profile: 'balanced', applied: 'balanced'), sessionA, 1, true);
+    await tester.pumpWidget(host(client, locale: 'en', platform: 'windows'));
+    final balancedText = readEffect();
+
+    client.update(view(profile: 'private', applied: 'private'), sessionA, 2, true);
+    await tester.pump();
+    final privateText = readEffect();
+    expect(privateText, isNot(balancedText));
+
+    // Saved Private while Balanced remains applied must explain Balanced.
+    client.update(view(profile: 'private', applied: 'balanced'), sessionA, 3, true);
+    await tester.pump();
+    expect(readEffect(), balancedText);
+
+    // Explicit native config (applied == null) must never claim saved Private is active.
+    for (final locale in const ['en', 'fr', 'de', 'es', 'ja', 'zh', 'ru']) {
+      client.update(
+        PreferenceView.fromJson(preferenceJson(
+          profile: 'private',
+          applied: null,
+          profileWritable: false,
+        )),
+        sessionA,
+        4 + const ['en', 'fr', 'de', 'es', 'ja', 'zh', 'ru'].indexOf(locale),
+        true,
+      );
+      await tester.pumpWidget(host(client, locale: locale, platform: 'windows'));
+      final text = readEffect();
+      expect(text, isNotEmpty);
+      if (locale == 'en') {
+        expect(text, isNot(privateText));
+        expect(text, contains('not confirmed'));
+      }
+      expect(tester.takeException(), isNull);
+    }
+  });
+
   group('native notification pause contract', () {
     const original = '2026-10-30T10:30:00.123456789+00:00';
     const changed = '2026-10-30T11:00:00Z';

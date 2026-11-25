@@ -327,6 +327,7 @@ class PreferencesPanel extends StatelessWidget {
                 value: values.profile,
                 isExpanded: true,
                 isDense: true,
+                itemHeight: null,
                 items: [for (final profile in assessmentProfiles)
                   DropdownMenuItem(value: profile, child: Text(labels[profile]))],
                 onChanged: client.canChange(PreferenceKey.profile)
@@ -341,7 +342,9 @@ class PreferencesPanel extends StatelessWidget {
                 '${view.appliedProfile == null ? labels['unknown'] : labels[view.appliedProfile!]}'),
             if (nativePlatform != null)
               note(labels[nativePlatform == 'windows'
-                  ? 'profileEffect_${values.profile}'
+                  ? (view.appliedProfile == null
+                      ? 'profileEffect_unknown'
+                      : 'profileEffect_${view.appliedProfile}')
                   : 'profileEffect_unix'],
                   key: const ValueKey('preferences.profileEffect')),
             if (client.disabledReasonFor(PreferenceKey.profile) == 'profileReadOnly')
@@ -400,7 +403,10 @@ class _PreferenceLabels {
   _PreferenceLabels(String locale)
       : _index = const ['en', 'fr', 'de', 'es', 'ja', 'zh', 'ru'].indexOf(locale);
   final int _index;
-  String operator [](String key) => _labels[key]![_index < 0 ? 0 : _index];
+  String operator [](String key) {
+    final values = _labels[key];
+    return values == null ? key : values[_index < 0 ? 0 : _index];
+  }
 }
 
 const _labels = <String, List<String>>{
@@ -427,13 +433,13 @@ const _labels = <String, List<String>>{
     'Уведомления выключены. Возобновление только отменяет паузу, но не включает уведомления.',
   ],
   'pauseScope': [
-    'Rust sets the 30-minute deadline and reports expiry. Pause does not change protection or monitoring.',
-    'Rust fixe le délai de 30 minutes et signale son expiration. La pause ne modifie ni la protection ni la surveillance.',
-    'Rust setzt die 30-Minuten-Frist und meldet deren Ablauf. Die Pause ändert weder Schutz noch Überwachung.',
-    'Rust establece el plazo de 30 minutos e informa de su vencimiento. La pausa no cambia la protección ni la monitorización.',
-    'Rust が 30 分の期限を設定し、終了を通知します。一時停止は保護や監視を変更しません。',
-    'Rust 设置 30 分钟期限并报告到期状态。暂停不会更改保护或监控。',
-    'Rust задаёт срок 30 минут и сообщает об истечении. Пауза не изменяет защиту или мониторинг.',
+    'Rust sets the pause deadline and reports expiry. Pause does not change protection or monitoring.',
+    'Rust fixe la fin de pause et signale son expiration. La pause ne modifie ni la protection ni la surveillance.',
+    'Rust setzt das Pausenende und meldet dessen Ablauf. Die Pause ändert weder Schutz noch Überwachung.',
+    'Rust establece el fin de la pausa e informa de su vencimiento. La pausa no cambia la protección ni la monitorización.',
+    'Rust が一時停止の期限を設定し、終了を通知します。一時停止は保護や監視を変更しません。',
+    'Rust 设置暂停截止时间并报告到期状态。暂停不会更改保护或监控。',
+    'Rust задаёт срок паузы и сообщает об истечении. Пауза не изменяет защиту или мониторинг.',
   ],
   'sound': ['Capture sounds', 'Sons de capture', 'Aufnahmeklänge', 'Sonidos de captura', 'キャプチャの通知音', '采集提示音', 'Звуки захвата'],
   'notificationsUnsupported': [
@@ -493,6 +499,7 @@ const _labels = <String, List<String>>{
   'profileEffect_meeting': ['Uses the same capture assessment as Balanced.', 'Applique la même évaluation des accès que le profil Équilibré.', 'Bewertet Aufnahmezugriffe wie das Profil Ausgewogen.', 'Evalúa los accesos de captura igual que el perfil Equilibrado.', 'バランスと同じキャプチャ評価を適用します。', '使用与均衡配置相同的采集访问评估。', 'Оценивает доступ к захвату так же, как сбалансированный профиль.'],
   'profileEffect_development': ['Uses the conservative assessment setting. Capture risk is evaluated as in Balanced.', 'Sélectionne l’évaluation prudente. Le risque des accès est évalué comme avec le profil Équilibré.', 'Wählt die zurückhaltende Bewertung. Das Aufnahmerisiko wird wie im Profil Ausgewogen bewertet.', 'Selecciona la evaluación conservadora. El riesgo de captura se evalúa igual que en Equilibrado.', '保守的な評価設定を選びます。キャプチャのリスク評価はバランスと同じです。', '选择保守评估设置。采集风险的评估与均衡配置相同。', 'Выбирает консервативную настройку. Риск захвата оценивается как в сбалансированном профиле.'],
   'profileEffect_private': ['The strict assessment classifies unexplained capture as suspicious.', 'L’évaluation stricte classe les accès inexpliqués comme suspects.', 'Die strenge Bewertung stuft ungeklärte Aufnahmen als verdächtig ein.', 'La evaluación estricta clasifica la captura sin explicación como sospechosa.', '厳格な評価では、理由が不明なキャプチャを不審と判定します。', '严格评估会将无法解释的采集标为可疑。', 'Строгая оценка относит необъяснённый захват к подозрительному.'],
+  'profileEffect_unknown': ['The applied assessment profile is not confirmed; the saved choice alone does not determine active risk evaluation.', 'Le profil d’évaluation appliqué n’est pas confirmé ; le choix enregistré ne détermine pas à lui seul l’évaluation active.', 'Das angewandte Bewertungsprofil ist nicht bestätigt; die gespeicherte Auswahl bestimmt die aktive Risikobewertung nicht allein.', 'El perfil de evaluación aplicado no está confirmado; la selección guardada no determina por sí sola la evaluación activa.', '適用中の評価プロファイルが未確認のため、保存済みの選択だけでは現在のリスク評価を判断できません。', '已应用的评估配置尚未确认，仅凭已保存的选择无法确定当前生效的风险评估。', 'Применённый профиль оценки не подтверждён; один лишь сохранённый выбор не определяет текущую оценку риска.'],
   'profileEffect_unix': ['All four profiles currently use the same capture risk assessment on this system.', 'Sur ce système, les quatre profils évaluent actuellement le risque des accès de la même manière.', 'Auf diesem System bewerten derzeit alle vier Profile das Aufnahmerisiko gleich.', 'En este sistema, los cuatro perfiles evalúan actualmente el riesgo de captura del mismo modo.', 'このシステムでは、現在どのプロファイルでもキャプチャのリスク評価は同じです。', '在此系统上，四个配置目前采用相同的采集风险评估。', 'В этой системе все четыре профиля сейчас одинаково оценивают риск захвата.'],
   'unknown': ['Unknown', 'Inconnu', 'Unbekannt', 'Desconocido', '不明', '未知', 'Неизвестно'],
   'private': ['Private', 'Privé', 'Privat', 'Privado', 'プライベート', '私密', 'Приватный'],
