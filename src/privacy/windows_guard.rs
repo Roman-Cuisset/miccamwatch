@@ -2304,7 +2304,10 @@ pub(super) fn restore_legacy_verified(instance_id: &str) -> Result<CameraControl
         "Legacy camera still has an unconfirmed native restoration"
     );
     let actual = observation()?;
-    ensure!(!actual.desired_blocked, "A new camera Block request superseded legacy restoration");
+    ensure!(
+        !actual.desired_blocked,
+        "A new camera Block request superseded legacy restoration"
+    );
     Ok(actual)
 }
 pub(super) fn run(encoded: &str) -> Result<()> {

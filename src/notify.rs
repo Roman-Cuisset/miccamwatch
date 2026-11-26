@@ -1,6 +1,6 @@
-mod content;
 #[cfg(windows)]
 pub(crate) mod capture;
+mod content;
 #[cfg(unix)]
 mod unix;
 #[cfg(unix)]
@@ -17,7 +17,9 @@ use winreg::{RegKey, enums::HKEY_CURRENT_USER};
 #[cfg(windows)]
 use windows::{
     Data::Xml::Dom::XmlDocument,
-    UI::Notifications::{NotificationSetting, ToastNotification, ToastNotificationManager, ToastTemplateType},
+    UI::Notifications::{
+        NotificationSetting, ToastNotification, ToastNotificationManager, ToastTemplateType,
+    },
     core::HSTRING,
 };
 #[cfg(windows)]
@@ -44,13 +46,17 @@ fn identity_id(identity: NotificationIdentity) -> &'static HSTRING {
 fn ensure_identity_for(identity: NotificationIdentity) -> anyhow::Result<()> {
     let root = RegKey::predef(HKEY_CURRENT_USER);
     let (key, _) = root.create_subkey(format!(
-        r"Software\Classes\AppUserModelId\{}", identity_id(identity)
+        r"Software\Classes\AppUserModelId\{}",
+        identity_id(identity)
     ))?;
-    key.set_value("DisplayName", &match identity {
-        NotificationIdentity::Installed => "MicCamWatch",
-        #[cfg(any(test, feature = "flutter-desktop"))]
-        NotificationIdentity::Qualification => "MicCamWatch TEST Qualification",
-    })?;
+    key.set_value(
+        "DisplayName",
+        &match identity {
+            NotificationIdentity::Installed => "MicCamWatch",
+            #[cfg(any(test, feature = "flutter-desktop"))]
+            NotificationIdentity::Qualification => "MicCamWatch TEST Qualification",
+        },
+    )?;
     key.set_value("ShowInSettings", &1u32)?;
     Ok(())
 }
@@ -134,7 +140,10 @@ pub(crate) fn deliver_message(
 fn unavailable_notification_setting(setting: NotificationSetting) -> windows::core::Error {
     windows::core::Error::new(
         windows::core::HRESULT(0x80070005u32 as i32),
-        format!("Windows notifications unavailable for this application (setting {})", setting.0),
+        format!(
+            "Windows notifications unavailable for this application (setting {})",
+            setting.0
+        ),
     )
 }
 
@@ -150,7 +159,10 @@ fn preference_gate_at(
 ) -> Option<DeliveryOutcome> {
     if !settings.notifications_enabled {
         Some(DeliveryOutcome::SuppressedDisabled)
-    } else if settings.pause_notifications_until.is_some_and(|until| until > now) {
+    } else if settings
+        .pause_notifications_until
+        .is_some_and(|until| until > now)
+    {
         Some(DeliveryOutcome::SuppressedPaused)
     } else {
         None
@@ -183,21 +195,34 @@ mod tests {
     #[test]
     fn live_master_and_pause_gates_are_conservative_at_exact_expiry() {
         let now = chrono::DateTime::parse_from_rfc3339("2026-10-29T12:00:00Z")
-            .unwrap().with_timezone(&chrono::Utc);
+            .unwrap()
+            .with_timezone(&chrono::Utc);
         let mut settings = crate::settings::Settings {
             notifications_enabled: false,
             sound_enabled: true,
             pause_notifications_until: Some(now + chrono::Duration::seconds(1)),
             ..Default::default()
         };
-        assert_eq!(preference_gate_at(&settings, now), Some(DeliveryOutcome::SuppressedDisabled));
+        assert_eq!(
+            preference_gate_at(&settings, now),
+            Some(DeliveryOutcome::SuppressedDisabled)
+        );
         settings.notifications_enabled = true;
-        assert_eq!(preference_gate_at(&settings, now), Some(DeliveryOutcome::SuppressedPaused));
-        assert_eq!(preference_gate_at(&settings, now + chrono::Duration::seconds(1)), None);
+        assert_eq!(
+            preference_gate_at(&settings, now),
+            Some(DeliveryOutcome::SuppressedPaused)
+        );
+        assert_eq!(
+            preference_gate_at(&settings, now + chrono::Duration::seconds(1)),
+            None
+        );
         settings.pause_notifications_until = None;
         assert_eq!(preference_gate_at(&settings, now), None);
         settings.notifications_enabled = false;
-        assert_eq!(preference_gate_at(&settings, now), Some(DeliveryOutcome::SuppressedDisabled));
+        assert_eq!(
+            preference_gate_at(&settings, now),
+            Some(DeliveryOutcome::SuppressedDisabled)
+        );
     }
 
     #[test]

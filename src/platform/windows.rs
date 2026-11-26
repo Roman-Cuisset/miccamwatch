@@ -84,12 +84,12 @@ use winreg::{RegKey, enums::HKEY_CURRENT_USER};
 
 #[path = "windows_camera.rs"]
 mod camera_activity;
-#[path = "windows_profile.rs"]
-mod profile;
-#[path = "windows_process.rs"]
-mod process_inventory;
 #[path = "windows_mute.rs"]
 mod microphone_lock;
+#[path = "windows_process.rs"]
+mod process_inventory;
+#[path = "windows_profile.rs"]
+mod profile;
 pub(crate) use microphone_protection::{
     MicrophoneLockJournal, ensure_update_inactive as ensure_microphone_update_inactive,
 };
@@ -1824,15 +1824,19 @@ fn process_capture_modules(pid: u32) -> Vec<String> {
 }
 
 fn capture_module_name(value: &[u16]) -> Option<&[u16]> {
-    let length = value.iter().position(|unit| *unit == 0).unwrap_or(value.len());
+    let length = value
+        .iter()
+        .position(|unit| *unit == 0)
+        .unwrap_or(value.len());
     let name = &value[..length];
     CAPTURE_MODULES
         .iter()
         .any(|expected| {
             name.len() == expected.len()
-                && name.iter().zip(expected.bytes()).all(|(&unit, byte)| {
-                    unit <= 0x7f && (unit as u8).eq_ignore_ascii_case(&byte)
-                })
+                && name
+                    .iter()
+                    .zip(expected.bytes())
+                    .all(|(&unit, byte)| unit <= 0x7f && (unit as u8).eq_ignore_ascii_case(&byte))
         })
         .then_some(name)
 }
@@ -2287,10 +2291,17 @@ mod tests {
             assert_eq!(*allocation.get_or_insert(storage), storage);
             observations.push(observed);
         }
-        assert_eq!(calls, replies.len(), "no result, including failure, is cached");
+        assert_eq!(
+            calls,
+            replies.len(),
+            "no result, including failure, is cached"
+        );
         // Previously published owned paths cannot change when storage is reused.
         assert_eq!(
-            observations.iter().map(Option::as_deref).collect::<Vec<_>>(),
+            observations
+                .iter()
+                .map(Option::as_deref)
+                .collect::<Vec<_>>(),
             replies.iter().map(|(path, _)| *path).collect::<Vec<_>>()
         );
     }
@@ -2352,8 +2363,7 @@ mod tests {
                 if reverse {
                     rows.reverse();
                 }
-                let original: Vec<String> =
-                    rows.iter().map(|row| wide_array_string(row)).collect();
+                let original: Vec<String> = rows.iter().map(|row| wide_array_string(row)).collect();
                 let has = |name: &str| {
                     original
                         .iter()

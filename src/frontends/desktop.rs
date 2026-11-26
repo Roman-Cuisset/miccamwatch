@@ -5,22 +5,22 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::io::{self, Write};
 
-pub mod commands;
-pub mod preferences;
-pub mod consultation;
-pub mod tools;
-pub mod session;
-pub mod exit_owner;
 mod applications;
+#[cfg(windows)]
+pub mod camera_owner;
+pub mod commands;
+pub mod consultation;
+pub mod exit_owner;
 mod maintenance;
 #[cfg(all(feature = "packaged-desktop", any(windows, target_os = "linux")))]
 pub(crate) mod package;
-#[cfg(windows)]
-pub mod camera_owner;
-#[cfg(windows)]
-pub mod windows;
+pub mod preferences;
+pub mod session;
+pub mod tools;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod unix;
+#[cfg(windows)]
+pub mod windows;
 
 pub const PROTOCOL_VERSION: u8 = 10;
 pub const MAX_FRAME_BYTES: usize = 262_144;
@@ -34,18 +34,25 @@ pub(super) fn new_private_token() -> Result<String> {
     let mut bytes = [0u8; 16];
     #[cfg(windows)]
     unsafe {
-        use ::windows::Win32::Security::Cryptography::{BCryptGenRandom, BCRYPT_USE_SYSTEM_PREFERRED_RNG};
+        use ::windows::Win32::Security::Cryptography::{
+            BCRYPT_USE_SYSTEM_PREFERRED_RNG, BCryptGenRandom,
+        };
         BCryptGenRandom(None, &mut bytes, BCRYPT_USE_SYSTEM_PREFERRED_RNG).ok()?;
     }
     #[cfg(unix)]
     {
         use std::{io::Read as _, os::unix::fs::OpenOptionsExt as _};
-        std::fs::OpenOptions::new().read(true).custom_flags(libc::O_CLOEXEC)
-            .open("/dev/urandom")?.read_exact(&mut bytes)?;
+        std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_CLOEXEC)
+            .open("/dev/urandom")?
+            .read_exact(&mut bytes)?;
     }
     let mut token = String::with_capacity(32);
     use std::fmt::Write as _;
-    for byte in bytes { write!(&mut token, "{byte:02x}")?; }
+    for byte in bytes {
+        write!(&mut token, "{byte:02x}")?;
+    }
     Ok(token)
 }
 
@@ -720,11 +727,20 @@ mod tests {
         }
     }
     fn test_observation_session() -> session::Status {
-        session::Status::idle(session::Cadence::native(std::time::Duration::from_secs(2), None))
+        session::Status::idle(session::Cadence::native(
+            std::time::Duration::from_secs(2),
+            None,
+        ))
     }
     fn dto(source: &Snapshot) -> DesktopSnapshot {
-        DesktopSnapshot::from_snapshot(4, Utc::now(), "en", Ok(source), "read_only_development",
-            test_observation_session())
+        DesktopSnapshot::from_snapshot(
+            4,
+            Utc::now(),
+            "en",
+            Ok(source),
+            "read_only_development",
+            test_observation_session(),
+        )
     }
     #[test]
     fn native_risk_is_preserved_independently_of_confidence_and_global_counts() {
@@ -736,7 +752,8 @@ mod tests {
         blocked.risk = Risk::Blocked;
         blocked.confidence = Confidence::Low;
         s.accesses = vec![expected, blocked];
-        let encoded: serde_json::Value = serde_json::from_slice(&dto(&s).encode().unwrap()).unwrap();
+        let encoded: serde_json::Value =
+            serde_json::from_slice(&dto(&s).encode().unwrap()).unwrap();
         assert_eq!(encoded["accesses"][0]["risk"], "expected");
         assert_eq!(encoded["accesses"][0]["confidence"], "high");
         assert_eq!(encoded["accesses"][1]["risk"], "blocked");
@@ -895,17 +912,22 @@ mod tests {
     fn ready_line(sequence: u64) -> Vec<u8> {
         let mut line = serde_json::to_vec(&serde_json::json!({
             "type":"ready", "protocol_version":PROTOCOL_VERSION, "sequence":sequence,
-        })).unwrap();
+        }))
+        .unwrap();
         line.push(b'\n');
         line
     }
     #[test]
     fn parser_rejects_mutations_versions_extra_fields_and_bad_types() {
-        let valid = serde_json::json!({"type":"ready","protocol_version":PROTOCOL_VERSION,"sequence":1});
+        let valid =
+            serde_json::json!({"type":"ready","protocol_version":PROTOCOL_VERSION,"sequence":1});
         for (field, value) in [
             ("type", serde_json::json!("mute")),
             ("protocol_version", serde_json::json!(PROTOCOL_VERSION - 1)),
-            ("protocol_version", serde_json::json!(f64::from(PROTOCOL_VERSION))),
+            (
+                "protocol_version",
+                serde_json::json!(f64::from(PROTOCOL_VERSION)),
+            ),
             ("sequence", serde_json::json!("1")),
             ("command", serde_json::json!("unmute")),
         ] {
@@ -916,7 +938,10 @@ mod tests {
         let invalid_stage = serde_json::json!({"type":"timing","protocol_version":PROTOCOL_VERSION,
             "stage":"shell","elapsed_ms":0});
         assert!(parse_event(&serde_json::to_vec(&invalid_stage).unwrap()).is_err());
-        assert!(matches!(parse_event(&ready_line(1)), Ok(UiEvent::Ready { sequence: 1, .. })));
+        assert!(matches!(
+            parse_event(&ready_line(1)),
+            Ok(UiEvent::Ready { sequence: 1, .. })
+        ));
     }
     #[test]
     fn oversized_line_cannot_smuggle_suffix_and_next_line_recovers() {
@@ -931,14 +956,8 @@ mod tests {
             }
         };
         lines.feed(&vec![b'x'; MAX_EVENT_BYTES + 1], &mut feed);
-        lines.feed(
-            &ready_line(1),
-            &mut feed,
-        );
-        lines.feed(
-            &ready_line(2),
-            &mut feed,
-        );
+        lines.feed(&ready_line(1), &mut feed);
+        lines.feed(&ready_line(2), &mut feed);
         assert_eq!((accepted, rejected), (1, 1));
         assert!(lines.bytes.is_empty());
     }
@@ -951,9 +970,7 @@ mod tests {
         let mut lines = EventLines::default();
         let mut results = Vec::new();
         let prefix = format!("{{\"type\":\"timing\",\"protocol_version\":{PROTOCOL_VERSION},");
-        lines.feed(prefix.as_bytes(), |e| {
-            results.push(e)
-        });
+        lines.feed(prefix.as_bytes(), |e| results.push(e));
         assert!(results.is_empty());
         lines.feed(b"\"stage\":\"first_frame\",\"elapsed_ms\":5}\n", |e| {
             results.push(e)

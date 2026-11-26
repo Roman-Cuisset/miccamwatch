@@ -213,9 +213,8 @@ fn load(path: &Path) -> Result<Journal> {
 }
 
 fn parse_journal(bytes: &[u8]) -> Result<Journal> {
-    let journal: Journal = serde_json::from_slice(bytes).context(
-        "invalid microphone restoration journal; refusing to overwrite original state",
-    )?;
+    let journal: Journal = serde_json::from_slice(bytes)
+        .context("invalid microphone restoration journal; refusing to overwrite original state")?;
     if journal.version != 1 {
         bail!("unsupported microphone restoration journal version");
     }
@@ -373,19 +372,32 @@ fn mute(journal: &mut Journal, path: &Path) -> Result<usize> {
 impl PlatformMonitor {
     #[cfg(feature = "flutter-desktop")]
     pub(crate) fn has_microphone_originals(&self) -> Result<bool> {
-        use std::{ffi::OsStr, io::{ErrorKind, Read as _}};
+        use std::{
+            ffi::OsStr,
+            io::{ErrorKind, Read as _},
+        };
         const MAX_BYTES: u64 = 1024 * 1024;
         let path = crate::settings::data_dir()?.join("macos-controls");
         let directory = match crate::autostart::Directory::open(&path, false) {
             Ok(directory) => directory,
-            Err(error) if error.downcast_ref::<std::io::Error>()
-                .is_some_and(|error| error.kind() == ErrorKind::NotFound) => return Ok(false),
+            Err(error)
+                if error
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(|error| error.kind() == ErrorKind::NotFound) =>
+            {
+                return Ok(false);
+            }
             Err(error) => return Err(error),
         };
-        let Some(file) = directory.file(OsStr::new("microphone.json"))? else { return Ok(false) };
+        let Some(file) = directory.file(OsStr::new("microphone.json"))? else {
+            return Ok(false);
+        };
         let mut bytes = Vec::new();
         file.take(MAX_BYTES + 1).read_to_end(&mut bytes)?;
-        anyhow::ensure!(bytes.len() as u64 <= MAX_BYTES, "Microphone restoration journal exceeds the readback limit");
+        anyhow::ensure!(
+            bytes.len() as u64 <= MAX_BYTES,
+            "Microphone restoration journal exceeds the readback limit"
+        );
         Ok(!parse_journal(&bytes)?.originals.is_empty())
     }
 

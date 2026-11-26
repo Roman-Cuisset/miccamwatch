@@ -534,7 +534,10 @@ pub(crate) fn ordinary_user() -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn owner_guidance(current: &Path, mut report: impl FnMut(std::fmt::Arguments<'_>)) -> Result<bool> {
+pub(crate) fn owner_guidance(
+    current: &Path,
+    mut report: impl FnMut(std::fmt::Arguments<'_>),
+) -> Result<bool> {
     let parent = current.parent().context("executable has no directory")?;
     safe_ancestors(parent)?;
     if parent.file_name().is_some_and(|name| name == "bin") {

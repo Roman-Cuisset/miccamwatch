@@ -261,10 +261,15 @@ pub fn set_if_expected(expected: bool, requested: bool) -> Result<bool> {
     let current = std::env::current_exe()?;
     let _lock = lock_installation(&current)?;
     let observed = state()? == AutostartState::Enabled;
-    if observed != expected { bail!("autostart changed since observation; unchanged"); }
+    if observed != expected {
+        bail!("autostart changed since observation; unchanged");
+    }
     if requested != observed {
-        if requested { enable_locked(env!("CARGO_PKG_VERSION"), &current)?; }
-        else { disable_locked(&current)?; }
+        if requested {
+            enable_locked(env!("CARGO_PKG_VERSION"), &current)?;
+        } else {
+            disable_locked(&current)?;
+        }
     }
     let confirmed = state()? == AutostartState::Enabled;
     if confirmed != requested {

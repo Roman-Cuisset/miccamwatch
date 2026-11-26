@@ -22,17 +22,24 @@ pub enum Operation {
         expected_enabled: bool,
         confirmation: String,
     },
-    Tools { request: super::tools::Request },
+    Tools {
+        request: super::tools::Request,
+    },
 }
 impl Operation {
     #[cfg(unix)]
     fn refreshes_native_observation(&self) -> bool {
         use super::tools::Request;
-        !matches!(self, Self::Tools {
-            request: Request::SessionStatus {} | Request::SessionStart { .. }
-                | Request::SessionStop {} | Request::SessionConfirm { .. }
-                | Request::SessionCadence { .. },
-        })
+        !matches!(
+            self,
+            Self::Tools {
+                request: Request::SessionStatus {}
+                    | Request::SessionStart { .. }
+                    | Request::SessionStop {}
+                    | Request::SessionConfirm { .. }
+                    | Request::SessionCadence { .. },
+            }
+        )
     }
 
     fn name(&self) -> &'static str {
@@ -45,7 +52,9 @@ impl Operation {
         }
     }
     fn validate(&self) -> Result<()> {
-        if let Self::Tools { request } = self { request.validate()?; }
+        if let Self::Tools { request } = self {
+            request.validate()?;
+        }
         if let Self::History { cursor, limit } = self {
             ensure!((1..=50).contains(limit), "History page limit must be1..50");
             ensure!(
@@ -73,12 +82,20 @@ fn session_requests_never_trigger_a_native_rescan() {
         Request::SessionStatus {},
         Request::SessionStart { requested_ms: 2000 },
         Request::SessionStop {},
-        Request::SessionConfirm { token: String::new(), consent: String::new() },
+        Request::SessionConfirm {
+            token: String::new(),
+            consent: String::new(),
+        },
         Request::SessionCadence { requested_ms: 5000 },
     ] {
         assert!(!Operation::Tools { request }.refreshes_native_observation());
     }
-    assert!(Operation::Tools { request: Request::Controls {} }.refreshes_native_observation());
+    assert!(
+        Operation::Tools {
+            request: Request::Controls {}
+        }
+        .refreshes_native_observation()
+    );
 }
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(try_from = "RequestWire")]
@@ -227,7 +244,9 @@ impl Session {
                 id: request.id,
                 state: CommandState::Rejected,
                 code: Some("read_only".into()),
-                detail: Some("Device, process and startup changes are disabled in development mode".into()),
+                detail: Some(
+                    "Device, process and startup changes are disabled in development mode".into(),
+                ),
                 operation: request.operation.name(),
                 history: None,
                 diagnostics: None,
@@ -360,12 +379,19 @@ impl Worker {
                         | Operation::SetAutostart { .. }) => {
                             autostart(operation, query.autostart_writable).map(Payload::Autostart)
                         }
-                        Operation::Tools { request } => tools.execute(request, &query.context).map(|report| {
-                            if report.data.get("cleared").and_then(serde_json::Value::as_bool) == Some(true) {
-                                browser = HistoryBrowser::default();
-                            }
-                            Payload::Tools(report)
-                        }),
+                        Operation::Tools { request } => {
+                            tools.execute(request, &query.context).map(|report| {
+                                if report
+                                    .data
+                                    .get("cleared")
+                                    .and_then(serde_json::Value::as_bool)
+                                    == Some(true)
+                                {
+                                    browser = HistoryBrowser::default();
+                                }
+                                Payload::Tools(report)
+                            })
+                        }
                     }
                     .map_err(|error| bounded(format!("{error:#}"), 1024));
                     if completed
@@ -405,8 +431,13 @@ impl Worker {
         autostart_writable: bool,
         context: super::tools::Context,
     ) -> Result<()> {
-        ensure!(!context.exit_owner.as_ref().is_some_and(|owner| owner.status().is_ok_and(|s| s.requested)),
-            "Native owner is exiting; no new operation admitted");
+        ensure!(
+            !context
+                .exit_owner
+                .as_ref()
+                .is_some_and(|owner| owner.status().is_ok_and(|s| s.requested)),
+            "Native owner is exiting; no new operation admitted"
+        );
         if owner.is_none() {
             *owner = Some(Self::start()?);
         }
@@ -553,12 +584,21 @@ mod tests {
     const SESSION: &str = "00112233445566778899aabbccddeeff";
     #[test]
     fn authenticated_development_sessions_cannot_dispatch_device_or_process_changes() {
-        for control in [super::super::tools::Control::CameraBlock, super::super::tools::Control::Terminate { pid: 12345 }] {
+        for control in [
+            super::super::tools::Control::CameraBlock,
+            super::super::tools::Control::Terminate { pid: 12345 },
+        ] {
             let mut lane = Session::default();
-            let request = Request { operation: Operation::Tools {
-                request: super::super::tools::Request::Prepare { control }
-            }, ..request(1) };
-            assert!(lane.admit(request, SESSION, 1, true, false, false).is_none());
+            let request = Request {
+                operation: Operation::Tools {
+                    request: super::super::tools::Request::Prepare { control },
+                },
+                ..request(1)
+            };
+            assert!(
+                lane.admit(request, SESSION, 1, true, false, false)
+                    .is_none()
+            );
             let result = lane.view(true).result.unwrap();
             assert_eq!(result.state, CommandState::Rejected);
             assert_eq!(result.code.as_deref(), Some("read_only"));

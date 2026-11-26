@@ -99,28 +99,52 @@ pub(super) fn authorize_envelope(
     pending: bool,
 ) -> std::result::Result<(), AdmissionRejection> {
     let reject = |code, detail, correlatable| AdmissionRejection {
-        code, detail, correlatable,
+        code,
+        detail,
+        correlatable,
     };
-    if request.id == 0 || request.id > u32::MAX as u64
-        || request.observed_sequence == 0 || request.observed_sequence > MAX_WIRE_COUNTER
+    if request.id == 0
+        || request.id > u32::MAX as u64
+        || request.observed_sequence == 0
+        || request.observed_sequence > MAX_WIRE_COUNTER
     {
         return Err(reject("invalid_counter", "Invalid command counters", false));
     }
     if request.session != expected_session {
-        return Err(reject("unauthorized", "Command session does not match", true));
+        return Err(reject(
+            "unauthorized",
+            "Command session does not match",
+            true,
+        ));
     }
     if request.id <= *last_request_id {
-        return Err(reject("replay", "Command ID has already been consumed", true));
+        return Err(reject(
+            "replay",
+            "Command ID has already been consumed",
+            true,
+        ));
     }
     *last_request_id = request.id;
     if !ready || last_written_sequence == 0 || last_written_sequence > MAX_WIRE_COUNTER {
-        return Err(reject("unavailable", "Desktop connection is not ready", true));
+        return Err(reject(
+            "unavailable",
+            "Desktop connection is not ready",
+            true,
+        ));
     }
     if request.observed_sequence > last_written_sequence {
-        return Err(reject("stale", "Command refers to an unwritten snapshot", true));
+        return Err(reject(
+            "stale",
+            "Command refers to an unwritten snapshot",
+            true,
+        ));
     }
     if pending {
-        return Err(reject("busy", "A command is already pending in this lane", true));
+        return Err(reject(
+            "busy",
+            "A command is already pending in this lane",
+            true,
+        ));
     }
     Ok(())
 }
@@ -183,9 +207,16 @@ impl CommandSession {
         }
         let pending = self.pending();
         if let Err(rejected) = authorize_envelope(
-            CommandEnvelope { session: &request.session, id: request.id,
-                observed_sequence: request.observed_sequence },
-            &self.session, &mut self.last_request_id, last_written_sequence, ready, pending,
+            CommandEnvelope {
+                session: &request.session,
+                id: request.id,
+                observed_sequence: request.observed_sequence,
+            },
+            &self.session,
+            &mut self.last_request_id,
+            last_written_sequence,
+            ready,
+            pending,
         ) {
             return if rejected.correlatable {
                 self.reject(&request, rejected.code, rejected.detail)

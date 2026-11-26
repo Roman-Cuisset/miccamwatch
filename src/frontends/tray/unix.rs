@@ -883,13 +883,19 @@ impl Lifecycle {
                                     {
                                         Ok("stopping\n")
                                     } else {
-                                        #[cfg(all(target_os = "macos", not(feature = "flutter-desktop")))]
+                                        #[cfg(all(
+                                            target_os = "macos",
+                                            not(feature = "flutter-desktop")
+                                        ))]
                                         ensure!(
                                             !server_input.closed.load(Ordering::Acquire),
                                             "AppKit helper input closed; window request was not accepted"
                                         );
                                         server_open.store(true, Ordering::Release);
-                                        #[cfg(all(target_os = "macos", not(feature = "flutter-desktop")))]
+                                        #[cfg(all(
+                                            target_os = "macos",
+                                            not(feature = "flutter-desktop")
+                                        ))]
                                         if flags.0.load(Ordering::Acquire)
                                             && server_open.swap(false, Ordering::AcqRel)
                                         {
@@ -1796,21 +1802,38 @@ struct FlutterFrontend {
 }
 #[cfg(feature = "flutter-desktop")]
 impl FlutterFrontend {
-    fn new(lang: Language, writable: bool, profile_writable: bool, operational: bool) -> Result<Self> {
+    fn new(
+        lang: Language,
+        writable: bool,
+        profile_writable: bool,
+        operational: bool,
+    ) -> Result<Self> {
         let (exit_client, exit_owner) = crate::frontends::desktop::exit_owner::channel();
         Ok(Self {
-            ui: None, worker: None, sequence: 1, writable, profile_writable, operational,
-            applied_profile: None, lang,
+            ui: None,
+            worker: None,
+            sequence: 1,
+            writable,
+            profile_writable,
+            operational,
+            applied_profile: None,
+            lang,
             current: None,
             policy: (!operational).then(|| Arc::new(Policy::default())),
             enforcement: Default::default(),
-            exit_client, exit_owner,
-            session: operational.then(|| session::Owner::new(session::Cadence::native(INTERVAL, None))).transpose()?,
-            observations: Default::default(), presentation: Default::default(),
+            exit_client,
+            exit_owner,
+            session: operational
+                .then(|| session::Owner::new(session::Cadence::native(INTERVAL, None)))
+                .transpose()?,
+            observations: Default::default(),
+            presentation: Default::default(),
         })
     }
     fn attached(&self) -> bool {
-        self.ui.as_ref().is_some_and(crate::frontends::desktop::unix::Supervisor::is_running)
+        self.ui
+            .as_ref()
+            .is_some_and(crate::frontends::desktop::unix::Supervisor::is_running)
     }
     fn session_status(&self) -> session::Status {
         self.session.as_ref().map_or_else(
@@ -1819,36 +1842,61 @@ impl FlutterFrontend {
         )
     }
     fn frame(&mut self) -> crate::frontends::desktop::DesktopSnapshot {
-        self.sequence = self.sequence.checked_add(1).expect("desktop sequence exhausted");
+        self.sequence = self
+            .sequence
+            .checked_add(1)
+            .expect("desktop sequence exhausted");
         let (snapshot, observed_at) = self.current.as_ref().map_or(
-            (Err("Initial native observation pending"), chrono::Utc::now()),
+            (
+                Err("Initial native observation pending"),
+                chrono::Utc::now(),
+            ),
             |(snapshot, at)| (snapshot.as_ref().map_err(String::as_str), *at),
         );
         let mut frame = crate::frontends::desktop::DesktopSnapshot::from_snapshot(
-            self.sequence, observed_at, self.lang.code(), snapshot,
-            if self.operational { "operational" } else if self.writable {
+            self.sequence,
+            observed_at,
+            self.lang.code(),
+            snapshot,
+            if self.operational {
+                "operational"
+            } else if self.writable {
                 "settings_development"
-            } else { "read_only_development" },
+            } else {
+                "read_only_development"
+            },
             self.session_status(),
         );
         frame.preferences = crate::frontends::desktop::observe_preferences(
-            self.writable, self.profile_writable, self.applied_profile,
+            self.writable,
+            self.profile_writable,
+            self.applied_profile,
             crate::frontends::desktop::preferences::PreferenceEffects {
                 capture_notifications_supported: self.operational,
                 capture_sounds_supported: self.operational,
                 history_recording_supported: self.operational,
                 history_recording_active: false,
-            }, self.worker.as_ref(),
+            },
+            self.worker.as_ref(),
         );
         frame.preferences.effects.history_recording_active = self.operational
-            && frame.preferences.values.as_ref().is_some_and(|values| values.history_enabled);
+            && frame
+                .preferences
+                .values
+                .as_ref()
+                .is_some_and(|values| values.history_enabled);
         frame
     }
-    fn observe(&mut self, snapshot: Result<Snapshot, String>, observed_at: chrono::DateTime<chrono::Utc>) {
+    fn observe(
+        &mut self,
+        snapshot: Result<Snapshot, String>,
+        observed_at: chrono::DateTime<chrono::Utc>,
+    ) {
         // Move the existing native observation; no DTO copies/serialization while
         // closed, and reopening never starts with a deliberately stale last UI.
         if let Some(owner) = &self.session {
-            self.observations.observe(&owner.client(), snapshot.as_ref().ok(), observed_at);
+            self.observations
+                .observe(&owner.client(), snapshot.as_ref().ok(), observed_at);
         }
         self.current = Some((snapshot, observed_at));
         self.presentation.observed();
@@ -1869,10 +1917,15 @@ impl FlutterFrontend {
             ui.configure_policy(Arc::clone(policy), !self.profile_writable);
             ui.configure_enforcement(self.enforcement.clone());
             ui.configure_exit_owner(self.exit_client.clone());
-            if let Some(owner) = &self.session { ui.configure_session(owner.client()); }
+            if let Some(owner) = &self.session {
+                ui.configure_session(owner.client());
+            }
         }
         let frame = self.frame();
-        self.ui.as_mut().expect("initialized UI").open(frame, theme)?;
+        self.ui
+            .as_mut()
+            .expect("initialized UI")
+            .open(frame, theme)?;
         self.presentation.published(Instant::now());
         Ok(())
     }
@@ -1882,9 +1935,15 @@ impl FlutterFrontend {
             preferences::{PreferenceWork, PreferenceWorker},
             unix::Supervisor,
         };
-        if let Some(ui) = self.ui.as_mut() { ui.poll(); }
+        if let Some(ui) = self.ui.as_mut() {
+            ui.poll();
+        }
         let mut changed = false;
-        if let Some(completion) = self.worker.as_mut().and_then(PreferenceWorker::try_complete) {
+        if let Some(completion) = self
+            .worker
+            .as_mut()
+            .and_then(PreferenceWorker::try_complete)
+        {
             if let Some(ui) = self.ui.as_mut() {
                 match completion.result {
                     Ok(_) => ui.complete_preference(completion.ticket, CommandState::Succeeded, None,
@@ -1897,19 +1956,42 @@ impl FlutterFrontend {
         }
         if let Some(command) = self.ui.as_mut().and_then(Supervisor::take_preference) {
             let ticket = command.ticket;
-            let work = PreferenceWork { ticket, request: command.request, profile_writable: self.profile_writable };
+            let work = PreferenceWork {
+                ticket,
+                request: command.request,
+                profile_writable: self.profile_writable,
+            };
             let result = if self.exit_owner.requested() {
-                Err(anyhow::anyhow!("Native owner is exiting; preference not admitted"))
-            } else { PreferenceWorker::enqueue(&mut self.worker, work) };
+                Err(anyhow::anyhow!(
+                    "Native owner is exiting; preference not admitted"
+                ))
+            } else {
+                PreferenceWorker::enqueue(&mut self.worker, work)
+            };
             if let Err(error) = result {
-                self.ui.as_mut().expect("request UI").complete_preference(ticket, CommandState::Rejected,
-                    Some("preferences_worker"), Some(format!("Preference request not queued: {error:#}")));
+                self.ui.as_mut().expect("request UI").complete_preference(
+                    ticket,
+                    CommandState::Rejected,
+                    Some("preferences_worker"),
+                    Some(format!("Preference request not queued: {error:#}")),
+                );
             }
             changed = true;
         }
-        changed |= self.ui.as_mut().is_some_and(Supervisor::take_controls_changed);
-        let presentation_changed = self.ui.as_mut().is_some_and(Supervisor::take_presentation_changed);
-        if changed || presentation_changed || self.presentation.due(Instant::now(), self.session_status().cadence) {
+        changed |= self
+            .ui
+            .as_mut()
+            .is_some_and(Supervisor::take_controls_changed);
+        let presentation_changed = self
+            .ui
+            .as_mut()
+            .is_some_and(Supervisor::take_presentation_changed);
+        if changed
+            || presentation_changed
+            || self
+                .presentation
+                .due(Instant::now(), self.session_status().cadence)
+        {
             self.publish()?;
         }
         if let Some(error) = self.ui.as_mut().and_then(Supervisor::take_error) {
@@ -1918,33 +2000,51 @@ impl FlutterFrontend {
         Ok(changed)
     }
     fn take_open_failure(&mut self) -> Option<String> {
-        self.ui.as_mut().and_then(crate::frontends::desktop::unix::Supervisor::take_open_failure)
+        self.ui
+            .as_mut()
+            .and_then(crate::frontends::desktop::unix::Supervisor::take_open_failure)
     }
     fn has_pending_work(&self) -> bool {
-        self.worker.as_ref().is_some_and(crate::frontends::desktop::preferences::PreferenceWorker::is_pending)
+        self.worker
+            .as_ref()
+            .is_some_and(crate::frontends::desktop::preferences::PreferenceWorker::is_pending)
             || self.ui.as_ref().is_some_and(|ui| ui.has_pending_work())
     }
     fn poll_exit(&self) -> bool {
-        let ready = !self.worker.as_ref().is_some_and(
-            crate::frontends::desktop::preferences::PreferenceWorker::is_pending);
-        if self.exit_owner.poll(ready) { eprintln!("desktop event=exit_admitted source=flutter"); }
-        self.exit_owner.requested() && !self.has_pending_work()
-            && self.ui.as_ref().is_none_or(crate::frontends::desktop::unix::Supervisor::delivery_complete)
+        let ready = !self
+            .worker
+            .as_ref()
+            .is_some_and(crate::frontends::desktop::preferences::PreferenceWorker::is_pending);
+        if self.exit_owner.poll(ready) {
+            eprintln!("desktop event=exit_admitted source=flutter");
+        }
+        self.exit_owner.requested()
+            && !self.has_pending_work()
+            && self
+                .ui
+                .as_ref()
+                .is_none_or(crate::frontends::desktop::unix::Supervisor::delivery_complete)
     }
     fn finish(&mut self) {
-        if let Some(ui) = self.ui.as_mut() { let _ = ui.close(); }
+        if let Some(ui) = self.ui.as_mut() {
+            let _ = ui.close();
+        }
         // Persistence admitted by this process is not cancelled by a close or stop.
         while self.has_pending_work() {
             let _ = self.refresh();
             thread::sleep(Duration::from_millis(20));
         }
         self.ui.take();
-        if let Some(owner) = self.session.as_mut() { owner.finish(); }
+        if let Some(owner) = self.session.as_mut() {
+            owner.finish();
+        }
     }
 }
 #[cfg(feature = "flutter-desktop")]
 impl Drop for FlutterFrontend {
-    fn drop(&mut self) { self.finish(); }
+    fn drop(&mut self) {
+        self.finish();
+    }
 }
 
 #[cfg(feature = "flutter-desktop")]
@@ -1984,10 +2084,18 @@ fn development_paths() -> Result<Vec<File>> {
     let mut result = std::ptr::null_mut();
     let mut buffer = [0u8; 16_384];
     let status = unsafe {
-        libc::getpwuid_r(uid(), &mut record, buffer.as_mut_ptr().cast(), buffer.len(), &mut result)
+        libc::getpwuid_r(
+            uid(),
+            &mut record,
+            buffer.as_mut_ptr().cast(),
+            buffer.len(),
+            &mut result,
+        )
     };
-    ensure!(status == 0 && !result.is_null() && !record.pw_dir.is_null(),
-        "cannot identify the account home for development isolation");
+    ensure!(
+        status == 0 && !result.is_null() && !record.pw_dir.is_null(),
+        "cannot identify the account home for development isolation"
+    );
     use std::os::unix::ffi::OsStrExt;
     let account = unsafe { std::ffi::CStr::from_ptr(record.pw_dir) };
     let account = Path::new(std::ffi::OsStr::from_bytes(account.to_bytes()));
@@ -1995,45 +2103,69 @@ fn development_paths() -> Result<Vec<File>> {
     pins.extend(pin_directory_chain(account).context("pin account home ancestors")?);
     let account = account.canonicalize().context("resolve account home")?;
     let mut roots = Vec::new();
-    for (variable, fallback) in [("XDG_CONFIG_HOME", ".config"), ("XDG_DATA_HOME", ".local/share")] {
-        let value = std::env::var_os(variable).with_context(|| format!("explicit private {variable} required"))?;
+    for (variable, fallback) in [
+        ("XDG_CONFIG_HOME", ".config"),
+        ("XDG_DATA_HOME", ".local/share"),
+    ] {
+        let value = std::env::var_os(variable)
+            .with_context(|| format!("explicit private {variable} required"))?;
         let path = Path::new(&value);
         ensure!(path.is_absolute(), "{variable} must be absolute");
         // Validate the original environment pathname before resolving it: later
         // settings accesses use this spelling, not just its canonical target.
-        pins.extend(pin_directory_chain(path).with_context(|| format!("pin {variable} ancestors"))?);
-        let metadata = fs::symlink_metadata(path).with_context(|| format!("prepare a private {variable} directory first"))?;
-        ensure!(metadata.is_dir() && !metadata.file_type().is_symlink()
-            && metadata.uid() == uid() && metadata.mode() & 0o077 == 0,
-            "{variable} must be a private owned directory, not a symlink");
+        pins.extend(
+            pin_directory_chain(path).with_context(|| format!("pin {variable} ancestors"))?,
+        );
+        let metadata = fs::symlink_metadata(path)
+            .with_context(|| format!("prepare a private {variable} directory first"))?;
+        ensure!(
+            metadata.is_dir()
+                && !metadata.file_type().is_symlink()
+                && metadata.uid() == uid()
+                && metadata.mode() & 0o077 == 0,
+            "{variable} must be a private owned directory, not a symlink"
+        );
         let root = path.canonicalize()?;
         for home in [&home, &account] {
             let normal = home.join(fallback);
             let normal = normal.canonicalize().unwrap_or(normal);
-            ensure!(!root.starts_with(&normal) && !normal.starts_with(&root),
-                "{variable} must be isolated from the normal preference/data tree");
+            ensure!(
+                !root.starts_with(&normal) && !normal.starts_with(&root),
+                "{variable} must be isolated from the normal preference/data tree"
+            );
         }
         let app = root.join("MicCamWatch");
         match fs::symlink_metadata(&app) {
-            Ok(metadata) => ensure!(metadata.is_dir() && !metadata.file_type().is_symlink()
-                && metadata.uid() == uid() && metadata.mode() & 0o022 == 0,
-                "existing development app directory must be owned, non-writable by others, and not a symlink"),
+            Ok(metadata) => ensure!(
+                metadata.is_dir()
+                    && !metadata.file_type().is_symlink()
+                    && metadata.uid() == uid()
+                    && metadata.mode() & 0o022 == 0,
+                "existing development app directory must be owned, non-writable by others, and not a symlink"
+            ),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(error.into()),
         }
         if variable == "XDG_CONFIG_HOME" {
             match fs::symlink_metadata(app.join("settings.toml")) {
-                Ok(metadata) => ensure!(metadata.is_file() && !metadata.file_type().is_symlink()
-                    && metadata.nlink() == 1 && metadata.uid() == uid() && metadata.mode() & 0o022 == 0,
-                    "existing development settings must be an owned non-writable-by-others single-link file"),
+                Ok(metadata) => ensure!(
+                    metadata.is_file()
+                        && !metadata.file_type().is_symlink()
+                        && metadata.nlink() == 1
+                        && metadata.uid() == uid()
+                        && metadata.mode() & 0o022 == 0,
+                    "existing development settings must be an owned non-writable-by-others single-link file"
+                ),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
                 Err(error) => return Err(error.into()),
             }
         }
         roots.push(root);
     }
-    ensure!(!roots[0].starts_with(&roots[1]) && !roots[1].starts_with(&roots[0]),
-        "development config/data roots must be separate");
+    ensure!(
+        !roots[0].starts_with(&roots[1]) && !roots[1].starts_with(&roots[0]),
+        "development config/data roots must be separate"
+    );
     Ok(pins)
 }
 
@@ -2047,15 +2179,29 @@ fn qualification_view(lang: Language, snapshot: Option<&Snapshot>, writable: boo
     // AppKit protocol4 requires the four profile choices even when disabled.
     // Construct them here, not through make_view (which probes control/autostart).
     let mut profile = entry("profile", text.profile, false);
-    profile.children = Some([
-        "profile_balanced", "profile_private", "profile_meeting", "profile_development",
-    ].into_iter().enumerate().map(|(index, action)| {
-        let mut choice = entry(action, text.profiles[index], false);
-        choice.checked = Some(index == profile_index(settings.profile));
-        choice
-    }).collect());
+    profile.children = Some(
+        [
+            "profile_balanced",
+            "profile_private",
+            "profile_meeting",
+            "profile_development",
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, action)| {
+            let mut choice = entry(action, text.profiles[index], false);
+            choice.checked = Some(index == profile_index(settings.profile));
+            choice
+        })
+        .collect(),
+    );
     let (summary, visual) = snapshot.map_or_else(
-        || ("Isolated qualification — native observation unavailable".to_owned(), "partial"),
+        || {
+            (
+                "Isolated qualification — native observation unavailable".to_owned(),
+                "partial",
+            )
+        },
         |snapshot| observation_status(snapshot, lang),
     );
     let mut view = View {
@@ -2114,13 +2260,23 @@ fn dispatch_qualification_action(command: Command, open: &mut bool, stop: &Atomi
 }
 
 #[cfg(feature = "flutter-desktop")]
-fn run_flutter_development(lang: Language, initial_window: bool, theme: &str, writable: bool) -> Result<()> {
-    ensure!(matches!(theme, "system" | "light" | "dark"), "unsupported desktop theme");
+fn run_flutter_development(
+    lang: Language,
+    initial_window: bool,
+    theme: &str,
+    writable: bool,
+) -> Result<()> {
+    ensure!(
+        matches!(theme, "system" | "light" | "dark"),
+        "unsupported desktop theme"
+    );
     // Keep every ancestor pinned until the worker, frontend and lifecycle stop.
     let _directory_pins = development_paths()?;
     // Reuse the authenticated native singleton implementation unchanged, including
     // Linux SO_PEERPIDFD/image verification. The isolated XDG roots own this namespace.
-    let Some(lifecycle) = Lifecycle::acquire_for_launch(initial_window, false)? else { return Ok(()) };
+    let Some(lifecycle) = Lifecycle::acquire_for_launch(initial_window, false)? else {
+        return Ok(());
+    };
     let mut frontend = FlutterFrontend::new(lang, writable, writable, false)?;
     // Opt-in genuine native registration; never label window-only mode as tray
     // proof. The Mac host uses the same pinned helper/input as operational mode.
@@ -2130,11 +2286,18 @@ fn run_flutter_development(lang: Language, initial_window: bool, theme: &str, wr
         let host = if std::env::var_os("MCW_LINUX_QUALIFICATION_TRAY").as_deref()
             == Some(std::ffi::OsStr::new("1"))
         {
-            let host = DesktopHost::start(sender, lifecycle.ready.clone(),
-                qualification_view(lang, None, writable))?;
-            eprintln!("MicCamWatch qualification: actual SNI registration succeeded; device/autostart actions disabled");
+            let host = DesktopHost::start(
+                sender,
+                lifecycle.ready.clone(),
+                qualification_view(lang, None, writable),
+            )?;
+            eprintln!(
+                "MicCamWatch qualification: actual SNI registration succeeded; device/autostart actions disabled"
+            );
             Some(host)
-        } else { None };
+        } else {
+            None
+        };
         (host, actions)
     };
     #[cfg(target_os = "macos")]
@@ -2143,19 +2306,31 @@ fn run_flutter_development(lang: Language, initial_window: bool, theme: &str, wr
         let host = if std::env::var_os("MCW_MACOS_QUALIFICATION_TRAY").as_deref()
             == Some(std::ffi::OsStr::new("1"))
         {
-            let host = DesktopHost::start(sender, lifecycle.ready.clone(),
-                qualification_view(lang, None, writable), lifecycle.window_input.clone())?;
-            eprintln!("MCW_MACOS_NATIVE event=ready owner={} pid={} protocol=4 mutations=disabled",
-                std::process::id(), host.child.id());
+            let host = DesktopHost::start(
+                sender,
+                lifecycle.ready.clone(),
+                qualification_view(lang, None, writable),
+                lifecycle.window_input.clone(),
+            )?;
+            eprintln!(
+                "MCW_MACOS_NATIVE event=ready owner={} pid={} protocol=4 mutations=disabled",
+                std::process::id(),
+                host.child.id()
+            );
             Some(host)
-        } else { None };
+        } else {
+            None
+        };
         (host, actions)
     };
     #[cfg(target_os = "linux")]
     let native_only = std::env::var_os("MCW_LINUX_QUALIFICATION_NATIVE").as_deref()
         == Some(std::ffi::OsStr::new("1"));
     #[cfg(target_os = "linux")]
-    ensure!(!native_only || native.is_some(), "native qualification requires the real SNI host");
+    ensure!(
+        !native_only || native.is_some(),
+        "native qualification requires the real SNI host"
+    );
     struct Reading {
         snapshot: Result<Snapshot, String>,
         at: chrono::DateTime<chrono::Utc>,
@@ -2171,7 +2346,9 @@ fn run_flutter_development(lang: Language, initial_window: bool, theme: &str, wr
         fn stop_and_join(&mut self) -> Result<()> {
             self.stop.store(true, Ordering::Release);
             if let Some(thread) = self.thread.take() {
-                thread.join().map_err(|_| anyhow::anyhow!("development Unix observer panicked"))?;
+                thread
+                    .join()
+                    .map_err(|_| anyhow::anyhow!("development Unix observer panicked"))?;
             }
             Ok(())
         }
@@ -2185,33 +2362,52 @@ fn run_flutter_development(lang: Language, initial_window: bool, theme: &str, wr
     }
     let readings = pending.clone();
     let observer_stop = stop.clone();
-    let observer_thread = thread::Builder::new().name("miccamwatch-unix-observer".into()).spawn(move || {
-        let result = PlatformMonitor::new(Policy::default());
-        let mut monitor = match result {
-            Ok(monitor) => monitor,
-            Err(error) => {
+    let observer_thread = thread::Builder::new()
+        .name("miccamwatch-unix-observer".into())
+        .spawn(move || {
+            let result = PlatformMonitor::new(Policy::default());
+            let mut monitor = match result {
+                Ok(monitor) => monitor,
+                Err(error) => {
+                    *readings.lock().unwrap_or_else(|e| e.into_inner()) = Some(Reading {
+                        snapshot: Err(format!("{error:#}")),
+                        at: chrono::Utc::now(),
+                        applied_profile: None,
+                    });
+                    return;
+                }
+            };
+            let filter = Filter {
+                include_ready: true,
+                ..Filter::default()
+            };
+            while !observer_stop.load(Ordering::Acquire) {
+                let profile = Settings::load().ok().map(|settings| settings.profile);
+                if let Some(profile) = profile {
+                    monitor.set_policy(Policy {
+                        profile: profile.assessment_profile(),
+                        ..Policy::default()
+                    });
+                }
+                let snapshot = monitor
+                    .snapshot((&filter).into())
+                    .map_err(|error| format!("{error:#}"));
                 *readings.lock().unwrap_or_else(|e| e.into_inner()) = Some(Reading {
-                    snapshot: Err(format!("{error:#}")), at: chrono::Utc::now(), applied_profile: None,
+                    snapshot,
+                    at: chrono::Utc::now(),
+                    applied_profile: profile,
                 });
-                return;
+                let until = Instant::now() + INTERVAL;
+                while !observer_stop.load(Ordering::Acquire) && Instant::now() < until {
+                    thread::sleep(Duration::from_millis(50));
+                }
             }
-        };
-        let filter = Filter { include_ready: true, ..Filter::default() };
-        while !observer_stop.load(Ordering::Acquire) {
-            let profile = Settings::load().ok().map(|settings| settings.profile);
-            if let Some(profile) = profile {
-                monitor.set_policy(Policy { profile: profile.assessment_profile(), ..Policy::default() });
-            }
-            let snapshot = monitor.snapshot((&filter).into()).map_err(|error| format!("{error:#}"));
-            *readings.lock().unwrap_or_else(|e| e.into_inner()) =
-                Some(Reading { snapshot, at: chrono::Utc::now(), applied_profile: profile });
-            let until = Instant::now() + INTERVAL;
-            while !observer_stop.load(Ordering::Acquire) && Instant::now() < until {
-                thread::sleep(Duration::from_millis(50));
-            }
-        }
-    }).context("start real Unix collector")?;
-    let mut observer = Observer { stop, thread: Some(observer_thread) };
+        })
+        .context("start real Unix collector")?;
+    let mut observer = Observer {
+        stop,
+        thread: Some(observer_thread),
+    };
     let outcome = (|| -> Result<()> {
         let mut open = initial_window;
         lifecycle.ready.store(true, Ordering::Release);
@@ -2228,16 +2424,23 @@ fn run_flutter_development(lang: Language, initial_window: bool, theme: &str, wr
                         eprintln!("MicCamWatch qualification: rejected native mutation");
                     }
                     #[cfg(target_os = "macos")]
-                    eprintln!("MCW_MACOS_NATIVE event=dispatch owner={} pid={} action={command:?} protocol=4",
-                        std::process::id(), host.child.id());
+                    eprintln!(
+                        "MCW_MACOS_NATIVE event=dispatch owner={} pid={} action={command:?} protocol=4",
+                        std::process::id(),
+                        host.child.id()
+                    );
                 }
             }
             frontend.refresh()?;
-            if frontend.poll_exit() { break; }
+            if frontend.poll_exit() {
+                break;
+            }
             if let Some(error) = frontend.take_open_failure() {
                 #[cfg(target_os = "linux")]
                 if let Some(host) = native.as_mut() {
-                    eprintln!("MicCamWatch qualification Flutter failed; opening native fallback: {error}");
+                    eprintln!(
+                        "MicCamWatch qualification Flutter failed; opening native fallback: {error}"
+                    );
                     host.show_window()?;
                 } else {
                     bail!("development Flutter desktop failed before ready: {error}");
@@ -2247,7 +2450,9 @@ fn run_flutter_development(lang: Language, initial_window: bool, theme: &str, wr
             }
             let requested = lifecycle.open_requested.swap(false, Ordering::AcqRel);
             #[cfg(target_os = "linux")]
-            { open |= requested; }
+            {
+                open |= requested;
+            }
             #[cfg(target_os = "macos")]
             if requested {
                 if let Some(host) = native.as_mut() {
@@ -2255,19 +2460,28 @@ fn run_flutter_development(lang: Language, initial_window: bool, theme: &str, wr
                     // then consume its Status event in this supervisor loop.
                     host.check()?;
                     host.show_window()?;
-                } else { open = true; }
+                } else {
+                    open = true;
+                }
             }
             if open {
                 open = false;
                 #[cfg(target_os = "linux")]
                 if native_only {
-                    native.as_mut().expect("required native host").show_window()?;
+                    native
+                        .as_mut()
+                        .expect("required native host")
+                        .show_window()?;
                 } else if let Err(error) = frontend.open(theme) {
                     if let Some(host) = native.as_mut() {
-                        eprintln!("MicCamWatch qualification Flutter unavailable; opening native fallback: {error:#}");
+                        eprintln!(
+                            "MicCamWatch qualification Flutter unavailable; opening native fallback: {error:#}"
+                        );
                         let _ = frontend.take_open_failure();
                         host.show_window()?;
-                    } else { return Err(error); }
+                    } else {
+                        return Err(error);
+                    }
                 }
                 #[cfg(target_os = "macos")]
                 frontend.open(theme)?;
@@ -2275,12 +2489,20 @@ fn run_flutter_development(lang: Language, initial_window: bool, theme: &str, wr
             if let Some(reading) = pending.lock().unwrap_or_else(|e| e.into_inner()).take() {
                 #[cfg(target_os = "macos")]
                 if let Some(host) = native.as_mut() {
-                    host.update(qualification_view(lang, reading.snapshot.as_ref().ok(), writable))?;
+                    host.update(qualification_view(
+                        lang,
+                        reading.snapshot.as_ref().ok(),
+                        writable,
+                    ))?;
                 }
                 #[cfg(target_os = "linux")]
                 if let Some(host) = native.as_mut() {
                     host.observe(reading.snapshot.as_ref().ok());
-                    host.update(qualification_view(lang, reading.snapshot.as_ref().ok(), writable))?;
+                    host.update(qualification_view(
+                        lang,
+                        reading.snapshot.as_ref().ok(),
+                        writable,
+                    ))?;
                 }
                 frontend.applied_profile = reading.applied_profile;
                 frontend.observe(reading.snapshot, reading.at);
@@ -2293,14 +2515,21 @@ fn run_flutter_development(lang: Language, initial_window: bool, theme: &str, wr
     lifecycle.ready.store(false, Ordering::Release);
     frontend.finish();
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    if let Some(host) = native.as_mut() { host.shutdown()?; }
+    if let Some(host) = native.as_mut() {
+        host.shutdown()?;
+    }
     #[cfg(target_os = "macos")]
     if let Some(host) = native.as_ref() {
-        eprintln!("MCW_MACOS_NATIVE event=stopped owner={} pid={} protocol=4",
-            std::process::id(), host.child.id());
+        eprintln!(
+            "MCW_MACOS_NATIVE event=stopped owner={} pid={} protocol=4",
+            std::process::id(),
+            host.child.id()
+        );
     }
     let outcome = outcome.and(observer.stop_and_join());
-    lifecycle.clean_shutdown.store(outcome.is_ok(), Ordering::Release);
+    lifecycle
+        .clean_shutdown
+        .store(outcome.is_ok(), Ordering::Release);
     outcome
 }
 
@@ -2319,7 +2548,9 @@ pub fn run_tray(
     #[cfg(feature = "flutter-desktop")]
     let mut flutter = FlutterFrontend::new(lang, true, !explicit_policy, true)?;
     #[cfg(feature = "flutter-desktop")]
-    { flutter.policy = Some(Arc::new(policy.clone())); }
+    {
+        flutter.policy = Some(Arc::new(policy.clone()));
+    }
     let (sender, actions) = mpsc::sync_channel(32);
     let mut inspection = CameraInspectionWorker::default();
     #[cfg(target_os = "macos")]
@@ -2351,7 +2582,9 @@ pub fn run_tray(
         lifecycle.window_input.clone(),
     )?;
     #[cfg(feature = "flutter-desktop")]
-    if initial_window { show_desktop(&mut flutter, &mut host)?; }
+    if initial_window {
+        show_desktop(&mut flutter, &mut host)?;
+    }
     #[cfg(all(target_os = "macos", not(feature = "flutter-desktop")))]
     if initial_window {
         // The initial unavailable state is already native-ready. Opening must
@@ -2394,17 +2627,25 @@ pub fn run_tray(
         loop {
             if lifecycle.stop.load(Ordering::Acquire) {
                 #[cfg(feature = "flutter-desktop")]
-                if !flutter.has_pending_work() { break; }
+                if !flutter.has_pending_work() {
+                    break;
+                }
                 #[cfg(not(feature = "flutter-desktop"))]
                 break;
             }
             host.check()?;
             #[cfg(feature = "flutter-desktop")]
             {
-                if flutter.refresh()? { next_poll = Instant::now(); }
-                if flutter.poll_exit() { break; }
+                if flutter.refresh()? {
+                    next_poll = Instant::now();
+                }
+                if flutter.poll_exit() {
+                    break;
+                }
                 if let Some(error) = flutter.take_open_failure() {
-                    eprintln!("MicCamWatch Flutter failed before ready, opening native desktop: {error}");
+                    eprintln!(
+                        "MicCamWatch Flutter failed before ready, opening native desktop: {error}"
+                    );
                     if let Err(error) = host.show_window() {
                         feedback = Some(format!("{}: {error:#}", words(lang).failed));
                         action_error = true;
@@ -2456,7 +2697,9 @@ pub fn run_tray(
                     applied_profile = settings.profile;
                 }
                 #[cfg(feature = "flutter-desktop")]
-                { flutter.applied_profile = (!explicit_policy).then_some(applied_profile); }
+                {
+                    flutter.applied_profile = (!explicit_policy).then_some(applied_profile);
+                }
                 lock = crate::platform::session_lock_state();
                 if lock == SessionLockState::Locked
                     && lock_previous != SessionLockState::Locked
@@ -2632,7 +2875,9 @@ pub fn run_tray(
                 }
                 Ok(command) => {
                     #[cfg(feature = "flutter-desktop")]
-                    if flutter.exit_owner.requested() { continue; }
+                    if flutter.exit_owner.requested() {
+                        continue;
+                    }
                     if matches!(command, Command::Status) {
                         #[cfg(feature = "flutter-desktop")]
                         let opened = show_desktop(&mut flutter, &mut host);
@@ -2929,10 +3174,20 @@ struct LinuxTray {
 #[cfg(target_os = "linux")]
 impl ksni::Tray for LinuxTray {
     fn id(&self) -> String {
-        if self.view.preferences.writable { "miccamwatch" } else { "miccamwatch-qualification" }.into()
+        if self.view.preferences.writable {
+            "miccamwatch"
+        } else {
+            "miccamwatch-qualification"
+        }
+        .into()
     }
     fn title(&self) -> String {
-        if self.view.preferences.writable { "MicCamWatch" } else { "MicCamWatch — isolated qualification" }.into()
+        if self.view.preferences.writable {
+            "MicCamWatch"
+        } else {
+            "MicCamWatch — isolated qualification"
+        }
+        .into()
     }
     fn icon_pixmap(&self) -> Vec<ksni::Icon> {
         let color: [u8; 3] = match self.view.visual {
@@ -3349,7 +3604,9 @@ mod menu_tests {
     #[test]
     fn qualification_native_view_has_no_mutating_actions() {
         let test = "frontends::tray::menu_tests::qualification_native_view_has_no_mutating_actions";
-        if run_isolated_menu_fixture(test) { return; }
+        if run_isolated_menu_fixture(test) {
+            return;
+        }
         for writable in [false, true] {
             let view = qualification_view(Language::En, None, writable);
             assert!(!view.preferences.writable);
@@ -3361,9 +3618,12 @@ mod menu_tests {
                 if item.action == "profile" {
                     let choices = item.children.as_ref().unwrap();
                     assert_eq!(choices.len(), 4);
-                    assert!(choices.iter().all(|choice| !choice.enabled && choice.checked.is_some()
+                    assert!(choices.iter().all(|choice| !choice.enabled
+                        && choice.checked.is_some()
                         && choice.children.is_none()));
-                } else { assert!(item.children.is_none()); }
+                } else {
+                    assert!(item.children.is_none());
+                }
             }
         }
         let home = PathBuf::from(std::env::var_os("HOME").unwrap());
@@ -3376,10 +3636,20 @@ mod menu_tests {
         let mut open = false;
         let stop = AtomicBool::new(false);
         let mutations = [
-            Command::Mic, Command::Camera, Command::Pause, Command::ProfileBalanced,
-            Command::ProfilePrivate, Command::ProfileMeeting, Command::ProfileDevelopment,
-            Command::NotificationsEnable, Command::NotificationsDisable, Command::SoundEnable,
-            Command::SoundDisable, Command::HistoryEnable, Command::HistoryDisable, Command::Autostart,
+            Command::Mic,
+            Command::Camera,
+            Command::Pause,
+            Command::ProfileBalanced,
+            Command::ProfilePrivate,
+            Command::ProfileMeeting,
+            Command::ProfileDevelopment,
+            Command::NotificationsEnable,
+            Command::NotificationsDisable,
+            Command::SoundEnable,
+            Command::SoundDisable,
+            Command::HistoryEnable,
+            Command::HistoryDisable,
+            Command::Autostart,
             #[cfg(target_os = "macos")]
             Command::CameraInspect,
         ];
@@ -3388,11 +3658,19 @@ mod menu_tests {
             assert!(!open);
             assert!(!stop.load(Ordering::Acquire));
         }
-        assert!(dispatch_qualification_action(Command::Status, &mut open, &stop));
+        assert!(dispatch_qualification_action(
+            Command::Status,
+            &mut open,
+            &stop
+        ));
         assert!(open);
         assert!(!stop.load(Ordering::Acquire));
         open = false;
-        assert!(dispatch_qualification_action(Command::Exit, &mut open, &stop));
+        assert!(dispatch_qualification_action(
+            Command::Exit,
+            &mut open,
+            &stop
+        ));
         assert!(!open);
         assert!(stop.load(Ordering::Acquire));
     }

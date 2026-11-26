@@ -1,3 +1,6 @@
+use crate::notify::capture::NotificationCooldowns;
+#[cfg(test)]
+use crate::notify::capture::{MAX_COOLDOWNS, NOTIFICATION_COOLDOWN};
 use crate::{
     frontends::cli::Filter,
     i18n::Language,
@@ -24,9 +27,6 @@ use std::{
     },
     time::{Duration, Instant},
 };
-use crate::notify::capture::NotificationCooldowns;
-#[cfg(test)]
-use crate::notify::capture::{MAX_COOLDOWNS, NOTIFICATION_COOLDOWN};
 use windows::{
     Win32::{
         Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0, WAIT_TIMEOUT},
@@ -385,8 +385,13 @@ fn update_enforcement_candidates<'a>(
     observations: &mut HashMap<(String, String), u8>,
     terminated: &mut HashSet<(String, String)>,
 ) {
-    update_enforcement_candidates_with(accesses, enabled, observations, terminated,
-        crate::platform::terminate_process_by_pid);
+    update_enforcement_candidates_with(
+        accesses,
+        enabled,
+        observations,
+        terminated,
+        crate::platform::terminate_process_by_pid,
+    );
 }
 
 pub(super) fn update_enforcement_candidates_with<'a>(

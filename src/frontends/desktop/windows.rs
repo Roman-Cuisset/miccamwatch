@@ -2,8 +2,8 @@
 use super::{
     DesktopSnapshot, EventLines, UiEvent,
     commands::{CommandSession, CommandState, MicrophoneCapability},
-    preferences::{PreferenceRequest, PreferenceSession, PreferencesSnapshot},
     consultation,
+    preferences::{PreferenceRequest, PreferenceSession, PreferencesSnapshot},
 };
 use anyhow::{Context, Result, ensure};
 use std::{
@@ -29,9 +29,7 @@ use windows::{
             DUPLICATE_SAME_ACCESS, DuplicateHandle, HANDLE, HANDLE_FLAG_INHERIT, HANDLE_FLAGS,
             HWND, LPARAM, SetHandleInformation, WAIT_OBJECT_0, WPARAM,
         },
-        Security::{
-            SECURITY_ATTRIBUTES,
-        },
+        Security::SECURITY_ATTRIBUTES,
         Storage::FileSystem::{BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle},
         System::{
             Console::{GetStdHandle, STD_ERROR_HANDLE},
@@ -239,7 +237,11 @@ impl Supervisor {
             observed_pending: false,
         })
     }
-    pub fn configure_policy(&mut self, policy: std::sync::Arc<crate::config::Policy>, explicit: bool) {
+    pub fn configure_policy(
+        &mut self,
+        policy: std::sync::Arc<crate::config::Policy>,
+        explicit: bool,
+    ) {
         self.context.policy = Some(policy);
         self.context.explicit_policy = explicit;
     }
@@ -257,10 +259,18 @@ impl Supervisor {
     }
     pub fn delivery_complete(&self) -> bool {
         self.child.as_ref().is_none_or(|child| {
-            child.exited() || child.signals.disconnected.load(Ordering::Acquire) ||
-                child.mailbox.pending.lock().unwrap_or_else(|e| e.into_inner()).highest_sequence
-                    .is_none_or(|sequence| child.signals.wrote_frame.load(Ordering::Acquire)
-                        && child.signals.written_sequence.load(Ordering::Acquire) >= sequence)
+            child.exited()
+                || child.signals.disconnected.load(Ordering::Acquire)
+                || child
+                    .mailbox
+                    .pending
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .highest_sequence
+                    .is_none_or(|sequence| {
+                        child.signals.wrote_frame.load(Ordering::Acquire)
+                            && child.signals.written_sequence.load(Ordering::Acquire) >= sequence
+                    })
         })
     }
     pub fn has_pending_work(&self) -> bool {
@@ -354,7 +364,9 @@ impl Supervisor {
     pub fn take_controls_changed(&mut self) -> bool {
         let pending = consultation::Worker::pending(&self.consultation_worker);
         let completed = std::mem::replace(&mut self.observed_pending, pending) && !pending;
-        let child_changed = self.child.as_mut()
+        let child_changed = self
+            .child
+            .as_mut()
             .is_some_and(|child| std::mem::take(&mut child.controls_changed));
         completed || child_changed
     }
@@ -386,7 +398,11 @@ impl Supervisor {
             child.consultation.finish(id, completion.result);
             child.controls_changed = true;
         }
-        let exiting = self.context.exit_owner.as_ref().is_some_and(|owner| owner.status().is_ok_and(|s| s.requested));
+        let exiting = self
+            .context
+            .exit_owner
+            .as_ref()
+            .is_some_and(|owner| owner.status().is_ok_and(|s| s.requested));
         if let Some(child) = self.child.as_mut() {
             let available = consultation::Worker::available(&self.consultation_worker);
             child.controls_changed |= child.consultation_available != available;
@@ -489,20 +505,30 @@ impl Supervisor {
                         child.controls_changed = true;
                     }
                     UiEvent::ConsultationRequest { request, .. } => {
-                        let ready = child.ready && child.closing.is_none() && !child.exited()
+                        let ready = child.ready
+                            && child.closing.is_none()
+                            && !child.exited()
                             && !exiting
                             && !child.signals.disconnected.load(Ordering::Acquire)
                             && child.last_frame_at.elapsed() <= Duration::from_secs(5)
                             && child.consultation_available;
-                        if let Some(request) = child.consultation.admit(request, child.commands.session(),
-                            child.signals.written_sequence.load(Ordering::Acquire), ready,
-                            consultation::Worker::pending(&self.consultation_worker), child.autostart_writable) {
+                        if let Some(request) = child.consultation.admit(
+                            request,
+                            child.commands.session(),
+                            child.signals.written_sequence.load(Ordering::Acquire),
+                            ready,
+                            consultation::Worker::pending(&self.consultation_worker),
+                            child.autostart_writable,
+                        ) {
                             if let Some(ticket) = self.next_ticket.checked_add(1) {
                                 self.next_ticket = ticket;
                                 child.pending_consultation = Some((ticket, request.id));
                                 child.queued_consultation = Some((ticket, request));
                             } else {
-                                child.consultation.finish(request.id, Err("Consultation tickets exhausted".into()));
+                                child.consultation.finish(
+                                    request.id,
+                                    Err("Consultation tickets exhausted".into()),
+                                );
                             }
                         }
                         child.controls_changed = true;
@@ -515,7 +541,13 @@ impl Supervisor {
                 context.data_writable = child.preference_capability.writable;
                 context.applied_profile = child.preference_capability.applied_profile;
                 let id = request.id;
-                if let Err(error) = consultation::Worker::enqueue(&mut self.consultation_worker, ticket, request, child.autostart_writable, context) {
+                if let Err(error) = consultation::Worker::enqueue(
+                    &mut self.consultation_worker,
+                    ticket,
+                    request,
+                    child.autostart_writable,
+                    context,
+                ) {
                     child.pending_consultation = None;
                     child.consultation.finish(id, Err(format!("{error:#}")));
                     child.controls_changed = true;
@@ -716,7 +748,10 @@ impl Bundle {
         reservations.push(file);
         #[cfg(feature = "packaged-desktop")]
         {
-            let root = path.parent().and_then(Path::parent).context("missing hybrid bundle root")?;
+            let root = path
+                .parent()
+                .and_then(Path::parent)
+                .context("missing hybrid bundle root")?;
             let manifest = reserve_file(&root.join(super::package::MANIFEST))
                 .context("hybrid manifest missing; reinstall the complete package")?;
             regular_identity(&manifest)?;
@@ -741,12 +776,16 @@ impl Bundle {
                 reservations.push(pin.try_clone()?);
                 Ok(pin)
             })?;
-            let expected: std::collections::BTreeSet<_> = expected.iter().map(|name| root.join(name)).collect();
+            let expected: std::collections::BTreeSet<_> =
+                expected.iter().map(|name| root.join(name)).collect();
             for directory in &reserved {
                 for entry in std::fs::read_dir(directory)? {
                     let child = entry?.path();
-                    ensure!(reserved.contains(&child) || expected.contains(&child),
-                        "unexpected Flutter bundle path: {}", child.display());
+                    ensure!(
+                        reserved.contains(&child) || expected.contains(&child),
+                        "unexpected Flutter bundle path: {}",
+                        child.display()
+                    );
                 }
             }
             reservations.push(manifest);

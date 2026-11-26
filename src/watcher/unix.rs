@@ -350,7 +350,12 @@ fn enforce_policy(
     observations: &mut HashMap<(String, String), u8>,
     attempted: &mut HashSet<(String, String)>,
 ) {
-    enforce_policy_with(snapshot, observations, attempted, platform::terminate_process_by_pid);
+    enforce_policy_with(
+        snapshot,
+        observations,
+        attempted,
+        platform::terminate_process_by_pid,
+    );
 }
 
 pub(super) fn enforce_policy_with(

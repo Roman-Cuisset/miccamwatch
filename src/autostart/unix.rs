@@ -274,12 +274,17 @@ fn installation_state_in(store: &Store, current: &Path) -> Result<AutostartState
     } else if let Some(record) = &snapshot.record {
         // A missing target does not authorize replacing another installation's
         // retained restoration/ownership journal.
-        serde_json::from_slice::<Receipt>(record)?.registrations.iter().all(owned)
+        serde_json::from_slice::<Receipt>(record)?
+            .registrations
+            .iter()
+            .all(owned)
     } else {
         true
     };
     if !matches {
-        bail!("autostart belongs to another installation; registration and ownership journal preserved");
+        bail!(
+            "autostart belongs to another installation; registration and ownership journal preserved"
+        );
     }
     registration_state(store, snapshot.registration)
 }
@@ -531,15 +536,27 @@ pub fn set_if_expected(expected: bool, requested: bool) -> Result<bool> {
     set_if_expected_in(&store, &current, expected, requested)
 }
 
-fn set_if_expected_in(store: &Store, current: &Path, expected: bool, requested: bool) -> Result<bool> {
+fn set_if_expected_in(
+    store: &Store,
+    current: &Path,
+    expected: bool,
+    requested: bool,
+) -> Result<bool> {
     let observed = installation_state_in(store, current)? == AutostartState::Enabled;
-    if observed != expected { bail!("autostart changed since observation; unchanged"); }
+    if observed != expected {
+        bail!("autostart changed since observation; unchanged");
+    }
     if requested != observed {
-        if requested { enable_in(store, env!("CARGO_PKG_VERSION"), true)?; }
-        else { disable_in(store)?; }
+        if requested {
+            enable_in(store, env!("CARGO_PKG_VERSION"), true)?;
+        } else {
+            disable_in(store)?;
+        }
     }
     let confirmed = installation_state_in(store, current)? == AutostartState::Enabled;
-    if confirmed != requested { bail!("autostart readback did not confirm requested state"); }
+    if confirmed != requested {
+        bail!("autostart readback did not confirm requested state");
+    }
     Ok(confirmed)
 }
 
@@ -1332,8 +1349,14 @@ mod tests {
         assert!(installation_state_in(&store, &current).is_err());
         for (expected, requested) in [(true, false), (false, true), (false, false)] {
             assert!(set_if_expected_in(&store, &current, expected, requested).is_err());
-            assert_eq!(store.target.read(&store.name)?.as_deref(), Some(bytes.as_slice()));
-            assert_eq!(store.state.read(RECORD)?.as_deref(), Some(record.as_slice()));
+            assert_eq!(
+                store.target.read(&store.name)?.as_deref(),
+                Some(bytes.as_slice())
+            );
+            assert_eq!(
+                store.state.read(RECORD)?.as_deref(),
+                Some(record.as_slice())
+            );
         }
         store.target.replace(&store.name, Some(&bytes), None)?;
         assert!(installation_state_in(&store, &current).is_err());
@@ -1345,7 +1368,8 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn installation_scoped_cas_rejects_stale_state_and_reads_back_private_registration() -> Result<()> {
+    fn installation_scoped_cas_rejects_stale_state_and_reads_back_private_registration()
+    -> Result<()> {
         let temporary = Temporary::new()?;
         let store = isolated_store(&temporary)?;
         let current = current_installation_executable()?;
@@ -1357,7 +1381,10 @@ mod tests {
         assert_eq!(preserved.bytes, saved.bytes);
         assert_eq!(preserved.record, saved.record);
         assert!(!set_if_expected_in(&store, &current, true, false)?);
-        assert_eq!(installation_state_in(&store, &current)?, AutostartState::Disabled);
+        assert_eq!(
+            installation_state_in(&store, &current)?,
+            AutostartState::Disabled
+        );
         assert!(store.target.read(&store.name)?.is_none());
         assert!(store.state.read(RECORD)?.is_none());
         Ok(())

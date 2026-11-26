@@ -862,7 +862,9 @@ fn latest_tag() -> Result<String> {
 
 fn latest_tag_with_timeout(timeout: &str, skip_user_config: bool) -> Result<String> {
     let mut command = Command::new("/usr/bin/curl");
-    if skip_user_config { command.arg("--disable"); }
+    if skip_user_config {
+        command.arg("--disable");
+    }
     let output = command
         .args([
             "--proto",

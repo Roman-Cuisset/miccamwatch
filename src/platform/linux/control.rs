@@ -142,12 +142,18 @@ impl Control {
         use std::{ffi::OsStr, io::ErrorKind};
         let directory = match crate::autostart::Directory::open(&Store::directory()?, false) {
             Ok(directory) => directory,
-            Err(error) if error.downcast_ref::<std::io::Error>()
-                .is_some_and(|error| error.kind() == ErrorKind::NotFound) => return Ok(false),
+            Err(error)
+                if error
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(|error| error.kind() == ErrorKind::NotFound) =>
+            {
+                return Ok(false);
+            }
             Err(error) => return Err(error),
         };
         let file = directory.file(OsStr::new("pipewire-mute.json"))?;
-        file.map(Store::read_journal).transpose()
+        file.map(Store::read_journal)
+            .transpose()
             .map(|journal| journal.is_some_and(|journal| !journal.entries.is_empty()))
     }
 

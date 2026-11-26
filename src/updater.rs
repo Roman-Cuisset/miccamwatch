@@ -10,26 +10,28 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub(crate) mod download;
-pub(crate) mod process;
-pub(crate) mod transaction;
 #[cfg(feature = "packaged-desktop")]
 mod bundle;
+pub(crate) mod download;
 #[cfg(feature = "packaged-desktop")]
 mod hybrid;
 #[cfg(feature = "packaged-desktop")]
 mod msi;
 #[cfg(feature = "packaged-desktop")]
 mod portable;
+pub(crate) mod process;
 #[cfg(feature = "packaged-desktop")]
 mod recovery;
 #[cfg(feature = "packaged-desktop")]
 mod system_library;
-#[cfg(feature = "packaged-desktop")]
-#[doc(hidden)]
-pub use hybrid::{hold_runtime_lease, prepare_legacy_recovery, recover, remove_portable, run_worker};
+pub(crate) mod transaction;
 #[cfg(feature = "packaged-desktop")]
 pub(crate) use hybrid::recovery_guidance;
+#[cfg(feature = "packaged-desktop")]
+#[doc(hidden)]
+pub use hybrid::{
+    hold_runtime_lease, prepare_legacy_recovery, recover, remove_portable, run_worker,
+};
 
 pub(crate) fn stop_installed_tray() -> Result<bool> {
     let current = env::current_exe().context("failed to locate mcw executable")?;
@@ -61,9 +63,14 @@ pub(crate) fn check_latest_release() -> Result<(String, bool)> {
     let release = releases.latest().context("no public MicCamWatch release")?;
     let version = release.version();
     let tag = format!("v{version}");
-    anyhow::ensure!(release.release_notes_url().and_then(|url|
-        url.strip_prefix("https://github.com/Roman-Cuisset/miccamwatch/releases/tag/")) == Some(tag.as_str()),
-        "Public release URL does not match this repository and version");
+    anyhow::ensure!(
+        release
+            .release_notes_url()
+            .and_then(|url| url
+                .strip_prefix("https://github.com/Roman-Cuisset/miccamwatch/releases/tag/"))
+            == Some(tag.as_str()),
+        "Public release URL does not match this repository and version"
+    );
     let comparison = self_update::version::cmp_versions(cargo_crate_version!(), version)?;
     Ok((tag, comparison == Ordering::Less))
 }
@@ -272,25 +279,24 @@ fn validate_reported_version(path: &Path, expected: &str, stage: &Path) -> Resul
             .map_err(|error| transaction::io_error("validate staged CLI version", path, error))?,
     );
     let deadline = Instant::now() + Duration::from_secs(5);
-    let status = loop {
-        if let Some(status) = child
-            .0
-            .try_wait()
-            .map_err(|error| transaction::io_error("wait for staged CLI validation", path, error))?
-        {
-            break status;
-        }
-        if Instant::now() >= deadline || fs::metadata(&output_path)?.len() > 4096 {
-            child.0.kill().map_err(|error| {
-                transaction::io_error("stop staged CLI validation", path, error)
-            })?;
-            child.0.wait().map_err(|error| {
-                transaction::io_error("wait for stopped CLI validation", path, error)
-            })?;
-            bail!("binary version probe exceeded its time or output limit");
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    };
+    let status =
+        loop {
+            if let Some(status) = child.0.try_wait().map_err(|error| {
+                transaction::io_error("wait for staged CLI validation", path, error)
+            })? {
+                break status;
+            }
+            if Instant::now() >= deadline || fs::metadata(&output_path)?.len() > 4096 {
+                child.0.kill().map_err(|error| {
+                    transaction::io_error("stop staged CLI validation", path, error)
+                })?;
+                child.0.wait().map_err(|error| {
+                    transaction::io_error("wait for stopped CLI validation", path, error)
+                })?;
+                bail!("binary version probe exceeded its time or output limit");
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        };
     if fs::metadata(&output_path)?.len() > 4096 {
         bail!("binary version probe output is too large");
     }

@@ -29,7 +29,9 @@ impl PreferenceKey {
             Self::SoundEnabled => PreferenceValue::Bool(settings.sound_enabled),
             Self::HistoryEnabled => PreferenceValue::Bool(settings.history_enabled),
             Self::Profile => PreferenceValue::Profile(settings.profile),
-            Self::NotificationPause => PreferenceValue::PauseUntil(settings.pause_notifications_until),
+            Self::NotificationPause => {
+                PreferenceValue::PauseUntil(settings.pause_notifications_until)
+            }
         }
     }
 
@@ -125,8 +127,12 @@ impl PreferenceRequest {
             self.key.accepts(self.value) && self.key.accepts_expected(self.expected_value),
             "preference key and value types do not match"
         );
-        if let PreferenceValue::PauseAction(NotificationPauseAction::Pause { minutes }) = self.value {
-            ensure!((1..=10_080).contains(&minutes), "notification pause must be1..10080 minutes");
+        if let PreferenceValue::PauseAction(NotificationPauseAction::Pause { minutes }) = self.value
+        {
+            ensure!(
+                (1..=10_080).contains(&minutes),
+                "notification pause must be1..10080 minutes"
+            );
         }
         Ok(())
     }
@@ -207,7 +213,9 @@ impl PreferenceValues {
             PreferenceKey::SoundEnabled => PreferenceValue::Bool(self.sound_enabled),
             PreferenceKey::HistoryEnabled => PreferenceValue::Bool(self.history_enabled),
             PreferenceKey::Profile => PreferenceValue::Profile(self.profile),
-            PreferenceKey::NotificationPause => PreferenceValue::PauseUntil(self.pause_notifications_until),
+            PreferenceKey::NotificationPause => {
+                PreferenceValue::PauseUntil(self.pause_notifications_until)
+            }
         }
     }
 }
@@ -1017,7 +1025,10 @@ mod tests {
         assert!(!latest.history_enabled);
     }
 
-    fn pause_request(action: NotificationPauseAction, until: Option<DateTime<Utc>>) -> PreferenceRequest {
+    fn pause_request(
+        action: NotificationPauseAction,
+        until: Option<DateTime<Utc>>,
+    ) -> PreferenceRequest {
         PreferenceRequest {
             key: PreferenceKey::NotificationPause,
             value: PreferenceValue::PauseAction(action),
@@ -1030,11 +1041,17 @@ mod tests {
     fn pause_contract_accepts_only_server_actions_and_observed_deadlines() {
         let pause = pause_request(NotificationPauseAction::Pause { minutes: 30 }, None);
         let wire = serde_json::to_value(&pause).unwrap();
-        assert_eq!(serde_json::from_value::<PreferenceRequest>(wire.clone()).unwrap(), pause);
+        assert_eq!(
+            serde_json::from_value::<PreferenceRequest>(wire.clone()).unwrap(),
+            pause
+        );
         for (field, value) in [
-            ("value", json!(null)), ("value", json!(true)),
-            ("value", json!("2026-10-30T08:00:00Z")), ("value", json!(60)),
-            ("expected_value", json!(true)), ("expected_value", json!("resume")),
+            ("value", json!(null)),
+            ("value", json!(true)),
+            ("value", json!("2026-10-30T08:00:00Z")),
+            ("value", json!(60)),
+            ("expected_value", json!(true)),
+            ("expected_value", json!("resume")),
             ("expected_value", json!("not-a-timestamp")),
         ] {
             let mut invalid = wire.clone();
@@ -1052,8 +1069,12 @@ mod tests {
         let mut settings = protected_settings();
         settings.notifications_enabled = false;
         let before = serde_json::to_value(&settings).unwrap();
-        pause_request(NotificationPauseAction::Pause { minutes: 30 }, settings.pause_notifications_until)
-            .apply_with_clock(&mut settings, || now).unwrap();
+        pause_request(
+            NotificationPauseAction::Pause { minutes: 30 },
+            settings.pause_notifications_until,
+        )
+        .apply_with_clock(&mut settings, || now)
+        .unwrap();
         let until = now + Duration::minutes(30);
         assert_eq!(settings.pause_notifications_until, Some(until));
         let mut expected = before;
@@ -1065,8 +1086,12 @@ mod tests {
         let concurrent = serde_json::to_value(&settings).unwrap();
         assert!(resume.apply_with_clock(&mut settings, || now).is_err());
         assert_eq!(serde_json::to_value(&settings).unwrap(), concurrent);
-        pause_request(NotificationPauseAction::Resume, settings.pause_notifications_until)
-            .apply_with_clock(&mut settings, || panic!("resume must not need a clock")).unwrap();
+        pause_request(
+            NotificationPauseAction::Resume,
+            settings.pause_notifications_until,
+        )
+        .apply_with_clock(&mut settings, || panic!("resume must not need a clock"))
+        .unwrap();
         assert!(settings.pause_notifications_until.is_none());
         assert!(!settings.notifications_enabled);
     }
@@ -1074,12 +1099,24 @@ mod tests {
     #[test]
     fn pause_admission_rejects_stale_deadlines_and_readonly_connections() {
         let until: DateTime<Utc> = "2026-10-30T08:00:00Z".parse().unwrap();
-        let settings = Settings { pause_notifications_until: Some(until), ..Settings::default() };
+        let settings = Settings {
+            pause_notifications_until: Some(until),
+            ..Settings::default()
+        };
         let mut view = PreferencesSnapshot::observed(
-            Ok(&settings), true, true, None, PreferenceEffects::default());
+            Ok(&settings),
+            true,
+            true,
+            None,
+            PreferenceEffects::default(),
+        );
         let mut session = PreferenceSession::default();
         let mut stale = pause_request(NotificationPauseAction::Resume, None);
-        assert!(session.admit(stale.clone(), SESSION, 9, true, &view).is_none());
+        assert!(
+            session
+                .admit(stale.clone(), SESSION, 9, true, &view)
+                .is_none()
+        );
         assert_eq!(outcome(&session).code.as_deref(), Some("stale"));
         assert!(!session.pending());
         stale.id = 2;
@@ -1094,8 +1131,14 @@ mod tests {
     fn overflowing_pause_clock_never_mutates_saved_intent() {
         let mut settings = protected_settings();
         let before = serde_json::to_value(&settings).unwrap();
-        assert!(pause_request(NotificationPauseAction::Pause { minutes: 30 }, settings.pause_notifications_until)
-            .apply_with_clock(&mut settings, || DateTime::<Utc>::MAX_UTC).is_err());
+        assert!(
+            pause_request(
+                NotificationPauseAction::Pause { minutes: 30 },
+                settings.pause_notifications_until
+            )
+            .apply_with_clock(&mut settings, || DateTime::<Utc>::MAX_UTC)
+            .is_err()
+        );
         assert_eq!(serde_json::to_value(&settings).unwrap(), before);
     }
 
@@ -1104,18 +1147,31 @@ mod tests {
         let now: DateTime<Utc> = "2026-11-10T09:00:00Z".parse().unwrap();
         for minutes in [1, 47, 10_080] {
             let mut settings = protected_settings();
-            pause_request(NotificationPauseAction::Pause { minutes }, settings.pause_notifications_until)
-                .apply_with_clock(&mut settings, || now).unwrap();
-            assert_eq!(settings.pause_notifications_until, Some(now + Duration::minutes(i64::from(minutes))));
+            pause_request(
+                NotificationPauseAction::Pause { minutes },
+                settings.pause_notifications_until,
+            )
+            .apply_with_clock(&mut settings, || now)
+            .unwrap();
+            assert_eq!(
+                settings.pause_notifications_until,
+                Some(now + Duration::minutes(i64::from(minutes)))
+            );
             assert!(settings.mute_on_lock);
         }
         for minutes in [0, 10_081] {
             let mut settings = protected_settings();
             let before = serde_json::to_value(&settings).unwrap();
-            let request = pause_request(NotificationPauseAction::Pause { minutes }, settings.pause_notifications_until);
+            let request = pause_request(
+                NotificationPauseAction::Pause { minutes },
+                settings.pause_notifications_until,
+            );
             assert!(request.apply_with_clock(&mut settings, || now).is_err());
             assert_eq!(serde_json::to_value(&settings).unwrap(), before);
-            assert!(serde_json::from_value::<PreferenceRequest>(serde_json::to_value(request).unwrap()).is_err());
+            assert!(
+                serde_json::from_value::<PreferenceRequest>(serde_json::to_value(request).unwrap())
+                    .is_err()
+            );
         }
     }
 

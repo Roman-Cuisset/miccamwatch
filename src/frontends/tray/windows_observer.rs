@@ -4,6 +4,10 @@ use super::{
     IconGlyph, MutexGuard, WM_OPEN_DESKTOP, create_status_icon, enable_dpi_awareness, format_wide,
     notify_icon_data,
 };
+use crate::notify::{
+    NotificationIdentity,
+    capture::{CaptureAlerts, NotificationWorker, submit_test_sequence},
+};
 use crate::{
     config::Policy,
     frontends::{
@@ -16,10 +20,6 @@ use crate::{
     privacy::CameraControlObservation,
 };
 use anyhow::{Context, Result, ensure};
-use crate::notify::{
-    NotificationIdentity,
-    capture::{CaptureAlerts, NotificationWorker, submit_test_sequence},
-};
 use parking_lot::Mutex;
 use std::{
     sync::{
@@ -177,7 +177,10 @@ impl Observer {
             self.lang.code(),
             snapshot,
             mode,
-            session::Status::idle(session::Cadence::native(super::OBSERVATION_INTERVAL, Some(super::CAMERA_POLL_INTERVAL))),
+            session::Status::idle(session::Cadence::native(
+                super::OBSERVATION_INTERVAL,
+                Some(super::CAMERA_POLL_INTERVAL),
+            )),
         );
         if self.mode == DevelopmentMode::SettingsProbe {
             let observed_detail = frame.engine.detail.take().unwrap_or_default();
@@ -324,14 +327,16 @@ impl Observer {
             );
             if self.last_alert_health != Some(current) {
                 self.last_alert_health = Some(current);
-                eprintln!("native alerts: submitted={} suppressed={} (disabled={} paused={} cooldown={}) failures={} unavailable={}",
+                eprintln!(
+                    "native alerts: submitted={} suppressed={} (disabled={} paused={} cooldown={}) failures={} unavailable={}",
                     health.submitted.load(Ordering::Relaxed),
                     health.suppressed.load(Ordering::Relaxed),
                     health.suppressed_disabled.load(Ordering::Relaxed),
                     health.suppressed_paused.load(Ordering::Relaxed),
                     health.suppressed_cooldown.load(Ordering::Relaxed),
                     health.undelivered.load(Ordering::Relaxed),
-                    health.unavailable.load(Ordering::Relaxed));
+                    health.unavailable.load(Ordering::Relaxed)
+                );
             }
         }
         let next = self.pending.lock().take();
@@ -371,11 +376,16 @@ impl Observer {
                 .expect("running supervisor")
                 .publish(frame)?;
         }
-        if self.exit_owner.poll(self.can_exit_native()) { eprintln!("desktop event=exit_admitted source=flutter"); }
-        if self.exit_owner.requested() && self.can_exit() &&
-            self.ui.as_ref().is_none_or(Supervisor::delivery_complete)
+        if self.exit_owner.poll(self.can_exit_native()) {
+            eprintln!("desktop event=exit_admitted source=flutter");
+        }
+        if self.exit_owner.requested()
+            && self.can_exit()
+            && self.ui.as_ref().is_none_or(Supervisor::delivery_complete)
         {
-            unsafe { let _ = PostMessageW(Some(self.hwnd), WM_CLOSE, WPARAM(0), LPARAM(0)); }
+            unsafe {
+                let _ = PostMessageW(Some(self.hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
+            }
         }
         Ok(())
     }
@@ -384,7 +394,9 @@ impl Observer {
             && let Some(worker) = &self.notifications
         {
             submit_test_sequence(&mut self.probe_alerts, worker, self.lang);
-            eprintln!("TEST native notification fixture submitted; no hardware or dashboard observations simulated");
+            eprintln!(
+                "TEST native notification fixture submitted; no hardware or dashboard observations simulated"
+            );
         }
     }
     fn menu(&mut self) -> Result<()> {
@@ -411,8 +423,12 @@ impl Observer {
                 PCWSTR(format_wide(&self.summary).as_ptr()),
             )?;
             if self.mode == DevelopmentMode::SettingsProbe {
-                AppendMenuW(menu, MF_STRING, TEST_NOTIFICATIONS,
-                    PCWSTR(format_wide("TEST native notifications (30-second cooldown)").as_ptr()))?;
+                AppendMenuW(
+                    menu,
+                    MF_STRING,
+                    TEST_NOTIFICATIONS,
+                    PCWSTR(format_wide("TEST native notifications (30-second cooldown)").as_ptr()),
+                )?;
             }
             AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null())?;
             AppendMenuW(
@@ -631,11 +647,18 @@ fn reuse_read_only(initial_window: bool, probe: bool) -> Result<bool> {
         "another development build owns the read-only tray; it was preserved"
     );
     if probe {
-        let accepted = unsafe { SendMessageW(
-            hwnd, PROBE_MESSAGE, Some(WPARAM(pid as usize)), Some(LPARAM(0)),
-        ) };
-        ensure!(accepted.0 == 1,
-            "existing development owner is not TEST notification mode; close it before starting the probe");
+        let accepted = unsafe {
+            SendMessageW(
+                hwnd,
+                PROBE_MESSAGE,
+                Some(WPARAM(pid as usize)),
+                Some(LPARAM(0)),
+            )
+        };
+        ensure!(
+            accepted.0 == 1,
+            "existing development owner is not TEST notification mode; close it before starting the probe"
+        );
     }
     if initial_window {
         unsafe {
@@ -660,7 +683,10 @@ pub(super) fn run(
     let controlled = mode == DevelopmentMode::Controlled;
     if controlled {
         verify_controlled_scope()?;
-    } else if matches!(mode, DevelopmentMode::Settings | DevelopmentMode::SettingsProbe) {
+    } else if matches!(
+        mode,
+        DevelopmentMode::Settings | DevelopmentMode::SettingsProbe
+    ) {
         verify_isolated_scope()?;
     }
     enable_dpi_awareness();
@@ -715,8 +741,11 @@ pub(super) fn run(
         microphone_result: None,
         presentation_sequence: 0,
         control_used: false,
-        notifications: matches!(mode, DevelopmentMode::Settings | DevelopmentMode::SettingsProbe)
-            .then(|| NotificationWorker::with_identity(NotificationIdentity::Qualification)),
+        notifications: matches!(
+            mode,
+            DevelopmentMode::Settings | DevelopmentMode::SettingsProbe
+        )
+        .then(|| NotificationWorker::with_identity(NotificationIdentity::Qualification)),
         probe_alerts: CaptureAlerts::default(),
         last_alert_health: None,
     });

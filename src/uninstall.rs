@@ -61,8 +61,10 @@ pub fn portable_receipt() -> Result<String> {
 
 /// Native-only transactions do not own a complete Flutter bundle yet.
 pub(crate) fn ensure_hybrid_transaction_qualified() -> Result<()> {
-    anyhow::ensure!(!cfg!(feature = "flutter-desktop"),
-        "This hybrid build refuses installation mutation until the complete bundle transaction is qualified (stage 3). No updater/remover, frontend shutdown, preference write or protection restoration was started. Use the installation owner's reviewed whole-package procedure; never replace only the Rust executables.");
+    anyhow::ensure!(
+        !cfg!(feature = "flutter-desktop"),
+        "This hybrid build refuses installation mutation until the complete bundle transaction is qualified (stage 3). No updater/remover, frontend shutdown, preference write or protection restoration was started. Use the installation owner's reviewed whole-package procedure; never replace only the Rust executables."
+    );
     Ok(())
 }
 
@@ -127,7 +129,10 @@ fn inherit(file: &File) -> Result<()> {
 }
 
 #[cfg(unix)]
-pub(crate) fn unix_owner_guidance(current: &Path, mut report: impl FnMut(std::fmt::Arguments<'_>)) -> Result<bool> {
+pub(crate) fn unix_owner_guidance(
+    current: &Path,
+    mut report: impl FnMut(std::fmt::Arguments<'_>),
+) -> Result<bool> {
     use std::{ffi::OsStr, process::Command};
     let physical = current
         .canonicalize()

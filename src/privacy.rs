@@ -418,7 +418,9 @@ pub fn restore_legacy_camera(instance_id: &str) -> Result<CameraControlObservati
 }
 
 #[cfg(all(windows, feature = "flutter-desktop"))]
-pub(crate) fn restore_legacy_camera_verified(instance_id: &str) -> Result<CameraControlObservation> {
+pub(crate) fn restore_legacy_camera_verified(
+    instance_id: &str,
+) -> Result<CameraControlObservation> {
     windows_guard::restore_legacy_verified(instance_id)
 }
 

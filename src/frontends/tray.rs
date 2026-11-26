@@ -1,3 +1,6 @@
+#[cfg(test)]
+use crate::notify::capture::NOTIFICATION_QUEUE_CAPACITY;
+use crate::notify::capture::{CaptureAlerts, NotificationHealth, NotificationWorker};
 use crate::{
     frontends::cli::Filter,
     i18n::Language,
@@ -9,9 +12,6 @@ use crate::{
     privacy::{CameraControlObservation, CameraPrivacyState},
     settings::{PrivacyProfile, Settings},
 };
-use crate::notify::capture::{CaptureAlerts, NotificationHealth, NotificationWorker};
-#[cfg(test)]
-use crate::notify::capture::NOTIFICATION_QUEUE_CAPACITY;
 use anyhow::{Context, Result};
 use parking_lot::Mutex;
 use std::{
@@ -113,10 +113,12 @@ pub fn run_settings_notification_probe_development(
     theme: &str,
 ) -> Result<()> {
     windows_observer::run(
-        lang, initial_window, theme, windows_observer::DevelopmentMode::SettingsProbe,
+        lang,
+        initial_window,
+        theme,
+        windows_observer::DevelopmentMode::SettingsProbe,
     )
 }
-
 
 #[cfg(feature = "flutter-desktop")]
 struct DesktopObservation {
@@ -642,12 +644,16 @@ pub fn run_tray(
     #[cfg(feature = "flutter-desktop")]
     let enforcement = crate::watcher::enforcement::Runtime::default();
     #[cfg(feature = "flutter-desktop")]
-    let (desktop_camera_client, desktop_camera_owner) = crate::frontends::desktop::camera_owner::channel();
+    let (desktop_camera_client, desktop_camera_owner) =
+        crate::frontends::desktop::camera_owner::channel();
     #[cfg(feature = "flutter-desktop")]
-    let (desktop_exit_client, desktop_exit_owner) = crate::frontends::desktop::exit_owner::channel();
+    let (desktop_exit_client, desktop_exit_owner) =
+        crate::frontends::desktop::exit_owner::channel();
     #[cfg(feature = "flutter-desktop")]
     let observation_session = desktop_session::Owner::new(desktop_session::Cadence::native(
-        OBSERVATION_INTERVAL, Some(CAMERA_POLL_INTERVAL)))?;
+        OBSERVATION_INTERVAL,
+        Some(CAMERA_POLL_INTERVAL),
+    ))?;
     let refreshes = start_refresh_worker(
         Arc::clone(&hwnd_cell),
         Arc::clone(&workers_alive),
@@ -923,7 +929,9 @@ unsafe extern "system" fn tray_wnd_proc(
         }
         WM_COMMAND => {
             #[cfg(feature = "flutter-desktop")]
-            if state(hwnd).is_some_and(|s| s.desktop_exit_owner.requested()) { return LRESULT(0); }
+            if state(hwnd).is_some_and(|s| s.desktop_exit_owner.requested()) {
+                return LRESULT(0);
+            }
             match wparam.0 & 0xffff {
                 CMD_TOGGLE_MUTE => toggle_mute(hwnd),
                 CMD_TOGGLE_CAMERA => queue_manual_camera(hwnd, CameraRequest::Manual),
@@ -995,7 +1003,11 @@ fn request_safe_close(hwnd: HWND) -> usize {
         return UPDATE_BUSY;
     }
     #[cfg(feature = "flutter-desktop")]
-    if state.flutter.as_ref().is_some_and(|ui| ui.has_pending_work()) {
+    if state
+        .flutter
+        .as_ref()
+        .is_some_and(|ui| ui.has_pending_work())
+    {
         return UPDATE_BUSY;
     }
     let mut activity = state.restore_activity.lock();
@@ -1048,11 +1060,17 @@ fn start_camera_worker(hwnd_cell: Arc<AtomicIsize>) -> CameraWorker {
                         CameraRequest::Desktop { action, .. } => {
                             use crate::frontends::desktop::camera_owner::Action;
                             match action {
-                                Action::Block => crate::privacy::set_camera_state(CameraPrivacyState::Blocked)?,
-                                Action::Allow => crate::privacy::set_camera_state(CameraPrivacyState::Allowed)?,
+                                Action::Block => {
+                                    crate::privacy::set_camera_state(CameraPrivacyState::Blocked)?
+                                }
+                                Action::Allow => {
+                                    crate::privacy::set_camera_state(CameraPrivacyState::Allowed)?
+                                }
                                 Action::Resume => crate::privacy::resume_camera_protection()?,
                                 Action::RestoreLegacy { instance_id } => {
-                                    return crate::privacy::restore_legacy_camera_verified(instance_id);
+                                    return crate::privacy::restore_legacy_camera_verified(
+                                        instance_id,
+                                    );
                                 }
                             }
                         }
@@ -1272,7 +1290,9 @@ fn apply_refresh(hwnd: HWND, state: &mut TrayAppState, refresh: TrayRefresh) {
     }
     apply_lock_policy(state, refresh.lock_state);
     if let Ok(snapshot) = &refresh.snapshot {
-        state.capture_alerts.observe(snapshot, &state.notifications, state.lang, false);
+        state
+            .capture_alerts
+            .observe(snapshot, &state.notifications, state.lang, false);
         record_history_changes(state, snapshot);
     }
     state.overview = windows_desktop::Overview::from_snapshot(
@@ -1541,12 +1561,24 @@ fn refreshed_status(
             "\nNotification history: {undelivered} undelivered toasts"
         );
     }
-    let _ = write!(summary, "\nNative notifications: {} submitted to Windows; {} suppressed (disabled {}, paused {}, cooldown {}); {undelivered} failed",
+    let _ = write!(
+        summary,
+        "\nNative notifications: {} submitted to Windows; {} suppressed (disabled {}, paused {}, cooldown {}); {undelivered} failed",
         status.notifications.submitted.load(Ordering::Relaxed),
         status.notifications.suppressed.load(Ordering::Relaxed),
-        status.notifications.suppressed_disabled.load(Ordering::Relaxed),
-        status.notifications.suppressed_paused.load(Ordering::Relaxed),
-        status.notifications.suppressed_cooldown.load(Ordering::Relaxed));
+        status
+            .notifications
+            .suppressed_disabled
+            .load(Ordering::Relaxed),
+        status
+            .notifications
+            .suppressed_paused
+            .load(Ordering::Relaxed),
+        status
+            .notifications
+            .suppressed_cooldown
+            .load(Ordering::Relaxed)
+    );
     if notification_unavailable {
         visual = TrayVisual::Error;
         summary.push_str("\nNotification delivery currently overloaded/unavailable");
@@ -1808,11 +1840,19 @@ fn handle_camera_operation_result(
         CameraRequest::Desktop { id, action } => {
             state.pending_manual -= 1;
             let acknowledgement = result.as_ref().map(|_| ()).map_err(Clone::clone);
-            let manual = if action.replaces_manual_intent() { CameraRequest::Manual } else { CameraRequest::Resume };
+            let manual = if action.replaces_manual_intent() {
+                CameraRequest::Manual
+            } else {
+                CameraRequest::Resume
+            };
             handle_camera_result(state, manual, result);
             queue_deferred_lock_block(state);
             if let Some((expected, reply)) = state.desktop_camera_pending.take() {
-                reply.finish(if expected == id { acknowledgement } else { Err("Native camera completion identity mismatch; outcome unknown".into()) });
+                reply.finish(if expected == id {
+                    acknowledgement
+                } else {
+                    Err("Native camera completion identity mismatch; outcome unknown".into())
+                });
             }
         }
         CameraRequest::Block {
@@ -2300,15 +2340,22 @@ fn refresh_desktop(hwnd: HWND) {
     if let Some(s) = state(hwnd) {
         use crate::frontends::desktop::camera_owner::Stamp;
         let activity = s.restore_activity.lock();
-        let available = s.pending_manual == 0 && s.pending_lock_block.is_none()
-            && s.pending_lock_restore.is_none() && activity.pending == 0 && !activity.closing
-            && s.desktop_camera_pending.is_none() && !s.desktop_exit_owner.requested();
-        s.desktop_camera_owner.publish(Stamp {
-            camera: s.camera_generation,
-            manual: s.manual_generation,
-            locked: s.lock_state != SessionLockState::Unlocked,
-            restore: s.settings.restore_on_unlock,
-        }, available);
+        let available = s.pending_manual == 0
+            && s.pending_lock_block.is_none()
+            && s.pending_lock_restore.is_none()
+            && activity.pending == 0
+            && !activity.closing
+            && s.desktop_camera_pending.is_none()
+            && !s.desktop_exit_owner.requested();
+        s.desktop_camera_owner.publish(
+            Stamp {
+                camera: s.camera_generation,
+                manual: s.manual_generation,
+                locked: s.lock_state != SessionLockState::Unlocked,
+                restore: s.settings.restore_on_unlock,
+            },
+            available,
+        );
         drop(activity);
         if let Some(request) = s.desktop_camera_owner.take()
             && let Ok((action, reply)) = s.desktop_camera_owner.admit(request)
@@ -2316,13 +2363,20 @@ fn refresh_desktop(hwnd: HWND) {
             let replaces_intent = action.replaces_manual_intent();
             s.camera_next_id = s.camera_next_id.wrapping_add(1);
             let id = s.camera_next_id;
-            match s.camera_requests.try_send(CameraRequest::Desktop { id, action }) {
+            match s
+                .camera_requests
+                .try_send(CameraRequest::Desktop { id, action })
+            {
                 Ok(()) => {
-                    if replaces_intent { s.manual_generation = s.manual_generation.wrapping_add(1); }
+                    if replaces_intent {
+                        s.manual_generation = s.manual_generation.wrapping_add(1);
+                    }
                     s.pending_manual += 1;
                     s.desktop_camera_pending = Some((id, reply));
                 }
-                Err(_) => reply.finish(Err("Native camera queue unavailable; no action accepted".into())),
+                Err(_) => reply.finish(Err(
+                    "Native camera queue unavailable; no action accepted".into()
+                )),
             }
         }
     }
@@ -2406,11 +2460,20 @@ fn refresh_desktop(hwnd: HWND) {
         if changed {
             match Settings::load() {
                 Ok(settings) => s.settings = settings,
-                Err(error) => s.settings_error = Some(format!("Native settings readback: {error:#}")),
+                Err(error) => {
+                    s.settings_error = Some(format!("Native settings readback: {error:#}"))
+                }
             }
         }
-        let presentation_due = s.presentation.due(Instant::now(), s.observation_session.status().cadence);
-        if changed || command.is_some() || preference_submitted || preference_completed || presentation_due {
+        let presentation_due = s
+            .presentation
+            .due(Instant::now(), s.observation_session.status().cadence);
+        if changed
+            || command.is_some()
+            || preference_submitted
+            || preference_completed
+            || presentation_due
+        {
             s.desktop_sequence = s.desktop_sequence.saturating_add(1);
             // Reading/serializing preferences is presentation work: do it only
             // for a running child. open_flutter_desktop reads the initial frame.
@@ -2429,18 +2492,33 @@ fn refresh_desktop(hwnd: HWND) {
     #[cfg(feature = "flutter-desktop")]
     if let Some(s) = state(hwnd) {
         let activity = s.restore_activity.lock();
-        let ready = s.pending_microphone == 0 && can_close_tray(s.pending_manual,
-            s.pending_lock_block.is_some(), s.pending_lock_restore.is_some(), activity.pending)
-            && !activity.closing && !s.preference_worker.as_ref().is_some_and(
-                crate::frontends::desktop::preferences::PreferenceWorker::is_pending);
+        let ready = s.pending_microphone == 0
+            && can_close_tray(
+                s.pending_manual,
+                s.pending_lock_block.is_some(),
+                s.pending_lock_restore.is_some(),
+                activity.pending,
+            )
+            && !activity.closing
+            && !s
+                .preference_worker
+                .as_ref()
+                .is_some_and(crate::frontends::desktop::preferences::PreferenceWorker::is_pending);
         drop(activity);
-        if s.desktop_exit_owner.poll(ready) { eprintln!("desktop event=exit_admitted source=flutter"); }
-        if s.desktop_exit_owner.requested() && ready && s.flutter.as_ref()
-            .is_none_or(|ui| !ui.has_pending_work() && ui.delivery_complete())
+        if s.desktop_exit_owner.poll(ready) {
+            eprintln!("desktop event=exit_admitted source=flutter");
+        }
+        if s.desktop_exit_owner.requested()
+            && ready
+            && s.flutter
+                .as_ref()
+                .is_none_or(|ui| !ui.has_pending_work() && ui.delivery_complete())
         {
             // Re-enter exactly the same native safe-close path after response
             // delivery and all admitted effects; never terminate a device guard.
-            unsafe { let _ = PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0)); }
+            unsafe {
+                let _ = PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
+            }
         }
     }
     let Some((desktop, view)) = state(hwnd).and_then(|s| {

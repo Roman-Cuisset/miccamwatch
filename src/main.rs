@@ -47,7 +47,10 @@ fn main() -> ExitCode {
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn run_development_frontend() -> Result<Option<u8>> {
     let arguments = std::env::args_os().skip(1).collect::<Vec<_>>();
-    if !arguments.iter().any(|a| a == "--read-only-development" || a == "--settings-development") {
+    if !arguments
+        .iter()
+        .any(|a| a == "--read-only-development" || a == "--settings-development")
+    {
         return Ok(None);
     }
     #[cfg(not(feature = "flutter-desktop"))]
@@ -66,7 +69,9 @@ fn run_development_frontend() -> Result<Option<u8>> {
                 anyhow::ensure!(!open, "Repeated --open");
                 open = true;
             } else if argument == "--desktop-theme" {
-                theme = arguments.next().and_then(|a| a.to_str())
+                theme = arguments
+                    .next()
+                    .and_then(|a| a.to_str())
                     .filter(|a| matches!(*a, "light" | "dark"))
                     .ok_or_else(|| anyhow::anyhow!("Expected light or dark desktop theme"))?;
             } else {
@@ -109,8 +114,11 @@ fn run() -> Result<u8> {
             parent_created,
         } => return uninstall::run_worker(*parent_pid, *parent_created),
         #[cfg(feature = "packaged-desktop")]
-        Command::UpdateWorker { parent_pid, parent_created, fingerprint } =>
-            return updater::run_worker(*parent_pid, *parent_created, fingerprint),
+        Command::UpdateWorker {
+            parent_pid,
+            parent_created,
+            fingerprint,
+        } => return updater::run_worker(*parent_pid, *parent_created, fingerprint),
         #[cfg(feature = "packaged-desktop")]
         Command::RecoverUpdate { repair } => return updater::recover(*repair),
         #[cfg(feature = "packaged-desktop")]
@@ -430,7 +438,9 @@ fn run() -> Result<u8> {
             unreachable!("internal command dispatched before configuration")
         }
         #[cfg(all(windows, feature = "packaged-desktop"))]
-        Command::UpdateWorker { .. } | Command::RecoverUpdate { .. } | Command::RecoverMsi { .. } => {
+        Command::UpdateWorker { .. }
+        | Command::RecoverUpdate { .. }
+        | Command::RecoverMsi { .. } => {
             unreachable!("Windows maintenance dispatched before configuration")
         }
         Command::Uninstall => unreachable!("uninstall dispatched before configuration"),

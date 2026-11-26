@@ -59,7 +59,8 @@ fn run() -> Result<()> {
         let settings = arguments
             .iter()
             .any(|argument| argument == "--settings-development");
-        let notification_probe = arguments.iter()
+        let notification_probe = arguments
+            .iter()
             .any(|argument| argument == "--settings-notification-probe-development");
         anyhow::ensure!(
             arguments
@@ -81,7 +82,11 @@ fn run() -> Result<()> {
             .map_or("light", |pair| pair[1].as_str());
         anyhow::ensure!(matches!(theme, "light" | "dark"), "Invalid desktop theme");
         if notification_probe {
-            return tray::run_settings_notification_probe_development(Language::detect(), initial_window, theme);
+            return tray::run_settings_notification_probe_development(
+                Language::detect(),
+                initial_window,
+                theme,
+            );
         }
         if settings {
             return tray::run_settings_development(Language::detect(), initial_window, theme);
