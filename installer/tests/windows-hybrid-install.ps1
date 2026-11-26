@@ -115,6 +115,38 @@ public static class McwInstalledBaselineWindow {
 '@
 }
 $base = Join-Path $env:LOCALAPPDATA 'Programs\MicCamWatch'
+if ($LocalDisposableVm) {
+    Add-Type @'
+using System;
+using System.Runtime.InteropServices;
+using System.Threading;
+public static class McwLabFrameProof {
+    [StructLayout(LayoutKind.Sequential)] public struct Rect { public int Left, Top, Right, Bottom; }
+    [StructLayout(LayoutKind.Sequential)] struct MonitorInfo { public uint Size; public Rect Monitor, Work; public uint Flags; }
+    [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr window, out Rect rect);
+    [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr window, out uint pid);
+    [DllImport("user32.dll")] static extern IntPtr MonitorFromWindow(IntPtr window, uint flags);
+    [DllImport("user32.dll")] static extern bool GetMonitorInfo(IntPtr monitor, ref MonitorInfo info);
+    [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr window, IntPtr after, int x, int y, int width, int height, uint flags);
+    [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern IntPtr SendMessageTimeoutW(IntPtr window, uint message, UIntPtr wparam, IntPtr lparam, uint flags, uint timeout, out UIntPtr result);
+    public static object Check(IntPtr window, uint expectedPid) {
+        uint pid;
+        if (window==IntPtr.Zero || GetWindowThreadProcessId(window,out pid)==0 || pid!=expectedPid) throw new Exception("Not the owned Flutter window");
+        Rect before;
+        if (!GetWindowRect(window,out before)) throw new Exception("Cannot read owned frame");
+        if (!SetWindowPos(window,IntPtr.Zero,-30000,-30000,0,0,0x15)) throw new Exception("Cannot position owned frame");
+        UIntPtr response;
+        if (SendMessageTimeoutW(window,0x007e,UIntPtr.Zero,IntPtr.Zero,2,3000,out response)==IntPtr.Zero) throw new Exception("WM_DISPLAYCHANGE timed out");
+        Thread.Sleep(200);
+        Rect after;
+        var info=new MonitorInfo {Size=(uint)Marshal.SizeOf(typeof(MonitorInfo))};
+        if (!GetWindowRect(window,out after) || !GetMonitorInfo(MonitorFromWindow(window,2),ref info)) throw new Exception("Cannot verify recovered frame");
+        if (after.Left<info.Work.Left || after.Top<info.Work.Top || after.Right>info.Work.Right || after.Bottom>info.Work.Bottom || after.Right<=after.Left || after.Bottom<=after.Top) throw new Exception("Display change left the frame outside the work area");
+        return new {before=before, after=after, workArea=info.Work, stimulus="owned window moved off-screen; WM_DISPLAYCHANGE; no physical monitor removed"};
+    }
+}
+'@
+}
 $configuration = Join-Path $env:APPDATA 'MicCamWatch'
 $data = Join-Path $env:LOCALAPPDATA 'MicCamWatch'
 $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
@@ -151,6 +183,19 @@ function Invoke-Msi([string]$Operation, [string]$Payload, [string]$Label, [int]$
         if (@(Get-CimInstance Win32_Process -Filter "Name='msiexec.exe'" |
               Where-Object ProcessId -ne $service.ProcessId).Count) {
             throw 'Another MSI client remains active in the guest.'
+        }
+        foreach ($name in 'Global\_MSIExecute','_MSIExecute') {
+            $mutex=$null; $acquired=$false
+            try {
+                $mutex=[Threading.Mutex]::OpenExisting($name)
+                $acquired=$mutex.WaitOne(0)
+                if (!$acquired) { throw 'Another MSI transaction owns the execute mutex.' }
+            } catch [Threading.WaitHandleCannotBeOpenedException] {
+                # An absent mutex is idle; access denial or abandonment fails closed.
+            } finally {
+                if ($acquired) { $mutex.ReleaseMutex() }
+                if ($mutex) { $mutex.Dispose() }
+            }
         }
     }
     $log = Join-Path $Proof "$Label.log"
@@ -610,6 +655,10 @@ try {
             }
             if (!$ready) { throw 'Missing installed IPC ready receipt before closing Flutter' }
             $report.installedIpcReady = $true
+            if ($LocalDisposableVm) {
+                if ($ui[0].HasExited) { throw 'Owned UI exited before frame qualification' }
+                $report.displayChangeRecovery = [McwLabFrameProof]::Check($ui[0].MainWindowHandle, [uint32]$ui[0].Id)
+            }
             if ($SampleDesktopResources) {
                 $report.desktopResources.candidateWindowVisibleAndIpcMs = $openTimer.ElapsedMilliseconds
                 Measure-DesktopResources 'candidate-open' @($launch, $ui[0])
