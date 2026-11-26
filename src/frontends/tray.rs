@@ -1,3 +1,6 @@
+#[cfg(test)]
+use crate::notify::capture::NOTIFICATION_QUEUE_CAPACITY;
+use crate::notify::capture::{CaptureAlerts, NotificationHealth, NotificationWorker};
 use crate::{
     frontends::cli::Filter,
     i18n::Language,
@@ -70,6 +73,59 @@ mod microphone_worker;
 #[path = "tray/windows_desktop.rs"]
 mod windows_desktop;
 
+#[cfg(feature = "flutter-desktop")]
+#[path = "tray/windows_observer.rs"]
+mod windows_observer;
+
+#[cfg(feature = "flutter-desktop")]
+pub fn run_read_only_development(lang: Language, initial_window: bool, theme: &str) -> Result<()> {
+    windows_observer::run(
+        lang,
+        initial_window,
+        theme,
+        windows_observer::DevelopmentMode::ReadOnly,
+    )
+}
+
+#[cfg(feature = "flutter-desktop")]
+pub fn run_controlled_development(lang: Language, initial_window: bool, theme: &str) -> Result<()> {
+    windows_observer::run(
+        lang,
+        initial_window,
+        theme,
+        windows_observer::DevelopmentMode::Controlled,
+    )
+}
+
+#[cfg(feature = "flutter-desktop")]
+pub fn run_settings_development(lang: Language, initial_window: bool, theme: &str) -> Result<()> {
+    windows_observer::run(
+        lang,
+        initial_window,
+        theme,
+        windows_observer::DevelopmentMode::Settings,
+    )
+}
+#[cfg(feature = "flutter-desktop")]
+pub fn run_settings_notification_probe_development(
+    lang: Language,
+    initial_window: bool,
+    theme: &str,
+) -> Result<()> {
+    windows_observer::run(
+        lang,
+        initial_window,
+        theme,
+        windows_observer::DevelopmentMode::SettingsProbe,
+    )
+}
+
+#[cfg(feature = "flutter-desktop")]
+struct DesktopObservation {
+    snapshot: Result<Snapshot, String>,
+    observed_at: chrono::DateTime<chrono::Utc>,
+}
+
 #[link(name = "user32")]
 unsafe extern "system" {
     fn SetProcessDpiAwarenessContext(context: isize) -> i32;
@@ -105,6 +161,7 @@ pub(crate) const UPDATE_STOPPED: usize = 0x4d435731;
 pub(crate) const UPDATE_BUSY: usize = 0x4d435732;
 pub(crate) const WM_OPEN_DESKTOP: u32 = WM_APP + 42;
 const TIMER_POLL_ID: usize = 1;
+const OBSERVATION_INTERVAL: Duration = Duration::from_millis(500);
 const CAMERA_POLL_INTERVAL: Duration = Duration::from_secs(5);
 const CMD_TOGGLE_MUTE: usize = 101;
 const CMD_TOGGLE_CAMERA: usize = 102;
@@ -117,6 +174,8 @@ const CMD_PROFILE_MEETING: usize = 111;
 const CMD_PROFILE_DEVELOPMENT: usize = 112;
 const CMD_DETAILS: usize = 107;
 const CMD_RESUME_CAMERA: usize = 108;
+#[cfg(feature = "flutter-desktop")]
+const CMD_NATIVE_DESKTOP: usize = 114;
 const WM_DESKTOP_SETTING: u32 = WM_APP + 5;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -154,12 +213,18 @@ struct TrayRefresh {
     camera: Result<CameraControlObservation, String>,
     camera_generation: u64,
     lock_state: SessionLockState,
+    applied_profile: Option<PrivacyProfile>,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 enum CameraRequest {
     Manual,
     Resume,
+    #[cfg(feature = "flutter-desktop")]
+    Desktop {
+        id: u64,
+        action: crate::frontends::desktop::camera_owner::Action,
+    },
     Block {
         id: u64,
         previous: CameraPrivacyState,
@@ -237,6 +302,32 @@ struct TrayAppState {
     visual: TrayVisual,
     summary: String,
     desktop: Option<windows_desktop::DesktopWindow>,
+    #[cfg(feature = "flutter-desktop")]
+    flutter: Option<crate::frontends::desktop::windows::Supervisor>,
+    #[cfg(feature = "flutter-desktop")]
+    preference_worker: Option<crate::frontends::desktop::preferences::PreferenceWorker>,
+    #[cfg(feature = "flutter-desktop")]
+    enforcement: crate::watcher::enforcement::Runtime,
+    #[cfg(feature = "flutter-desktop")]
+    desktop_exit_client: crate::frontends::desktop::exit_owner::Client,
+    #[cfg(feature = "flutter-desktop")]
+    desktop_exit_owner: crate::frontends::desktop::exit_owner::Owner,
+    #[cfg(feature = "flutter-desktop")]
+    desktop_camera_client: crate::frontends::desktop::camera_owner::Client,
+    #[cfg(feature = "flutter-desktop")]
+    desktop_camera_owner: crate::frontends::desktop::camera_owner::Owner,
+    #[cfg(feature = "flutter-desktop")]
+    desktop_camera_pending: Option<(u64, crate::frontends::desktop::camera_owner::Completion)>,
+    #[cfg(feature = "flutter-desktop")]
+    desktop_observation: Option<DesktopObservation>,
+    #[cfg(feature = "flutter-desktop")]
+    observation_session: desktop_session::Owner,
+    #[cfg(feature = "flutter-desktop")]
+    presentation: desktop_session::Presentation,
+    #[cfg(feature = "flutter-desktop")]
+    desktop_sequence: u64,
+    #[cfg(feature = "flutter-desktop")]
+    desktop_policy: Arc<crate::config::Policy>,
     overview: windows_desktop::Overview,
     settings_error: Option<String>,
     mute_state: MicrophoneMuteState,
@@ -248,6 +339,7 @@ struct TrayAppState {
     autostart_state: crate::autostart::AutostartState,
     settings: Settings,
     explicit_policy: bool,
+    applied_profile: Option<PrivacyProfile>,
     lock_state: SessionLockState,
     policy_lock_state: SessionLockState,
     microphone_worker: microphone_worker::Worker,
@@ -279,6 +371,7 @@ struct TrayAppState {
     restore_activity: Arc<Mutex<RestoreActivity>>,
     workers_alive: Arc<AtomicBool>,
     notifications: NotificationWorker,
+    capture_alerts: CaptureAlerts,
 }
 
 impl Drop for TrayAppState {
@@ -294,9 +387,16 @@ impl Drop for TrayAppState {
     }
 }
 
+#[cfg(feature = "flutter-desktop")]
+use crate::frontends::desktop::session as desktop_session;
+
 struct RefreshPolicy {
+    #[cfg(feature = "flutter-desktop")]
+    session: desktop_session::Client,
     policy: crate::config::Policy,
     explicit_policy: bool,
+    #[cfg(feature = "flutter-desktop")]
+    enforcement: crate::watcher::enforcement::Runtime,
 }
 
 fn start_refresh_worker(
@@ -311,6 +411,10 @@ fn start_refresh_worker(
     let RefreshPolicy {
         mut policy,
         explicit_policy,
+        #[cfg(feature = "flutter-desktop")]
+        session,
+        #[cfg(feature = "flutter-desktop")]
+        enforcement,
     } = profile_policy;
     let CameraRefreshSignals {
         dirty: camera_dirty,
@@ -335,6 +439,7 @@ fn start_refresh_worker(
                     camera: Err("Camera observation unavailable".to_owned()),
                     camera_generation: 0,
                     lock_state: SessionLockState::Unknown,
+                    applied_profile: None,
                 });
                 let h = hwnd_cell.load(Ordering::Relaxed);
                 if h != 0 {
@@ -361,25 +466,29 @@ fn start_refresh_worker(
         // the device disappears is what re-arms the prompt after a replug, and it keeps
         // a declined UAC prompt from being raised again for the same arrival.
         let mut restore_offered: Vec<String> = Vec::new();
+        #[cfg(feature = "flutter-desktop")]
+        let mut observations = desktop_session::Observations::default();
         while workers_alive.load(Ordering::Acquire) {
             let settings = Settings::load().map_err(|error| format!("{error:#}"));
             if let Ok(settings) = &settings
                 && !explicit_policy
                 && applied_profile != Some(settings.profile)
             {
-                policy.profile = match settings.profile {
-                    PrivacyProfile::Private => crate::config::Profile::Strict,
-                    PrivacyProfile::Development => crate::config::Profile::Conservative,
-                    PrivacyProfile::Meeting | PrivacyProfile::Balanced => {
-                        crate::config::Profile::Balanced
-                    }
-                };
+                policy.profile = settings.profile.assessment_profile();
                 monitor.set_policy(policy.clone());
                 applied_profile = Some(settings.profile);
             }
             let snapshot = monitor
                 .snapshot((&filter).into())
                 .map_err(|error| format!("{error:#}"));
+            let observed_at = chrono::Utc::now();
+            #[cfg(feature = "flutter-desktop")]
+            observations.observe(&session, snapshot.as_ref().ok(), observed_at);
+            #[cfg(feature = "flutter-desktop")]
+            match &snapshot {
+                Ok(snapshot) => enforcement.observe(snapshot),
+                Err(_) => enforcement.observation_gap(),
+            }
             let microphone_generation = microphone_sequence.load(Ordering::Acquire);
             let microphone = monitor
                 .microphone_protection_status()
@@ -412,12 +521,13 @@ fn start_refresh_worker(
                 &sender,
                 TrayRefresh {
                     snapshot,
-                    observed_at: chrono::Utc::now(),
+                    observed_at,
                     microphone,
                     microphone_generation,
                     camera: camera.clone(),
                     camera_generation,
                     lock_state,
+                    applied_profile,
                 },
             )
             .is_err()
@@ -426,7 +536,7 @@ fn start_refresh_worker(
             }
             let h = hwnd_cell.load(Ordering::Relaxed);
             if h == 0 {
-                thread::sleep(Duration::from_millis(500));
+                thread::sleep(OBSERVATION_INTERVAL);
                 continue;
             }
             unsafe {
@@ -453,7 +563,7 @@ fn start_refresh_worker(
                     let _ = restore_requests.try_send(RestorePermit(Arc::clone(&restore_activity)));
                 }
             }
-            thread::sleep(Duration::from_millis(500));
+            thread::sleep(OBSERVATION_INTERVAL);
         }
     });
     receiver
@@ -529,6 +639,21 @@ pub fn run_tray(
     let (camera_requests, camera_results) = start_camera_worker(Arc::clone(&hwnd_cell));
     let microphone_worker =
         microphone_worker::Worker::start(policy.clone(), Arc::clone(&hwnd_cell));
+    #[cfg(feature = "flutter-desktop")]
+    let desktop_policy = Arc::new(policy.clone());
+    #[cfg(feature = "flutter-desktop")]
+    let enforcement = crate::watcher::enforcement::Runtime::default();
+    #[cfg(feature = "flutter-desktop")]
+    let (desktop_camera_client, desktop_camera_owner) =
+        crate::frontends::desktop::camera_owner::channel();
+    #[cfg(feature = "flutter-desktop")]
+    let (desktop_exit_client, desktop_exit_owner) =
+        crate::frontends::desktop::exit_owner::channel();
+    #[cfg(feature = "flutter-desktop")]
+    let observation_session = desktop_session::Owner::new(desktop_session::Cadence::native(
+        OBSERVATION_INTERVAL,
+        Some(CAMERA_POLL_INTERVAL),
+    ))?;
     let refreshes = start_refresh_worker(
         Arc::clone(&hwnd_cell),
         Arc::clone(&workers_alive),
@@ -540,8 +665,12 @@ pub fn run_tray(
         restore_requests,
         Arc::clone(&restore_activity),
         RefreshPolicy {
+            #[cfg(feature = "flutter-desktop")]
+            session: observation_session.client(),
             policy,
             explicit_policy,
+            #[cfg(feature = "flutter-desktop")]
+            enforcement: enforcement.clone(),
         },
     );
     // The shell downsamples anything larger than the small-icon metric, which is what
@@ -564,10 +693,37 @@ pub fn run_tray(
         visual: TrayVisual::Error,
         summary: "miccamwatch".to_owned(),
         desktop: None,
+        #[cfg(feature = "flutter-desktop")]
+        flutter: None,
+        #[cfg(feature = "flutter-desktop")]
+        preference_worker: None,
+        #[cfg(feature = "flutter-desktop")]
+        enforcement,
+        #[cfg(feature = "flutter-desktop")]
+        desktop_exit_client,
+        #[cfg(feature = "flutter-desktop")]
+        desktop_exit_owner,
+        #[cfg(feature = "flutter-desktop")]
+        desktop_camera_client,
+        #[cfg(feature = "flutter-desktop")]
+        desktop_camera_owner,
+        #[cfg(feature = "flutter-desktop")]
+        desktop_camera_pending: None,
+        #[cfg(feature = "flutter-desktop")]
+        desktop_observation: None,
+        #[cfg(feature = "flutter-desktop")]
+        observation_session,
+        #[cfg(feature = "flutter-desktop")]
+        presentation: Default::default(),
+        #[cfg(feature = "flutter-desktop")]
+        desktop_sequence: 0,
+        #[cfg(feature = "flutter-desktop")]
+        desktop_policy,
         overview: windows_desktop::Overview::default(),
         settings_error: None,
         settings,
         explicit_policy,
+        applied_profile: None,
         lock_state,
         policy_lock_state: lock_state,
         microphone_worker,
@@ -592,6 +748,7 @@ pub fn run_tray(
         pending_lock_restore: None,
         workers_alive,
         notifications: NotificationWorker::start(),
+        capture_alerts: CaptureAlerts::default(),
         previous_accesses: HashMap::new(),
         green_icon: create_status_icon((34, 197, 94), IconGlyph::Check, icon_size)?,
         yellow_icon: create_status_icon((245, 158, 11), IconGlyph::Ready, icon_size)?,
@@ -771,6 +928,10 @@ unsafe extern "system" fn tray_wnd_proc(
             LRESULT(0)
         }
         WM_COMMAND => {
+            #[cfg(feature = "flutter-desktop")]
+            if state(hwnd).is_some_and(|s| s.desktop_exit_owner.requested()) {
+                return LRESULT(0);
+            }
             match wparam.0 & 0xffff {
                 CMD_TOGGLE_MUTE => toggle_mute(hwnd),
                 CMD_TOGGLE_CAMERA => queue_manual_camera(hwnd, CameraRequest::Manual),
@@ -784,12 +945,21 @@ unsafe extern "system" fn tray_wnd_proc(
                 CMD_DETAILS => {
                     open_desktop(hwnd);
                 }
+                #[cfg(feature = "flutter-desktop")]
+                CMD_NATIVE_DESKTOP => {
+                    if let Some(supervisor) = state(hwnd).and_then(|s| s.flutter.as_mut())
+                        && let Err(error) = supervisor.close()
+                    {
+                        eprintln!("mcw: cannot close desktop before native controls: {error:#}");
+                    }
+                    open_native_desktop(hwnd);
+                }
                 CMD_EXIT if request_safe_close(hwnd) == UPDATE_BUSY => {
                     if let Some(state) = state(hwnd) {
                         notify_async(
                             state,
                             "MicCamWatch",
-                            "Finish pending privacy operations or UAC prompts before exiting. Nothing was cancelled.",
+                            "Finish pending privacy operations, preference writes, or UAC prompts before exiting. Nothing was cancelled.",
                         );
                     }
                 }
@@ -821,6 +991,25 @@ fn request_safe_close(hwnd: HWND) -> usize {
     let Some(state) = state(hwnd) else {
         return UPDATE_BUSY;
     };
+    // The persistence worker belongs to this process, not the Flutter child.
+    // Keep normal exit/update-stop busy until its write and readback finish,
+    // even if the user has already closed the Flutter window.
+    #[cfg(feature = "flutter-desktop")]
+    if state
+        .preference_worker
+        .as_ref()
+        .is_some_and(crate::frontends::desktop::preferences::PreferenceWorker::is_pending)
+    {
+        return UPDATE_BUSY;
+    }
+    #[cfg(feature = "flutter-desktop")]
+    if state
+        .flutter
+        .as_ref()
+        .is_some_and(|ui| ui.has_pending_work())
+    {
+        return UPDATE_BUSY;
+    }
     let mut activity = state.restore_activity.lock();
     if state.pending_microphone != 0
         || !can_close_tray(
@@ -865,7 +1054,25 @@ fn start_camera_worker(hwnd_cell: Arc<AtomicIsize>) -> CameraWorker {
                             crate::privacy::set_camera_state(CameraPrivacyState::Blocked)?;
                         }
                         CameraRequest::Restore { previous, .. } => {
-                            crate::privacy::set_camera_state(previous)?;
+                            crate::privacy::set_camera_state(*previous)?;
+                        }
+                        #[cfg(feature = "flutter-desktop")]
+                        CameraRequest::Desktop { action, .. } => {
+                            use crate::frontends::desktop::camera_owner::Action;
+                            match action {
+                                Action::Block => {
+                                    crate::privacy::set_camera_state(CameraPrivacyState::Blocked)?
+                                }
+                                Action::Allow => {
+                                    crate::privacy::set_camera_state(CameraPrivacyState::Allowed)?
+                                }
+                                Action::Resume => crate::privacy::resume_camera_protection()?,
+                                Action::RestoreLegacy { instance_id } => {
+                                    return crate::privacy::restore_legacy_camera_verified(
+                                        instance_id,
+                                    );
+                                }
+                            }
                         }
                     }
                     crate::privacy::camera_observation()
@@ -894,7 +1101,7 @@ fn start_camera_worker(hwnd_cell: Arc<AtomicIsize>) -> CameraWorker {
 fn camera_worker<T>(
     requests: Receiver<CameraRequest>,
     results: SyncSender<(CameraRequest, Result<T, String>)>,
-    mut execute: impl FnMut(CameraRequest) -> Result<T, String>,
+    mut execute: impl FnMut(&CameraRequest) -> Result<T, String>,
     mut notify: impl FnMut(),
     mut alive: impl FnMut() -> bool,
 ) {
@@ -902,7 +1109,8 @@ fn camera_worker<T>(
         if !alive() {
             break;
         }
-        if results.send((request, execute(request))).is_err() {
+        let result = execute(&request);
+        if results.send((request, result)).is_err() {
             break;
         }
         notify();
@@ -1001,61 +1209,6 @@ fn apply_lock_policy(state: &mut TrayAppState, current: SessionLockState) {
     }
 }
 
-const NOTIFICATION_QUEUE_CAPACITY: usize = 32;
-#[derive(Default)]
-struct NotificationHealth {
-    undelivered: AtomicU64,
-    unavailable: AtomicBool,
-}
-impl NotificationHealth {
-    fn failed(&self) {
-        self.undelivered.fetch_add(1, Ordering::Relaxed);
-        self.unavailable.store(true, Ordering::Relaxed);
-    }
-    fn delivered(&self) {
-        self.unavailable.store(false, Ordering::Relaxed);
-    }
-}
-struct NotificationWorker {
-    sender: SyncSender<(String, String)>,
-    health: Arc<NotificationHealth>,
-}
-impl NotificationWorker {
-    fn start() -> Self {
-        let (sender, pending) = mpsc::sync_channel::<(String, String)>(NOTIFICATION_QUEUE_CAPACITY);
-        let health = Arc::new(NotificationHealth::default());
-        let delivery = Arc::clone(&health);
-        thread::spawn(move || {
-            // A single shell round-trip at a time. Dropping the sender ends this
-            // finite worker after accepted toasts are drained.
-            while let Ok((title, message)) = pending.recv() {
-                if let Err(error) = crate::notify::notify_message(&title, &message) {
-                    delivery.failed();
-                    eprintln!("notification failed: {error}");
-                } else {
-                    // This is positive delivery evidence, not deletion of loss history.
-                    delivery.delivered();
-                }
-            }
-        });
-        Self { sender, health }
-    }
-    fn submit(&self, title: &str, message: &str) -> bool {
-        if self
-            .sender
-            .try_send((title.to_owned(), message.to_owned()))
-            .is_err()
-        {
-            self.health.failed();
-            eprintln!(
-                "notification queue overloaded/unavailable; toast not delivered: {title}: {message}"
-            );
-            false
-        } else {
-            true
-        }
-    }
-}
 fn notify_async(state: &mut TrayAppState, title: &str, message: &str) {
     if !state.notifications.submit(title, message) {
         state.visual = TrayVisual::Error;
@@ -1098,6 +1251,7 @@ fn refresh_state(hwnd: HWND, state: &mut TrayAppState) {
 }
 
 fn apply_refresh(hwnd: HWND, state: &mut TrayAppState, refresh: TrayRefresh) {
+    state.applied_profile = refresh.applied_profile;
     let old_camera_state = state.camera_state;
     if accepts_control_refresh(
         refresh.camera_generation,
@@ -1136,6 +1290,9 @@ fn apply_refresh(hwnd: HWND, state: &mut TrayAppState, refresh: TrayRefresh) {
     }
     apply_lock_policy(state, refresh.lock_state);
     if let Ok(snapshot) = &refresh.snapshot {
+        state
+            .capture_alerts
+            .observe(snapshot, &state.notifications, state.lang, false);
         record_history_changes(state, snapshot);
     }
     state.overview = windows_desktop::Overview::from_snapshot(
@@ -1157,6 +1314,16 @@ fn apply_refresh(hwnd: HWND, state: &mut TrayAppState, refresh: TrayRefresh) {
             notifications: &state.notifications.health,
         },
     );
+    #[cfg(feature = "flutter-desktop")]
+    {
+        // Retain the owned observation, not a second serialized/rendered copy.
+        // A closed Flutter process causes no presentation serialization.
+        state.desktop_observation = Some(DesktopObservation {
+            snapshot: refresh.snapshot,
+            observed_at: refresh.observed_at,
+        });
+        state.presentation.observed();
+    }
     let mute_state = state.mute_state;
     if visual == state.visual
         && summary == state.summary
@@ -1208,35 +1375,7 @@ fn history_current(
     previous: &HashMap<String, Access>,
     snapshot: &Snapshot,
 ) -> HashMap<String, Access> {
-    let mut unavailable_mic = false;
-    let mut unavailable_camera = false;
-    for collector in snapshot
-        .collectors
-        .iter()
-        .filter(|collector| collector.state == CollectorState::Unavailable)
-    {
-        match collector.collector {
-            "wasapi" => unavailable_mic = true,
-            "privacy_store" | "module_scanner" => unavailable_camera = true,
-            _ => {
-                unavailable_mic = true;
-                unavailable_camera = true;
-            }
-        }
-    }
-    let mut current = snapshot
-        .accesses
-        .iter()
-        .map(|access| (access.key.clone(), access.clone()))
-        .collect::<HashMap<_, _>>();
-    for (key, access) in previous {
-        if (access.resource == Resource::Microphone && unavailable_mic)
-            || (access.resource == Resource::Camera && unavailable_camera)
-        {
-            current.entry(key.clone()).or_insert_with(|| access.clone());
-        }
-    }
-    current
+    crate::notify::capture::current_observations(previous, snapshot)
 }
 
 fn append_history_event(access: &Access, action: Action) {
@@ -1422,6 +1561,24 @@ fn refreshed_status(
             "\nNotification history: {undelivered} undelivered toasts"
         );
     }
+    let _ = write!(
+        summary,
+        "\nNative notifications: {} submitted to Windows; {} suppressed (disabled {}, paused {}, cooldown {}); {undelivered} failed",
+        status.notifications.submitted.load(Ordering::Relaxed),
+        status.notifications.suppressed.load(Ordering::Relaxed),
+        status
+            .notifications
+            .suppressed_disabled
+            .load(Ordering::Relaxed),
+        status
+            .notifications
+            .suppressed_paused
+            .load(Ordering::Relaxed),
+        status
+            .notifications
+            .suppressed_cooldown
+            .load(Ordering::Relaxed)
+    );
     if notification_unavailable {
         visual = TrayVisual::Error;
         summary.push_str("\nNotification delivery currently overloaded/unavailable");
@@ -1447,7 +1604,7 @@ fn queue_microphone(state: &mut TrayAppState, request: microphone_worker::Reques
         operation_error(
             state,
             Resource::Microphone,
-            matches!(request, microphone_worker::Request::Manual),
+            request.is_manual(),
             "Microphone worker unavailable; request not accepted".to_owned(),
         );
     }
@@ -1464,8 +1621,9 @@ fn operation_error(state: &mut TrayAppState, resource: Resource, manual: bool, m
 
 fn queue_manual_camera(hwnd: HWND, request: CameraRequest) {
     let Some(state) = state(hwnd) else { return };
+    let replaces_intent = matches!(request, CameraRequest::Manual);
     if state.pending_manual < 6 && state.camera_requests.try_send(request).is_ok() {
-        if matches!(request, CameraRequest::Manual) {
+        if replaces_intent {
             state.manual_generation = state.manual_generation.wrapping_add(1);
         }
         state.pending_manual += 1;
@@ -1564,26 +1722,47 @@ fn handle_worker_results(state: &mut TrayAppState) {
     while let Ok((request, generation, result)) = state.microphone_worker.results.try_recv() {
         state.microphone_generation = generation;
         state.pending_microphone = state.pending_microphone.saturating_sub(1);
+        #[cfg(feature = "flutter-desktop")]
+        if let microphone_worker::Request::Set {
+            ticket, requested, ..
+        } = request
+            && let Some(ui) = state.flutter.as_mut()
+        {
+            crate::frontends::desktop::complete_microphone(
+                ui,
+                ticket,
+                requested,
+                result.as_ref().map_err(String::as_str),
+            );
+        }
         match result {
             Ok(actual) => {
-                state.operation_errors.completed(
-                    Resource::Microphone,
-                    matches!(request, microphone_worker::Request::Manual),
-                );
+                state
+                    .operation_errors
+                    .completed(Resource::Microphone, request.is_manual());
                 state.mute_state = actual.mute_state;
                 let message = crate::output::microphone_protection_summary(state.lang, &actual);
                 state.microphone_protection = Some(actual);
                 state.microphone_status_error = None;
-                if matches!(request, microphone_worker::Request::Manual) {
+                if request.is_manual() {
                     notify_async(state, "MicCamWatch", &message);
                 }
             }
-            Err(error) => operation_error(
-                state,
-                Resource::Microphone,
-                matches!(request, microphone_worker::Request::Manual),
-                format!("microphone {request:?} failed/partial: {error}"),
-            ),
+            Err(error) => {
+                #[cfg(feature = "flutter-desktop")]
+                if matches!(request, microphone_worker::Request::Set { .. }) {
+                    state.microphone_status_error = Some(
+                        "Native command failed or partial; awaiting fresh microphone readback"
+                            .into(),
+                    );
+                }
+                operation_error(
+                    state,
+                    Resource::Microphone,
+                    request.is_manual(),
+                    format!("microphone {request:?} failed/partial: {error}"),
+                );
+            }
         }
     }
     while let Ok((request, result)) = state.camera_results.try_recv() {
@@ -1656,6 +1835,25 @@ fn handle_camera_operation_result(
             state.pending_manual -= 1;
             handle_camera_result(state, request, result);
             queue_deferred_lock_block(state);
+        }
+        #[cfg(feature = "flutter-desktop")]
+        CameraRequest::Desktop { id, action } => {
+            state.pending_manual -= 1;
+            let acknowledgement = result.as_ref().map(|_| ()).map_err(Clone::clone);
+            let manual = if action.replaces_manual_intent() {
+                CameraRequest::Manual
+            } else {
+                CameraRequest::Resume
+            };
+            handle_camera_result(state, manual, result);
+            queue_deferred_lock_block(state);
+            if let Some((expected, reply)) = state.desktop_camera_pending.take() {
+                reply.finish(if expected == id {
+                    acknowledgement
+                } else {
+                    Err("Native camera completion identity mismatch; outcome unknown".into())
+                });
+            }
         }
         CameraRequest::Block {
             id,
@@ -1992,6 +2190,116 @@ fn diagnostic_document(summary: &str) -> String {
 }
 
 fn open_desktop(hwnd: HWND) -> bool {
+    #[cfg(feature = "flutter-desktop")]
+    {
+        open_flutter_desktop(hwnd)
+    }
+    #[cfg(not(feature = "flutter-desktop"))]
+    {
+        open_native_desktop(hwnd)
+    }
+}
+
+#[cfg(feature = "flutter-desktop")]
+fn flutter_snapshot(state: &TrayAppState) -> crate::frontends::desktop::DesktopSnapshot {
+    use crate::frontends::desktop::DesktopSnapshot;
+    let (snapshot, observed_at) = state.desktop_observation.as_ref().map_or_else(
+        || (Err("Initial observation pending"), chrono::Utc::now()),
+        |observation| {
+            (
+                observation.snapshot.as_ref().map_err(String::as_str),
+                observation.observed_at,
+            )
+        },
+    );
+    let mut frame = DesktopSnapshot::from_snapshot(
+        state.desktop_sequence,
+        observed_at,
+        state.lang.code(),
+        snapshot,
+        "operational",
+        state.observation_session.status(),
+    );
+    let microphone = if state.pending_microphone != 0 {
+        Err("Native microphone operation pending; effective state not yet confirmed")
+    } else {
+        state.microphone_status_error.as_deref().map_or_else(
+            || {
+                state
+                    .microphone_protection
+                    .as_ref()
+                    .ok_or("Microphone protection unknown")
+            },
+            Err,
+        )
+    };
+    frame.controls.microphone = crate::frontends::desktop::microphone_capability(
+        microphone,
+        state.microphone_generation,
+        state.pending_microphone != 0,
+        true,
+    );
+    frame.set_protection(
+        microphone,
+        state.camera_status_error.as_deref().map_or_else(
+            || {
+                state
+                    .camera_observation
+                    .as_ref()
+                    .ok_or("Camera protection unknown")
+            },
+            Err,
+        ),
+    );
+    frame.preferences = crate::frontends::desktop::observe_preferences(
+        true,
+        !state.explicit_policy,
+        state.applied_profile,
+        crate::frontends::desktop::preferences::PreferenceEffects {
+            capture_notifications_supported: true,
+            capture_sounds_supported: true,
+            history_recording_supported: true,
+            history_recording_active: state.settings.history_enabled,
+        },
+        state.preference_worker.as_ref(),
+    );
+    frame
+}
+
+#[cfg(feature = "flutter-desktop")]
+fn open_flutter_desktop(hwnd: HWND) -> bool {
+    let Some(state) = state(hwnd) else {
+        return false;
+    };
+    let frame = flutter_snapshot(state);
+    let mut supervisor = match state.flutter.take() {
+        Some(supervisor) => supervisor,
+        None => match crate::frontends::desktop::windows::Supervisor::new() {
+            Ok(supervisor) => supervisor,
+            Err(error) => {
+                state.settings_error = Some(format!("Flutter desktop: {error:#}"));
+                return false;
+            }
+        },
+    };
+    supervisor.configure_policy(Arc::clone(&state.desktop_policy), state.explicit_policy);
+    supervisor.configure_camera_owner(state.desktop_camera_client.clone());
+    supervisor.configure_enforcement(state.enforcement.clone());
+    supervisor.configure_session(state.observation_session.client());
+    supervisor.configure_exit_owner(state.desktop_exit_client.clone());
+    // Window activation may synchronously send messages; no tray state reference
+    // is used across the native call.
+    let opened = supervisor.open(frame, "light");
+    if let Some(state) = self::state(hwnd) {
+        if let Err(error) = &opened {
+            state.settings_error = Some(format!("Flutter desktop: {error:#}"));
+        }
+        state.flutter = Some(supervisor);
+    }
+    opened.is_ok()
+}
+
+fn open_native_desktop(hwnd: HWND) -> bool {
     let Some((existing, view)) =
         state(hwnd).map(|s| (s.desktop.take(), windows_desktop::View::from_state(s)))
     else {
@@ -2028,6 +2336,191 @@ fn open_desktop(hwnd: HWND) -> bool {
 }
 
 fn refresh_desktop(hwnd: HWND) {
+    #[cfg(feature = "flutter-desktop")]
+    if let Some(s) = state(hwnd) {
+        use crate::frontends::desktop::camera_owner::Stamp;
+        let activity = s.restore_activity.lock();
+        let available = s.pending_manual == 0
+            && s.pending_lock_block.is_none()
+            && s.pending_lock_restore.is_none()
+            && activity.pending == 0
+            && !activity.closing
+            && s.desktop_camera_pending.is_none()
+            && !s.desktop_exit_owner.requested();
+        s.desktop_camera_owner.publish(
+            Stamp {
+                camera: s.camera_generation,
+                manual: s.manual_generation,
+                locked: s.lock_state != SessionLockState::Unlocked,
+                restore: s.settings.restore_on_unlock,
+            },
+            available,
+        );
+        drop(activity);
+        if let Some(request) = s.desktop_camera_owner.take()
+            && let Ok((action, reply)) = s.desktop_camera_owner.admit(request)
+        {
+            let replaces_intent = action.replaces_manual_intent();
+            s.camera_next_id = s.camera_next_id.wrapping_add(1);
+            let id = s.camera_next_id;
+            match s
+                .camera_requests
+                .try_send(CameraRequest::Desktop { id, action })
+            {
+                Ok(()) => {
+                    if replaces_intent {
+                        s.manual_generation = s.manual_generation.wrapping_add(1);
+                    }
+                    s.pending_manual += 1;
+                    s.desktop_camera_pending = Some((id, reply));
+                }
+                Err(_) => reply.finish(Err(
+                    "Native camera queue unavailable; no action accepted".into()
+                )),
+            }
+        }
+    }
+    #[cfg(feature = "flutter-desktop")]
+    if let Some(s) = state(hwnd) {
+        use crate::frontends::desktop::{
+            complete_preference,
+            preferences::{PreferenceWork, PreferenceWorker},
+        };
+
+        // Poll process-owned persistence even when no Flutter child is attached.
+        // UI closure neither cancels an admitted write nor discards its readback.
+        let completion = s
+            .preference_worker
+            .as_mut()
+            .and_then(PreferenceWorker::try_complete);
+        let preference_completed = completion.is_some();
+        if let Some(completion) = completion {
+            complete_preference(s.flutter.as_mut(), &completion);
+            match completion.result {
+                Ok(settings) => {
+                    if !settings.history_enabled {
+                        s.previous_accesses.clear();
+                    }
+                    s.settings = settings;
+                    s.settings_error = None;
+                }
+                Err(error) => s.settings_error = Some(error),
+            }
+        }
+        let (command, preference, changed) = s.flutter.as_mut().map_or((None, None, false), |ui| {
+            ui.poll();
+            (
+                ui.take_command(),
+                ui.take_preference(),
+                ui.take_controls_changed(),
+            )
+        });
+        let preference_submitted = preference.is_some();
+        if let Some(preference) = preference {
+            let ticket = preference.ticket;
+            if let Err(error) = PreferenceWorker::enqueue(
+                &mut s.preference_worker,
+                PreferenceWork {
+                    ticket,
+                    request: preference.request,
+                    profile_writable: !s.explicit_policy,
+                },
+            ) {
+                // Admission is not persistence. A missing/full worker must
+                // explicitly finish this ticket without claiming a saved value.
+                if let Some(ui) = s.flutter.as_mut() {
+                    ui.complete_preference(
+                        ticket,
+                        crate::frontends::desktop::commands::CommandState::Rejected,
+                        Some("preferences_unavailable"),
+                        Some(format!("Preference was not queued or applied: {error:#}")),
+                    );
+                }
+                s.settings_error = Some(format!("Preference queue unavailable: {error:#}"));
+            }
+        }
+        if let Some(command) = command {
+            let request = microphone_worker::Request::Set {
+                ticket: command.ticket,
+                requested: command.requested,
+                expected_requested: command.expected_requested,
+                expected_generation: command.expected_generation,
+            };
+            if s.pending_microphone < 6 && s.microphone_worker.requests.try_send(request).is_ok() {
+                s.pending_microphone += 1;
+            } else if let Some(ui) = s.flutter.as_mut() {
+                ui.complete(
+                    command.ticket,
+                    crate::frontends::desktop::commands::CommandState::Rejected,
+                    Some("busy"),
+                    Some("Native microphone queue unavailable; command not applied".into()),
+                );
+            }
+        }
+        if changed {
+            match Settings::load() {
+                Ok(settings) => s.settings = settings,
+                Err(error) => {
+                    s.settings_error = Some(format!("Native settings readback: {error:#}"))
+                }
+            }
+        }
+        let presentation_due = s
+            .presentation
+            .due(Instant::now(), s.observation_session.status().cadence);
+        if changed
+            || command.is_some()
+            || preference_submitted
+            || preference_completed
+            || presentation_due
+        {
+            s.desktop_sequence = s.desktop_sequence.saturating_add(1);
+            // Reading/serializing preferences is presentation work: do it only
+            // for a running child. open_flutter_desktop reads the initial frame.
+            if s.flutter.as_ref().is_some_and(|ui| ui.is_running()) {
+                let frame = flutter_snapshot(s);
+                if let Some(ui) = s.flutter.as_mut()
+                    && let Err(error) = ui.publish(frame)
+                {
+                    s.settings_error = Some(format!("Desktop command state delivery: {error:#}"));
+                } else {
+                    s.presentation.published(Instant::now());
+                }
+            }
+        }
+    }
+    #[cfg(feature = "flutter-desktop")]
+    if let Some(s) = state(hwnd) {
+        let activity = s.restore_activity.lock();
+        let ready = s.pending_microphone == 0
+            && can_close_tray(
+                s.pending_manual,
+                s.pending_lock_block.is_some(),
+                s.pending_lock_restore.is_some(),
+                activity.pending,
+            )
+            && !activity.closing
+            && !s
+                .preference_worker
+                .as_ref()
+                .is_some_and(crate::frontends::desktop::preferences::PreferenceWorker::is_pending);
+        drop(activity);
+        if s.desktop_exit_owner.poll(ready) {
+            eprintln!("desktop event=exit_admitted source=flutter");
+        }
+        if s.desktop_exit_owner.requested()
+            && ready
+            && s.flutter
+                .as_ref()
+                .is_none_or(|ui| !ui.has_pending_work() && ui.delivery_complete())
+        {
+            // Re-enter exactly the same native safe-close path after response
+            // delivery and all admitted effects; never terminate a device guard.
+            unsafe {
+                let _ = PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
+            }
+        }
+    }
     let Some((desktop, view)) = state(hwnd).and_then(|s| {
         if !s
             .desktop
@@ -2201,6 +2694,19 @@ fn build_context_menu(
         let menu = CreatePopupMenu()?;
         let open = format_wide(windows_desktop::open_label(lang));
         let _ = AppendMenuW(menu, MF_STRING, CMD_DETAILS, PCWSTR(open.as_ptr()));
+        #[cfg(feature = "flutter-desktop")]
+        {
+            let native = format_wide(match lang {
+                Language::Fr => "Réglages et contrôles natifs…",
+                Language::De => "Native Einstellungen und Steuerung…",
+                Language::Es => "Ajustes y controles nativos…",
+                Language::Ja => "ネイティブ設定と操作…",
+                Language::Zh => "原生设置和控制…",
+                Language::Ru => "Системные настройки и управление…",
+                Language::En => "Native settings and controls…",
+            });
+            let _ = AppendMenuW(menu, MF_STRING, CMD_NATIVE_DESKTOP, PCWSTR(native.as_ptr()));
+        }
         append_disabled(menu, &format!("miccamwatch v{}", env!("CARGO_PKG_VERSION")));
         append_disabled(menu, &compact_menu_summary(hwnd, summary));
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
@@ -4077,6 +4583,8 @@ mod tests {
                 CameraRequest::Restore { .. } => Ok(CameraPrivacyState::Allowed),
                 CameraRequest::Manual => Ok(CameraPrivacyState::Blocked),
                 CameraRequest::Block { .. } | CameraRequest::Resume => unreachable!(),
+                #[cfg(feature = "flutter-desktop")]
+                CameraRequest::Desktop { .. } => unreachable!(),
             },
             || {},
             || true,
@@ -4099,6 +4607,8 @@ mod tests {
                     );
                 }
                 CameraRequest::Block { .. } | CameraRequest::Resume => unreachable!(),
+                #[cfg(feature = "flutter-desktop")]
+                CameraRequest::Desktop { .. } => unreachable!(),
             }
         }
         assert_eq!(actual, CameraPrivacyState::Blocked);

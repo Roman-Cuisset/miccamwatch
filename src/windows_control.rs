@@ -569,6 +569,107 @@ fn verify_mutex_acl(mutex: &Handle, expected: *const c_void) -> Result<()> {
     );
     Ok(())
 }
+
+#[cfg(feature = "packaged-desktop")]
+pub(crate) fn create_private_update_directory(path: &std::path::Path) -> Result<()> {
+    use std::os::windows::{ffi::OsStrExt, fs::OpenOptionsExt, io::AsRawHandle};
+    use windows::{
+        Win32::{
+            Foundation::ERROR_ALREADY_EXISTS, Security::SECURITY_ATTRIBUTES,
+            Storage::FileSystem::CreateDirectoryW,
+        },
+        core::{HRESULT, PCWSTR},
+    };
+    let identity = current_identity()?;
+    validate_identity(&identity)?;
+    let user = &identity.user;
+    let acl = wide(&format!("O:{user}D:P(A;OICI;FA;;;{user})(A;OICI;FA;;;SY)"));
+    let mut descriptor = ptr::null_mut();
+    unsafe {
+        check(ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            acl.as_ptr(),
+            1,
+            &mut descriptor,
+            ptr::null_mut(),
+        ))?;
+    }
+    let _descriptor = Local(descriptor);
+    let attributes = SECURITY_ATTRIBUTES {
+        nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: descriptor,
+        bInheritHandle: false.into(),
+    };
+    let path_text: Vec<_> = path.as_os_str().encode_wide().chain([0]).collect();
+    if let Err(error) = unsafe { CreateDirectoryW(PCWSTR(path_text.as_ptr()), Some(&attributes)) }
+        && error.code() != HRESULT::from_win32(ERROR_ALREADY_EXISTS.0)
+    {
+        return Err(error.into());
+    }
+    let file = std::fs::OpenOptions::new()
+        .access_mode(0x0002_0080)
+        .share_mode(3)
+        .custom_flags(0x0200_0000 | 0x0020_0000)
+        .open(path)?;
+    crate::uninstall::windows::ensure_owned(&file)?;
+    use std::os::windows::fs::MetadataExt;
+    let metadata = file.metadata()?;
+    ensure!(
+        metadata.is_dir() && metadata.file_attributes() & 0x400 == 0,
+        "unsafe maintenance directory"
+    );
+    let mut actual = ptr::null_mut();
+    let status = unsafe {
+        GetSecurityInfo(
+            file.as_raw_handle(),
+            1,
+            4,
+            ptr::null_mut(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+            &mut actual,
+        )
+    };
+    ensure!(
+        status == 0,
+        "cannot verify private maintenance ACL: Windows error {status}"
+    );
+    let _actual = Local(actual);
+    ensure!(
+        descriptor_sddl(actual)? == descriptor_sddl(descriptor)?,
+        "maintenance directory has an unexpected ACL"
+    );
+    Ok(())
+}
+
+#[cfg(feature = "packaged-desktop")]
+pub(crate) fn assign_new_maintenance_owner(file: &std::fs::File) -> Result<()> {
+    use std::os::windows::io::AsRawHandle;
+    let identity = current_identity()?;
+    validate_identity(&identity)?;
+    let text = wide(&identity.user);
+    let mut sid = ptr::null_mut();
+    unsafe { check(ConvertStringSidToSidW(text.as_ptr(), &mut sid))? };
+    let _sid = Local(sid);
+    // The caller supplies a retained handle to a just-created object in
+    // the verified private directory. Never adopt an existing foreign file.
+    let status = unsafe {
+        SetSecurityInfo(
+            file.as_raw_handle(),
+            1,
+            1,
+            sid,
+            ptr::null_mut(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+        )
+    };
+    ensure!(
+        status == 0,
+        "cannot set the new maintenance object's owner: Windows error {status}"
+    );
+    crate::uninstall::windows::ensure_owned(file)
+}
 fn acquire_named_mutex(
     name: &[u16],
     identity: &ControlIdentity,

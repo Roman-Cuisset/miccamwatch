@@ -40,6 +40,7 @@ pub(crate) struct Receipt {
     pub tray_sha256: String,
 }
 
+#[cfg_attr(feature = "packaged-desktop", allow(dead_code))]
 pub(super) fn run() -> Result<u8> {
     ordinary_user()?;
     let current = std::env::current_exe()?;
@@ -49,7 +50,7 @@ pub(super) fn run() -> Result<u8> {
             .is_some_and(|name| name.eq_ignore_ascii_case("mcw.exe")),
         "uninstall requires the installed mcw.exe, not a renamed copy"
     );
-    if owner_guidance(&current)? {
+    if owner_guidance(&current, |message| eprintln!("{message}"))? {
         return Ok(2);
     }
     let _installation = crate::autostart::try_lock_installation(&current)?;
@@ -170,7 +171,7 @@ fn worker_inner(parent_pid: u32, parent_created: u64, helper: &Path) -> Result<(
         "worker is not in its inherited private temporary staging namespace"
     );
     ensure!(
-        !owner_guidance(&current)?,
+        !owner_guidance(&current, |message| eprintln!("{message}"))?,
         "installation is manager owned; use its reported removal command"
     );
     let installation = crate::autostart::try_lock_installation(&current)?;
@@ -363,13 +364,17 @@ impl Snapshot {
     }
 }
 
-fn validate_regular(file: &File) -> Result<(u32, u32, u32)> {
+pub(crate) fn validate_regular(file: &File) -> Result<(u32, u32, u32)> {
+    ensure_owned(file)?;
+    regular_identity(file)
+}
+
+pub(crate) fn regular_identity(file: &File) -> Result<(u32, u32, u32)> {
     let metadata = file.metadata()?;
     ensure!(
         metadata.is_file() && metadata.file_attributes() & 0x400 == 0,
         "uninstall target is not a regular non-reparse file"
     );
-    ensure_owned(file)?;
     let mut info = BY_HANDLE_FILE_INFORMATION::default();
     unsafe { GetFileInformationByHandle(HANDLE(file.as_raw_handle()), &mut info) }?;
     ensure!(
@@ -383,7 +388,7 @@ fn validate_regular(file: &File) -> Result<(u32, u32, u32)> {
     ))
 }
 
-fn ensure_owned(file: &File) -> Result<()> {
+pub(crate) fn ensure_owned(file: &File) -> Result<()> {
     use windows::Win32::Security::{
         Authorization::{ConvertSidToStringSidW, GetSecurityInfo, SE_FILE_OBJECT},
         OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID,
@@ -424,7 +429,7 @@ fn ensure_owned(file: &File) -> Result<()> {
     Ok(())
 }
 
-fn safe_ancestors(path: &Path) -> Result<()> {
+pub(crate) fn safe_ancestors(path: &Path) -> Result<()> {
     ensure!(path.is_absolute(), "installation path must be absolute");
     for ancestor in path.ancestors() {
         let metadata = fs::symlink_metadata(ancestor)?;
@@ -455,7 +460,7 @@ pub(crate) fn digest(file: &mut File) -> Result<String> {
     Ok(hex)
 }
 
-fn process_image(pid: u32) -> Result<PathBuf> {
+pub(crate) fn process_image(pid: u32) -> Result<PathBuf> {
     let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }?;
     let mut buffer = [0u16; 32768];
     let mut length = buffer.len() as u32;
@@ -485,7 +490,7 @@ struct BasicInformation {
     pid: usize,
     parent_pid: usize,
 }
-fn kernel_parent() -> Result<u32> {
+pub(crate) fn kernel_parent() -> Result<u32> {
     let mut information = BasicInformation::default();
     let status = unsafe {
         crate::platform::NtQueryInformationProcess(
@@ -500,7 +505,7 @@ fn kernel_parent() -> Result<u32> {
     Ok(information.parent_pid.try_into()?)
 }
 
-fn ordinary_user() -> Result<()> {
+pub(crate) fn ordinary_user() -> Result<()> {
     use windows::Win32::{
         Security::{GetTokenInformation, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation},
         System::Threading::OpenProcessToken,
@@ -529,7 +534,10 @@ fn ordinary_user() -> Result<()> {
     Ok(())
 }
 
-fn owner_guidance(current: &Path) -> Result<bool> {
+pub(crate) fn owner_guidance(
+    current: &Path,
+    mut report: impl FnMut(std::fmt::Arguments<'_>),
+) -> Result<bool> {
     let parent = current.parent().context("executable has no directory")?;
     safe_ancestors(parent)?;
     if parent.file_name().is_some_and(|name| name == "bin") {
@@ -554,37 +562,37 @@ fn owner_guidance(current: &Path) -> Result<bool> {
                     })
                 })
             {
-                eprintln!(
+                report(format_args!(
                     "Cargo owns this exact install root. Explicitly restore protection and normally exit its frontends, then run: cargo uninstall --root \"{}\" miccamwatch. Cargo metadata has no historical binary hashes, so MCW does not delete or claim removal of a possibly modified Cargo payload.",
                     root.display()
-                );
+                ));
                 return Ok(true);
             }
         }
     }
     match registered_owner(parent)? {
         Some(RegisteredOwner::Msi(product_code)) => {
-            eprintln!(
+            report(format_args!(
                 "Windows Installer registration matches this installation. Explicitly restore protection and exit its frontends, then run: msiexec.exe /x {product_code}. The MSI owns PATH/shortcuts/payload removal. No MSI operation, elevation or success was claimed."
-            );
+            ));
             Ok(true)
         }
         Some(RegisteredOwner::Managed) => {
-            eprintln!(
+            report(format_args!(
                 "A registered MicCamWatch installation matches this directory; use Windows Settings > Apps > Installed apps > MicCamWatch > Uninstall after explicit restoration and normal frontend exit. No registered command was executed or success claimed."
-            );
+            ));
             Ok(true)
         }
         None => Ok(false),
     }
 }
 
-enum RegisteredOwner {
+pub(crate) enum RegisteredOwner {
     Msi(String),
     Managed,
 }
 
-fn registered_owner(parent: &Path) -> Result<Option<RegisteredOwner>> {
+pub(crate) fn registered_owner(parent: &Path) -> Result<Option<RegisteredOwner>> {
     use winreg::{
         RegKey,
         enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE},
@@ -653,7 +661,7 @@ pub(crate) fn ensure_binary_update_allowed(current: &Path) -> Result<()> {
         None => Ok(()),
     }
 }
-fn valid_product_code(value: &str) -> bool {
+pub(crate) fn valid_product_code(value: &str) -> bool {
     value.len() == 38
         && value.starts_with('{')
         && value.ends_with('}')

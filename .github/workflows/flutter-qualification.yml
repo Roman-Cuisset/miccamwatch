@@ -1,0 +1,751 @@
+name: Flutter desktop qualification (no release)
+
+# New workflow_dispatch files may need an existing default-branch manual bridge
+# before they are dispatchable on a feature ref. workflow_call supports that
+# reviewed bridge. Neither push, pull_request, tags nor a schedule runs this job.
+on:
+  workflow_dispatch:
+    inputs:
+      runtime-replay:
+        type: boolean
+        default: false
+      intel-only:
+        type: boolean
+        default: false
+      arm-only:
+        type: boolean
+        default: false
+      intel-bootstrap-controls:
+        type: boolean
+        default: false
+      linux-only:
+        type: boolean
+        default: false
+      skip-linux-x64:
+        type: boolean
+        default: false
+      skip-linux-arm64:
+        type: boolean
+        default: false
+      native-gates-only:
+        type: boolean
+        default: false
+  workflow_call:
+    inputs:
+      runtime-replay:
+        type: boolean
+        default: false
+      macos-replay-build-run:
+        type: string
+        default: ''
+      intel-only:
+        type: boolean
+        default: false
+      arm-only:
+        type: boolean
+        default: false
+      intel-bootstrap-controls:
+        type: boolean
+        default: false
+      linux-only:
+        type: boolean
+        default: false
+      skip-linux-x64:
+        type: boolean
+        default: false
+      skip-linux-arm64:
+        type: boolean
+        default: false
+      native-gates-only:
+        type: boolean
+        default: false
+      linux-renderer-probe:
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    if: ${{ !inputs.native-gates-only && !inputs.linux-only }}
+    name: macOS 15 ${{ matrix.architecture }} owned qualification
+    permissions:
+      contents: read
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(inputs.arm-only && '[{"runner":"macos-15","architecture":"arm64"}]' || inputs.intel-only && '[{"runner":"macos-15-intel","architecture":"x86_64"}]' || '[{"runner":"macos-15-intel","architecture":"x86_64"},{"runner":"macos-15","architecture":"arm64"}]') }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 50
+    env:
+      EXPECTED_ARCH: ${{ matrix.architecture }}
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+      MACOSX_DEPLOYMENT_TARGET: "15.0"
+      CARGO_TERM_COLOR: never
+      FLUTTER_SUPPRESS_ANALYTICS: "true"
+      CI: "true"
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: ${{ inputs.macos-replay-build-run != '' && '0' || '1' }}
+      - name: Require disposable native host and pinned Xcode
+        run: |
+          set -euo pipefail
+          if [[ "${{ inputs.arm-only }}" == true && "${{ inputs.intel-only }}" == true ]]; then
+            printf '%s\n' 'Conflicting Mac target filters: arm-only and intel-only' >&2
+            exit 1
+          fi
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$(uname -m)" = "$EXPECTED_ARCH"
+          test "$(id -u)" != 0
+          mkdir -m 700 "$RUNNER_TEMP/mcw-flutter-macos"
+          {
+            /usr/bin/sw_vers
+            /usr/bin/uname -a
+            /usr/bin/xcodebuild -version
+            /usr/bin/xcrun --show-sdk-version
+            /usr/bin/xcrun swiftc --version
+            printf 'source=%s\nrunner-image=%s\n' "$GITHUB_SHA" "${ImageVersion:-unknown}"
+          } 2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/environment.log"
+          test "$(/usr/bin/xcodebuild -version)" = $'Xcode 26.3\nBuild version 17C529'
+          test "$(/usr/bin/xcrun --show-sdk-version)" = 26.2
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: 1.98.1
+          components: clippy
+      - name: Restore exact pinned B5 products and retain each original build provenance
+        if: ${{ inputs.runtime-replay && inputs.macos-replay-build-run == '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          rustc -Vv | tee "$RUNNER_TEMP/mcw-flutter-macos/replay-rust.log"
+          test "$(rustc --version | cut -d ' ' -f 2)" = 1.98.1
+          python3 -B desktop/qualification/replay_products.py --platform macos \
+            --root "$RUNNER_TEMP/mcw-flutter-macos"
+      - name: Restore exact Intel products from the explicitly chosen construction run
+        if: ${{ inputs.macos-replay-build-run != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MCW_MACOS_BUILD_RUN: ${{ inputs.macos-replay-build-run }}
+        run: |
+          set -euo pipefail
+          test "${{ inputs.runtime-replay }}" = true
+          test "${{ inputs.intel-only }}" = true
+          test "$EXPECTED_ARCH" = x86_64
+          test "$(rustc --version | cut -d ' ' -f 2)" = 1.98.1
+          [[ "$MCW_MACOS_BUILD_RUN" =~ ^[0-9]+$ ]]
+          root="$RUNNER_TEMP/mcw-flutter-macos"
+          gh run view "$MCW_MACOS_BUILD_RUN" --repo "$GITHUB_REPOSITORY" --json headBranch,headSha,status,jobs > "$root/replay-source.json"
+          source="$(jq -er '.headSha | select(test("^[a-f0-9]{40}$"))' "$root/replay-source.json")"
+          jq -e --arg branch "$GITHUB_REF_NAME" '
+            .headBranch == $branch and .status == "completed" and
+            ([.jobs[] | select(.name | endswith("macOS 15 x86_64 owned qualification"))
+             | .steps[] | select(.name == "Upload frozen build proof before any graphical process can fail"
+                                 and .conclusion == "success")] | length == 1)
+          ' "$root/replay-source.json" >/dev/null
+          git merge-base --is-ancestor "$source" "$GITHUB_SHA"
+          git diff --quiet "$source" "$GITHUB_SHA" -- src native .cargo build.rs Cargo.toml Cargo.lock desktop/flutter
+          download="$root/build-download"
+          mkdir -m 700 "$download"
+          gh run download "$MCW_MACOS_BUILD_RUN" --repo "$GITHUB_REPOSITORY" \
+            --name "flutter-macos-x86_64-$source-built-products" --dir "$download"
+          cp "$download/built-products.tar.gz" "$download/built-products.SHA256SUMS" "$root/"
+          read -r expected _ < "$root/built-products.SHA256SUMS"
+          [[ "$expected" =~ ^[0-9a-f]{64}$ ]]
+          test "$(shasum -a 256 "$root/built-products.tar.gz" | cut -d ' ' -f 1)" = "$expected"
+          python3 -B - "$root" <<'PY'
+          import pathlib, sys, tarfile
+          root = pathlib.Path(sys.argv[1])
+          with tarfile.open(root / "built-products.tar.gz") as archive:
+              archive.extractall(root, filter="data")
+          PY
+          built="$root/built-products"
+          test "$(cat "$built/source-commit.txt")" = "$source"
+          mkdir -p target/release
+          test ! -e target/release/mcw
+          install -m 0755 "$built/mcw" target/release/mcw
+          for variant in release instrumented quit; do
+            codesign --verify --deep --strict "$built/$variant/MicCamWatch.app"
+          done
+          {
+            printf 'MCW_FROZEN_RELEASE_APP=%s\n' "$built/release/MicCamWatch.app"
+            printf 'MCW_FROZEN_INSTRUMENTED_APP=%s\n' "$built/instrumented/MicCamWatch.app"
+            printf 'MCW_FROZEN_QUIT_APP=%s\n' "$built/quit/MicCamWatch.app"
+          } >> "$GITHUB_ENV"
+      - name: Install exact SHA-256 verified official Flutter study SDK
+        if: ${{ !inputs.runtime-replay }}
+        run: python3 -B desktop/qualification/macos_sdk.py --proof "$RUNNER_TEMP/mcw-flutter-macos"
+      - name: Record and require exact Rust Flutter and Dart revisions
+        if: ${{ !inputs.runtime-replay }}
+        run: |
+          set -euo pipefail
+          rustc -Vv | tee "$RUNNER_TEMP/mcw-flutter-macos/rust.log"
+          test "$(rustc --version | cut -d ' ' -f 2)" = 1.98.1
+          flutter --version --machine > "$RUNNER_TEMP/mcw-flutter-macos/flutter-version.json"
+          python3 -c 'import json,os; p=json.load(open(os.environ["RUNNER_TEMP"]+"/mcw-flutter-macos/flutter-version.json")); assert p["frameworkVersion"]=="3.47.8" and p["frameworkRevision"]=="737ba8f885dc774b53b442759999a312c9461e4e" and p["dartSdkVersion"].split()[0]=="3.13.7",p'
+          flutter doctor -v 2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/flutter-doctor.log"
+      - name: Check shared Rust commands ownership and settings without hardware actions
+        if: ${{ !inputs.runtime-replay }}
+        run: |
+          set -euo pipefail
+          cargo clippy --all-targets --locked --features flutter-desktop -- -D warnings \
+            2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/rust-clippy.log"
+          cargo test --lib --locked --features flutter-desktop frontends::desktop \
+            2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/rust-desktop-tests.log"
+          cargo test --lib --locked --features flutter-desktop watcher::enforcement:: \
+            2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/rust-enforcement-tests.log"
+          cargo test --lib --locked --features flutter-desktop watcher::unix::tests \
+            2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/rust-observation-transitions-tests.log"
+          cargo test --lib --locked --features flutter-desktop platform::macos::tests::camera_ \
+            2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/rust-camera-observation-tests.log"
+          cargo test --lib --locked --features flutter-desktop platform::macos::tests::native_termination_ \
+            2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/rust-termination-identity-tests.log"
+          cargo test --lib --locked --features flutter-desktop platform::macos::tests::native_close_application_ \
+            2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/rust-close-application-tests.log"
+          cargo test --lib --locked --features flutter-desktop platform::macos::control::tests \
+            2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/rust-microphone-tests.log"
+          cargo test --lib --locked --features flutter-desktop privacy::tests \
+            2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/rust-camera-tests.log"
+          cargo test --lib --locked --features flutter-desktop settings::tests \
+            2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/rust-settings-tests.log"
+          cargo test --lib --locked --features flutter-desktop history:: \
+            2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/rust-history-tests.log"
+          cargo test --lib --locked --features flutter-desktop autostart::tests \
+            2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/rust-autostart-tests.log"
+          cargo test --lib --locked --features flutter-desktop frontends::tray::menu_tests::qualification_ \
+            2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/rust-native-qualification-gates.log"
+      - name: Build real native engine with development parser and unchanged AppKit fallback
+        if: ${{ !inputs.runtime-replay }}
+        run: |
+          set -euo pipefail
+          cargo build --locked --release --features flutter-desktop --bin mcw 2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/rust-build.log"
+      - name: Build normal sandboxed Flutter release
+        if: ${{ !inputs.runtime-replay }}
+        working-directory: desktop/flutter
+        run: |
+          set -euo pipefail
+          flutter pub get --enforce-lockfile 2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/pub.log"
+          flutter analyze --no-pub 2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/flutter-analyze.log"
+          flutter test --no-pub 2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/flutter-tests.log"
+          flutter build macos --release --no-pub 2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/flutter-build.log"
+          /usr/bin/ditto build/macos/Build/Products/Release/MicCamWatch.app "$RUNNER_TEMP/mcw-flutter-macos/release/MicCamWatch.app"
+      - name: Build separately identified native-window instrumentation (same release sandbox)
+        if: ${{ !inputs.runtime-replay }}
+        working-directory: desktop/flutter
+        run: |
+          set -euo pipefail
+          flutter build macos --release --no-pub --dart-define=MCW_UI_QUALIFICATION=consultation \
+            2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/instrumented-dart-build.log"
+          /usr/bin/xcodebuild -workspace macos/Runner.xcworkspace -scheme Runner \
+            -configuration Release -destination "platform=macOS,arch=$EXPECTED_ARCH" \
+            -derivedDataPath "$RUNNER_TEMP/mcw-flutter-macos/derived" \
+            CONFIGURATION_BUILD_DIR="$RUNNER_TEMP/mcw-flutter-macos/instrumented" \
+            ARCHS="$EXPECTED_ARCH" ONLY_ACTIVE_ARCH=YES \
+            SWIFT_ACTIVE_COMPILATION_CONDITIONS=MCW_QUALIFICATION \
+            CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual build \
+            2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/instrumented-build.log"
+      - name: Build separately identified Flutter quit confirmation with native window proof
+        if: ${{ !inputs.runtime-replay }}
+        working-directory: desktop/flutter
+        run: |
+          set -euo pipefail
+          flutter build macos --release --no-pub --dart-define=MCW_UI_QUALIFICATION=quit \
+            2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/quit-dart-build.log"
+          /usr/bin/xcodebuild -workspace macos/Runner.xcworkspace -scheme Runner \
+            -configuration Release -destination "platform=macOS,arch=$EXPECTED_ARCH" \
+            -derivedDataPath "$RUNNER_TEMP/mcw-flutter-macos/quit-derived" \
+            CONFIGURATION_BUILD_DIR="$RUNNER_TEMP/mcw-flutter-macos/quit" \
+            ARCHS="$EXPECTED_ARCH" ONLY_ACTIVE_ARCH=YES \
+            SWIFT_ACTIVE_COMPILATION_CONDITIONS=MCW_QUALIFICATION \
+            CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual build \
+            2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/quit-build.log"
+      - name: Preserve complete built products before any graphical qualification
+        if: ${{ !inputs.runtime-replay }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/mcw-flutter-macos"
+          test -x target/release/mcw
+          test -d "$root/release/MicCamWatch.app"
+          test -d "$root/instrumented/MicCamWatch.app"
+          mkdir -m 700 "$root/built-products"
+          cp target/release/mcw "$root/built-products/mcw"
+          /usr/bin/ditto "$root/release/MicCamWatch.app" "$root/built-products/release/MicCamWatch.app"
+          /usr/bin/ditto "$root/instrumented/MicCamWatch.app" "$root/built-products/instrumented/MicCamWatch.app"
+          /usr/bin/ditto "$root/quit/MicCamWatch.app" "$root/built-products/quit/MicCamWatch.app"
+          printf '%s\n' "$GITHUB_SHA" > "$root/built-products/source-commit.txt"
+          tar -C "$root" -czf "$root/built-products.tar.gz" built-products
+          shasum -a256 "$root/built-products.tar.gz" > "$root/built-products.SHA256SUMS"
+      - name: Upload frozen build proof before any graphical process can fail
+        if: ${{ !inputs.runtime-replay }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: flutter-macos-${{ matrix.architecture }}-${{ github.sha }}-built-products
+          retention-days: 14
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/mcw-flutter-macos/built-products.tar.gz
+            ${{ runner.temp }}/mcw-flutter-macos/built-products.SHA256SUMS
+            ${{ runner.temp }}/mcw-flutter-macos/environment.log
+            ${{ runner.temp }}/mcw-flutter-macos/sdk-pin.json
+      - name: Construct and verify the sealed hybrid app and distribution containers
+        if: ${{ !inputs.runtime-replay }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/mcw-flutter-macos"
+          arch="$EXPECTED_ARCH"
+          if [[ "$arch" == arm64 ]]; then arch=aarch64; fi
+          python3 -B installer/macos/package.py --binary target/release/mcw --arch "$arch" \
+            --flutter "$root/release/MicCamWatch.app" --revision "$GITHUB_SHA" --output "$root/distribution" \
+            2>&1 | tee "$root/distribution-build.log"
+      - name: Exercise the installed hybrid app, whole-app rollback and removal
+        if: ${{ !inputs.runtime-replay }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/mcw-flutter-macos"
+          arch="$EXPECTED_ARCH"
+          if [[ "$arch" == arm64 ]]; then arch=aarch64; fi
+          python3 -B installer/tests/macos-hybrid-installed.py "$root/distribution/miccamwatch-hybrid-macos-$arch.dmg" \
+            --direct-engine target/release/mcw \
+            --proof "$root/distribution/installed-lifecycle"
+      - name: Preserve exact macOS hybrid distribution artifacts
+        if: ${{ always() && !inputs.runtime-replay }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: miccamwatch-hybrid-macos-${{ matrix.architecture }}-${{ github.sha }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            ${{ runner.temp }}/mcw-flutter-macos/distribution/**
+            ${{ runner.temp }}/mcw-flutter-macos/distribution-build.log
+      - name: Inspect bundle seals architectures ACLs and run owned Aqua smoke when available
+        timeout-minutes: ${{ inputs.macos-replay-build-run != '' && 15 || 10 }}
+        run: |
+          set -euo pipefail
+          set -- --ui-panels
+          if [[ "${{ inputs.intel-bootstrap-controls }}" == "true" ]]; then
+            set -- "$@" --intel-bootstrap-controls
+          fi
+          python3 -B desktop/qualification/macos.py \
+            --proof "$RUNNER_TEMP/mcw-flutter-macos/evidence" \
+            --release-app "${MCW_FROZEN_RELEASE_APP:-$RUNNER_TEMP/mcw-flutter-macos/release/MicCamWatch.app}" \
+            --instrumented-app "${MCW_FROZEN_INSTRUMENTED_APP:-$RUNNER_TEMP/mcw-flutter-macos/instrumented/MicCamWatch.app}" \
+            "$@" \
+            2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/qualification.log"
+      - name: Verify rendered Flutter quit confirmation and permanent native owner teardown
+        if: ${{ !inputs.runtime-replay || inputs.macos-replay-build-run != '' }}
+        run: |
+          set -euo pipefail
+          python3 -B desktop/qualification/macos_quit.py \
+            --app "${MCW_FROZEN_QUIT_APP:-$RUNNER_TEMP/mcw-flutter-macos/quit/MicCamWatch.app}" \
+            --session "$RUNNER_TEMP/mcw-flutter-macos/evidence/session.json" \
+            --proof "$RUNNER_TEMP/mcw-flutter-macos/evidence/flutter-quit" \
+            2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/quit-qualification.log"
+      - name: Summarize observed graphical status (never infer from a successful build)
+        if: always()
+        timeout-minutes: 1
+        run: |
+          set -euo pipefail
+          receipt="$RUNNER_TEMP/mcw-flutter-macos/evidence/graphical-receipt.json"
+          {
+            printf '## macOS %s qualification\n\n```json\n' "$EXPECTED_ARCH"
+            if [[ -f "$receipt" ]]; then
+              cat "$receipt"
+            else
+              printf '{"status":"not-completed","reason":"See preserved runtime logs; no graphical success claimed"}\n'
+            fi
+            printf '\n```\n\nNo release, deploy, physical capture, Developer ID or notarization claim.\n'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Preserve Unix modes and symlinks and verify restored bundle seals
+        if: always()
+        timeout-minutes: 3
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/mcw-flutter-macos"
+          if [[ -d "$root/evidence" ]]; then
+            tar -C "$root" -czf "$root/evidence-native.tar.gz" evidence
+            shasum -a256 "$root/evidence-native.tar.gz" | tee "$root/evidence-native.SHA256SUMS"
+            mkdir "$root/archive-check"
+            tar -C "$root/archive-check" -xzf "$root/evidence-native.tar.gz"
+            for variant in release instrumented; do
+              app="$root/archive-check/evidence/$variant-prefix/desktop/MicCamWatch.app"
+              if [[ -d "$app" ]]; then
+                test -x "$app/Contents/MacOS/MicCamWatch"
+                codesign --verify --deep --strict "$app"
+              fi
+            done
+          fi
+      - name: Preserve exact qualification logs captures and development payload identities
+        if: always()
+        timeout-minutes: 5
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: flutter-macos-${{ matrix.architecture }}-${{ github.sha }}${{ inputs.runtime-replay && '-runtime-replay' || '' }}
+          if-no-files-found: error
+          retention-days: 14
+          include-hidden-files: true
+          path: |
+            ${{ runner.temp }}/mcw-flutter-macos/*.log
+            ${{ runner.temp }}/mcw-flutter-macos/*.json
+            ${{ runner.temp }}/mcw-flutter-macos/evidence-native.tar.gz
+            ${{ runner.temp }}/mcw-flutter-macos/evidence-native.SHA256SUMS
+            ${{ runner.temp }}/mcw-flutter-macos/built-products.tar.gz
+            ${{ runner.temp }}/mcw-flutter-macos/built-products.SHA256SUMS
+            ${{ runner.temp }}/mcw-flutter-macos/replay/artifact.json
+
+  linux-x64-baseline:
+    name: Ubuntu 22.04 x64 Mint-baseline development bundle
+    if: ${{ !inputs.native-gates-only && !inputs.intel-only && !inputs.arm-only && !inputs.skip-linux-x64 }}
+    permissions:
+      contents: read
+      actions: read
+    runs-on: ubuntu-22.04
+    timeout-minutes: 50
+    env:
+      CARGO_TERM_COLOR: never
+      FLUTTER_SUPPRESS_ANALYTICS: "true"
+      DART_SUPPRESS_ANALYTICS: "true"
+      CI: "true"
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Require ephemeral native Ubuntu 22.04 x64 baseline
+        run: |
+          set -euo pipefail
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$(uname -m)" = x86_64
+          test "$(id -u)" != 0
+          test "$(. /etc/os-release; printf '%s' "$ID:$VERSION_ID")" = ubuntu:22.04
+          mkdir -m 700 "$RUNNER_TEMP/mcw-flutter-linux-setup"
+          if [ ! -e "$HOME/mcw-qualification" ]; then
+            mkdir -m 700 "$HOME/mcw-qualification"
+          fi
+          {
+            cat /etc/os-release
+            uname -a
+            ldd --version
+            printf 'source=%s\nrunner-image=%s\n' "$GITHUB_SHA" "${ImageVersion:-unknown}"
+          } 2>&1 | tee "$RUNNER_TEMP/mcw-flutter-linux-setup/environment.log"
+          printf 'MCW_LINUX_OUTPUT=%s/mcw-qualification/b3-hosted-%s-%s\n' "$HOME" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" >> "$GITHUB_ENV"
+      - name: Prepare build and isolated virtual-desktop tools on disposable hosted VM only
+        run: |
+          set -euo pipefail
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          sudo apt-get update 2>&1 | tee "$RUNNER_TEMP/mcw-flutter-linux-setup/apt-update.log"
+          sudo apt-get install -y --no-install-recommends \
+            clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libstdc++-12-dev \
+            libpipewire-0.3-dev libclang-dev python3 binutils libx11-dev \
+            dbus-x11 xvfb xauth openbox xfce4-panel xfconf at-spi2-core libatspi2.0-0 libatk-adaptor fonts-noto-core \
+            libgl1-mesa-dri libegl1-mesa libgl1 mesa-utils \
+            2>&1 | tee "$RUNNER_TEMP/mcw-flutter-linux-setup/apt-install.log"
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        if: ${{ !inputs.runtime-replay }}
+        with:
+          toolchain: 1.98.1
+          components: clippy
+      - name: Download exact official Linux Flutter SDK and verify before execution
+        if: ${{ !inputs.runtime-replay }}
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, subprocess, urllib.request
+          root = pathlib.Path(os.environ['RUNNER_TEMP']) / 'mcw-flutter-linux-setup'
+          base = 'https://storage.googleapis.com/flutter_infra_release/releases'
+          archive = 'stable/linux/flutter_linux_3.47.8-stable.tar.xz'
+          digest = 'baf7dcc5a3dbba60fe863bf493a6cf203195621f7786eaa5a1bba02cd0d87dd2'
+          revision = '737ba8f885dc774b53b442759999a312c9461e4e'
+          with urllib.request.urlopen(base + '/releases_linux.json', timeout=60) as response:
+              metadata = response.read()
+          (root / 'flutter-official-releases.json').write_bytes(metadata)
+          rows = [row for row in json.loads(metadata)['releases']
+                  if row.get('version') == '3.47.8' and row.get('channel') == 'stable'
+                  and row.get('dart_sdk_arch') == 'x64']
+          assert len(rows) == 1 and all(rows[0].get(key) == value for key, value in
+              dict(hash=revision, archive=archive, sha256=digest, dart_sdk_version='3.13.7').items()), rows
+          target = root / 'flutter.tar.xz'
+          with urllib.request.urlopen(base + '/' + archive, timeout=180) as response, target.open('xb') as output:
+              while block := response.read(1024 * 1024):
+                  output.write(block)
+          sha = hashlib.sha256()
+          with target.open('rb') as source:
+              while block := source.read(1024 * 1024):
+                  sha.update(block)
+          assert sha.hexdigest() == digest, 'Official SDK archive SHA256 mismatch'
+          subprocess.run(['tar', '-xJf', str(target), '-C', str(root)], check=True)
+          (root / 'sdk-pin.json').write_text(json.dumps(rows[0], indent=2) + '\n')
+          with open(os.environ['GITHUB_PATH'], 'a') as path:
+              path.write(str(root / 'flutter/bin') + '\n')
+          PY
+      - name: Require exact Rust Flutter and Dart versions
+        if: ${{ !inputs.runtime-replay }}
+        run: |
+          set -euo pipefail
+          rustc -Vv | tee "$RUNNER_TEMP/mcw-flutter-linux-setup/rust.log"
+          test "$(rustc --version | cut -d ' ' -f 2)" = 1.98.1
+          flutter --version --machine > "$RUNNER_TEMP/mcw-flutter-linux-setup/flutter-version.json"
+          python3 -c 'import json,os; p=json.load(open(os.environ["RUNNER_TEMP"]+"/mcw-flutter-linux-setup/flutter-version.json")); assert p["frameworkVersion"]=="3.47.8" and p["frameworkRevision"]=="737ba8f885dc774b53b442759999a312c9461e4e" and p["dartSdkVersion"].split()[0]=="3.13.7",p'
+      - name: Build package and audit actual Ubuntu 22.04 symbol floors
+        if: ${{ !inputs.runtime-replay }}
+        run: |
+          set -euo pipefail
+          bash desktop/qualification/linux_hosted.sh "$MCW_LINUX_OUTPUT" \
+            2>&1 | tee "$RUNNER_TEMP/mcw-flutter-linux-setup/build.log"
+      - name: Restore exact pinned B5 baseline products without recompilation
+        if: ${{ inputs.runtime-replay }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          extra=()
+          if [ "${{ inputs.linux-renderer-probe }}" = "true" ]; then extra+=(--linux-renderer-probe); fi
+          python3 -B desktop/qualification/replay_products.py --platform linux \
+            --root "$MCW_LINUX_OUTPUT" "${extra[@]}"
+      - name: Exercise owned X11 lifecycle native SNI and safe preferences in private virtual desktop
+        run: |
+          set -euo pipefail
+          command=(dbus-run-session -- xvfb-run -a -s '-screen 0 1280x1000x24'
+            python3 -B desktop/qualification/linux_hosted.py
+            --prefix "$MCW_LINUX_OUTPUT/bundle" --xwindow "$MCW_LINUX_OUTPUT/linux_xwindow")
+          if [ "${{ inputs.linux-renderer-probe }}" = "true" ]; then
+            export MCW_LINUX_THREAD_SAMPLE=1
+            failed=0
+            env -u FLUTTER_LINUX_RENDERER "${command[@]}" --performance-only --out "$MCW_LINUX_OUTPUT/runtime" \
+              2>&1 | tee "$RUNNER_TEMP/mcw-flutter-linux-setup/runtime.log" || failed=1
+            FLUTTER_LINUX_RENDERER=software "${command[@]}" --performance-only --out "$MCW_LINUX_OUTPUT/runtime-software" \
+              2>&1 | tee "$RUNNER_TEMP/mcw-flutter-linux-setup/runtime-software.log" || failed=1
+            exit "$failed"
+          else
+            "${command[@]}" --out "$MCW_LINUX_OUTPUT/runtime" \
+              2>&1 | tee "$RUNNER_TEMP/mcw-flutter-linux-setup/runtime.log"
+          fi
+      - name: Summarize observed baseline bundle and hosted desktop evidence
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib
+          output = os.environ.get('MCW_LINUX_OUTPUT')
+          receipt = pathlib.Path(output) / 'runtime/hosted-result.json' if output else None
+          value = json.loads(receipt.read_text()) if receipt and receipt.exists() else {'complete': False, 'reason': 'Qualification did not complete; inspect build/runtime logs'}
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write('## Linux x64 Ubuntu22.04 baseline qualification\n\n```json\n' + json.dumps(value, indent=2) + '\n```\n\nQualification artifact only. Xvfb/software graphics is not physical Mint/GPU qualification. No ARM, hardware-control, release or deploy claim.\n')
+          PY
+      - name: Exercise managed Linux install, rollback and guarded uninstall
+        if: ${{ !inputs.runtime-replay }}
+        run: |
+          set -euo pipefail
+          bash installer/tests/linux-hybrid-hosted.sh \
+            "$MCW_LINUX_OUTPUT/distribution/miccamwatch-hybrid-linux-x86_64.tar.gz" \
+            "$MCW_LINUX_OUTPUT/distribution/installed-lifecycle.json"
+      - name: Preserve complete Linux distribution and ABI evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: miccamwatch-hybrid-linux-x86_64-${{ github.sha }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            ${{ env.MCW_LINUX_OUTPUT }}/distribution/*.tar.gz
+            ${{ env.MCW_LINUX_OUTPUT }}/distribution/SHA256SUMS
+            ${{ env.MCW_LINUX_OUTPUT }}/distribution/elf-abi.json
+            ${{ env.MCW_LINUX_OUTPUT }}/distribution/bundle/miccamwatch-bundle.json
+            ${{ env.MCW_LINUX_OUTPUT }}/distribution/installed-lifecycle.json
+            ${{ env.MCW_LINUX_OUTPUT }}/distribution/hosted-install.log
+      - name: Preserve qualification-only Linux bundle and actual build/runtime evidence
+        if: ${{ always() && env.MCW_LINUX_OUTPUT != '' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: flutter-linux-x64-ubuntu2204-baseline-${{ github.sha }}${{ inputs.runtime-replay && '-runtime-replay' || '' }}
+          if-no-files-found: error
+          retention-days: 14
+          include-hidden-files: true
+          path: |
+            ${{ env.MCW_LINUX_OUTPUT }}/bundle/**
+            ${{ env.MCW_LINUX_OUTPUT }}/runtime/**
+            ${{ env.MCW_LINUX_OUTPUT }}/runtime-software/**
+            ${{ env.MCW_LINUX_OUTPUT }}/*.json
+            ${{ env.MCW_LINUX_OUTPUT }}/*.log
+            ${{ env.MCW_LINUX_OUTPUT }}/*.txt
+            ${{ env.MCW_LINUX_OUTPUT }}/*.SHA256SUMS
+            ${{ env.MCW_LINUX_OUTPUT }}/*.tar.gz
+            ${{ env.MCW_LINUX_OUTPUT }}/linux_xwindow
+            ${{ env.MCW_LINUX_OUTPUT }}/replay/artifact.json
+            ${{ runner.temp }}/mcw-flutter-linux-setup/*.log
+            ${{ runner.temp }}/mcw-flutter-linux-setup/*.json
+
+  linux-arm64-native:
+    name: Ubuntu 22.04 ARM64 official-source Flutter build and ABI baseline
+    if: ${{ !inputs.native-gates-only && !inputs.intel-only && !inputs.arm-only && !inputs.runtime-replay && !inputs.skip-linux-arm64 }}
+    runs-on: ubuntu-22.04-arm
+    timeout-minutes: 60
+    env:
+      CARGO_TERM_COLOR: never
+      FLUTTER_SUPPRESS_ANALYTICS: "true"
+      DART_SUPPRESS_ANALYTICS: "true"
+      CI: "true"
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Require disposable native host and prepare only its build dependencies
+        run: |
+          set -euo pipefail
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$(uname -m)" = aarch64
+          test "$(id -u)" != 0
+          test "$(. /etc/os-release; printf '%s' "$ID:$VERSION_ID")" = ubuntu:22.04
+          mkdir -m 700 "$RUNNER_TEMP/mcw-flutter-arm-setup"
+          mkdir -p "$HOME/mcw-qualification"
+          printf 'MCW_ARM_SDK=%s/mcw-qualification/b4-arm-sdk-%s-%s\n' "$HOME" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" >> "$GITHUB_ENV"
+          printf 'MCW_ARM_OUTPUT=%s/mcw-qualification/b4-arm-%s-%s\n' "$HOME" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" >> "$GITHUB_ENV"
+          sudo apt-get update 2>&1 | tee "$RUNNER_TEMP/mcw-flutter-arm-setup/apt-update.log"
+          sudo apt-get install -y --no-install-recommends \
+            git curl unzip xz-utils zip clang cmake ninja-build pkg-config \
+            libgtk-3-dev liblzma-dev libstdc++-11-dev libpipewire-0.3-dev \
+            libclang-dev python3 binutils libx11-dev \
+            2>&1 | tee "$RUNNER_TEMP/mcw-flutter-arm-setup/apt-install.log"
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: 1.98.1
+          components: clippy
+      - name: Bootstrap exact official Flutter source with native upstream ARM64 artifacts
+        run: |
+          set -euo pipefail
+          python3 -B desktop/qualification/linux_b4_arm_bootstrap.py --out "$MCW_ARM_SDK"
+      - name: Compile and test native Rust and Flutter and audit the actual ARM64 bundle
+        run: |
+          set -euo pipefail
+          python3 -B desktop/qualification/linux_b4_arm.py \
+            --sdk "$MCW_ARM_SDK/flutter" --out "$MCW_ARM_OUTPUT"
+      - name: Exercise managed Linux install, rollback and guarded uninstall
+        if: ${{ !inputs.runtime-replay }}
+        run: |
+          set -euo pipefail
+          bash installer/tests/linux-hybrid-hosted.sh \
+            "$MCW_ARM_OUTPUT/distribution/miccamwatch-hybrid-linux-aarch64.tar.gz" \
+            "$MCW_ARM_OUTPUT/distribution/installed-lifecycle.json"
+      - name: Preserve complete Linux distribution and ABI evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: miccamwatch-hybrid-linux-aarch64-${{ github.sha }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            ${{ env.MCW_ARM_OUTPUT }}/distribution/*.tar.gz
+            ${{ env.MCW_ARM_OUTPUT }}/distribution/SHA256SUMS
+            ${{ env.MCW_ARM_OUTPUT }}/distribution/elf-abi.json
+            ${{ env.MCW_ARM_OUTPUT }}/distribution/bundle/miccamwatch-bundle.json
+            ${{ env.MCW_ARM_OUTPUT }}/distribution/installed-lifecycle.json
+            ${{ env.MCW_ARM_OUTPUT }}/distribution/hosted-install.log
+      - name: Preserve provenance logs native ELFs and qualification-only package
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: flutter-linux-arm64-native-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 14
+          include-hidden-files: true
+          path: |
+            ${{ env.MCW_ARM_SDK }}/*.json
+            ${{ env.MCW_ARM_SDK }}/*.log
+            ${{ env.MCW_ARM_OUTPUT }}/*.json
+            ${{ env.MCW_ARM_OUTPUT }}/*.log
+            ${{ env.MCW_ARM_OUTPUT }}/*.SHA256SUMS
+            ${{ env.MCW_ARM_OUTPUT }}/*.tar.gz
+            ${{ env.MCW_ARM_OUTPUT }}/bundle/**
+            ${{ runner.temp }}/mcw-flutter-arm-setup/*.log
+
+  native-qualification-gates:
+    name: Native guard tests ${{ matrix.family }} ${{ matrix.architecture }} (no Flutter rebuild)
+    if: ${{ inputs.native-gates-only }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {runner: macos-15-intel, family: macos, architecture: x86_64}
+          - {runner: macos-15, family: macos, architecture: arm64}
+          - {runner: ubuntu-22.04, family: linux, architecture: x86_64}
+          - {runner: ubuntu-24.04-arm, family: linux, architecture: aarch64}
+    env:
+      CARGO_TERM_COLOR: never
+      MACOSX_DEPLOYMENT_TARGET: "15.0"
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Require disposable matching native host
+        run: |
+          set -euo pipefail
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$(uname -m)" = "${{ matrix.architecture }}"
+          test "$(id -u)" != 0
+          mkdir -m 700 "$RUNNER_TEMP/mcw-native-guards"
+          printf '%s\n' "$GITHUB_SHA" > "$RUNNER_TEMP/mcw-native-guards/source.txt"
+      - name: Prepare only disposable Linux Rust build dependencies
+        if: matrix.family == 'linux'
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang pkg-config libclang-dev libpipewire-0.3-dev libgtk-3-dev
+      - name: Require pinned Xcode for native helper
+        if: matrix.family == 'macos'
+        env:
+          DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+        run: |
+          set -euo pipefail
+          test "$(/usr/bin/xcodebuild -version)" = $'Xcode 26.3\nBuild version 17C529'
+          test "$(/usr/bin/xcrun --show-sdk-version)" = 26.2
+          printf 'DEVELOPER_DIR=%s\n' "$DEVELOPER_DIR" >> "$GITHUB_ENV"
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: 1.98.1
+          components: clippy
+      - name: Require both exact tests then execute their real isolated bodies
+        run: |
+          set -euo pipefail
+          proof="$RUNNER_TEMP/mcw-native-guards"
+          cargo test --lib --locked --features flutter-desktop frontends::tray::menu_tests::qualification_ -- --list \
+            2>&1 | tee "$proof/selected-tests.log"
+          python3 - "$proof/selected-tests.log" <<'PY'
+          import pathlib, sys
+          prefix = 'frontends::tray::menu_tests::'
+          expected = {prefix + name for name in (
+              'qualification_native_view_has_no_mutating_actions',
+              'qualification_dispatch_rejects_every_native_mutation')}
+          selected = {line[:-6] for line in pathlib.Path(sys.argv[1]).read_text().splitlines() if line.endswith(': test')}
+          if selected != expected:
+              raise SystemExit(f'Exact native guard test selection mismatch: {selected!r}')
+          PY
+          cargo test --lib --locked --features flutter-desktop frontends::tray::menu_tests::qualification_ -- --test-threads=1 --nocapture \
+            2>&1 | tee "$proof/executed-tests.log"
+          cargo test --lib --locked --features flutter-desktop autostart:: -- --test-threads=1 \
+            2>&1 | tee "$proof/autostart-tests.log"
+          cargo test --lib --locked --features flutter-desktop watcher::unix::tests \
+            2>&1 | tee "$proof/watch-notification-tests.log"
+          cargo clippy --locked --lib --tests --features flutter-desktop -- -D warnings \
+            2>&1 | tee "$proof/clippy.log"
+      - name: Preserve native guard selection and execution evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: flutter-native-guards-${{ matrix.family }}-${{ matrix.architecture }}-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 14
+          path: ${{ runner.temp }}/mcw-native-guards/

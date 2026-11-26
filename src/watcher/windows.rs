@@ -1,3 +1,6 @@
+use crate::notify::capture::NotificationCooldowns;
+#[cfg(test)]
+use crate::notify::capture::{MAX_COOLDOWNS, NOTIFICATION_COOLDOWN};
 use crate::{
     frontends::cli::Filter,
     i18n::Language,
@@ -382,6 +385,22 @@ fn update_enforcement_candidates<'a>(
     observations: &mut HashMap<(String, String), u8>,
     terminated: &mut HashSet<(String, String)>,
 ) {
+    update_enforcement_candidates_with(
+        accesses,
+        enabled,
+        observations,
+        terminated,
+        crate::platform::terminate_process_by_pid,
+    );
+}
+
+pub(super) fn update_enforcement_candidates_with<'a>(
+    accesses: impl Iterator<Item = &'a Access>,
+    enabled: bool,
+    observations: &mut HashMap<(String, String), u8>,
+    terminated: &mut HashSet<(String, String)>,
+    mut terminate: impl FnMut(u32, &str) -> Result<()>,
+) {
     if !enabled {
         observations.clear();
         return;
@@ -416,7 +435,7 @@ fn update_enforcement_candidates<'a>(
         if *count < 2 {
             continue;
         }
-        match crate::platform::terminate_process_by_pid(pid, instance) {
+        match terminate(pid, instance) {
             Ok(()) => {
                 terminated.insert((access.key.clone(), instance.to_owned()));
                 eprintln!(
@@ -498,40 +517,6 @@ fn write_eventlog(event: &AccessEvent, handle: &Option<HANDLE>) {
     };
 }
 
-const NOTIFICATION_COOLDOWN: Duration = Duration::from_secs(30);
-const MAX_COOLDOWNS: usize = 4096;
-
-#[derive(Default)]
-struct NotificationCooldowns {
-    last: HashMap<String, Instant>,
-    overloaded: bool,
-}
-impl NotificationCooldowns {
-    fn prune(&mut self, now: Instant) {
-        self.last
-            .retain(|_, at| now.saturating_duration_since(*at) < NOTIFICATION_COOLDOWN);
-        if self.last.len() < MAX_COOLDOWNS {
-            self.overloaded = false;
-        }
-    }
-    fn due(&mut self, key: &str, now: Instant) -> bool {
-        self.prune(now);
-        if self.last.contains_key(key) {
-            return false;
-        }
-        if self.last.len() == MAX_COOLDOWNS {
-            if !self.overloaded {
-                eprintln!(
-                    "notification cooldown overload: {MAX_COOLDOWNS} active identities; new toasts suppressed until cooldown expiry (event output/history preserved)"
-                );
-                self.overloaded = true;
-            }
-            return false;
-        }
-        self.last.insert(key.to_owned(), now);
-        true
-    }
-}
 fn notification_due(last: &mut NotificationCooldowns, key: &str) -> bool {
     last.due(key, Instant::now())
 }

@@ -1,0 +1,363 @@
+#include "win32_window.h"
+
+#include <dwmapi.h>
+#include <flutter_windows.h>
+
+#include <algorithm>
+
+#include "resource.h"
+
+namespace {
+
+/// Window attribute that enables dark mode window decorations.
+///
+/// Redefined in case the developer's machine has a Windows SDK older than
+/// version 10.0.22000.0.
+/// See: https://docs.microsoft.com/windows/win32/api/dwmapi/ne-dwmapi-dwmwindowattribute
+#ifndef DWMWA_USE_IMMERSIVE_DARK_MODE
+#define DWMWA_USE_IMMERSIVE_DARK_MODE 20
+#endif
+
+constexpr const wchar_t kWindowClassName[] = L"FLUTTER_RUNNER_WIN32_WINDOW";
+constexpr const wchar_t kFrameKey[] = L"Software\\MicCamWatch\\FlutterWindow";
+struct SavedFrame {
+  RECT rect;
+  UINT dpi;
+};
+
+
+// The number of Win32Window objects that currently exist.
+static int g_active_window_count = 0;
+
+using EnableNonClientDpiScaling = BOOL __stdcall(HWND hwnd);
+
+// Scale helper to convert logical scaler values to physical using passed in
+// scale factor
+int Scale(int source, double scale_factor) {
+  return static_cast<int>(source * scale_factor);
+}
+
+// Dynamically loads the |EnableNonClientDpiScaling| from the User32 module.
+// This API is only needed for PerMonitor V1 awareness mode.
+void EnableFullDpiSupportIfAvailable(HWND hwnd) {
+  HMODULE user32_module = LoadLibraryA("User32.dll");
+  if (!user32_module) {
+    return;
+  }
+  auto enable_non_client_dpi_scaling =
+      reinterpret_cast<EnableNonClientDpiScaling*>(
+          GetProcAddress(user32_module, "EnableNonClientDpiScaling"));
+  if (enable_non_client_dpi_scaling != nullptr) {
+    enable_non_client_dpi_scaling(hwnd);
+  }
+  FreeLibrary(user32_module);
+}
+
+}  // namespace
+
+// Manages the Win32Window's window class registration.
+class WindowClassRegistrar {
+ public:
+  ~WindowClassRegistrar() = default;
+
+  // Returns the singleton registrar instance.
+  static WindowClassRegistrar* GetInstance() {
+    if (!instance_) {
+      instance_ = new WindowClassRegistrar();
+    }
+    return instance_;
+  }
+
+  // Returns the name of the window class, registering the class if it hasn't
+  // previously been registered.
+  const wchar_t* GetWindowClass();
+
+  // Unregisters the window class. Should only be called if there are no
+  // instances of the window.
+  void UnregisterWindowClass();
+
+ private:
+  WindowClassRegistrar() = default;
+
+  static WindowClassRegistrar* instance_;
+
+  bool class_registered_ = false;
+};
+
+WindowClassRegistrar* WindowClassRegistrar::instance_ = nullptr;
+
+const wchar_t* WindowClassRegistrar::GetWindowClass() {
+  if (!class_registered_) {
+    WNDCLASS window_class{};
+    window_class.hCursor = LoadCursor(nullptr, IDC_ARROW);
+    window_class.lpszClassName = kWindowClassName;
+    window_class.style = CS_HREDRAW | CS_VREDRAW;
+    window_class.cbClsExtra = 0;
+    window_class.cbWndExtra = 0;
+    window_class.hInstance = GetModuleHandle(nullptr);
+    window_class.hIcon =
+        LoadIcon(window_class.hInstance, MAKEINTRESOURCE(IDI_APP_ICON));
+    window_class.hbrBackground = 0;
+    window_class.lpszMenuName = nullptr;
+    window_class.lpfnWndProc = Win32Window::WndProc;
+    RegisterClass(&window_class);
+    class_registered_ = true;
+  }
+  return kWindowClassName;
+}
+
+void WindowClassRegistrar::UnregisterWindowClass() {
+  UnregisterClass(kWindowClassName, nullptr);
+  class_registered_ = false;
+}
+
+Win32Window::Win32Window() {
+  ++g_active_window_count;
+}
+
+Win32Window::~Win32Window() {
+  --g_active_window_count;
+  Destroy();
+}
+
+bool Win32Window::Create(const std::wstring& title,
+                         const Point& origin,
+                         const Size& size) {
+  Destroy();
+
+  const wchar_t* window_class =
+      WindowClassRegistrar::GetInstance()->GetWindowClass();
+
+  const POINT target_point = {static_cast<LONG>(origin.x),
+                              static_cast<LONG>(origin.y)};
+  HMONITOR monitor = MonitorFromPoint(target_point, MONITOR_DEFAULTTONEAREST);
+  UINT dpi = FlutterDesktopGetDpiForMonitor(monitor);
+  if (dpi == 0) dpi = 96;
+  double scale_factor = dpi / 96.0;
+  // Preserve logical client dimensions across display scaling.
+  RECT frame = {0, 0, Scale(size.width, scale_factor),
+                Scale(size.height, scale_factor)};
+  AdjustWindowRectExForDpi(&frame, WS_OVERLAPPEDWINDOW, FALSE, 0, dpi);
+
+  LONG width = frame.right - frame.left;
+  LONG height = frame.bottom - frame.top;
+  LONG x = target_point.x;
+  LONG y = target_point.y;
+  SavedFrame saved = {};
+  DWORD bytes = sizeof(saved);
+  if (RegGetValueW(HKEY_CURRENT_USER, kFrameKey, L"Frame", RRF_RT_REG_BINARY,
+                   nullptr, &saved, &bytes) == ERROR_SUCCESS &&
+      bytes == sizeof(saved) && saved.dpi >= 48 && saved.dpi <= 960 &&
+      saved.rect.right > saved.rect.left && saved.rect.bottom > saved.rect.top &&
+      saved.rect.left >= -100000 && saved.rect.top >= -100000 &&
+      saved.rect.right <= 100000 && saved.rect.bottom <= 100000) {
+    monitor = MonitorFromRect(&saved.rect, MONITOR_DEFAULTTONEAREST);
+    dpi = FlutterDesktopGetDpiForMonitor(monitor);
+    if (dpi == 0) dpi = 96;
+    x = saved.rect.left;
+    y = saved.rect.top;
+    width = MulDiv(saved.rect.right - saved.rect.left, dpi, saved.dpi);
+    height = MulDiv(saved.rect.bottom - saved.rect.top, dpi, saved.dpi);
+  }
+  MONITORINFO monitor_info = {};
+  monitor_info.cbSize = sizeof(monitor_info);
+  if (GetMonitorInfo(monitor, &monitor_info)) {
+    const RECT& work = monitor_info.rcWork;
+    width = std::min(width, work.right - work.left);
+    height = std::min(height, work.bottom - work.top);
+    x = std::clamp(x, work.left, work.right - width);
+    y = std::clamp(y, work.top, work.bottom - height);
+  }
+
+  HWND window = CreateWindow(
+      window_class, title.c_str(), WS_OVERLAPPEDWINDOW, x, y, width, height,
+      nullptr, nullptr, GetModuleHandle(nullptr), this);
+
+  if (!window) {
+    return false;
+  }
+  FitToWorkArea();
+
+  UpdateTheme(window);
+
+  return OnCreate();
+}
+
+bool Win32Window::Show() {
+  return ShowWindow(window_handle_, SW_SHOWNORMAL);
+}
+
+// static
+LRESULT CALLBACK Win32Window::WndProc(HWND const window,
+                                      UINT const message,
+                                      WPARAM const wparam,
+                                      LPARAM const lparam) noexcept {
+  if (message == WM_NCCREATE) {
+    auto window_struct = reinterpret_cast<CREATESTRUCT*>(lparam);
+    SetWindowLongPtr(window, GWLP_USERDATA,
+                     reinterpret_cast<LONG_PTR>(window_struct->lpCreateParams));
+
+    auto that = static_cast<Win32Window*>(window_struct->lpCreateParams);
+    EnableFullDpiSupportIfAvailable(window);
+    that->window_handle_ = window;
+  } else if (Win32Window* that = GetThisFromHandle(window)) {
+    return that->MessageHandler(window, message, wparam, lparam);
+  }
+
+  return DefWindowProc(window, message, wparam, lparam);
+}
+
+LRESULT
+Win32Window::MessageHandler(HWND hwnd,
+                            UINT const message,
+                            WPARAM const wparam,
+                            LPARAM const lparam) noexcept {
+  switch (message) {
+    case WM_CLOSE:
+      SaveFrame();
+      break;
+    case WM_EXITSIZEMOVE:
+      SaveFrame();
+      return 0;
+    case WM_DISPLAYCHANGE:
+    case WM_SETTINGCHANGE:
+      FitToWorkArea();
+      return 0;
+    case WM_DESTROY:
+      window_handle_ = nullptr;
+      Destroy();
+      if (quit_on_close_) {
+        PostQuitMessage(0);
+      }
+      return 0;
+
+    case WM_DPICHANGED: {
+      auto newRectSize = reinterpret_cast<RECT*>(lparam);
+      LONG newWidth = newRectSize->right - newRectSize->left;
+      LONG newHeight = newRectSize->bottom - newRectSize->top;
+
+      SetWindowPos(hwnd, nullptr, newRectSize->left, newRectSize->top, newWidth,
+                   newHeight, SWP_NOZORDER | SWP_NOACTIVATE);
+      FitToWorkArea();
+
+      return 0;
+    }
+    case WM_SIZE: {
+      RECT rect = GetClientArea();
+      if (child_content_ != nullptr) {
+        // Size and position the child window.
+        MoveWindow(child_content_, rect.left, rect.top, rect.right - rect.left,
+                   rect.bottom - rect.top, TRUE);
+      }
+      return 0;
+    }
+
+    case WM_ACTIVATE:
+      if (child_content_ != nullptr) {
+        SetFocus(child_content_);
+      }
+      return 0;
+
+    case WM_DWMCOLORIZATIONCOLORCHANGED:
+      UpdateTheme(hwnd);
+      return 0;
+  }
+
+  return DefWindowProc(window_handle_, message, wparam, lparam);
+}
+
+void Win32Window::FitToWorkArea() {
+  if (!window_handle_ || IsIconic(window_handle_) || IsZoomed(window_handle_)) return;
+  RECT rect;
+  MONITORINFO info = {};
+  info.cbSize = sizeof(info);
+  if (!GetWindowRect(window_handle_, &rect) ||
+      !GetMonitorInfo(MonitorFromRect(&rect, MONITOR_DEFAULTTONEAREST), &info)) return;
+  const RECT& work = info.rcWork;
+  const LONG width = std::min(rect.right - rect.left, work.right - work.left);
+  const LONG height = std::min(rect.bottom - rect.top, work.bottom - work.top);
+  const LONG x = std::clamp(rect.left, work.left, work.right - width);
+  const LONG y = std::clamp(rect.top, work.top, work.bottom - height);
+  if (x != rect.left || y != rect.top || width != rect.right - rect.left ||
+      height != rect.bottom - rect.top) {
+    SetWindowPos(window_handle_, nullptr, x, y, width, height, SWP_NOZORDER | SWP_NOACTIVATE);
+  }
+}
+
+void Win32Window::SaveFrame() {
+  if (!window_handle_ || IsIconic(window_handle_) || IsZoomed(window_handle_)) return;
+  SavedFrame saved = {};
+  if (!GetWindowRect(window_handle_, &saved.rect)) return;
+  saved.dpi = GetDpiForWindow(window_handle_);
+  if (saved.dpi == 0) saved.dpi = 96;
+  HKEY key;
+  if (RegCreateKeyExW(HKEY_CURRENT_USER, kFrameKey, 0, nullptr, 0, KEY_SET_VALUE,
+                      nullptr, &key, nullptr) == ERROR_SUCCESS) {
+    RegSetValueExW(key, L"Frame", 0, REG_BINARY,
+                  reinterpret_cast<const BYTE*>(&saved), sizeof(saved));
+    RegCloseKey(key);
+  }
+}
+
+void Win32Window::Destroy() {
+  OnDestroy();
+
+  if (window_handle_) {
+    DestroyWindow(window_handle_);
+    window_handle_ = nullptr;
+  }
+  if (g_active_window_count == 0) {
+    WindowClassRegistrar::GetInstance()->UnregisterWindowClass();
+  }
+}
+
+Win32Window* Win32Window::GetThisFromHandle(HWND const window) noexcept {
+  return reinterpret_cast<Win32Window*>(
+      GetWindowLongPtr(window, GWLP_USERDATA));
+}
+
+void Win32Window::SetChildContent(HWND content) {
+  child_content_ = content;
+  SetParent(content, window_handle_);
+  RECT frame = GetClientArea();
+
+  MoveWindow(content, frame.left, frame.top, frame.right - frame.left,
+             frame.bottom - frame.top, true);
+
+  SetFocus(child_content_);
+}
+
+RECT Win32Window::GetClientArea() {
+  RECT frame;
+  GetClientRect(window_handle_, &frame);
+  return frame;
+}
+
+HWND Win32Window::GetHandle() {
+  return window_handle_;
+}
+
+void Win32Window::SetQuitOnClose(bool quit_on_close) {
+  quit_on_close_ = quit_on_close;
+}
+
+bool Win32Window::OnCreate() {
+  // No-op; provided for subclasses.
+  return true;
+}
+
+void Win32Window::OnDestroy() {
+  // No-op; provided for subclasses.
+}
+
+void Win32Window::SetFrameTheme(bool dark) {
+  dark_frame_ = dark;
+  if (window_handle_) UpdateTheme(window_handle_);
+}
+
+void Win32Window::UpdateTheme(HWND const window) {
+  BOOL enabled = dark_frame_ ? TRUE : FALSE;
+  // DWM styling is per-window and never writes system/user theme state.
+  DwmSetWindowAttribute(window, DWMWA_USE_IMMERSIVE_DARK_MODE,
+                        &enabled, sizeof(enabled));
+}

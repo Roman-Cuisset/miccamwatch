@@ -417,6 +417,13 @@ pub fn restore_legacy_camera(instance_id: &str) -> Result<CameraControlObservati
     windows_guard::restore_legacy(instance_id)
 }
 
+#[cfg(all(windows, feature = "flutter-desktop"))]
+pub(crate) fn restore_legacy_camera_verified(
+    instance_id: &str,
+) -> Result<CameraControlObservation> {
+    windows_guard::restore_legacy_verified(instance_id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

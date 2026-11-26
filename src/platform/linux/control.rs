@@ -137,6 +137,26 @@ impl Control {
         Ok(aggregate_state(&session.capabilities()))
     }
 
+    #[cfg(feature = "flutter-desktop")]
+    pub(crate) fn has_microphone_originals() -> Result<bool> {
+        use std::{ffi::OsStr, io::ErrorKind};
+        let directory = match crate::autostart::Directory::open(&Store::directory()?, false) {
+            Ok(directory) => directory,
+            Err(error)
+                if error
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(|error| error.kind() == ErrorKind::NotFound) =>
+            {
+                return Ok(false);
+            }
+            Err(error) => return Err(error),
+        };
+        let file = directory.file(OsStr::new("pipewire-mute.json"))?;
+        file.map(Store::read_journal)
+            .transpose()
+            .map(|journal| journal.is_some_and(|journal| !journal.entries.is_empty()))
+    }
+
     pub fn set_microphone_mute(&self, muted: bool) -> Result<usize> {
         let store = Store::open()?;
         let mut journal = store.load()?;
@@ -1010,15 +1030,19 @@ pub(crate) fn reserve_uninstall() -> Result<File> {
 }
 
 impl Store {
-    fn open() -> Result<Self> {
+    fn directory() -> Result<PathBuf> {
         let root = env::var_os("XDG_STATE_HOME")
             .map(PathBuf::from)
             .filter(|path| path.is_absolute())
             .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/state")))
             .context("HOME/XDG_STATE_HOME is missing; cannot persist original mute states")?;
-        let directory = root.join("miccamwatch");
+        Ok(root.join("miccamwatch"))
+    }
+
+    fn open() -> Result<Self> {
+        let directory = Self::directory()?;
         if !directory.exists() {
-            fs::create_dir_all(&root)?;
+            fs::create_dir_all(directory.parent().context("Missing mute state parent")?)?;
             match fs::DirBuilder::new().mode(0o700).create(&directory) {
                 Ok(()) => (),
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => (),
@@ -1079,6 +1103,10 @@ impl Store {
             }
             Err(error) => return Err(error.into()),
         };
+        Self::read_journal(file)
+    }
+
+    fn read_journal(file: File) -> Result<Journal> {
         validate_private_file(&file)?;
         let mut bytes = Vec::new();
         file.take(MAX_STATE_BYTES + 1).read_to_end(&mut bytes)?;

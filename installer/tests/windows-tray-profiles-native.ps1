@@ -117,11 +117,8 @@ $executables = @($build | ForEach-Object {
     } catch { }
 } | Select-Object -Unique)
 if ($executables.Count -ne 1) { throw 'Cannot uniquely identify the freshly built miccamwatch library-test executable.' }
-$executable = [IO.Path]::GetFullPath($executables[0])
-$target = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../../target')) + [IO.Path]::DirectorySeparatorChar
-if (-not $executable.StartsWith($target, [StringComparison]::OrdinalIgnoreCase) -or $executable -notmatch '[\\/]deps[\\/]miccamwatch-[0-9a-f]+\.exe$') {
-    throw 'Refusing a non-repository/non-test executable image.'
-}
+. (Join-Path $PSScriptRoot 'windows-test-image.ps1')
+$executable = Assert-McwRepositoryTestImage $executables[0]
 $scope = Join-Path $directory 'scope'
 [void][IO.Directory]::CreateDirectory((Join-Path $scope 'roaming/MicCamWatch'))
 [void][IO.Directory]::CreateDirectory((Join-Path $scope 'local'))

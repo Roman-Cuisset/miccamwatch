@@ -88,14 +88,16 @@ struct DesktopOverview: Decodable {
     }
 }
 struct DesktopPreferences: Decodable {
+    let writable: Bool
     let notifications_enabled: Bool
     let sound_enabled: Bool
     let history_enabled: Bool
     let notifications_paused: Bool
-    private enum CodingKeys: String, CodingKey { case notifications_enabled, sound_enabled, history_enabled, notifications_paused }
+    private enum CodingKeys: String, CodingKey { case writable, notifications_enabled, sound_enabled, history_enabled, notifications_paused }
     init(from decoder: Decoder) throws {
-        try desktopFields(decoder, allowed: ["notifications_enabled", "sound_enabled", "history_enabled", "notifications_paused"])
+        try desktopFields(decoder, allowed: ["writable", "notifications_enabled", "sound_enabled", "history_enabled", "notifications_paused"])
         let fields = try decoder.container(keyedBy: CodingKeys.self)
+        writable = try fields.decode(Bool.self, forKey: .writable)
         notifications_enabled = try fields.decode(Bool.self, forKey: .notifications_enabled)
         sound_enabled = try fields.decode(Bool.self, forKey: .sound_enabled)
         history_enabled = try fields.decode(Bool.self, forKey: .history_enabled)
@@ -860,6 +862,9 @@ final class DesktopConsultation: NSObject {
         notifications.title = gui[11]; notifications.state = preferences.notifications_enabled ? .on : .off
         sound.title = gui[12]; sound.state = preferences.sound_enabled ? .on : .off
         history.title = gui[13]; history.state = preferences.history_enabled ? .on : .off
+        notifications.isEnabled = preferences.writable
+        sound.isEnabled = preferences.writable
+        history.isEnabled = preferences.writable
         notifications.setAccessibilityLabel(gui[11])
         sound.setAccessibilityLabel(gui[12])
         history.setAccessibilityLabel(gui[13])
@@ -908,7 +913,7 @@ final class DesktopConsultation: NSObject {
         desktopEmit(DesktopEvent(kind: "action", action: action))
     }
     @objc private func preferenceSelected(_ sender: NSButton) {
-        guard frame != nil, let key = sender.identifier?.rawValue,
+        guard frame?.preferences?.writable == true, let key = sender.identifier?.rawValue,
               ["notifications", "sound", "history"].contains(key), sender.isEnabled else { return }
         desktopEmit(DesktopEvent(kind: "action", action: key + (sender.state == .on ? "_enable" : "_disable")))
     }
@@ -934,6 +939,7 @@ final class DesktopMenu: NSObject {
     private let words: DesktopWords
     private let version: String
     private let textWidth: CGFloat
+    let qualificationBridge: Bool
 
     init(frame: DesktopFrame, consultation: DesktopConsultation) {
         self.consultation = consultation
@@ -941,6 +947,15 @@ final class DesktopMenu: NSObject {
         self.words = words
         version = frame.version!
         let summary = frame.summary!, entries = frame.items!, protection = frame.protection!
+        // Opt-in isolated development only. An operational frame cannot opt in
+        // merely by inheriting the environment variable. Wire protocol stays4.
+        qualificationBridge = ProcessInfo.processInfo.environment["MCW_MACOS_QUALIFICATION_TRAY"] == "1"
+            && entries.first?.label == "MicCamWatch — isolated qualification"
+            && frame.preferences?.writable == false
+            && entries.allSatisfy { entry in
+                (["status", "exit"].contains(entry.action) || !entry.enabled)
+                    && (entry.children?.allSatisfy { !$0.enabled } ?? true)
+            }
         textWidth = min(340, max(80, (NSScreen.main?.visibleFrame.width ?? 400) - 60))
         func flag(_ value: Bool?) -> String { value.map { $0 ? words.yes : words.no } ?? words.noRequest }
         let mic: String
@@ -1065,7 +1080,19 @@ final class DesktopMenu: NSObject {
         return alert
     }
 
-    @objc private func showConsultation(_ sender: Any?) { consultation.show() }
+    @objc private func showConsultation(_ sender: Any?) {
+        if qualificationBridge {
+            desktopEmit(DesktopEvent(kind: "action", action: "status"))
+        } else { consultation.show() }
+    }
+    func qualificationExit() {
+        guard qualificationBridge,
+              let index = menu.items.firstIndex(where: { ($0.representedObject as? String) == "exit" }),
+              menu.items[index].isEnabled else { return }
+        // Owned hosted probe only: dispatch the real menu item's target/action,
+        // not a substitute shutdown path or global mouse/keyboard injection.
+        menu.performActionForItem(at: index)
+    }
     @objc private func showAbout(_ sender: Any?) {
         NSApp.activate(ignoringOtherApps: true)
         aboutAlert().runModal()
@@ -1084,6 +1111,8 @@ private final class DesktopDelegate: NSObject, NSApplicationDelegate {
     private var stopping = false
     private var initialized = false
     private var pendingClick: DispatchWorkItem?
+    private var qualificationExitSource: DispatchSourceSignal?
+    private var qualificationRegistrationSource: DispatchSourceSignal?
     func applicationDidFinishLaunching(_ notification: Notification) {
         desktopDiagnostic("didFinishLaunching policy=\(desktopPolicyName(NSApp.activationPolicy()))")
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -1163,13 +1192,38 @@ private final class DesktopDelegate: NSObject, NSApplicationDelegate {
         menuContent = content
         if !initialized {
             initialized = true
+            if content.qualificationBridge,
+               ProcessInfo.processInfo.environment["MCW_DESKTOP_QUALIFICATION"] == "1" {
+                signal(SIGUSR2, SIG_IGN)
+                let source = DispatchSource.makeSignalSource(signal: SIGUSR2, queue: .main)
+                source.setEventHandler { [weak self] in self?.menuContent?.qualificationExit() }
+                qualificationExitSource = source
+                source.resume()
+                signal(SIGUSR1, SIG_IGN)
+                let registration = DispatchSource.makeSignalSource(signal: SIGUSR1, queue: .main)
+                registration.setEventHandler { [weak self] in _ = self?.qualificationRegistrationReady() }
+                qualificationRegistrationSource = registration
+                registration.resume()
+            }
             desktopEmit(DesktopEvent(kind: "ready", protocol: 4))
         }
+    }
+    private func qualificationRegistrationReady() -> Bool {
+        guard initialized, !stopping, menuContent?.qualificationBridge == true else { return false }
+        guard let item = item, item.isVisible, item.button != nil else {
+            desktopEmit(DesktopEvent(kind: "error", error: "qualification status registration lost"))
+            return false
+        }
+        desktopDiagnostic("qualification registration ready pid=\(getpid()) protocol=4 visible=\(item.isVisible)")
+        return true
     }
     private func showConsultation() {
         guard initialized, !stopping else { return }
         trackingMenu?.cancelTracking()
-        consultation.show()
+        if menuContent?.qualificationBridge == true {
+            guard qualificationRegistrationReady() else { return }
+            desktopEmit(DesktopEvent(kind: "action", action: "status"))
+        } else { consultation.show() }
     }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         showConsultation()
@@ -1204,6 +1258,8 @@ private final class DesktopDelegate: NSObject, NSApplicationDelegate {
     private func stop() {
         guard !stopping else { return }
         stopping = true
+        qualificationExitSource?.cancel()
+        qualificationRegistrationSource?.cancel()
         pendingClick?.cancel()
         trackingMenu?.cancelTracking()
         NSApp.abortModal()
@@ -1251,6 +1307,33 @@ func desktopMain(args: [String]) -> Never {
 private func desktopFailure(_ error: String) -> NativeEffectReply {
     NativeEffectReply(ok: false, error: error, state: nil)
 }
+
+private func readNotificationSettings(_ center: UNUserNotificationCenter) -> UNNotificationSettings? {
+    var settings: UNNotificationSettings?
+    center.getNotificationSettings { result in
+        DispatchQueue.main.async { settings = result }
+    }
+    let deadline = Date().addingTimeInterval(5)
+    while settings == nil && Date() < deadline {
+        RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+    }
+    return settings
+}
+
+private func notificationStatus(_ settings: UNNotificationSettings) -> String {
+    switch settings.authorizationStatus {
+    case .notDetermined: return "not_determined"
+    case .denied: return "denied"
+    case .authorized:
+        if settings.alertSetting != .enabled || settings.alertStyle == .none {
+            return "authorized_without_alerts"
+        }
+        return "authorized"
+    case .provisional: return "provisional"
+    default: return "unknown"
+    }
+}
+
 // Native effect requests are explicit side effects. Passive observation never reaches here.
 func desktopEffect(mode: String, args: [String]) -> NativeEffectReply {
     if mode == "log" {
@@ -1270,25 +1353,48 @@ func desktopEffect(mode: String, args: [String]) -> NativeEffectReply {
         if sound.isPlaying { sound.stop(); return desktopFailure("system sound playback timed out") }
         return NativeEffectReply(ok: true, error: nil, state: "played")
     }
-    guard mode == "notify" || mode == "notification-identity" else { return desktopFailure("unknown desktop effect") }
+    guard mode == "notify" || mode == "notification-identity" || mode == "notification-status" else {
+        return desktopFailure("unknown desktop effect")
+    }
     guard Bundle.main.bundleIdentifier == "com.roman-cuisset.miccamwatch.helper",
           Bundle.main.bundleURL.pathExtension == "app" else {
         return desktopFailure("notification helper must run with its installed stable application identity")
     }
-    guard (mode == "notify" && args.count == 2) || (mode == "notification-identity" && args.isEmpty) else {
+    guard args.count == (mode == "notify" ? 2 : 0) else {
         return desktopFailure("invalid notification arguments")
     }
     let center = UNUserNotificationCenter.current()
-    // Callbacks mutate their result only on the main queue; the main run loop waits boundedly.
-    var authorization: Bool? = nil
-    var failure: String? = nil
-    center.requestAuthorization(options: [.alert, .sound]) { accepted, error in
-        DispatchQueue.main.async { authorization = accepted; failure = error?.localizedDescription }
+    guard let settings = readNotificationSettings(center) else {
+        return desktopFailure("cannot read macOS notification settings")
     }
-    let deadline = Date().addingTimeInterval(45)
-    while authorization == nil && Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.02)) }
-    guard authorization == true else { return desktopFailure(failure ?? (authorization == nil ? "notification authorization timed out" : "notification authorization denied")) }
-    if mode == "notification-identity" { return NativeEffectReply(ok: true, error: nil, state: "authorized") }
+    var state = notificationStatus(settings)
+    if mode == "notification-status" {
+        return NativeEffectReply(ok: true, error: nil, state: state)
+    }
+
+    var failure: String? = nil
+    if settings.authorizationStatus == .notDetermined {
+        // Request once, while sending an enabled notification or checking identity explicitly.
+        var authorization: Bool?
+        center.requestAuthorization(options: [.alert, .sound]) { accepted, error in
+            DispatchQueue.main.async { authorization = accepted; failure = error?.localizedDescription }
+        }
+        let deadline = Date().addingTimeInterval(45)
+        while authorization == nil && Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+        }
+        if let error = failure { return desktopFailure(error) }
+        guard authorization != nil, let updated = readNotificationSettings(center) else {
+            return desktopFailure("notification authorization could not be confirmed")
+        }
+        state = notificationStatus(updated)
+    }
+    guard state == "authorized" || state == "authorized_without_alerts" || state == "provisional" else {
+        return desktopFailure("macOS notification permission: \(state)")
+    }
+    if mode == "notification-identity" {
+        return NativeEffectReply(ok: true, error: nil, state: state)
+    }
     let content = UNMutableNotificationContent()
     content.title = args[0]; content.body = args[1]
     let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)

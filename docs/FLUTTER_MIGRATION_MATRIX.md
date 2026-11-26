@@ -1,0 +1,520 @@
+# Native feature migration inventory — A–B5 and v0.22.0 stage 2
+
+> The [stage 4 audit](HYBRID_STAGE4_AUDIT.md) records the current protocol 10 window, profiles, diagnostics and qualification scope. Profiles describe effects actually implemented by each native observer.
+
+> **Prochaine publication publique prévue pour v0.22.0.** Le §9 de l’[audit de parité](V0.22.0_PARITY_AUDIT.md#matrice-des-44-familles) actualise les 44 familles. Les [reçus de la qualification fonctionnelle](V0.22.0_PARITY_AUDIT.md#qualification-etape-2) sur `945d69c` établissent l’état logiciel de l’étape 2. Le [plan en six étapes](RELEASE_0.22.0_PLAN.md) définit les validations installées et matérielles à venir.
+
+Source baseline: `b5cf391c1905cbc391c47220f1347c55ba8e24cc`, 27 October 2026. Inspection only; runtime qualification is recorded separately. This inventory preserves every native/public CLI capability and its actual limitations.
+
+The historical inventory priorities mean **A = microphone**, **B = presentation/preferences**, **C = sensitive operations**. The current v0.22 development bridge is strict protocol **6**, without downgrade; the separate native AppKit helper remains protocol 4. Historical [B4 qualification](FLUTTER_B4_QUALIFICATION.md), [B1 protocol 3 evidence](FLUTTER_PREFERENCES_B1.md) and [protocol 2 stage-A history](FLUTTER_COMMANDS_STAGE_A.md) retain their exact sources and do not qualify later changes.
+
+Stage A implementation update: Windows now has explicit desired-state microphone commands through the existing Rust worker, private protocol2 admission and native readback. Real mute/release, UI process exit, retained native guard and reopening without duplicate UI have been exercised. Other controls/platforms remain gated; this inventory's source references and “inspection only” evidence describe the pinned baseline, not the later runtime qualification. Sidebar/Windows branding now uses official assets; macOS/Linux Flutter packaging identity remains unqualified. See the current stage A results in the ROADMAP.
+
+## v0.22 stage 2 checkpoint — 11 November 2026
+
+Development branch `work/flutter-hybrid-0220`; no release or stable replacement.
+The per-function statuses, remaining acceptance tests and P0/P1 blockers are in
+[audit section 8](V0.22.0_PARITY_AUDIT.md#8-delta-dimplémentation-de-létape-2--11-novembre-2026).
+
+- Added native prepared/confirmed tools, capability-gated Unix controls, lock
+  preferences, devices/current application context, policy/path validation,
+  confirmed local-history clearing, diagnostic copying and all native pause durations.
+- About uses the real engine version, with seven translated paragraphs. The user
+  can choose any supported language for the current window without changing Rust
+  policy/preferences; closing returns the next window to the native language.
+- Windows normal/instrumented releases and actual owned light/dark windows
+  exercised; Rust continues and every Flutter child exits. Linux native checks
+  passed against a private WSL SDK. Fresh macOS qualification is separate and
+  cannot be inferred from B5 or from Windows tests.
+- **Not full parity:** Windows camera coordination/resume/legacy, automatic
+  enforcement, advanced sessions/logs/filters, complete multi-access application
+  detail, Flutter Exit and installation-aware hybrid maintenance remain open.
+  Native fallback is retained, not counted as a completed Flutter action.
+
+
+## B5 integration checkpoint — 2 November 2026
+
+Work in progress on `work/flutter-hybrid-0211`; not a release or approval to replace the stable installation.
+
+| Area | Confirmed in B5 so far | Still not established |
+|---|---|---|
+| Windows distribution runtime | All three CRT commits integrated. Latest native Rust pair, static C++ runner/official engine, exact native MSI/ZIP and hybrid bundle passed local dependency gates; CI41424009387 passed the real native/hybrid import guard and package checks. Published0.21.0 assets unchanged. | No clean VC-runtime-free Windows or public winget qualification claimed. Native MSI fixtures do not qualify a complete Flutter installer. |
+| Windows startup inspection/control | Local Task Scheduler COM distinguishes absence from access/service errors. CI41424009387 proved rendered Flutter activation, owner-restart persistence, deactivation, foreign-registration refusal, actual private-lock write denial and Windows user opt-out; private preferences preserved and owned UI exited. | Hosted WinSta0 token is administrative, not a standard-user claim. Daily MSI registration unchanged. Installed-package lifecycle and other OS startup writes remain separate gates. |
+| Rendered consultation | Final hybrid passed six real release/AOT panel cycles, three pertheme: native history/refresh, disabled development startup, notification preference round-trip, About and native diagnostics. One passing cycle explicitly has stale observation but live IPC; observation remains unknown while consultation succeeds. Private preference values restored; actual light/dark captures examined. | No external MSAA/UIA or seven-language native visual pass is claimed. Normal AOT and macOS/ARM qualifications remain distinct from this instrumented Windows proof. |
+| Hybrid lifecycle | Native stderr is outside the authenticated command pipe. Exact generation/kernel exit checks prove owned teardown and continuing Rust ticks after each of six UI exits. Ready acknowledges a validated rendered frame, not a fresh sensor observation; no deadline or observation-truth rule relaxed. | macOS/ARM and full installed-package lifecycle remain separate. Flutter is not intentionally retained after close. |
+| macOS | Apple Silicon41471689681 and Intel41476279179 each passed release builds/seals and eight real-panel scenarios:32 proofs/24 reopens, seven native languages, English light/dark, permanent AppKit host and real IPC. Native singleton activation, Status/Exit, preference restoration and exact-release owner-death teardown passed. The supported Mac-only Skia opt-out fixes the Latin-glyph corruption; actual sixteen images reviewed. Both artifact ZIP/native digests verified and pinned. | Automated hosted Aqua qualification, not physical sensors/TCC, Developer ID/notarization or installed-package lifecycle. Earlier default-renderer failures/lost runner remain historical evidence, not a universal root-cause claim. AppKit retained. SDK upgrades must requalify the supported opt-out; Mac CPU/RAM not measured here. |
+| Linux Mint / ARM64 | B5 frozen Linux x64 products passed real SNI, preference/error/restore checks and six light/dark UI cycles on Mint22.2. Every owned UI exited, Rust continued; daily process/data bytes and bundle hashes preserved. Actual images examined. CI41422733643 ARM64 native Rust/Flutter builds, tests and ELF/package checks passed. | Mint renderer confirmed llvmpipe, not GPU: open RSS324.72–324.79MiB/PSS295.47–295.50MiB; closed final RSS10.48–10.77MiB. First mapping4.83–5.68s; reopens about1s. No permission changes, accelerated/Wayland/physical ARM desktop qualification or full Flutter installer claim. |
+| Controlled Windows cost | Two complete AB/BA pairs,60s per state, equivalent ready/low-confidence camera-capable workload at boundaries: closed CPU36.98→35.91%, open32.56→34.16% of one core. B5 RSS20.21MiB closed/136.50MiB open; warm protocol Ready median246ms, exit245ms. Separate instrumented profile confirms18fresh signature calls/15s; WinVerifyTrust33.16% of one core. | **No general CPU improvement established.** Inclusive profiler scopes cannot be summed or mixed into clean means. No security-verdict cache, frequency reduction or active-device latency claim. Earlier inactive-workload figures are not a valid comparison. |
+
+### Microphone release is not owned-original restoration
+
+Source inspection, not a new device test: Windows manual release calls
+`windows_protection::Owner::apply` → `GuardEndpoints::explicit_release` →
+`protection_pass(..., false)`. It explicitly unmutes supported current inputs,
+including inputs muted before the request. The existing Flutter warning and
+confirmation describe that effect; it must not be relabelled “restore previous states”.
+
+The separate automatic-lock journal in `windows_mute.rs` skips already-muted
+inputs and restores only retained original values whose endpoint generation,
+revision and applied readback are still owned; external/manual changes relinquish
+ownership, while real read/write failures retain unresolved originals. B5 does not
+merge or weaken these different contracts.
+
+A change to manual restoration would require a separately reviewed durable
+per-endpoint ownership/original-state contract, crash/restart and arrival handling,
+generation/CAS/readback tests, preservation of external intent and explicit resolution
+of “unmute now” versus “restore originals”. No such redesign or hardware mutation is
+included in this tranche.
+
+## Historical B4 development checkpoint — 31 October 2026
+
+Covers the already-qualified B4 products, not later unqualified B5 changes.
+
+
+This is not a public0.21.1 release, complete parity or approval to remove GTK/AppKit.
+Source d7f778a contains the shared Windows/Linux x64 feature slice;7e47596 adds the native timing/provisioning fixes.
+Later5a797f2 changes only native test selection/guards, CI and documentation. Exact component provenance and actual runtime gates follow.
+
+| Function / platform | Implemented or verified so far | Remaining gate |
+|---|---|---|
+| Recorded history | Real bounded schema3 JSONL browser, opaque single-use cursors, original timestamps, application/resource/activity/confidence and partial/error/stale states. Windows30→60→30 rows and Mint two actual copied events/Refresh exercised in both themes; native reader tests11Windows/12Unix passed. | No synthetic production records, destructive clear or export API. macOS panel clicks and ARM graphics runtime remain unverified. |
+| Detailed diagnostics | On-demand bounded passive native doctor, separate from live snapshot; temporary default policy omitted. Genuine native report and common translated framing exercised/captured on Windows/Mint. | Native technical details do not guarantee protection. macOS panel clicks remain unverified. |
+| Installation startup | Operational-only native CAS, explicit confirmation, same lock/ownership/rollback/readback. Foreign Unix registrations/journals preserved; native isolated tests7perMac/9ARM passed. Windows/Mint read-only GUI status exercised. | Host writes forbidden in qualification. Installed Windows/macOS write lifecycle unqualified. Windows disabled-button MSAA/UIA state unavailable; not converted to an accessibility pass. |
+| IPC and lifecycle | Strict protocol5, bounded consultation lane, presentation-only updates preserve observer cadence. Windows50desktop tests and consultation reloads after four burst reopens passed. Unix desktop56perMac/57ARM; exact native guard bodies subsequently passed2perfourUnix targets. | Authentication, timeout, ownership and restoration preserved. Hardware mutation and full installed-package lifecycle remain separate gates. |
+| Linux x64 | CI41120973121 build/tests/package/ELF/hosted SNI passed. Same frozen products passed Mint22.2 consultation/preferences/errors/restoration and12cycles, six pertheme; complete Flutter exit and native observation confirmed. Actual light/dark images examined. | Authorized XRDP/X11/llvmpipe only: no accelerated or Wayland claim. Open RSS316.61–329.54MiB; no software-renderer performance resolution. |
+| macOS Intel / Apple Silicon | CI41188772673 release builds/suites/packaging/seals passed. Actual permanent AppKit host retained across three instrumented Flutter close/reopens perarchitecture; singleton, native Status/Exit, release IPC and owner-death cleanup passed. Real light Flutter captures examined. | Former window-only B3 stall no longer reproduced in the representative architecture; not a universal WindowServer root-cause claim. No physical/manual Mac gate. Sensors/TCC, new panel clicks, native Flutter dark capture and installed-package lifecycle unverified; AppKit retained. |
+| Linux ARM64 | Native Ubuntu24.04 Rust/Flutter release,89Flutter tests and native suites, fourAArch64 product ELF and full hash/package verification passed. Official pinned Git/engine/Dart components; explicitly verified target frontend assembly corrects upstream host-architecture component error. | No official ARM SDK archive/signature invented. Actual desktop launch/SNI/GPU/physical SBC and Ubuntu22.04/Mint21 compatibility unverified. |
+| Windows CPU | Reusable UTF16 path buffer avoids repeated allocation; signatures/generation/module checks remain fresh. Complete matched AB/BA60-second means: closed3.333→3.177%, open7.894→8.155% of onecore; RSS18.00MiB closed/135.23MiB open for B4 overview runs. | **No established CPU speedup**; closed deltas have opposite signs, open slightly higher. Separate inactive profile lacks signature-stage records; eligible-path cost and device-active detection latency unmeasured. No verdict cache/cadence change. |
+| Common UI / identity | Official shared logos/navigation/themes retained; new framing in sevenlanguages. Full89Flutter tests passed across hosted targets. Actual Windows/Mint History/Doctor light/dark and bothMac light overview images examined. | Widget coverage is not seven native visual reviews or full screen-reader/DPI qualification. Windows startup disabled-state native accessibility remains unverified. |
+
+Still absent: camera/lock/maintenance flows, Unix microphone commands and persisted language/theme APIs.
+Windows explicit microphone release semantics remain unchanged; B4 does not invoke hardware commands.
+Autostart code and read-only presentation are not a claimed host-startup write success.
+
+## Historical B3 checkpoint — 30 October 2026
+
+This is development qualification, not a public0.21.1 release or complete parity.
+The detailed native inventory below preserves its pinned source baseline;
+the current delta and actual runtime gates are listed here.
+
+| Function / platform | B3 evidence actually established | Remaining gate |
+|---|---|---|
+| Notification pause/resume | Real Windows Flutter clicks, server-derived30-minute deadline, exact timestamp CAS, native readback, persisted restart, independent Rust TEST delivery while Flutter is absent. Resume clears the deadline without enabling a disabled master. | Flutter offers30 minutes/resume, not the CLI's full1–10080-minute choice. No new genuine-capture or physical audibility test. |
+| Errors and lifecycle | Private read-only settings reject mutation; held settings lock reaches uncertain timeout without invented success; close/reopen while accepted work completes shows real native state. All owned processes exit; original private preference values restored. | Native serialization normalized the private fixture's CRLF to LF; semantic restoration, not byte-identical formatting. Stable user settings were not used for writes. |
+| Windows CPU | Two paired AB/BA rounds,60 seconds per open/closed interval, equivalent snapshots and fresh signatures. Closed5.73→5.53% of one core; open8.46→8.00%, with opposite-sign open round deltas. RSS20.77MiB closed,138.36MiB open. | Small descriptive difference, not a proven large/significant/general speedup; B2's earlier11.60% is a different workload. Separate instrumentation must not be mixed with clean CPU figures. Controlled capture/trust-mutation latency remains unmeasured. |
+| Ubuntu22.04 x64 | CI41037181504: strict checks,53desktop+5settings tests, Flutter release, ELF/package hashes passed. Runtime-only CI41066470241 then passed real SNI, twelve combined light/dark lifecycle/preference cycles, error/restoration and owned desktop teardown, without rebuilding products. | Xvfb/software-rendered hosted desktop, not physical GPU/Wayland or installed-package lifecycle. |
+| Linux Mint22.2 | Frozen7e794d2 bundle, real SNI/IPC/preferences/error-restoration and six light/dark cycles passed. All owned UI/fixtures exited. Normal overview captures examined. Closed RSS9.97–10.24MiB; open325.40–329.76MiB, PSS293.77–298.12MiB. Stable PID/executable/preferences/history/protection bytes preserved. | XRDP/X11 llvmpipe: no accelerated or Wayland claim. First mapped window4.86–4.97s despite native Ready1.41–1.49s; open CPU remains high. New private qualification wrapper, not an installer/stable replacement. |
+| macOS15 Intel / Apple Silicon | Both release builds and52desktop+5settings tests passed. CI41066470241 ARM exact-product replay passed real release/instrumented IPC/lifecycle, owned-window image and native AppKit simulated-input fixture. Intel initial launch/activation/capture/close passed. Sandbox/seals/architectures/tar intact. | Intel reopen remains failed. CI41070188421: fresh non-Flutter session/AppKit probes also stop responding after close; late owned product sample around11.19s still waits in WindowServer bootstrap. Broader hosted-context failure observed, trigger/root cause not proved. Development owner is window-only, unlike the operational permanent AppKit host. Keep fallback; next qualification must distinguish those contexts. Native preferences/menu integration, dark visual, package lifecycle/TCC/hardware remain open; no physical Mac prerequisite. |
+| Identity / language | Official assets unchanged;61Flutter tests and Windows release passed. Actual French125% Windows and English Mint light/dark captures, plus both Mac first-window light captures examined. WGC captured only owned Windows HWNDs without permission request/global fallback. | Seven-language widgets are not seven native visual reviews. macOS dark/other DPI/fonts/accessibility configurations remain open; no new ARM64 Flutter build/runtime. |
+
+Still absent: autostart UI, complete doctor/history presentation, camera/lock/maintenance
+flows, Unix microphone commands and persisted language/theme APIs. Windows microphone
+release semantics remain unchanged; no device-changing B3 test. GTK/AppKit remain.
+
+## Historical B2 qualification — 29 October 2026
+
+Paired performance checkpoint `d37c8e8`; final code/build and Windows/Linux lifecycle smoke checkpoint `9aa4689`. See [B2 results, methods and remaining gates](FLUTTER_B2_QUALIFICATION.md). This is not full parity, installed-package qualification or a public0.21.1 release.
+
+| Function / platform | B2 state actually established | Remaining gate |
+|---|---|---|
+| Windows capture notifications and sound | Existing Rust snapshots/transitions connected to a bounded native worker; live master/pause/audio preferences, cooldown and failures. TEST pipeline submitted while Flutter was absent; actual Flutter writes persisted; OS history confirmed silent/sound requests. | Physical audibility/banner, controlled genuine capture and other Windows configurations not tested. Operational path compiled, not installed over stable MSI. |
+| Four safe preferences | Windows actual GUI/native CAS/readback retained; same Dart components and typed preferences wired to Unix owner. | Linux GUI mutation not yet exercised; no macOS runtime. History flag controls future recording only and is explicitly ineffective in development mode. |
+| Windows background CPU | Fresh kernel generation inventory with immutable birth facts only; matched closed CPU17.53→11.60%, signatures fresh, cadence not reduced. | Non-negligible remaining signature cost; no universal/significance/Windows10 gain claim. Active-capture and trust-mutation latency cases untested. |
+| Linux x64 frontend | Rust and Flutter release builds, real WSLg X11 display/IPC snapshots, light/dark captures, six close/reopens, same-child activation and stopped-child parent-death check. Unknown/unavailable media sources displayed honestly. | Real SNI tray/native fallback surface, hardware controls, native Wayland, package lifecycle and physical Linux/GPU not qualified. Software llvmpipe open CPU39.09% remains a performance limitation. |
+| Linux ARM64 | Architecture-neutral Unix route prepared; original ELF/installer checks retained. | No new Flutter ARM64 build/package/runtime or physical ARM validation. Earlier native CI is not B2 proof. |
+| macOS Intel / Apple Silicon | Unix route, official runner branding, activation and independent native parent monitoring prepared; AppKit retained. | No available macOS/Xcode host: all builds, sandbox/IPC, execution, visuals, controls and signing/package checks remain open. Respect native macOS15 minimum. |
+| Common appearance | Same Dart app/protocol3, navigation, cards, preferences, themes and official sidebar asset; seven-language widget checks on Windows/Linux. | Real visuals only French125% Windows and English100% Linux; not seven native visual reviews or full accessibility/DPI qualification. |
+
+Still absent from Flutter: pause/resume UI (native CLI was exercised), autostart, full doctor/history presentation, camera/lock/maintenance flows and platform-specific Unix microphone controls. No browser/export API or persisted language/theme API is invented. Windows explicit release still unmutes supported active inputs rather than restoring each original; B2 does not invoke or generalize it. Bundle-aware installation/update/uninstall is not qualified by private prefixes. GTK/AppKit must remain until replacements pass their real gates.
+
+
+### Historical B1 handoff
+
+| Priority | Remaining function | Scope and gate |
+|---|---|---|
+| Delivered B1, Windows development | Notification/sound/history preferences and assessment profile | Four real Flutter commands: native locked CAS/merge, readback, separate applied policy; UI closure/timeout/permission failure exercised. Windows capture alerts remain explicitly unsupported. |
+| P1, parallel | Collector CPU | Compare identical workloads, retain signatures and cadence; no stale verdict cache or invented Active capture. |
+| P1, next control tranche | Camera and lock/protection options | Platform-specific authority, UAC/helper/profile ownership and restoration; no device-changing test without specific permission. Windows microphone release remains all-supported-input unmute, not Unix owned-original restore. |
+| P2 | Notification pause, autostart, complete diagnostics and history presentation | Reuse bounded native operations; host autostart writes need safe qualification. Native history browser/export APIs do not yet exist. |
+| P2 | Language/theme/version/update presentation | Local theme and version display already exist. Do not invent persisted language/theme settings or a generic installer-independent updater. |
+| Cross-platform preparation | Linux x64/ARM64 and macOS Intel/Apple Silicon Flutter integration | Common app/protocol, authenticated owned process transport, native fallback retained until actual qualification; architecture/build preparation is not runtime or ARM hardware proof. |
+
+B1 runtime `a0411ea` is compiled and exercised on Windows with isolated preferences; [results and limits](FLUTTER_PREFERENCES_B1.md). This is not full parity, installed-MSI qualification or a Unix Flutter port. Baseline line references below remain pinned, not current line numbers.
+
+## Summary
+
+- **Stage A can reuse the existing Windows microphone owner**, without migrating camera authorization, restoration, settings, or maintenance. The native tray microphone worker currently accepts **toggle**, not an explicit desired-state assignment; the underlying Rust API already supports `set_microphone_mute(bool)`.
+- **Requested protection, effective SDK/PnP/profile state, and observed capture are independent.** Neither “mute requested” nor “SDK muted” means microphone permission denied.
+- Baseline gaps at the pinned source revision: **no export command/history browser**, no tray/native process termination, unused persisted `show_ready`, Linux TUI camera controls deliberately disabled, and Windows tray preferences did **not** implement capture-event alerts/chimes. The current B2 section supersedes that Windows alert gap.
+
+**Baseline evidence scope:** source and asset inspection only. The later B1/B2 runtime results above are separate evidence, not retroactive validation of these pinned line references.
+
+## Files
+
+The following aliases keep the matrices compact; line references below resolve to these paths.
+
+| Alias | File | Holds |
+|---|---|---|
+| **CLI** | `src/frontends/cli.rs:6-336` | Public command/subcommand definitions and flags |
+| **MAIN** | `src/main.rs:46-621` | CLI dispatch, settings/policy precedence, platform differences |
+| **WT** | `src/frontends/tray.rs` | Windows tray menus, operation workers, native/Flutter activation, lock/restoration coordination |
+| **WN** | `src/frontends/tray/windows_desktop.rs` | Win32 consultation, preferences, diagnostics copying, About |
+| **U** | `src/frontends/tray/unix.rs` | Linux/macOS action vocabulary, native views, control dispatch, inspection worker |
+| **GTK** | `src/frontends/tray/linux_desktop.rs` | GTK3 consultation and callbacks |
+| **APP** | `native/macos_desktop.swift` | AppKit consultation/menu/About, copying, notification/sound effects |
+| **SET** | `src/settings.rs:20-74,158-224` | All persisted application preferences, defaults, paths, update API |
+| **HIST** | `src/history.rs:68-132` | JSONL history, rotation, clear |
+| **GUIDE** | `docs/USAGE.md:130-309` | User-facing scope, permissions, restoration, policy and storage contracts |
+
+Additional backend and branding files are identified precisely in the relevant tables.
+
+## Architecture
+
+CLI, TUI and native frontends ultimately call `PlatformMonitor`, privacy backends, settings/history, autostart and maintenance APIs. Windows microphone control is owned by a separate native COM/MTA guard; Windows camera control by an explicitly elevated coordinator. Unix controls have different scopes and ownership models.
+
+The existing Flutter bridge is **presentation-only**: `UiEvent` accepts only `Ready` and `Timing`, with strict decoding—there is no mutation variant (`src/frontends/desktop.rs:353-401`). Flutter must request typed Rust operations through the parent, not acquire device/control authority itself.
+
+## Report
+
+### 1. Complete public CLI inventory
+
+**Proposed migration labels:** **A** = microphone command slice, preserving current read-only dashboard; **B** = later observation/preferences/history presentation; **C** = later sensitive camera/process/maintenance integration. B/C grouping is a recommendation, not an already implemented protocol or a documented approved staging contract.
+
+All commands below exist on Windows/Linux/macOS unless stated otherwise.
+
+| Actual CLI surface | Actual behavior, support and consent | Proposed Flutter equivalent | Evidence |
+|---|---|---|---|
+| `status` | Current access snapshot. `--microphone`/`--camera`, `--risk expected\|unexplained\|suspicious\|blocked`, `--include-ready`, `--json`, `--no-color`. Filters do not authorize enforcement. Exit 1 for matching access; 2 for unavailable collectors, also degraded collectors on Unix. | Existing live overview; B for full CLI-detail parity | CLI:84-85,236-275,299-336; MAIN:147-177,611-621 |
+| `watch` | START/UPDATE/STOP monitoring until Ctrl+C. Same filters/output; `--interval` default 750 ms/minimum 100; `--notify`, `--log PATH`, `--eventlog`, `--sound`, `--kill-unauthorized`, `--no-kill`. Kill flags conflict. Explicit log is independent of automatic history. | Rust continues monitoring; B for presentation/log workflows; C for termination | CLI:86-87,246-275; MAIN:178-209 |
+| `devices` | Native microphone/camera inventory; JSON/no-color options. Inventory is not capture or permission proof. | B device inventory | CLI:88-89; MAIN:210-214 |
+| `explain PID` | Filters a **current** snapshot to that PID, prints associated evidence; not historical process lookup. JSON/no-color. | B application detail | CLI:90-91,278-286; MAIN:215-232 |
+| `doctor` | Native diagnostics, JSON/no-color. Unix returns 2 for diagnostic errors; Windows dispatch returns 0 after printing checks, so inspect check statuses rather than treating exit 0 as universal health. | Existing collector diagnostics are only a subset; B full doctor view | CLI:96-97; MAIN:237-250 |
+| `mute`, `mute --toggle/-t`, `mute --status/-s`; `unmute` | Windows persistent requested protection/release; Unix supported scoped mute/restoration. `--status` is passive and takes precedence if also supplied with toggle. No existing extra confirmation dialog/UAC for microphone operations. Platform semantics below. | **A** explicit microphone request/release and actual-state feedback | CLI:98-103,288-297; MAIN:251-274,555-608 |
+| `top` | Interactive TUI. `m` microphone; `b` camera block; `a` camera restore; `k` terminate; `r` refresh; `q`/Esc quit; selection keys. **Linux camera buttons/actions are disabled**, despite Linux CLI/tray camera support. | A microphone; B observation/navigation; C camera/process actions | CLI:104-105; `src/frontends/tui.rs:546-554,649-807,1186-1216,2319-2324` |
+| `tray` / `tray run` | Background native frontend; optional Unix `--eventlog`. Plain startup does not intentionally open consultation. | Keep Rust/native tray | CLI:106-115,146-156; MAIN:279-296 |
+| `tray open` | Opens/reopens owned consultation, reusing the frontend where supported. With `flutter-desktop`, Windows ordinary opening uses Flutter; native controls remain separately accessible. | Existing supervised open/reopen | MAIN:71-87,297-313; WT:2054-2063,2092-2150 |
+| `tray stop`, `tray status` | Stop/query frontend, not microphone/camera release. Status prints running/stopped, nonzero if stopped. Windows refuses close while accepted privacy/restoration work remains pending. | Preserve owned lifecycle; never equate window close with protection release | MAIN:314-330; WT:862-886 |
+| `camera status\|block\|allow\|toggle` | Same command names, materially different platform controls; see protection matrix. Not a per-app permissions editor. | C; retain native paths during A | CLI:158-180; MAIN:333-360,371-403,528-551 |
+| Windows `camera allow --restore-legacy INSTANCE_ID` | Explicit authorization to recover **one** historical camera; may override independent disable. Not blanket adoption of writable legacy records. New UAC authorization when restoration is necessary. | C explicit recovery workflow | CLI:170-176; `src/privacy.rs:418-423`; `src/privacy/windows_guard.rs:2226-2287` |
+| macOS `camera inspect [--admin] [--json] [--no-color]` | Read-only profile metadata. `--admin` only requests expanded scope when passive scope is insufficient/failed; confirmation and administrator authorization, not camera TCC permission. Timestamped outcome/completeness; unknown exits 2. | C explicit diagnostic authorization, not a “grant camera permission” button | CLI:161-169; MAIN:374-388; `src/privacy/macos.rs:105-151` |
+| `autostart status\|enable\|disable` | Per-user native registration; explicit opt-in, ownership checked. No blanket administrative startup service. Details below. | B | CLI:182-187; MAIN:404-420 |
+| `profile [private\|meeting\|development\|balanced]` | Omitted argument queries; supplied argument saves preference. Changes assessment policy, **not device controls or an allowlist**. | B | CLI:123-128,191-198; MAIN:421-434 |
+| `notifications status\|pause MINUTES\|resume` | Pause range **1–10080 minutes**. Does not stop monitoring/protection. There is no public CLI enable/disable subcommand for general notifications or sound. | B assignment/expiry UI | CLI:129-133,200-209; MAIN:435-461 |
+| `lock-policy status\|enable [--microphone] [--camera]\|disable` | Windows: absent flags means both; enable sets restore-on-unlock true. Linux: microphone only; `--camera` refused; no flags selects microphone. macOS: **status and enable refused**, disable remains available to clear preferences. Applied by tray, not `watch`. | B policy preferences; retain existing native enforcement | CLI:134-138,211-221; MAIN:462-497 |
+| `history path\|clear` | Locate/delete current and rotated application history. **Clear has no existing confirmation prompt.** Does not delete restoration records, explicit logs or OS journals. No `history list`, `show`, or `export`. | B real history/clear workflow; any new destructive confirmation would be new UI policy | CLI:223-227; MAIN:499-508; HIST:100-113 |
+| `config validate\|path\|settings-path` | Validate selected/default TOML; missing policy rejected for validate. Print policy/preferences locations. No interactive policy editor. | B settings/diagnostic paths; leave policy editor unsupported unless explicitly added | CLI:229-235; MAIN:509-525 |
+| `update` | Installation-aware release maintenance, not universal auto-update. See maintenance section. | C; no A maintenance mutation | CLI:92-93; MAIN:233-236 |
+| `uninstall` | Exact-install ownership/removal or owner-specific instructions; user data retained. See maintenance section. | C; do not launch arbitrary deletion/elevation from Flutter | CLI:94-95; MAIN:68-70 |
+| `help`, `-h/--help`, `-V/--version`; global `--config PATH`, `--lang CODE` | Seven languages: en/fr/de/es/ja/zh/ru. Config supplies TOML policy; language is CLI/policy/detected, not a persisted `Settings` language field. | Existing localization/About; B explicit language handling if desired | CLI:6-57,343-351; MAIN:129-145 |
+
+**Other executable entrypoints, not additional public `mcw` subcommands:**
+
+- Windows `mcw-tray.exe [--open]`; development feature-only `--read-only-development` and `--desktop-theme light|dark`. Development mode bypasses operational control startup, not a second operational hardware namespace (`src/bin/mcw-tray.rs:26-62`).
+- Hidden Windows `__microphone-guard`, `__camera-guard --bootstrap`, `__uninstall-worker PARENT_PID PARENT_CREATED`, `__portable-receipt`; hidden Unix `autostart refresh`. These are internal/maintenance capabilities, not controls to expose as raw Flutter arguments (`CLI:61-83,182-189`; `MAIN:46-66,95-107`).
+
+### 2. Exhaustive tray/native action matrix
+
+`✓` means an actual exposed action, not merely an available backend. Native observation/diagnostic views also display read-only state.
+
+| Function | Windows tray | Win32 window | Linux tray | GTK window | macOS menu | AppKit window |
+|---|---|---|---|---|---|---|
+| Open/reopen consultation | Menu/double-click | Retained window | Details/activation | Retained window | Open/double-click/Finder reopen | Retained window |
+| Microphone toggle | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Camera toggle | ✓ | ✓ | ✓, prerequisite-gated | ✓, prerequisite-gated | ✓ | ✓ |
+| Resume requested camera guard without Allow | Conditional UAC action | Conditional UAC action | — | — | — | — |
+| Expanded read-only camera inspection | — | — | — | — | **Not in menu** | Conditional explicit admin inspection |
+| Pause/resume notifications | **1 hour** | **1 hour** | **30 minutes** | **30 minutes** | **30 minutes** | **30 minutes** |
+| General notification enable/disable | — | ✓ | — | ✓ | — | ✓ |
+| Sound enable/disable | — | ✓ | — | ✓ | — | ✓ |
+| Automatic history enable/disable | — | ✓ | — | ✓ | — | ✓ |
+| Four profile choices | Submenu | Radio choices | Submenu | Combo | Submenu | Popup |
+| Autostart enable/disable | ✓ | ✓ | ✓ | ✓ | **Excluded from menu** | ✓ |
+| Microphone-on-lock, camera-on-lock, restore-on-unlock preference editing | — | ✓ | — | — | — | — |
+| Full diagnostics / copying | Opens consultation | Copy all; selectable text | Opens consultation | Select/Ctrl+A/Ctrl+C | Opens consultation | Copy button; selection/Cmd+A/Cmd+C |
+| About | Passive version row only | About page | Passive identity only | About page | About alert | No separate About tab |
+| Exit frontend | ✓ | Closing hides window | ✓ | Closing hides window | ✓ | Closing leaves frontend running |
+| Process kill; history clear/browser/export; update; uninstall | **None** | **None** | **None** | **None** | **None** | **None** |
+
+**Action and widget evidence:**
+
+- Windows tray dispatch/menu: **WT:806-854,2314-2439**. Feature-enabled tray additionally has **“Native settings and controls…”**, closing Flutter before opening the native window.
+- Win32 actions/preferences/copy: **WN:851-896,1337-1388,2249-2320**; setting application **WT:2177-2227**.
+- Unix action vocabulary and dispatch: **U:39-92,1538-1759,2084-2154,2239-2260**.
+- Linux SNI activation/menu: **U:2297-2330,2396-2417**.
+- GTK widgets/actions: **GTK:495-625**; callbacks guarded against render-triggered writes **GTK:291-316**.
+- AppKit widgets/actions: **APP:673-713,905-924**. Menu explicitly excludes `camera_inspect` and `autostart`: **APP:987-1022**. About and reopening: **APP:1060-1075,1174-1202**.
+
+Profiles are disabled in native menus/windows when **explicit `--config`** owns policy. CLI `profile` still saves the preference; saving does not override that explicit policy (`WT:1898-1918`; `U:2251-2260`; `MAIN:421-434`).
+
+### 3. Protection strength, authorization and restoration
+
+| Platform/control | Actual strength and limitations | Confirmation/permissions and existing APIs |
+|---|---|---|
+| **Windows microphone — A** | Persistent native owner reasserts **endpoint SDK mute**, including compatible topology changes. Survives TUI/tray/UI exit until explicit release. Hardware-mute capability counts are advertisements, not proof of a universal physical cutoff. Exclusive/ASIO/direct-driver/unsupported paths can bypass software scope. **Explicit release actively unmutes supported active endpoints; it is not “restore each original.”** Original-state restoration belongs to automatic lock policy. | No existing UAC/second confirmation. `PlatformMonitor::{set_microphone_mute(bool), toggle_microphone_mute(), microphone_protection_status()}`: `src/platform/windows.rs:663-672`. Intent/owner startup: `src/platform/windows_protection.rs:280-401`; limitations: `:500-548`; enforce/release: `src/platform/windows_mute.rs:443-550`. |
+| **Linux microphone — future platform integration** | Writable capture-source **PipeWire session** mute, including supported virtual/monitor sources. Not ALSA permission denial, other PipeWire sessions or physical isolation. Retains/restores MCW-owned originals pinned to server/node identity; no Windows-style persistent guard. | Requires usable session and writable PipeWire controls; no elevation fallback. `Control::{set_microphone_mute,toggle_microphone_mute,begin_lock_mute,restore_lock_mute}`: `src/platform/linux/control.rs:135-215`; wrapper API `src/platform/linux.rs:39-56`; scope `:276-317`. Unmute can leave independently pre-muted sources muted. |
+| **macOS microphone — future platform integration** | Only writable **CoreAudio INPUT mute properties**, master/channel controls independently. Missing/read-only controls unavailable; no universal microphone deny. Restores owned originals; refuses to unmute unrelated pre-muted inputs when no originals exist. No Windows-style persistent owner. | Native writable-property checks/readback, not TCC grant or administrative observation. `src/platform/macos/control.rs:372-482`; `native/macos_controls.swift:111-182`. |
+| **Windows camera — C** | Global requested Block, including zero cameras and supported future arrivals while elevated owner runs. Native PnP disable for Camera class and positively identified legacy Image cameras—not arbitrary Image/scanner devices. Arrival-enforcement window, veto/restart/partial/unknown states remain possible. Allow restores **only authenticated MCW-owned disables**, with offline/pending restoration tracked. | Temporary **`runas` UAC** owner; new launch/resume/recovery can require approval. Allow is not guaranteed UAC-free if owner is absent and restoration requires elevation. `src/privacy.rs:368-423`; `src/privacy/windows_guard.rs:1317-1429,1595-1621,2001-2044,2140-2224`. |
+| **Linux camera — C** | Optional Linux ≥5.9 **USB/UVC interface unbind**, not global camera permission denial. Supports conservative descriptor/configuration envelope; preserves unrelated composite audio/storage interfaces. No CSI/non-USB support, automatic arrival blocking or camera-on-lock. Restoration tied to recorded USB generation; changed/stale/partial state can remain unresolved. | Separately reviewed root-helper installation, matching version, trusted fixed paths, **explicit Polkit/pkexec authorization**. Preflight checks prerequisites, not consent/effectiveness. `src/privacy/linux.rs:66-163`; envelope/restoration contract `GUIDE:230-240`. Linux TUI intentionally does not expose these controls. |
+| **macOS camera — C** | MCW-owned Restrictions profile with `allowCamera=false`. Preparing/opening profile is **pending, not blocked**. Allow removes only exact owned profile; external/MDM restrictions are not adopted. Installed metadata is not physical capture proof or per-app TCC management. | Explicit confirmation to open System Settings, followed by manual installation/removal approval/authentication there. `src/privacy/macos.rs:393-488`; `native/macos_controls.swift:426-475`. |
+| **macOS profile inspection — C** | Separate timestamped read-only inventory with complete/incomplete scope and authorization outcome. Cancellation/denial leaves unknown; does not change camera intent/ownership, identify camera clients, establish lock state or grant TCC. | Native Continue/Cancel then fixed bounded administrator `profiles` query. Worker: **U:1450-1527**. API `camera_inspection(bool)`: `src/privacy/macos.rs:105-151`; authorization UI/query: `native/macos_controls.swift:377-424`. |
+
+**Lock policy distinctions:**
+
+- Windows startup’s first known lock state is a **baseline**, not a new enforcement request; unknown never triggers action. Microphone originals use token/generation/per-endpoint ownership; manual requests invalidate automatic ownership. Camera restoration is coordinated with pending manual/block/restore work. **WT:1005-1044**; `src/platform/windows_protection.rs:599-704`; `src/platform/windows_mute.rs:65-154`.
+- Windows camera UAC cannot reliably be approved after locking: camera-on-lock is **not a dependable safeguard**; explicitly block before locking. **GUIDE:178-182**.
+- Linux uses native graphical-session lock evidence and microphone ownership restoration; unknown is not unlock. Unix enforcement loop: **U:1887-1943**.
+- macOS public lock signal is unavailable. The existence of lower-level microphone lock helpers does not make automatic macOS lock policy supported. `src/platform/unix.rs:85-88`; **MAIN:462-477**.
+
+### 4. Every application preference and policy type
+
+`Settings` has **nine fields**; unknown fields are rejected. Updates merge against latest settings under a stable process lock, so Flutter should reuse `Settings::update`, not rewrite a stale snapshot.
+
+| Preference | Type / default | Existing user entrypoints and actual meaning | Flutter |
+|---|---|---|---|
+| `notifications_enabled` | `bool`, true | Win32/GTK/AppKit checkboxes; no CLI enable/disable | B |
+| `sound_enabled` | `bool`, false | Native checkboxes; `watch --sound` requests playback, with platform distinctions below | B |
+| `show_ready` | `bool`, false | **Persisted but unused in production source.** Tray collection explicitly includes ready independently; CLI uses `--include-ready`. No actual preference control to migrate. | Do not invent effective toggle |
+| `history_enabled` | `bool`, true | Native checkboxes; controls future automatic history, not existing files/explicit log/system journal | B |
+| `profile` | `PrivacyProfile`, Balanced | Four saved choices. Private→Strict; Development→Conservative; Meeting/Balanced→Balanced assessment policy | B |
+| `pause_notifications_until` | `Option<DateTime<Utc>>`, None | CLI bounded minutes; native Windows 1h/Unix 30m pause/resume | B |
+| `mute_on_lock` | `bool`, false | CLI lock-policy, Win32 checkbox; supported Windows/Linux execution only | B |
+| `block_camera_on_lock` | `bool`, false | CLI lock-policy and Win32 checkbox; Windows only | B/C boundary |
+| `restore_on_unlock` | `bool`, true | CLI enable forces true; Win32 editable checkbox; no separate CLI setter | B |
+
+Evidence: **SET:20-74,88-147**; **WT:2177-2227**; **U:2118-2140,2239-2260**. Repository-wide `show_ready` references were limited to its schema/default and tests, not production consumption.
+
+**Separate TOML policy types**, not additional `Settings` fields:
+
+- `profile`: Conservative/Balanced/Strict.
+- `trust_policy`: Offline(default)/Online.
+- `language`: optional string.
+- `action`: Alert(default)/Kill.
+- `applications`: rules containing executable plus publisher and path lists.
+
+`src/config.rs:5-94`. Publisher/path rules are policy evidence, not an OS per-app privacy permission editor. Online trust explicitly permits native trust-network behavior; no GUI rule editor currently exists.
+
+**Baseline alert-delivery discrepancies — Windows capture dispatch superseded by B2 above:**
+
+- Windows tray records access history but does **not dispatch capture-event notifications/chimes**. Its asynchronous toasts report operations/errors and are not gated by notification-enable/pause preferences. Evidence: **WT:1061-1114,1142-1247,1248-1315**; all `notify_async` callers are control/settings/lifecycle paths.
+- Windows `watch` computes notification gating at startup; sound is independent of that notification gate. **MAIN:184-208**; `src/watcher/windows.rs:332-375`.
+- Unix dispatcher reloads settings during event delivery; sound requires `sound_enabled`, notification enable/unpaused, and **Active START**. Consequently **`watch --sound` alone does not bypass saved `sound_enabled=false`**. `src/watcher/unix.rs:95-125,154-170`.
+
+### 5. Process actions, history/export and maintenance
+
+| Function | Actual implementation / safeguards | Migration |
+|---|---|---|
+| Manual process termination | **TUI only**; second `k`/click within **3 seconds**, same access key/PID/process instance; Esc cancels. Protected/unverified identities refused. No public `kill PID` command, tray button or native-GUI kill. `src/frontends/tui.rs:562-576,692-807`. | C with identity-bound confirmation—not a raw PID action |
+| Automatic termination | `watch --kill-unauthorized` or policy Kill; `--no-kill` overrides. Requires explicit policy **Deny**, Active evidence, attributable stable process, two observations, protected-target safeguards. Suspicious heuristic risk alone is insufficient. `src/watcher/windows.rs:379-439`; `src/watcher/unix.rs:233-280`. | C; do not activate from profile selection |
+| Native termination authority | Windows retained process handle/creation-time revalidation, no elevation fallback; Linux pidfd/stable identity/same-user restrictions; macOS retained native process authority. `src/platform/windows.rs:2091-2118`; `src/platform/unix.rs:122-225`. | Retain Rust authority, never make Flutter PID sufficient |
+| History retention/clear | `history.jsonl`, **5 MiB rotation threshold**, **three rotations plus current**, no age expiry. `history::path/append/clear`; stable locking coordinates writers/rotation/clear. **HIST:68-132**. | B real data access; clear only designated history |
+| Export | **No dedicated export/CSV/history-export command or GUI.** Existing outputs are JSON snapshots, JSONL watch/explicit logs/history, and copied diagnostics. A history viewer/export API would be new functionality, not “migrating an existing native action.” CLI enum **CLI:61-240**; native action enumerations above; **GUIDE:283-309**. | B only if explicitly added; no fake export |
+| Windows update | Downloads/verifies matching CLI/tray package, transactionally replaces eligible pair, cooperative owned frontend handling and rollback; protection reservations refuse requested/pending ownership rather than releasing it. Registered MSI/manager installs **refuse binary-only update**, provide official installer guidance; no automatic MSI/UAC upgrade. `src/updater.rs:31-173`; `src/uninstall/windows.rs:644-654`; `src/platform/windows_protection.rs:230-239`; `src/privacy/windows_guard.rs:1721-1742`. | C installation-aware action |
+| Unix update | Ordinary-user, installer/receipt-aware path; Linux root camera-helper installation blocks user update/removal until ordered administrator lifecycle. macOS `.app` binary-only update refused; replace whole app. `src/updater/unix.rs:94-163,280-367`. | C; no generic self-update promise |
+| Uninstall | Windows verified portable pair: authenticated deferred worker, reservations before frontend shutdown, result receipt—not immediate completion claim. MSI/Cargo produce owner commands rather than executing them. Unix managed removal validates ownership/reserves controls; app/Homebrew/Cargo/Arch/standalone cases provide appropriate instructions. Settings/history/policy retained; active automatic protection/restoration blocks removal. `src/uninstall/windows.rs:43-109,145-215,532-570`; `src/uninstall.rs:40-87,101-215`. | C with exact-install provenance and truthful result |
+| Autostart | `state/enable/disable`; Windows limited per-user task, Run-key fallback, no elevation, respects native-disabled intent; Unix `.desktop` or Aqua LaunchAgent, owned registrations only. Hidden refresh preserves existing intent, not installation-wide enable. `src/autostart.rs:98-156,215-229`; `src/autostart/unix.rs:73-78,214-250,285-303,423-507`. | B; separate from startup of a guard |
+| About/theme/diagnostics | Native About and diagnostic copying as matrix above. Current Flutter has Overview/Diagnostics/About and local light/dark selection, **not persisted theme preference**. Its diagnostics are snapshot collector/protection details, not full doctor/process evidence. `desktop/flutter/lib/main.dart:135-178,283-327`. | Keep local in A; B for deeper diagnostics |
+
+### 6. Reuse points for Stage A and later stages
+
+| Existing boundary | Precise reuse recommendation |
+|---|---|
+| Windows microphone tray worker | `src/frontends/tray/windows_audio.rs:18-93`: bounded request/result queues; `Manual`, `Lock`, `Unlock`; COM references stay on worker apartment. **Manual currently toggles** and invalidates automatic journal after success. For an explicit Flutter desired-state command, reuse this owner/worker path and the existing `set_microphone_mute(bool)` backend; do not infer a toggle from stale SDK mute. |
+| Microphone result/actual-state reporting | `MicrophoneProtectionStatus { requested, service_active, mute_state, endpoint_count, hardware_mute_count, corrections, detail }`, `src/platform/windows_protection.rs:38-47`. Preserve operation failure plus subsequent observation; absence of endpoints is not proof of protection. |
+| Passive Flutter projection | `src/frontends/desktop.rs:261-310` retains requested/service/actual separation and maps zero microphone endpoints/zero cameras to unknown. Counts currently live in backend status, not dedicated fields in Flutter’s `ProtectionStatus` (`:74-95`). |
+| Windows authorization | Fixed typed endpoints, same user/session/data-scope; peer checks and version checks. `src/windows_control.rs:276-324,353-382,903-976`; `src/platform/windows_protection.rs:289-305`. This is not authority over another installation’s namespace. |
+| Camera workers/restoration | **WT:889-952,1563-1593** already separate camera operations and arrival restoration; `privacy::{camera_observation,set_camera_state,toggle_camera,arrived_restore_targets,restore_arrived,restore_legacy_camera}` at `src/privacy.rs:381-423`. Resume is a separate intent-preserving operation, not Allow→Block. |
+| Settings/history | `Settings::update` (**SET:65-68,88-147**) and `history::{path,append,clear}` (**HIST:71-113**). No history-reader/export API currently present. |
+| Unix actions | **U:2084-2154** routes native actions to existing platform controls; macOS inspection alone has a dedicated inspection worker (**U:1450-1527**). Do not assume Windows worker architecture already exists identically on Unix. |
+
+### 7. Official logo assets and resource identity mismatches
+
+| Surface | Inspected evidence / finding |
+|---|---|
+| Canonical identity | **`site/assets/mark.svg:1`**: rounded green tile, eye outline containing microphone; official **`site/assets/favicon.png`** is the 96×96 raster, visually inspected. This is not the generic Material eye icon. |
+| Windows native | `installer/miccamwatch.rc:1-2` explicitly ties `installer/miccamwatch.ico` to canonical SVG. `build.rs:40-49` embeds it into CLI/tray; **WN:1474-1516** decodes the same asset for the native window. Windows tray’s semantic status icons are separately drawn status glyphs (**WT:2551-2633**), not canonical-logo copies. |
+| GTK/native Linux | **GTK:858-878** embeds `site/assets/favicon.png` for window/header. Native program identity is `com.roman-cuisset.miccamwatch` (**GTK:1031-1035**). Installer desktop/icon paths use that identity (`installer/install.sh:445-455,517-523`). |
+| AppKit/native macOS | `native/macos_brand.swift:1-55` renders canonical SVG geometry; menu-bar template removes tile and adds separate status badge (**APP:277-310**). Packaging generates ICNS from that renderer, identity **`com.roman-cuisset.miccamwatch`** (`installer/macos/package.py:62-81`); notification helper identity is **`com.roman-cuisset.miccamwatch.helper`** (`build.rs:103-107`; **APP:1277-1281**). |
+| Flutter in-window branding — **confirmed mismatch** | `desktop/flutter/lib/main.dart:151-155` uses **`Icons.visibility_outlined`**, not official eye-plus-microphone asset. `desktop/flutter/pubspec.yaml:1-18` declares Material icons but no branded asset. |
+| Flutter macOS app icon — **confirmed mismatch** | Visually inspected `desktop/flutter/macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_128.png`: **stock blue Flutter logo**. Catalog names/sizes are referenced by `Contents.json:1-65`. |
+| Flutter macOS/Linux identity — **different from native** | macOS product `miccamwatch_desktop`, bundle **`dev.miccamwatch.desktop`** (`desktop/flutter/macos/Runner/Configs/AppInfo.xcconfig:7-14`); Linux uses same binary/application ID (`desktop/flutter/linux/CMakeLists.txt:3-10`). Linux runner sets MicCamWatch title but has no canonical-icon assignment in its source (`linux/runner/my_application.cc:48-55,146-151`). These are real identity differences; changing installed identities/notification ownership is **not** part of this investigation. |
+| Flutter Windows resources | `desktop/flutter/windows/runner/Runner.rc:55,92-99` uses its separate `resources/app_icon.ico`; product/company/title say MicCamWatch, internal/executable name `miccamwatch_desktop`. The existing first-slice document reports the official Windows logo (`docs/FLUTTER_0.21.1_FIRST_SLICE.md:12`). **ICO byte equality was not established by this inspection; no confirmed Windows icon mismatch is asserted.** |
+| Version identity | Flutter manifest/About advertise **0.21.1 development**, while engine version is separately reported (`desktop/flutter/pubspec.yaml:4`; `lib/main.dart:314-327`). Keep development shell and actual engine version distinct, rather than implying an installed 0.21.1 release. |
+
+**Unsupported claims to avoid:** universal physical microphone/camera cutoff; per-app privacy permission editing; camera TCC grant via administrator inspection; macOS automatic lock protection; Linux hotplug camera blocking; existing full history/export UI; existing tray/native kill/update/uninstall actions; or treating saved Windows tray sound/notification toggles as proof those capture alerts are implemented.
+
+## B1 parity and next gates — 28 October 2026
+
+| Function | Current Flutter state | Next gate |
+|---|---|---|
+| Native snapshot/collector diagnostics, About, local light/dark theme | Existing shared presentation retained | Full doctor/device detail, keyboard/screen-reader audit and seven-language desktop visual checks |
+| Windows explicit SDK microphone request/release | Stage A retained unchanged | Manual release is all-supported-input unmute, not per-input original restoration; no new hardware test in B1 |
+| Notifications, sound, future-history preference | B1 native persistence/readback works | Saved flags are not proof of alert delivery; history effect remains separate from preference; no deletion/viewer API invented |
+| Assessment profile | B1 saved selection and collector-applied policy work | Managed native configuration disables only profile editing; no permission, allowlist or blocking side effect |
+| Pause/resume notifications, autostart | Native only | Typed existing bounds/ownership; isolated registration tests before any host startup write |
+| Camera controls, requested guard resume, automatic lock policies | Native only | Explicit platform authorization, effective-state/arrival health and owned restoration; no blind toggles or new guarantees |
+| History path/clear, application details, complete diagnostics | Native CLI/interfaces retained | Read APIs before destructive clear; browser/export is new API work, not missing migration wiring |
+| Language/theme persistence, update/uninstall | Existing limited/native behavior retained | No imaginary settings fields or generic installation-independent updater |
+| Linux x64/ARM64, macOS Intel/Apple Silicon | Native fallback retained; no B1 Flutter runtime qualification | Owned Unix transport/lifecycle, platform restore semantics, full payload/identity/signing gates; ARM physical validation remains absent |
+
+## v0.22.0 finalisation — 12 November 2026
+
+The dated A–B5 rows above remain historical. The current 44-family status is
+`V0.22.0_PARITY_AUDIT.md` §8, including the §8.4 camera delta.
+
+| Family | Implemented now | Verification boundary |
+|---|---|---|
+| C01 Windows Block/Allow | IPC7 private prepared revision, delegation to the existing permanent tray camera queue, native consent and fresh readback | Fixtures and six isolated real-UI cycles; no hardware effect on the daily installation |
+| C02 Windows Resume | Explicit action preserves manual intent and confirms helper/request state independently of observed coverage | Native refusal/stale/busy/disconnect tests; no real UAC/hardware activation |
+| C03 Windows historical recovery | Exact bounded instance ID, distinct warning/confirmation, existing native recovery authority only | Typed/forged-authority and UI tests; no historical device actually enabled |
+
+Development controls remain disabled. Closing Flutter does not cancel admitted
+native work or own guard restoration. Remaining P0/P1 and platform qualifications
+are not marked complete by this checkpoint.
+
+
+### O07 — process-owned enforcement checkpoint
+
+Flutter can explicitly enable/disable the existing two-observation policy
+enforcement through Rust. It is session-scoped like CLI flags, not an edit of the
+policy file. Native identity revalidation and error reporting remain authoritative;
+Flutter closure does not disable it, engine restart starts disabled. Windows and
+Unix reuse their existing watcher algorithms and observations. Three native
+runtime fixture tests, development denial, 14 Flutter tool tests, strict Clippy,
+analysis, Windows release builds and six real isolated IPC/UI cycles passed.
+No real process was terminated; new Unix runtime qualification and an actual
+desktop capture of the lower enforcement panel remain pending.
+
+
+### L02 — explicit engine exit checkpoint
+
+The common Flutter interface has a separately confirmed Quit MicCamWatch action.
+Its private native owner admits or refuses a retained revision, drains accepted
+work and the response, then uses the existing native exit path. Window closure
+does not call this lane. Persistent guards and native owned-original restoration
+are not forcibly changed. Hardware commits still require operational authority.
+
+Windows: 66 desktop tests, 105 Flutter tests, strict Clippy/analyze/release builds;
+four actual Flutter-requested native engine exits (both themes, restarted owners),
+exit0, no owned-process residue, private preferences retained. Initial missing
+confirmation semantic identifier was fixed and its failed proof retained.
+Unix/macOS integration is present but not newly qualified at this checkpoint.
+
+
+## O04 — détails multi-accès vérifiés, 13 novembre 2026
+
+- Code `b2ac919`, IPC **8**. Tous les accès du même instantané d'application
+  sont consultables par continuations privées ; refus des générations mélangées,
+  des curseurs réutilisés/étrangers et des réponses d'une ancienne session.
+- Les détails affichent leur date et leur caractère non live. Une identité
+  inconnue désactive la terminaison ; la lecture n'autorise jamais une action.
+- Collision détectée en vraie fenêtre entre décision observée `enforcement`
+  et état du runtime : ce dernier utilise désormais `enforcement_runtime`.
+  Le test de régression conserve la décision observée sans l'interpréter comme
+  une protection ou une terminaison automatique activée.
+- Windows : 69 tests Rust desktop, Clippy/analyse/builds release réussis ;
+  20 tests Flutter tools réussis après un échec conservé dans la suite complète
+  (108 autres réussites). Six cycles réels, deux thèmes, captures examinées,
+  processus Flutter absent après fermeture et observation Rust maintenue.
+- Pagination multi-périphériques : fixtures ; requête réelle : un accès sur le
+  PID consulté. Aucune action sur les périphériques ou processus quotidiens.
+- Linux : 71 tests desktop + 3 enforcement et Clippy sur **`ee8daa8` seulement** ;
+  la nouvelle source IPC 8/O04 et macOS restent à qualifier.
+- O02/O05 (sessions, cadence, sinks) et U01/U02 (maintenance) demeurent ouverts.
+
+
+## U01/U02 — maintenance sans transaction incomplète, 13 novembre 2026
+
+Code `4e7b20b`. Contrats étape 2 :
+
+- Propriétaire natif : chemin/version réels, même diagnostic de gestionnaire que
+  la CLI, absence de preuve affichée comme non confirmée, jamais comme libre
+  autorisation de retirer des fichiers.
+- Vérification publique réelle, datée et en lecture seule ; timeout 8 s, URL et
+  version contrôlées, pas de téléchargement ni de revendication de signature.
+  La version publique v0.21.0 n'est pas confondue avec le moteur dev 0.22.0.
+- Update/uninstall hybrides explicitement désactivés et refusés côté Rust,
+  y compris CLI/worker, avant mutation. Native-only conserve les mécanismes
+  précédents ; transactions complètes/installateurs/rollback restent étape 3.
+- DTO stricts, erreurs/refus/déconnexion, ancien résultat marqué périmé,
+  textes et contrôles désactivés dans les sept langues.
+- Windows : quatre tests Rust, 23 Flutter ciblés, Clippy strict des deux
+  variantes, analyse/builds release, vrais échanges GUI et captures examinées.
+  `--version` x2 : 0 ; refus update/uninstall : 2, scope privé/payload identiques.
+  Audit PE réel normal/différé : quatre images sans dépendance CRT inattendue.
+- Échecs initiaux de compilation et de harness conservés ; aucun succès CI,
+  Windows vierge, package hybride ou test matériel revendiqué à ce checkpoint.
+- Nouveau code Linux/macOS à qualifier ; O02/O05 toujours incomplets.
+
+## O02/V01 — vue filtrée et scopes natifs, 13 novembre 2026
+
+- `85c6493`, protocole **9** synchronisé Rust/Dart/runner Windows.
+- Risque natif obligatoire, sans inférence depuis la confiance.
+- Ressource, seuil natif et Ready filtrent réellement les lignes de cette
+  fenêtre ; cartes/observations/notifications/protections inchangées.
+- Six scopes natifs traduits, faux choix UAC Unix supprimé ; libellés microphone
+  suivent la langue de fenêtre. Sept langues, deux thèmes, trois tailles de texte.
+- Windows : 74 tests Rust, 115 Flutter, Clippy/analyse/builds réussis ;
+  six cycles réels, préférences privées préservées et captures examinées.
+- **O02 partiel/O05 ouvert** : cadence et sessions/journaux avancés non livrés
+  par ce filtre de présentation. Aucun changement de fréquence ou nouveau
+  collecteur ; nouvelles preuves Unix/CI du protocole 9 encore attendues.
+
+## Tableau de clôture des 44 familles — 13 novembre 2026
+
+Le [tableau courant de l'audit](V0.22.0_PARITY_AUDIT.md#9-état-courant-des-44-familles--13-novembre-2026)
+actualise les 44 familles sans remplacer leur référence native ni les preuves
+historiques ci-dessus. Protocole courant : **9**.
+
+Les manques fonctionnels de clôture sont **O02 (cadence/session avancée)** et
+**O05 (sessions et sorties explicites)**. Les filtres réels n'en sont pas un
+substitut. Le §9.1 identifie les contrats natifs, l'autorité des fichiers et les
+tests encore nécessaires ; pas de second moniteur ou de log synthétique.
+Qualification Unix exacte `6094f3a` :
+[43402431543](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/43402431543),
+quatre cibles réussies, reçus et captures examinés au §9.2 de l'audit.
+Deux gardes Linux non sélectionnées par l'ancien script : corrigé `5ed7303`,
+contrôle ciblé [43406668221](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/43406668221)
+réussi : deux gardes réellement sélectionnées et exécutées par cible, source
+`5ed7303`. Pas de rebuild Flutter ou d'exécution ARM physique revendiqués.
+
+### Passation O02/O05 vers Codex — 13 novembre 2026
+
+L'arrêt demandé intervient à `f70c7f7` ; aucun code produit n'est modifié après
+cette sauvegarde. Les deux P1 restants sont bornés, pas terminés :
+
+- **O02 — présentation seulement** : la cadence native de collecte reste celle
+  du propriétaire (Unix 2 s, Windows 500 ms ; caméra 5 s). Flutter ne règle que
+  la diffusion et affiche native/demandée/effective. Pas de second collecteur,
+  pas de parité `watch --interval`.
+- **O05 — répertoire possédé** : un fichier JSONL par session sous
+  `settings::data_dir()/sessions`, créé par Rust après consentement, chemin
+  affiché, refus des liens/remplacements et erreurs visibles. Aucun chemin
+  fourni par Flutter.
+
+Le plan d'implémentation et les tests d'acceptation sont dans
+[`HANDOFF_CODEX_2026-11-13.md`](HANDOFF_CODEX_2026-11-13.md). La ligne O02
+reste **Partiel** et O05 **Incomplet** jusqu'à preuve du contraire.
+
+
+
+### Reprise O02/O05 — 16 novembre 2026
+
+| Famille | Portée implémentée | Qualification |
+|---|---|---|
+| O02 | Intervalle d’affichage indépendant de la collecte, trois valeurs relues depuis Rust, réglage en mémoire et session possédée par le moteur. IPC 10. | Tests Windows, Linux et macOS réussis. Cadence testée par horloge de présentation et absence de nouvelle collecte vérifiée côté Unix. |
+| O05 | Consentement par confirmation native, nouveau fichier JSONL privé, événements du snapshot complet, plafond explicite et état d’arrêt relu. | Tests des permissions et transitions réussis. Cycle opérationnel complet vérifié en fenêtre sur le runner Windows, événements couverts par fixtures. |
+
+Les états ci-dessus s’appliquent aux deux familles de la matrice existante.
+Les 42 autres familles gardent les résultats vérifiés dans l’audit de parité.
+
+### Clôture de l’étape 2 — 16 novembre 2026
+
+| Famille | Vérification ajoutée sur `945d69c` |
+|---|---|
+| M03 | Capacité PipeWire/CoreAudio et présence des originaux relues. Un journal illisible ou un état inconnu empêche la confirmation. |
+| C01–C03 | Intention, activité et restauration affichées. Autoriser requiert la relecture de l’arrêt de la garde. La récupération historique relit la configuration de l’instance exacte. |
+| C06 | Rapport d’inspection macOS dans Flutter, avec statut natif, inventaire et issue de l’autorisation. Annulation et relecture insuffisante restent visibles. |
+| O05 | Erreur de disque plein injectée dans un vrai fichier de test après une écriture partielle. Les lignes déjà validées sont conservées et l’échec remonte. |
+| L01–L03 | IPC 10, refus natifs de Quit, cycles de fenêtre et sorties explicites Aqua dans les deux thèmes. |
+
+Voir les [reçus de la qualification fonctionnelle](V0.22.0_PARITY_AUDIT.md#qualification-etape-2) pour les limites de chaque preuve.

@@ -1,0 +1,411 @@
+"""Exercise only a manifest-pinned development tray, never installed MCW.
+Default runner is read-only. Controlled Host requires explicit isolated environment
+and paired CLI identity; its UI can invoke native microphone actions after consent.
+Settings-only Host requires a settings_development manifest and explicit isolated
+APPDATA/LOCALAPPDATA beneath the qualification root. It never permits CLI children.
+The explicit notification_probe variant uses a matching probe manifest and only
+TEST-labelled synthetic alert events; collectors/dashboard remain genuine, all
+hardware commands stay disabled, and Windows uses a separate qualification AUMID.
+Requires Python3.12+, psutil and Pillow. No administrator rights.
+"""
+import argparse
+import ctypes as C
+from ctypes import wintypes as W
+import hashlib
+import json
+import os
+from pathlib import Path
+import queue
+import re
+import statistics
+import subprocess
+import threading
+import time
+
+import psutil
+from PIL import Image
+
+U = C.WinDLL('user32', use_last_error=True)
+G = C.WinDLL('gdi32')
+K = C.WinDLL('kernel32', use_last_error=True)
+K.OpenProcess.argtypes, K.OpenProcess.restype = [W.DWORD, W.BOOL, W.DWORD], W.HANDLE
+K.CloseHandle.argtypes = [W.HANDLE]
+K.WaitForSingleObject.argtypes, K.WaitForSingleObject.restype = [W.HANDLE, W.DWORD], W.DWORD
+K.GetProcessTimes.argtypes = [W.HANDLE, C.POINTER(W.FILETIME), C.POINTER(W.FILETIME),
+                              C.POINTER(W.FILETIME), C.POINTER(W.FILETIME)]
+K.GetSystemDirectoryW.argtypes = [W.LPWSTR, W.UINT]
+_system_directory = C.create_unicode_buffer(32768)
+if not K.GetSystemDirectoryW(_system_directory, len(_system_directory)):
+    raise C.WinError(C.get_last_error())
+SYSTEM_QUERY = (Path(_system_directory.value) / 'schtasks.exe').resolve()
+
+
+def kernel_process_state(pid):
+    """Retain exact generation and kernel exit status, not PID existence."""
+    handle = K.OpenProcess(0x00100000 | 0x1000, False, pid)
+    if not handle:
+        if C.get_last_error() == 87:
+            return None
+        raise C.WinError(C.get_last_error())
+    try:
+        created, exited, kernel, user = (W.FILETIME() for _ in range(4))
+        if not K.GetProcessTimes(handle, C.byref(created), C.byref(exited),
+                                 C.byref(kernel), C.byref(user)):
+            raise C.WinError(C.get_last_error())
+        state = K.WaitForSingleObject(handle, 0)
+        if state not in (0, 258):
+            raise C.WinError(C.get_last_error())
+        return dict(birth=(created.dwHighDateTime << 32) | created.dwLowDateTime,
+                    exited=state == 0)
+    finally:
+        K.CloseHandle(handle)
+
+
+def same_process_alive(pid, birth):
+    value = kernel_process_state(pid)
+    return value is not None and value['birth'] == birth and not value['exited']
+CALLBACK = C.WINFUNCTYPE(W.BOOL, W.HWND, W.LPARAM)
+U.EnumWindows.argtypes = [CALLBACK, W.LPARAM]
+U.GetWindowThreadProcessId.argtypes = [W.HWND, C.POINTER(W.DWORD)]
+U.GetWindowTextLengthW.argtypes = [W.HWND]
+U.GetWindowTextW.argtypes = [W.HWND, W.LPWSTR, C.c_int]
+U.GetClassNameW.argtypes = [W.HWND, W.LPWSTR, C.c_int]
+U.IsWindowVisible.argtypes = [W.HWND]
+U.PostMessageW.argtypes = [W.HWND, W.UINT, W.WPARAM, W.LPARAM]
+U.GetClientRect.argtypes = [W.HWND, C.POINTER(W.RECT)]
+U.ShowWindow.argtypes = [W.HWND, C.c_int]
+U.UpdateWindow.argtypes = [W.HWND]
+U.SetWindowPos.argtypes = [W.HWND,W.HWND,C.c_int,C.c_int,C.c_int,C.c_int,W.UINT]
+U.SetForegroundWindow.argtypes = [W.HWND]
+U.GetDpiForWindow.argtypes, U.GetDpiForWindow.restype = [W.HWND], W.UINT
+U.GetDC.argtypes, U.GetDC.restype = [W.HWND], W.HDC
+U.ReleaseDC.argtypes = [W.HWND, W.HDC]
+U.PrintWindow.argtypes = [W.HWND, W.HDC, W.UINT]
+U.SetProcessDpiAwarenessContext.argtypes = [C.c_void_p]
+U.SetProcessDpiAwarenessContext(C.c_void_p(-4))
+G.CreateCompatibleDC.argtypes, G.CreateCompatibleDC.restype = [W.HDC], W.HDC
+G.CreateCompatibleBitmap.argtypes, G.CreateCompatibleBitmap.restype = [W.HDC,C.c_int,C.c_int],W.HBITMAP
+G.SelectObject.argtypes, G.SelectObject.restype = [W.HDC,W.HANDLE],W.HANDLE
+G.GetDIBits.argtypes = [W.HDC,W.HBITMAP,W.UINT,W.UINT,C.c_void_p,C.c_void_p,W.UINT]
+G.DeleteObject.argtypes, G.DeleteDC.argtypes = [W.HANDLE],[W.HDC]
+
+class Header(C.Structure):
+    _fields_=[('size',W.DWORD),('width',W.LONG),('height',W.LONG),('planes',W.WORD),
+              ('bits',W.WORD),('compression',W.DWORD),('image_size',W.DWORD),
+              ('xp',W.LONG),('yp',W.LONG),('used',W.DWORD),('important',W.DWORD)]
+
+def sha(path):
+    with path.open('rb') as f: return hashlib.file_digest(f,'sha256').hexdigest()
+
+def until(fn, timeout=25):
+    end=time.perf_counter()+timeout
+    while time.perf_counter()<end:
+        found=fn()
+        if found: return found
+        time.sleep(.01)
+    raise TimeoutError('Owned development state did not arrive')
+
+def windows(pids,title,visible=False,by_class=False):
+    found=[]
+    @CALLBACK
+    def visit(hwnd,_):
+        pid=W.DWORD();U.GetWindowThreadProcessId(hwnd,C.byref(pid))
+        if pid.value in pids and (not visible or U.IsWindowVisible(hwnd)):
+            text=C.create_unicode_buffer(256 if by_class else U.GetWindowTextLengthW(hwnd)+1)
+            if by_class: U.GetClassNameW(hwnd,text,len(text))
+            else: U.GetWindowTextW(hwnd,text,len(text))
+            if text.value==title: found.append((hwnd,pid.value))
+        return True
+    U.EnumWindows(visit,0)
+    return found
+
+def capture(hwnd,path,dark):
+    # Reuse the study's proven HWND-only capture; never fall back to desktop pixels.
+    r=W.RECT();assert U.GetClientRect(hwnd,C.byref(r))
+    dc=U.GetDC(hwnd);target=G.CreateCompatibleDC(dc)
+    bitmap=G.CreateCompatibleBitmap(dc,r.right,r.bottom);old=G.SelectObject(target,bitmap)
+    try:
+        assert U.PrintWindow(hwnd,target,3),'PrintWindow failed'
+        G.SelectObject(target,old)
+        header=Header(C.sizeof(Header),r.right,-r.bottom,1,32,0,0,0,0,0,0)
+        pixels=C.create_string_buffer(r.right*r.bottom*4)
+        assert G.GetDIBits(target,bitmap,0,r.bottom,pixels,C.byref(header),0)==r.bottom
+        image=Image.frombuffer('RGB',(r.right,r.bottom),pixels.raw,'raw','BGRX',0,1)
+        # Native Material pages need not expose Overview's exact background RGB.
+        # Reject empty surfaces here; actual content/theme still requires review.
+        assert any(low!=high for low,high in image.getextrema()),'Blank owned UI surface'
+        image.save(path)
+        return {'file':path.name,'sha256':sha(path),'client':[r.right,r.bottom],
+                'dpi':U.GetDpiForWindow(hwnd),'api':'PrintWindow owned HWND',
+                'requested_theme':'dark' if dark else 'light','visual_review_required':True}
+    finally:
+        G.SelectObject(target,old);G.DeleteObject(bitmap);G.DeleteDC(target);U.ReleaseDC(hwnd,dc)
+
+class Host:
+    """Own a manifest-pinned engine and its graphical child.
+
+    Existing positional arguments keep their read-only/controlled meaning.
+    Settings smoke call (only the integration owner runs it):
+
+        root = Path(os.environ['LOCALAPPDATA']) / 'MicCamWatchQualification'
+        roaming, local = root / 'b1-smoke' / 'roaming', root / 'b1-smoke' / 'local'
+        roaming.mkdir(parents=True, exist_ok=False)
+        local.mkdir(parents=True, exist_ok=False)
+        environment = os.environ.copy()
+        environment.update(APPDATA=str(roaming.resolve()), LOCALAPPDATA=str(local.resolve()))
+        host = Host(prefix, 'light', environment=environment, settings_development=True)
+        try:
+            host.open()
+            # Exercise only Preferences in this owned window, then host.close/open.
+        finally:
+            evidence = host.stop()
+
+    The prefix must have matching engine/UI hashes and manifest mode
+    settings_development. No CLI identity is needed or allowed as a descendant.
+    The settings backend must disable microphone worker/resume/automatic controls;
+    this runner does not change hardware or substitute a fake preference transport.
+
+    Real B1 scenario: save a boolean in Preferences, observe authoritative success,
+    close/reopen the UI and confirm persistence; repeat for the assessment profile,
+    checking saved selection separately from the actual applied profile. Closing
+    while accepted must not cancel the process-owned write. Unsupported effects
+    must remain explicit. Use only these safe preference controls, never microphone,
+    permissions, autostart or operational-host actions. Host records lifecycle logs
+    and owns HWND capture, but cannot inspect outbound snapshots or send UI commands;
+    automated preference assertions need the real UI/pipe consumer, not log guesses.
+    """
+    settings_development=False
+
+
+    def __init__(self,prefix,theme,controlled=False,environment=None,*,settings_development=False,notification_probe=False):
+        self.prefix=prefix.resolve();self.exe=self.prefix/'mcw-tray.exe'
+        self.ui=self.prefix/'desktop/miccamwatch_desktop.exe'
+        if notification_probe and not settings_development:
+            raise RuntimeError('Notification probe requires explicit isolated settings-development mode')
+        if controlled and settings_development:
+            raise RuntimeError('Controlled and settings-only development modes are mutually exclusive')
+        self.controlled=controlled;self.settings_development=settings_development
+        self.notification_probe=notification_probe
+        self.cli=self.prefix/'mcw.exe'
+        allowed=Path(os.environ['LOCALAPPDATA'])/'MicCamWatchQualification'
+        if not self.prefix.is_relative_to(allowed.resolve()):
+            raise RuntimeError('Qualification prefix must be under the dedicated local evidence root')
+        manifest=json.loads((self.prefix/'qualification-manifest.json').read_text(encoding='utf-8-sig'))
+        if manifest.get('mode') not in ['read_only_development','controlled_development','settings_development','settings_notification_probe_development'] or manifest.get('feature')!='flutter-desktop':
+            raise RuntimeError('Development manifest missing')
+        if controlled and (manifest.get('mode')!='controlled_development' or not environment
+                           or sha(self.cli)!=manifest.get('cli_sha256')):
+            raise RuntimeError('Controlled mode requires explicit isolated environment and paired CLI identity')
+        if settings_development:
+            expected_mode='settings_notification_probe_development' if notification_probe else 'settings_development'
+            if manifest.get('mode')!=expected_mode or not environment:
+                raise RuntimeError('Settings/probe mode requires its matching manifest and explicit isolated environment')
+            isolated=[]
+            for key in ('APPDATA','LOCALAPPDATA'):
+                value=environment.get(key)
+                if not isinstance(value,str) or not value or not Path(value).is_absolute():
+                    raise RuntimeError(f'Settings mode requires explicit absolute {key}')
+                path=Path(value).resolve()
+                if path==allowed.resolve() or not path.is_relative_to(allowed.resolve()):
+                    raise RuntimeError(f'Settings {key} must be strictly beneath the qualification root')
+                if not path.is_dir():
+                    raise RuntimeError(f'Settings {key} must be an existing isolated directory')
+                isolated.append(path)
+            if isolated[0].is_relative_to(isolated[1]) or isolated[1].is_relative_to(isolated[0]):
+                raise RuntimeError('Settings APPDATA and LOCALAPPDATA must be separate isolated directories')
+        if sha(self.exe)!=manifest['engine_sha256'] or sha(self.ui)!=manifest['ui_sha256']:
+            raise RuntimeError('Qualified build hashes do not match; no process launched')
+        if sha(self.exe)=='5a0253ea90a77bf7478f6a9f1826290f6a6055723cb12bdf4975b89bdfb1b6fe':
+            raise RuntimeError('Refusing the stable binary: its parser lacks the development mode')
+        self.lines=[];self.theme=theme;self.started=time.perf_counter()
+        mode=('--settings-notification-probe-development' if notification_probe else
+              '--settings-development' if settings_development else
+              '--controlled-development' if controlled else '--read-only-development')
+        self.proc=subprocess.Popen([str(self.exe),mode,'--desktop-theme',theme],
+            stdout=subprocess.PIPE,stderr=subprocess.STDOUT,encoding='utf-8',errors='replace',
+            creationflags=subprocess.CREATE_NO_WINDOW,cwd=self.prefix,env=environment)
+        self.parent=psutil.Process(self.proc.pid);self.known={self.proc.pid}
+        self.births = {self.proc.pid: kernel_process_state(self.proc.pid)['birth']}
+        self.reader=threading.Thread(target=self._read,daemon=True);self.reader.start()
+        self.hwnd=None
+        try:
+            self.hwnd=until(lambda:windows({self.proc.pid},'MicCamWatchReadOnlyDevelopmentTray',by_class=True))[0][0]
+            until(lambda:self.ticks())
+            if self.settings_development:self.members()
+        except BaseException:
+            # Constructor failures still own this exact manifest-pinned process.
+            if self.proc.poll() is None:
+                if self.hwnd: U.PostMessageW(self.hwnd,0x10,0,0)
+                try:self.proc.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    self.proc.kill();self.proc.wait(timeout=10)
+            self.reader.join(timeout=3)
+            print('Observer startup evidence:',json.dumps(self.lines),flush=True)
+            raise
+
+    def _read(self):
+        for line in self.proc.stdout:
+            self.lines.append({'at':time.perf_counter(),'elapsed':time.perf_counter()-self.started,'line':line.rstrip()})
+
+    def ticks(self):
+        return [int(x['sequence']) for row in self.lines if row['line'].startswith('{')
+                for x in [json.loads(row['line'])] if x.get('event')=='observer_tick']
+
+    def members(self):
+        try: candidates=[self.parent,*self.parent.children(recursive=True)]
+        except psutil.NoSuchProcess:return []
+        result=[]
+        for p in candidates:
+            try:
+                if p.status()==psutil.STATUS_ZOMBIE:continue
+                path=Path(p.exe()).resolve()
+                owner=self.controlled and path==self.cli.resolve() and p.cmdline()[1:]==['__microphone-guard']
+                query = (path == SYSTEM_QUERY and p.ppid() == self.proc.pid
+                         and p.cmdline()[1:] == ['/Query', '/TN', 'MicCamWatch Tray', '/XML'])
+                if path not in [self.exe.resolve(),self.ui.resolve()] and not (owner or query):
+                    raise RuntimeError(f'Unexpected observer descendant: {path}; no name-based cleanup permitted')
+                if self.settings_development and p.pid!=self.proc.pid and not (
+                        p.ppid()==self.proc.pid and (path==self.ui.resolve() or query)):
+                    raise RuntimeError(f'Unexpected settings descendant: {path}; only owned UI or exact passive startup query permitted')
+                state = kernel_process_state(p.pid)
+                if state is None or state['exited']:
+                    continue
+                self.births[p.pid] = state['birth']
+                self.known.add(p.pid);result.append(p)
+            except psutil.NoSuchProcess:pass
+        return result
+
+    def view(self):
+        return windows({p.pid for p in self.members() if p.pid!=self.proc.pid},'MicCamWatch',True)
+
+    def snapshot(self):
+        rows=[]
+        for p in self.members():
+            with p.oneshot():
+                m=p.memory_full_info();c=p.cpu_times()
+                rows.append({'pid':p.pid,'name':p.name(),'private_commit':m.private,'rss':m.rss,
+                             'uss':m.uss,'shareable_rss':m.rss-m.uss,'cpu_seconds':c.user+c.system,
+                             'threads':p.num_threads(),'handles':p.num_handles()})
+        return {'rows':rows,'process_count':len(rows),**{k:sum(r[k] for r in rows) for k in ['private_commit','rss','uss','shareable_rss']}}
+
+    def idle(self,seconds):
+        start=time.perf_counter();samples=[self.snapshot()]
+        while time.perf_counter()-start<seconds:
+            time.sleep(.5);samples.append(self.snapshot())
+        elapsed=time.perf_counter()-start
+        before={r['pid']:r['cpu_seconds'] for r in samples[0]['rows']}
+        after={r['pid']:r['cpu_seconds'] for r in samples[-1]['rows']}
+        assert before.keys()==after.keys(),'Process membership changed in idle interval'
+        cpu=sum(after[pid]-before[pid] for pid in before)/elapsed*100
+        return {'seconds':elapsed,'cpu_one_core_percent':cpu,'samples':samples,
+                'median':{k:statistics.median(x[k] for x in samples) for k in ['private_commit','rss','uss','shareable_rss','process_count']}}
+
+    def open(self,burst=1):
+        start=time.perf_counter()
+        for _ in range(burst):
+            assert U.PostMessageW(self.hwnd,0x8000+42,self.proc.pid,0)
+        win=until(self.view)
+        visible_ms=(time.perf_counter()-start)*1000
+        ready=until(lambda:[r for r in self.lines if r['at']>=start and 'desktop event=ready ' in r['line']])[-1]
+        payload={k:v for k,v in re.findall(r'(\w+)=([^ ]+)',ready['line'])}
+        time.sleep(.2)
+        members=self.members();assert sum(Path(p.exe()).resolve()==self.ui.resolve() for p in members)==1,'Duplicate graphical child'
+        stages=[]
+        for r in self.lines:
+            if r['at']>=start and 'desktop event=' in r['line']:
+                stages.append({'observed_ms':(r['at']-start)*1000,'line':r['line']})
+        return {'window_pid':win[0][1],'visible_wall_ms':visible_ms,
+                'usable_parent_ms':int(payload['parent_elapsed_ms']),
+                'ready_sequence':int(payload['sequence']),'stages':stages}
+
+    def expose(self):
+        # An occluded GPU surface can PrintWindow as white despite a rendered frame.
+        # Restore only the owned child; never capture unrelated desktop pixels.
+        hwnd=self.view()[0][0]
+        U.ShowWindow(hwnd,9)
+        # Normal activation only: no topmost flag, input attachment, focus-policy
+        # override or global desktop capture. Windows may deny foreground focus.
+        U.SetWindowPos(hwnd,0,0,0,0,0,0x43)  # NOMOVE | NOSIZE | SHOWWINDOW
+        U.SetForegroundWindow(hwnd)
+        U.UpdateWindow(hwnd)
+        time.sleep(.2)
+        return hwnd
+
+    def close(self):
+        window=self.view()[0];start=time.perf_counter()
+        assert U.PostMessageW(window[0],0x10,0,0)
+        until(lambda:not self.view())
+        hidden=(time.perf_counter()-start)*1000
+        until(lambda:not any(Path(p.exe()).resolve()==self.ui.resolve() for p in self.members()))
+        return {'hidden_ms':hidden,'process_exit_ms':(time.perf_counter()-start)*1000}
+
+    def stop(self):
+        if self.proc.poll() is None:
+            U.PostMessageW(self.hwnd,0x10,0,0)
+            self.proc.wait(timeout=35)
+        self.reader.join(timeout=3)
+        until(lambda:all(not same_process_alive(pid, birth)
+                         for pid, birth in self.births.items()),timeout=10)
+        return {'code':self.proc.returncode,'owned_pids':sorted(self.known),
+                'births':self.births,'all_exited':True,'events':self.lines}
+
+
+def main():
+    ap=argparse.ArgumentParser(description=__doc__)
+    ap.add_argument('--prefix',required=True,type=Path)
+    ap.add_argument('--out',required=True,type=Path)
+    ap.add_argument('--trials',type=int,default=3)
+    ap.add_argument('--cycles',type=int,default=3)
+    ap.add_argument('--idle-seconds',type=float,default=5)
+    ap.add_argument('--theme',choices=['light','dark'],default='light')
+    ap.add_argument('--captures',action='store_true')
+    ap.add_argument('--lifecycle',action='store_true',help='Owned-child crash, visible activation and parent-exit checks')
+    args=ap.parse_args();args.out.mkdir(parents=True,exist_ok=True)
+    result={'platform':'Windows11 x64 local; no hardware mutations',
+            'measurement':'Private commit != resident. RSS includes shareable pages; sums may double-count. No GPU/DWM accounting. CPU100%=one logical core.',
+            'trials':[]}
+    for index in range(args.trials):
+        print('Read-only actual-engine trial',index+1,flush=True)
+        host=Host(args.prefix,args.theme);row={'trial':index+1}
+        try:
+            row['closed_before']=host.idle(args.idle_seconds)
+            row['open']=host.open(burst=10)
+            row['opened']=host.idle(args.idle_seconds)
+            if args.captures and index==0:
+                row['capture']=capture(host.expose(),args.out/f'live-{args.theme}.png',args.theme=='dark')
+            row['close']=host.close()
+            tick=max(host.ticks());time.sleep(1)
+            row['closed_after']=host.idle(args.idle_seconds)
+            until(lambda:max(host.ticks())>tick)
+            row['monitoring_continued_closed']={'before_sequence':tick,'after_sequence':max(host.ticks())}
+            row['cycles']=[]
+            for cycle in range(args.cycles):
+                opened=host.open();time.sleep(.2)
+                closed=host.close()
+                row['cycles'].append({'cycle':cycle+1,'open':opened,'close':closed,'closed_process_count':len(host.members())})
+            if args.lifecycle:
+                tick=max(host.ticks())
+                first=host.open();child_pid=first['window_pid']
+                for _ in range(10):assert U.PostMessageW(host.hwnd,0x8000+42,host.proc.pid,0)
+                until(lambda:max(host.ticks())>tick)
+                assert len(host.members())==2 and host.view()[0][1]==child_pid
+                row['visible_activation']={'requests':10,'same_child_pid':child_pid,'process_count':2}
+                # Simulate failure of this exact owned UI, never a process-name kill.
+                child=next(p for p in host.members() if p.pid==child_pid)
+                assert Path(child.exe()).resolve()==host.ui.resolve()
+                tick=max(host.ticks());child.kill();child.wait(timeout=10)
+                until(lambda:len(host.members())==1)
+                until(lambda:max(host.ticks())>tick)
+                row['ui_crash']={'terminated_ui_pid':child_pid,'engine_alive':host.proc.poll() is None,
+                                 'before_sequence':tick,'after_sequence':max(host.ticks())}
+                row['after_crash_open']=host.open()
+                row['shutdown_with_ui_open']=True
+        except BaseException as error:
+            row['error']=f'{type(error).__name__}: {error}'
+            raise
+        finally:
+            row['shutdown']=host.stop();result['trials'].append(row)
+            (args.out/'qualification.json').write_text(json.dumps(result,indent=2),encoding='utf-8')
+    print('Completed actual-engine read-only qualification',args.out,flush=True)
+
+if __name__=='__main__':main()

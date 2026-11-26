@@ -10,6 +10,7 @@ use crate::{
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, de::DeserializeOwned};
 use std::{
+    collections::HashSet,
     fs::{self, File, OpenOptions},
     io::{Read, Seek, SeekFrom, Write},
     os::unix::{
@@ -50,11 +51,15 @@ static SCAN_ID: AtomicU64 = AtomicU64::new(0);
 
 pub struct PlatformMonitor {
     policy: Policy,
+    camera_inventory: Mutex<HashSet<String>>,
 }
 
 impl PlatformMonitor {
     pub fn new(policy: Policy) -> Result<Self> {
-        Ok(Self { policy })
+        Ok(Self {
+            policy,
+            camera_inventory: Mutex::new(HashSet::new()),
+        })
     }
 
     pub(crate) fn set_policy(&mut self, policy: Policy) {
@@ -127,7 +132,14 @@ impl PlatformMonitor {
                     let video = observation
                         .video
                         .context("helper omitted CoreMediaIO camera result")?;
-                    append_camera_observation(&mut snapshot, video);
+                    append_camera_observation_with_inventory(
+                        &mut snapshot,
+                        video,
+                        &mut self
+                            .camera_inventory
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner()),
+                    );
                 }
             }
             Err(error) => {
@@ -214,6 +226,24 @@ impl PlatformMonitor {
                 name: "camera_profile_inventory",
                 status: DiagnosticStatus::Error,
                 detail: format!("Cannot read camera profile metadata: {error:#}; no administrator requirement inferred"),
+            },
+        });
+        checks.push(match crate::notify::native_status() {
+            Ok(state) => DiagnosticCheck {
+                name: "notification_authorization",
+                status: if state == "authorized" {
+                    DiagnosticStatus::Ok
+                } else {
+                    DiagnosticStatus::Warning
+                },
+                detail: format!("macos_authorization={state}; banner_delivery=unverified"),
+            },
+            Err(error) => DiagnosticCheck {
+                name: "notification_authorization",
+                status: DiagnosticStatus::Warning,
+                detail: format!(
+                    "macos_authorization=unknown; banner_delivery=unverified; {error:#}"
+                ),
             },
         });
         checks.push(DiagnosticCheck {
@@ -443,7 +473,34 @@ fn microphone_access(process: AudioProcess, index: usize) -> Access {
     }
 }
 
+fn append_camera_observation_with_inventory(
+    snapshot: &mut Snapshot,
+    video: VideoResult,
+    previous: &mut HashSet<String>,
+) {
+    let current: HashSet<_> = video
+        .devices
+        .iter()
+        .map(|device| device.id.clone())
+        .collect();
+    let disappeared = !previous.is_subset(&current);
+    *previous = current;
+    append_camera_observation(snapshot, video);
+    if disappeared {
+        if !snapshot.observation_gaps.contains(&Resource::Camera) {
+            snapshot.observation_gaps.push(Resource::Camera);
+        }
+        if let Some(collector) = snapshot.collectors.last_mut() {
+            collector.detail = Some("Camera inventory changed: a previously observed device disappeared; capture stop time is unknown".to_owned());
+        }
+    }
+}
+
 fn append_camera_observation(snapshot: &mut Snapshot, video: VideoResult) {
+    let has_running_state = video
+        .devices
+        .iter()
+        .any(|camera| camera.running_somewhere.is_some());
     let unknown_state = video
         .devices
         .iter()
@@ -469,7 +526,11 @@ fn append_camera_observation(snapshot: &mut Snapshot, video: VideoResult) {
     // Empty discovery, missing states and API errors independently suppress STOP.
     snapshot.collectors.push(health(
         "coremediaio_video",
-        CollectorState::Degraded,
+        if has_running_state {
+            CollectorState::Degraded
+        } else {
+            CollectorState::Unavailable
+        },
         Some(detail),
     ));
 }
@@ -503,6 +564,7 @@ fn camera_access(camera: &CameraDevice) -> Access {
 struct Helper {
     directory: PathBuf,
     binary: PathBuf,
+    notification_binary: Option<PathBuf>,
     desktop_children: Mutex<Vec<u32>>,
 }
 
@@ -517,6 +579,7 @@ impl Helper {
                     let bundle = directory.join("MicCamWatchHelper.app");
                     let installation = Self {
                         binary: bundle.join("Contents/MacOS/MicCamWatchHelper"),
+                        notification_binary: installed_notification_helper()?,
                         directory,
                         desktop_children: Mutex::new(Vec::new()),
                     };
@@ -576,15 +639,24 @@ impl Helper {
             .open(&error_path)?;
         let start = Instant::now();
         let mut child = RunningChild {
-            child: Command::new(&self.binary)
-                .arg(mode)
-                .args(args)
-                .process_group(0)
-                .stdin(Stdio::null())
-                .stdout(Stdio::from(stdout.try_clone()?))
-                .stderr(Stdio::from(stderr.try_clone()?))
-                .spawn()
-                .context("cannot execute embedded macOS helper")?,
+            child: Command::new(
+                if matches!(
+                    mode,
+                    "notify" | "notification-identity" | "notification-status"
+                ) {
+                    self.notification_binary.as_ref().unwrap_or(&self.binary)
+                } else {
+                    &self.binary
+                },
+            )
+            .arg(mode)
+            .args(args)
+            .process_group(0)
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(stdout.try_clone()?))
+            .stderr(Stdio::from(stderr.try_clone()?))
+            .spawn()
+            .context("cannot execute embedded macOS helper")?,
             reaped: false,
         };
         let result = (|| {
@@ -667,6 +739,47 @@ impl Helper {
         children.push(child.id());
         Ok(child)
     }
+}
+
+fn installed_notification_helper() -> Result<Option<PathBuf>> {
+    let executable = std::env::current_exe()?.canonicalize()?;
+    let Some(contents) = executable
+        .parent()
+        .and_then(Path::parent)
+        .filter(|path| path.file_name().is_some_and(|name| name == "Contents"))
+    else {
+        return Ok(None);
+    };
+    let bundle = contents.join("Helpers/MicCamWatchHelper.app");
+    // New packages always carry this helper. Old/development bundles keep the
+    // embedded fallback and report their limited authorization persistence.
+    if !bundle.try_exists()? {
+        return Ok(None);
+    }
+    for (relative, expected) in [
+        ("Contents/MacOS/MicCamWatchHelper", HELPER),
+        ("Contents/Info.plist", HELPER_PLIST),
+        ("Contents/_CodeSignature/CodeResources", HELPER_RESOURCES),
+    ] {
+        let path = bundle.join(relative);
+        if path.canonicalize()? != path {
+            bail!("installed notification helper path is redirected");
+        }
+        let mut file = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(&path)?;
+        let metadata = file.metadata()?;
+        if !metadata.is_file() || metadata.len() != expected.len() as u64 {
+            bail!("installed notification helper does not match this engine");
+        }
+        let mut actual = Vec::with_capacity(expected.len());
+        file.read_to_end(&mut actual)?;
+        if actual != expected {
+            bail!("installed notification helper does not match this engine");
+        }
+    }
+    Ok(Some(bundle.join("Contents/MacOS/MicCamWatchHelper")))
 }
 
 impl Helper {
@@ -769,9 +882,10 @@ fn validate_request(mode: &str, args: &[&str]) -> Result<()> {
         | "locale"
         | "session-lock"
         | "notification-identity"
+        | "notification-status"
         | "sound" => args.is_empty(),
         "control" | "log" => args.len() == 1,
-        "terminate" | "notify" => args.len() == 2,
+        "terminate" | "close-application" | "notify" => args.len() == 2,
         "signature" => args.len() == 2 && matches!(args[1], "offline" | "online"),
         _ => false,
     };
@@ -842,6 +956,249 @@ impl CaptureCollector for PlatformMonitor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "requires an explicitly disposable hosted Mac and its fixture-only sudo authority"]
+    fn native_other_user_process_is_refused_and_remains_alive() -> Result<()> {
+        use std::{
+            io::{BufRead, BufReader},
+            os::unix::fs::PermissionsExt,
+        };
+        anyhow::ensure!(
+            std::env::var("RUNNER_ENVIRONMENT").as_deref() == Ok("github-hosted"),
+            "cross-user fixture is admitted only on a disposable hosted runner"
+        );
+        let temporary = tempfile::Builder::new()
+            .prefix("mcw-other-user-")
+            .tempdir_in("/private/tmp")?;
+        fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o755))?;
+        let binary = temporary.path().join("fixture");
+        ensure_native_success(
+            Command::new("/usr/bin/cc")
+                .args(["native/fixtures/other_user_process.c", "-lproc", "-o"])
+                .arg(&binary)
+                .status()?,
+        )?;
+        let mut child = Command::new("/usr/bin/sudo")
+            .args(["-n", "-u", "nobody"])
+            .arg(&binary)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()?;
+        let result = (|| -> Result<()> {
+            let mut line = String::new();
+            let mut output = BufReader::new(child.stdout.take().context("fixture stdout missing")?);
+            output.read_line(&mut line)?;
+            let fields = line
+                .split_whitespace()
+                .map(str::parse::<u64>)
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            anyhow::ensure!(
+                fields.len() == 4
+                    && fields[0] > 4
+                    && fields[0] <= i32::MAX as u64
+                    && fields[2] > 0
+                    && fields[3] < 1_000_000,
+                "fixture did not report its authentic self-observed process identity"
+            );
+            let pid = fields[0] as i32;
+            anyhow::ensure!(
+                fields[1] != unsafe { libc::getuid() } as u64,
+                "fixture unexpectedly belongs to the caller"
+            );
+            let instance = format!("macos:microphone:{pid}:{}:{}", fields[2], fields[3]);
+            for mode in ["terminate", "close-application"] {
+                let reply: serde_json::Value = native_request(
+                    mode,
+                    &[&pid.to_string(), &instance],
+                    Duration::from_secs(20),
+                )?;
+                assert_eq!(reply["effect"]["ok"], false, "{reply}");
+                // The ordinary caller may legitimately lack cross-user libproc
+                // visibility. Prove liveness through this retained fixture pipe;
+                // do not acquire administrator authority for the product helper.
+                let input = child.stdin.as_mut().context("fixture stdin missing")?;
+                input.write_all(b"p")?;
+                input.flush()?;
+                let mut alive = String::new();
+                output.read_line(&mut alive)?;
+                assert_eq!(alive.trim(), "alive");
+            }
+            Ok(())
+        })();
+        // EOF belongs to the retained fixture, not to a numeric PID. Never ask
+        // the product to kill it during cleanup or escalate the rejected action.
+        drop(child.stdin.take());
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while child.try_wait()?.is_none() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(20));
+        }
+        anyhow::ensure!(
+            child.try_wait()?.is_some(),
+            "cross-user fixture did not exit after owned stdin closed"
+        );
+        let _ = child.wait();
+        result
+    }
+
+    #[test]
+    fn native_close_application_observes_a_hardened_fixture_exit() -> Result<()> {
+        let temporary = tempfile::tempdir()?;
+        let app = temporary.path().join("MCWCloseFixture.app");
+        let contents = app.join("Contents");
+        fs::create_dir_all(contents.join("MacOS"))?;
+        fs::write(
+            contents.join("Info.plist"),
+            r#"<?xml version="1.0"?><plist version="1.0"><dict>
+            <key>CFBundleIdentifier</key><string>dev.miccamwatch.close-fixture</string>
+            <key>CFBundleExecutable</key><string>fixture</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>LSUIElement</key><true/>
+            </dict></plist>"#,
+        )?;
+        let binary = contents.join("MacOS/fixture");
+        ensure_native_success(
+            Command::new("swiftc")
+                .args(["native/fixtures/macos_close_app.swift", "-o"])
+                .arg(&binary)
+                .status()?,
+        )?;
+        ensure_native_success(
+            Command::new("codesign")
+                .args([
+                    "--force",
+                    "--sign",
+                    "-",
+                    "--options",
+                    "runtime",
+                    "--timestamp=none",
+                ])
+                .arg(&app)
+                .status()?,
+        )?;
+        let pid_path = temporary.path().join("pid");
+        let mut launcher = Command::new("open")
+            .args(["-n", "-W", "-a"])
+            .arg(&app)
+            .arg("--args")
+            .arg(&pid_path)
+            .arg("refuse-once")
+            .spawn()?;
+        let result = (|| -> Result<()> {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !pid_path.exists() && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(50));
+            }
+            let pid: i32 = fs::read_to_string(&pid_path)?.parse()?;
+            let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+            let size = std::mem::size_of_val(&info) as i32;
+            let read = unsafe {
+                libc::proc_pidinfo(
+                    pid,
+                    libc::PROC_PIDTBSDINFO,
+                    0,
+                    (&mut info as *mut libc::proc_bsdinfo).cast(),
+                    size,
+                )
+            };
+            if read != size {
+                bail!("fixture birth identity unavailable");
+            }
+            let instance = format!(
+                "macos:microphone:{pid}:{}:{}",
+                info.pbi_start_tvsec, info.pbi_start_tvusec
+            );
+            let stale = format!("macos:microphone:{pid}:{}:0", info.pbi_start_tvsec + 1);
+            for (target, identity) in [(pid, stale.as_str()), (1, instance.as_str())] {
+                let refused: serde_json::Value = native_request(
+                    "close-application",
+                    &[&target.to_string(), identity],
+                    Duration::from_secs(20),
+                )?;
+                assert_eq!(refused["effect"]["ok"], false, "{refused}");
+            }
+            let refused: serde_json::Value = native_request(
+                "close-application",
+                &[&pid.to_string(), &instance],
+                Duration::from_secs(20),
+            )?;
+            assert_eq!(refused["effect"]["ok"], false, "{refused}");
+            assert!(
+                refused["effect"]["error"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("unconfirmed"),
+                "{refused}"
+            );
+            assert!(
+                launcher.try_wait()?.is_none(),
+                "refused close must leave the application alive"
+            );
+            let reply: serde_json::Value = native_request(
+                "close-application",
+                &[&pid.to_string(), &instance],
+                Duration::from_secs(20),
+            )?;
+            assert_eq!(reply["effect"]["ok"], true, "{reply}");
+            assert_eq!(reply["effect"]["state"], "application_exited");
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while launcher.try_wait()?.is_none() && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(50));
+            }
+            assert!(launcher.try_wait()?.is_some());
+            Ok(())
+        })();
+        // Only the fixture launcher belongs to this test. A failed application
+        // close is retained as a failure and is never escalated by PID.
+        if launcher.try_wait()?.is_none() {
+            let _ = launcher.kill();
+        }
+        let _ = launcher.wait();
+        result
+    }
+
+    fn ensure_native_success(status: std::process::ExitStatus) -> Result<()> {
+        if !status.success() {
+            bail!("native fixture setup failed: {status}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn native_termination_rejects_parent_and_stale_observation() -> Result<()> {
+        let request = |pid: u32| {
+            native_request::<serde_json::Value>(
+                "terminate",
+                &[&pid.to_string(), "stale-observation"],
+                Duration::from_secs(5),
+            )
+        };
+        let parent = request(std::process::id())?;
+        assert_eq!(parent["effect"]["ok"], false);
+        assert!(
+            parent["effect"]["error"]
+                .as_str()
+                .is_some_and(|detail| detail.contains("protected"))
+        );
+
+        let mut child = Command::new("/bin/sleep").arg("20").spawn()?;
+        let result = (|| -> Result<_> {
+            let reply = request(child.id())?;
+            Ok((reply, child.try_wait()?.is_none()))
+        })();
+        // The fixture owns this child handle and is responsible for reaping it.
+        let _ = child.kill();
+        child.wait()?;
+        let (reply, still_running) = result?;
+        assert!(still_running);
+        assert_eq!(reply["effect"]["ok"], false);
+        assert!(
+            reply["effect"]["error"]
+                .as_str()
+                .is_some_and(|detail| detail.contains("birth identity changed"))
+        );
+        Ok(())
+    }
 
     #[test]
     fn active_input_requires_verified_process_identity_for_pid() {
@@ -970,6 +1327,45 @@ mod tests {
     }
 
     #[test]
+    fn camera_disappearance_with_another_idle_device_does_not_invent_stop() {
+        let mut previous = HashSet::new();
+        let mut tracker = crate::watcher::TransitionTracker::default();
+        let mut events = Vec::new();
+        for document in [
+            r#"{"devices":[{"id":"usb","name":"USB","runningSomewhere":true},{"id":"built-in","name":"Built-in","runningSomewhere":false}]}"#,
+            r#"{"devices":[{"id":"built-in","name":"Built-in","runningSomewhere":false}]}"#,
+            r#"{"devices":[{"id":"built-in","name":"Built-in","runningSomewhere":false}]}"#,
+            r#"{"devices":[{"id":"usb","name":"USB","runningSomewhere":true},{"id":"built-in","name":"Built-in","runningSomewhere":false}]}"#,
+            r#"{"devices":[{"id":"usb","name":"USB","runningSomewhere":false},{"id":"built-in","name":"Built-in","runningSomewhere":false}]}"#,
+        ] {
+            let mut snapshot = Snapshot {
+                collectors: Vec::new(),
+                accesses: Vec::new(),
+                observation_gaps: Vec::new(),
+            };
+            append_camera_observation_with_inventory(
+                &mut snapshot,
+                serde_json::from_str(document).unwrap(),
+                &mut previous,
+            );
+            tracker
+                .reconcile(&snapshot, |_, action| {
+                    events.push(action);
+                    Ok(())
+                })
+                .unwrap();
+        }
+        assert!(matches!(
+            events.as_slice(),
+            [
+                crate::model::Action::Start,
+                crate::model::Action::Start,
+                crate::model::Action::Stop
+            ]
+        ));
+    }
+
+    #[test]
     fn camera_activity_never_attributes_or_enforces_unknown_client() {
         let snapshot = camera_snapshot(
             r#"{"devices":[{"id":"camera-1","name":"USB camera","runningSomewhere":true},{"id":"camera-2","name":"Idle camera","runningSomewhere":false}]}"#,
@@ -1001,16 +1397,25 @@ mod tests {
 
     #[test]
     fn camera_unknown_null_missing_empty_and_error_are_observation_gaps() {
-        for document in [
-            r#"{"devices":[{"id":"c","name":"cam","runningSomewhere":null}]}"#,
-            r#"{"devices":[{"id":"c","name":"cam"}]}"#,
-            r#"{"devices":[]}"#,
-            r#"{"devices":[{"id":"c","name":"cam","runningSomewhere":false}],"error":"CoreMediaIO lookup failed"}"#,
+        for (document, state) in [
+            (
+                r#"{"devices":[{"id":"c","name":"cam","runningSomewhere":null}]}"#,
+                CollectorState::Unavailable,
+            ),
+            (
+                r#"{"devices":[{"id":"c","name":"cam"}]}"#,
+                CollectorState::Unavailable,
+            ),
+            (r#"{"devices":[]}"#, CollectorState::Unavailable),
+            (
+                r#"{"devices":[{"id":"c","name":"cam","runningSomewhere":false}],"error":"CoreMediaIO lookup failed"}"#,
+                CollectorState::Degraded,
+            ),
         ] {
             let snapshot = camera_snapshot(document);
             assert!(snapshot.accesses.is_empty());
             assert_eq!(snapshot.observation_gaps, vec![Resource::Camera]);
-            assert_eq!(snapshot.collectors[0].state, CollectorState::Degraded);
+            assert_eq!(snapshot.collectors[0].state, state);
         }
     }
 

@@ -10,11 +10,8 @@ $ErrorActionPreference = 'Stop'
 if (-not $IsolatedDesktop -or $env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') {
     throw 'Native menu rendering requires explicitly isolated GitHub-hosted qualification.'
 }
-$expectedImage = [IO.Path]::GetFullPath($OwnerExecutable)
-$target = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../../target')) + [IO.Path]::DirectorySeparatorChar
-if (-not $expectedImage.StartsWith($target, [StringComparison]::OrdinalIgnoreCase) -or $expectedImage -notmatch '[\\/]deps[\\/]miccamwatch-[0-9a-f]+\.exe$') {
-    throw 'Only the repository library-test image can grant native menu rendering.'
-}
+. (Join-Path $PSScriptRoot 'windows-test-image.ps1')
+$expectedImage = Assert-McwRepositoryTestImage $OwnerExecutable
 Add-Type -AssemblyName System.Drawing
 Add-Type -TypeDefinition @'
 using System;

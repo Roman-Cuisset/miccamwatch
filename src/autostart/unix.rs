@@ -213,7 +213,16 @@ impl UninstallRegistration {
 
 pub fn state() -> Result<AutostartState> {
     let store = Store::open()?;
-    let registration = store.snapshot()?.registration;
+    state_in(&store)
+}
+
+fn state_in(store: &Store) -> Result<AutostartState> {
+    registration_state(store, store.snapshot()?.registration)
+}
+
+fn registration_state(store: &Store, registration: Option<Registration>) -> Result<AutostartState> {
+    #[cfg(target_os = "linux")]
+    let _ = store;
     #[cfg(target_os = "macos")]
     {
         let native = Native::open()?;
@@ -243,6 +252,47 @@ pub fn state() -> Result<AutostartState> {
         return Ok(AutostartState::Enabled);
     }
     Ok(AutostartState::Disabled)
+}
+
+fn current_installation_executable() -> Result<PathBuf> {
+    let executable = std::env::current_exe().context("cannot locate mcw executable")?;
+    // Darwin can report a Homebrew invocation alias. Match the same physical
+    // executable that the native registration backend owns.
+    #[cfg(target_os = "macos")]
+    let executable = std::fs::canonicalize(executable)
+        .context("cannot resolve the current executable; registration preserved")?;
+    Ok(executable)
+}
+
+fn installation_state_in(store: &Store, current: &Path) -> Result<AutostartState> {
+    let snapshot = store.snapshot()?;
+    let owned = |entry: &Registration| {
+        entry.executable == current && entry.version == env!("CARGO_PKG_VERSION")
+    };
+    let matches = if let Some(entry) = &snapshot.registration {
+        owned(entry)
+    } else if let Some(record) = &snapshot.record {
+        // A missing target does not authorize replacing another installation's
+        // retained restoration/ownership journal.
+        serde_json::from_slice::<Receipt>(record)?
+            .registrations
+            .iter()
+            .all(owned)
+    } else {
+        true
+    };
+    if !matches {
+        bail!(
+            "autostart belongs to another installation; registration and ownership journal preserved"
+        );
+    }
+    registration_state(store, snapshot.registration)
+}
+
+pub fn state_for_current_installation() -> Result<AutostartState> {
+    let current = current_installation_executable()?;
+    let store = Store::open()?;
+    installation_state_in(&store, &current)
 }
 
 pub fn enable() -> Result<()> {
@@ -302,17 +352,12 @@ fn enable_in(store: &Store, version: &str, activate: bool) -> Result<()> {
     if version != env!("CARGO_PKG_VERSION") {
         bail!("autostart refresh must be performed by the matching mcw {version} executable");
     }
-    let executable = std::env::current_exe().context("cannot locate mcw executable")?;
-    // Darwin may report the invocation alias, including Homebrew's writable
-    // prefix/bin link. Validate and register the physical executable instead;
-    // Explicit ordinary-user refresh updates owned Cellar targets before cleanup.
+    let executable = current_installation_executable()?;
+    let parent = executable.parent().context("mcw has no parent directory")?;
+    #[cfg(target_os = "linux")]
+    let executable_dir = Directory::open(parent, false)?;
     #[cfg(target_os = "macos")]
-    let executable = std::fs::canonicalize(executable)
-        .context("cannot resolve the current executable; registration preserved")?;
-    let executable_dir = Directory::open(
-        executable.parent().context("mcw has no parent directory")?,
-        false,
-    )?;
+    let executable_dir = Directory::walk(parent, false, validate_launch_acl)?;
     let name = executable.file_name().context("mcw has no filename")?;
     let file = executable_dir
         .file(name)?
@@ -321,6 +366,8 @@ fn enable_in(store: &Store, version: &str, activate: bool) -> Result<()> {
     if metadata.mode() & 0o111 == 0 {
         bail!("mcw executable is not executable");
     }
+    #[cfg(target_os = "macos")]
+    validate_launch_acl(&file, &executable)?;
     let new = Registration {
         executable,
         version: version.to_owned(),
@@ -422,6 +469,10 @@ fn enable_in(store: &Store, version: &str, activate: bool) -> Result<()> {
 
 pub fn disable() -> Result<()> {
     let store = Store::open()?;
+    disable_in(&store)
+}
+
+fn disable_in(store: &Store) -> Result<()> {
     let RegistrationSnapshot {
         bytes,
         record,
@@ -475,6 +526,38 @@ pub fn disable() -> Result<()> {
     #[cfg(target_os = "linux")]
     let _ = registration;
     Ok(())
+}
+
+/// Keep the existing ownership receipt, target and state lock across comparison,
+/// native mutation/rollback and actual readback. No privilege escalation.
+pub fn set_if_expected(expected: bool, requested: bool) -> Result<bool> {
+    let current = current_installation_executable()?;
+    let store = Store::open()?;
+    set_if_expected_in(&store, &current, expected, requested)
+}
+
+fn set_if_expected_in(
+    store: &Store,
+    current: &Path,
+    expected: bool,
+    requested: bool,
+) -> Result<bool> {
+    let observed = installation_state_in(store, current)? == AutostartState::Enabled;
+    if observed != expected {
+        bail!("autostart changed since observation; unchanged");
+    }
+    if requested != observed {
+        if requested {
+            enable_in(store, env!("CARGO_PKG_VERSION"), true)?;
+        } else {
+            disable_in(store)?;
+        }
+    }
+    let confirmed = installation_state_in(store, current)? == AutostartState::Enabled;
+    if confirmed != requested {
+        bail!("autostart readback did not confirm requested state");
+    }
+    Ok(confirmed)
 }
 
 fn registration_bytes(entry: &Registration) -> Result<Vec<u8>> {
@@ -580,6 +663,14 @@ pub(crate) struct Directory(File);
 
 impl Directory {
     pub(crate) fn open(path: &Path, create: bool) -> Result<Self> {
+        Self::walk(path, create, |_, _| Ok(()))
+    }
+
+    fn walk(
+        path: &Path,
+        create: bool,
+        inspect: impl Fn(&File, &Path) -> Result<()>,
+    ) -> Result<Self> {
         if !path.is_absolute() {
             bail!("directory must be absolute: {}", path.display());
         }
@@ -594,6 +685,8 @@ impl Directory {
             return Err(std::io::Error::last_os_error()).context("cannot open filesystem root");
         }
         let mut current = Self(unsafe { File::from_raw_fd(fd) });
+        let mut ancestor = PathBuf::from("/");
+        inspect(&current.0, &ancestor)?;
         for component in path.components() {
             let Component::Normal(name) = component else {
                 if matches!(component, Component::RootDir) {
@@ -604,6 +697,7 @@ impl Directory {
                     path.display()
                 );
             };
+            ancestor.push(name);
             let name = c_name(name)?;
             let mut fd = unsafe {
                 libc::openat(
@@ -633,7 +727,10 @@ impl Directory {
             }
             if fd < 0 {
                 return Err(std::io::Error::last_os_error()).with_context(|| {
-                    format!("cannot open {} without following symlinks", path.display())
+                    format!(
+                        "cannot open {} without following symlinks",
+                        ancestor.display()
+                    )
                 });
             }
             current = Self(unsafe { File::from_raw_fd(fd) });
@@ -641,18 +738,25 @@ impl Directory {
             let uid = unsafe { libc::getuid() };
             if metadata.uid() != uid && metadata.uid() != 0 {
                 bail!(
-                    "directory ancestor is owned by another user: {}",
-                    path.display()
+                    "directory ancestor is owned by another user: {} (uid {}, gid {}, mode {:04o})",
+                    ancestor.display(),
+                    metadata.uid(),
+                    metadata.gid(),
+                    metadata.mode() & 0o7777
                 );
             }
             if metadata.mode() & 0o022 != 0
                 && !(metadata.uid() == 0 && metadata.mode() & 0o1000 != 0)
             {
                 bail!(
-                    "directory ancestor is writable by another user: {}",
-                    path.display()
+                    "directory ancestor is writable by another user: {} (uid {}, gid {}, mode {:04o})",
+                    ancestor.display(),
+                    metadata.uid(),
+                    metadata.gid(),
+                    metadata.mode() & 0o7777
                 );
             }
+            inspect(&current.0, &ancestor)?;
         }
         Ok(current)
     }
@@ -936,6 +1040,76 @@ fn validate_file(file: &File) -> Result<()> {
     Ok(())
 }
 
+/// POSIX mode bits do not describe additional write grants in Darwin ACLs.
+#[cfg(target_os = "macos")]
+fn validate_launch_acl(file: &File, path: &Path) -> Result<()> {
+    use libc::{c_int, c_void};
+    unsafe extern "C" {
+        fn acl_get_fd(fd: c_int) -> *mut c_void;
+        fn acl_free(acl: *mut c_void) -> c_int;
+        fn acl_get_entry(acl: *mut c_void, id: c_int, entry: *mut *mut c_void) -> c_int;
+        fn acl_get_tag_type(entry: *mut c_void, tag: *mut c_int) -> c_int;
+        fn acl_get_permset_mask_np(entry: *mut c_void, mask: *mut u64) -> c_int;
+    }
+    struct Acl(*mut c_void);
+    impl Drop for Acl {
+        fn drop(&mut self) {
+            unsafe { acl_free(self.0) };
+        }
+    }
+    // Values from Darwin's <sys/acl.h>. Write/add, delete, append,
+    // delete-child, write metadata, write security and change owner.
+    const MUTATION: u64 =
+        (1 << 2) | (1 << 4) | (1 << 5) | (1 << 6) | (1 << 8) | (1 << 10) | (1 << 12) | (1 << 13);
+    const EXTENDED_ALLOW: c_int = 1;
+    const EXTENDED_DENY: c_int = 2;
+    const FIRST_ENTRY: c_int = 0;
+    const NEXT_ENTRY: c_int = -1;
+    let inspection_failed = || format!("cannot inspect launch path ACL: {}", path.display());
+    let acl = unsafe { acl_get_fd(file.as_raw_fd()) };
+    if acl.is_null() {
+        let error = std::io::Error::last_os_error();
+        return if error.raw_os_error() == Some(libc::ENOENT) {
+            Ok(())
+        } else {
+            Err(error).with_context(inspection_failed)
+        };
+    }
+    let acl = Acl(acl);
+    let mut id = FIRST_ENTRY;
+    loop {
+        let mut entry = std::ptr::null_mut();
+        if unsafe { acl_get_entry(acl.0, id, &mut entry) } != 0 {
+            let error = std::io::Error::last_os_error();
+            // Darwin returns EINVAL after the final entry of a valid ACL.
+            return if error.raw_os_error() == Some(libc::EINVAL) {
+                Ok(())
+            } else {
+                Err(error).with_context(inspection_failed)
+            };
+        }
+        id = NEXT_ENTRY;
+        let mut tag = 0;
+        if unsafe { acl_get_tag_type(entry, &mut tag) } != 0 {
+            return Err(std::io::Error::last_os_error()).with_context(inspection_failed);
+        }
+        if tag == EXTENDED_DENY {
+            continue;
+        }
+        anyhow::ensure!(tag == EXTENDED_ALLOW, "{}", inspection_failed());
+        let mut permissions = 0;
+        if unsafe { acl_get_permset_mask_np(entry, &mut permissions) } != 0 {
+            return Err(std::io::Error::last_os_error()).with_context(inspection_failed);
+        }
+        if permissions & MUTATION != 0 {
+            bail!(
+                "launch path has an ACL granting modification: {}",
+                path.display()
+            );
+        }
+    }
+}
+
 #[cfg(any(target_os = "macos", test))]
 fn parse_launchagent_disabled(text: &str) -> Result<bool> {
     for line in text.lines() {
@@ -1147,6 +1321,75 @@ mod tests {
         }
     }
 
+    fn isolated_store(temporary: &Temporary) -> Result<Store> {
+        let state = Directory::open(&temporary.0.join("state"), true)?;
+        let lock = state.lock("autostart.lock")?;
+        let path = temporary.0.join("startup/qualification-autostart");
+        Ok(Store {
+            state,
+            target: Directory::open(path.parent().unwrap(), true)?,
+            name: path.file_name().unwrap().to_str().unwrap().to_owned(),
+            path,
+            _lock: lock,
+        })
+    }
+
+    #[test]
+    fn installation_scoped_commands_preserve_other_registration_and_journal() -> Result<()> {
+        let temporary = Temporary::new()?;
+        let store = isolated_store(&temporary)?;
+        let foreign = Registration {
+            executable: temporary.0.join("other-installation/mcw"),
+            version: env!("CARGO_PKG_VERSION").into(),
+        };
+        let bytes = registration_bytes(&foreign)?;
+        store.target.replace(&store.name, None, Some(&bytes))?;
+        let record = store.save_receipt(vec![foreign], None)?;
+        let current = current_installation_executable()?;
+        assert!(installation_state_in(&store, &current).is_err());
+        for (expected, requested) in [(true, false), (false, true), (false, false)] {
+            assert!(set_if_expected_in(&store, &current, expected, requested).is_err());
+            assert_eq!(
+                store.target.read(&store.name)?.as_deref(),
+                Some(bytes.as_slice())
+            );
+            assert_eq!(
+                store.state.read(RECORD)?.as_deref(),
+                Some(record.as_slice())
+            );
+        }
+        store.target.replace(&store.name, Some(&bytes), None)?;
+        assert!(installation_state_in(&store, &current).is_err());
+        assert!(set_if_expected_in(&store, &current, false, true).is_err());
+        assert!(store.target.read(&store.name)?.is_none());
+        assert_eq!(store.state.read(RECORD)?, Some(record));
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn installation_scoped_cas_rejects_stale_state_and_reads_back_private_registration()
+    -> Result<()> {
+        let temporary = Temporary::new()?;
+        let store = isolated_store(&temporary)?;
+        let current = current_installation_executable()?;
+        assert!(set_if_expected_in(&store, &current, false, true)?);
+        let saved = store.snapshot()?;
+        assert_eq!(saved.registration.as_ref().unwrap().executable, current);
+        assert!(set_if_expected_in(&store, &current, false, false).is_err());
+        let preserved = store.snapshot()?;
+        assert_eq!(preserved.bytes, saved.bytes);
+        assert_eq!(preserved.record, saved.record);
+        assert!(!set_if_expected_in(&store, &current, true, false)?);
+        assert_eq!(
+            installation_state_in(&store, &current)?,
+            AutostartState::Disabled
+        );
+        assert!(store.target.read(&store.name)?.is_none());
+        assert!(store.state.read(RECORD)?.is_none());
+        Ok(())
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn desktop_exec_preserves_reserved_characters_and_literal_field_codes() {
@@ -1250,6 +1493,79 @@ mod tests {
         assert!(directory.read("entry").is_err());
         symlink(&temporary.0, temporary.0.join("directory-link"))?;
         assert!(Directory::open(&temporary.0.join("directory-link"), false).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn ownership_reports_the_offending_ancestor_and_preserves_it() -> Result<()> {
+        let temporary = Temporary::new()?;
+        let applications = temporary.0.join("Applications");
+        let inner = applications.join("MicCamWatch.app/Contents/MacOS");
+        std::fs::create_dir_all(&inner)?;
+        std::fs::set_permissions(&applications, std::fs::Permissions::from_mode(0o700))?;
+        Directory::open(&inner, false)?;
+        for mode in [0o775, 0o777] {
+            std::fs::set_permissions(&applications, std::fs::Permissions::from_mode(mode))?;
+            let error = Directory::open(&inner, false)
+                .err()
+                .context("unsafe path admitted")?;
+            assert_eq!(
+                error.to_string(),
+                format!(
+                    "directory ancestor is writable by another user: {} (uid {}, gid {}, mode {mode:04o})",
+                    applications.display(),
+                    applications.metadata()?.uid(),
+                    applications.metadata()?.gid()
+                )
+            );
+            assert_eq!(applications.metadata()?.mode() & 0o777, mode);
+        }
+        Ok(())
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn launch_path_permits_read_acl_and_refuses_write_acl() -> Result<()> {
+        let temporary = Temporary::new()?;
+        let app = temporary.0.join("MicCamWatch.app");
+        let path = app.join("Contents/MacOS");
+        std::fs::create_dir_all(&path)?;
+        let executable = path.join("mcw");
+        std::fs::write(&executable, b"fixture")?;
+        let acl = |entry: &str, target: &Path| -> Result<()> {
+            let status = std::process::Command::new("/bin/chmod")
+                .args(["+a", entry])
+                .arg(target)
+                .status()?;
+            anyhow::ensure!(status.success(), "could not set fixture ACL");
+            Ok(())
+        };
+        acl("everyone allow list,search", &app)?;
+        let directory = Directory::walk(&path, false, validate_launch_acl)?;
+        let file = directory
+            .file(OsStr::new("mcw"))?
+            .context("fixture missing")?;
+        validate_launch_acl(&file, &executable)?;
+        acl("everyone allow write", &executable)?;
+        let error = validate_launch_acl(&file, &executable).expect_err("unsafe file ACL admitted");
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "launch path has an ACL granting modification: {}",
+                executable.display()
+            )
+        );
+        acl("everyone allow add_file", &app)?;
+        let error = Directory::walk(&path, false, validate_launch_acl)
+            .err()
+            .context("unsafe directory ACL admitted")?;
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "launch path has an ACL granting modification: {}",
+                app.display()
+            )
+        );
         Ok(())
     }
 

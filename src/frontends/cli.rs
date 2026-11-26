@@ -74,6 +74,26 @@ pub enum Command {
         parent_pid: u32,
         parent_created: u64,
     },
+    #[cfg(all(windows, feature = "packaged-desktop"))]
+    #[command(name = "__update-worker", hide = true)]
+    UpdateWorker {
+        parent_pid: u32,
+        parent_created: u64,
+        fingerprint: String,
+    },
+    #[cfg(all(windows, feature = "packaged-desktop"))]
+    /// Recover an interrupted Windows update using its retained maintenance executable
+    RecoverUpdate {
+        /// Review and explicitly approve one verified MSI recovery operation
+        #[arg(long)]
+        repair: bool,
+    },
+    #[cfg(all(windows, feature = "packaged-desktop"))]
+    /// Prepare recovery of an incomplete official Windows MSI v0.21.0 installation
+    RecoverMsi {
+        /// Path to the original official Windows x64 v0.21.0 MSI
+        msi: std::path::PathBuf,
+    },
     #[cfg(windows)]
     #[command(name = "__portable-receipt", hide = true)]
     PortableReceipt,
@@ -200,6 +220,9 @@ pub enum ProfileArg {
 #[derive(Debug, Subcommand)]
 pub enum NotificationCommand {
     Status,
+    /// Read macOS notification authorization without prompting or sending an alert
+    #[cfg(target_os = "macos")]
+    NativeStatus,
     /// Pause notifications for a bounded number of minutes
     Pause {
         #[arg(value_parser = clap::value_parser!(u64).range(1..=10080))]

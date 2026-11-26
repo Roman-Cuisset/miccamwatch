@@ -45,6 +45,14 @@ type CameraObservation = privacy::CameraControlObservation;
 #[cfg(not(windows))]
 type CameraObservation = CameraPrivacyState;
 
+#[cfg(windows)]
+fn comparable_event_resources(previous: &mut [bool; 2], snapshot: &Snapshot) -> [bool; 2] {
+    let current = [Resource::Microphone, Resource::Camera]
+        .map(|resource| !crate::notify::capture::incomplete(snapshot, resource));
+    let old = std::mem::replace(previous, current);
+    [old[0] && current[0], old[1] && current[1]]
+}
+
 fn read_microphone(monitor: &PlatformMonitor) -> Result<MicObservation> {
     #[cfg(windows)]
     return monitor.microphone_protection_status();
@@ -882,6 +890,8 @@ fn tui_loop(
         buttons: Vec::with_capacity(ACTIONS.len()),
     };
     let mut current_accesses: Vec<Access> = Vec::new();
+    #[cfg(windows)]
+    let mut event_coverage = [true; 2];
     #[cfg(unix)]
     let mut tracker = crate::watcher::TransitionTracker::default();
     loop {
@@ -1080,8 +1090,17 @@ fn tui_loop(
                         Ok(())
                     })?;
                     #[cfg(windows)]
-                    for access in &snapshot.accesses {
-                        if !current_accesses.iter().any(|a| a.key == access.key) {
+                    {
+                        // Rebaseline each resource after a gap. Both scans must
+                        // support a transition before adding it to the event log.
+                        let comparable = comparable_event_resources(&mut event_coverage, &snapshot);
+                        let can_compare = |access: &Access| {
+                            comparable[usize::from(access.resource == Resource::Camera)]
+                        };
+                        for access in snapshot.accesses.iter().filter(|access| {
+                            can_compare(access)
+                                && !current_accesses.iter().any(|old| old.key == access.key)
+                        }) {
                             let time = Local::now().format("%H:%M:%S").to_string();
                             let text = format!(
                                 "{} {} ({})",
@@ -1105,10 +1124,10 @@ fn tui_loop(
                                 state.events_log.remove(0);
                             }
                         }
-                    }
-                    #[cfg(windows)]
-                    for previous in &current_accesses {
-                        if !snapshot.accesses.iter().any(|a| a.key == previous.key) {
+                        for previous in current_accesses.iter().filter(|access| {
+                            can_compare(access)
+                                && !snapshot.accesses.iter().any(|new| new.key == access.key)
+                        }) {
                             let time = Local::now().format("%H:%M:%S").to_string();
                             let text = format!(
                                 "{} {} ({})",
@@ -1155,6 +1174,10 @@ fn tui_loop(
                 Err(error) => {
                     #[cfg(unix)]
                     tracker.observation_gap();
+                    #[cfg(windows)]
+                    {
+                        event_coverage = [false; 2];
+                    }
                     state.health_error = Some(format!(
                         "{}: {error:#}",
                         text(
@@ -2559,6 +2582,30 @@ fn draw_controls(f: &mut Frame, state: &mut TuiState, area: Rect) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn event_log_rebaselines_only_the_resource_with_a_gap() {
+        let mut coverage = [true; 2];
+        let mut snapshot = Snapshot {
+            accesses: Vec::new(),
+            collectors: Vec::new(),
+            observation_gaps: vec![Resource::Camera],
+        };
+        assert_eq!(
+            comparable_event_resources(&mut coverage, &snapshot),
+            [true, false]
+        );
+        snapshot.observation_gaps.clear();
+        assert_eq!(
+            comparable_event_resources(&mut coverage, &snapshot),
+            [true, false]
+        );
+        assert_eq!(
+            comparable_event_resources(&mut coverage, &snapshot),
+            [true, true]
+        );
+    }
     use ratatui::backend::TestBackend;
 
     fn state(lang: Language) -> TuiState {

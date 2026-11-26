@@ -86,6 +86,10 @@ use winreg::{RegKey, enums::HKEY_CURRENT_USER};
 mod camera_activity;
 #[path = "windows_mute.rs"]
 mod microphone_lock;
+#[path = "windows_process.rs"]
+mod process_inventory;
+#[path = "windows_profile.rs"]
+mod profile;
 pub(crate) use microphone_protection::{
     MicrophoneLockJournal, ensure_update_inactive as ensure_microphone_update_inactive,
 };
@@ -437,6 +441,7 @@ impl PlatformMonitor {
     }
 
     pub fn snapshot(&self, scope: CaptureScope) -> Result<Snapshot> {
+        let _profile = profile::Span::new("snapshot");
         let mut accesses = Vec::new();
         let mut collectors = Vec::new();
         if scope.microphone {
@@ -835,6 +840,7 @@ impl PlatformMonitor {
     }
 
     fn microphone_accesses(&self) -> Result<Vec<Access>> {
+        let _profile = profile::Span::new("microphone");
         let collection = unsafe {
             self.enumerator
                 .EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE)
@@ -928,8 +934,15 @@ impl PlatformMonitor {
     }
 
     fn sensor_camera_accesses(&self) -> Result<(Vec<Access>, std::collections::HashSet<String>)> {
+        let _profile = profile::Span::new("sensor");
         let cameras = camera_devices()?;
         let reports = camera_activity::collect(&cameras)?;
+        // No sensor records can consume process identities in this snapshot.
+        // Keep collection and signature validation unchanged; avoid an unused
+        // system-wide process inventory, not a cached observation/verdict.
+        if reports.values().all(Vec::is_empty) {
+            return Ok((Vec::new(), std::collections::HashSet::new()));
+        }
         let processes = ProcessTable::load();
         let mut accesses = Vec::new();
         let mut reported_instances = std::collections::HashSet::new();
@@ -1259,6 +1272,7 @@ fn camera_accesses(
     policy: &Policy,
     mut signature_for: impl FnMut(&str) -> SignatureInfo,
 ) -> Result<Vec<Access>> {
+    let _profile = profile::Span::new("camera_registry_modules");
     let root = RegKey::predef(HKEY_CURRENT_USER);
     let webcam = webcam_consent_store(root.open_subkey(format!(r"{CONSENT_STORE}\webcam")))?;
     let processes = ProcessTable::load();
@@ -1339,6 +1353,9 @@ fn camera_accesses(
     }
 
     let mut candidate_runtime = HashMap::new();
+    // Reuse storage, not process facts: every candidate still gets a fresh
+    // OpenProcess/QueryFullProcessImageNameW before the unchanged module scan.
+    let mut process_path_buffer = Vec::new();
     for (application, apps) in &known_apps {
         let Some(pids) = processes.by_name.get(application.as_str()) else {
             continue;
@@ -1347,7 +1364,7 @@ fn camera_accesses(
             if accesses.iter().any(|access| access.pid == Some(pid)) {
                 continue;
             }
-            let Some(executable) = process_path(pid) else {
+            let Some(executable) = process_path_with_buffer(pid, &mut process_path_buffer) else {
                 continue;
             };
             if camera_app_for_process(apps, &executable).is_none() {
@@ -1643,6 +1660,7 @@ fn classify_forensic(
 // ---------------------------------------------------------------------------
 
 fn verify_signature_with_policy(path: &str, trust_policy: TrustPolicy) -> SignatureInfo {
+    let _profile = profile::Span::new("signature");
     let wide_path: Vec<u16> = path.encode_utf16().chain(Some(0)).collect();
     let mut file_info = WINTRUST_FILE_INFO {
         cbStruct: size_of::<WINTRUST_FILE_INFO>() as u32,
@@ -1669,12 +1687,15 @@ fn verify_signature_with_policy(path: &str, trust_policy: TrustPolicy) -> Signat
         ..Default::default()
     };
 
-    let status = unsafe {
-        WinVerifyTrust(
-            HWND::default(),
-            &mut WINTRUST_ACTION_GENERIC_VERIFY_V2.clone(),
-            &mut trust_data as *mut _ as _,
-        )
+    let status = {
+        let _profile = profile::Span::new("winverifytrust");
+        unsafe {
+            WinVerifyTrust(
+                HWND::default(),
+                &mut WINTRUST_ACTION_GENERIC_VERIFY_V2.clone(),
+                &mut trust_data as *mut _ as _,
+            )
+        }
     };
 
     let signer = get_signer_name(&wide_path);
@@ -1702,6 +1723,7 @@ fn verify_signature_with_policy(path: &str, trust_policy: TrustPolicy) -> Signat
 }
 
 fn get_signer_name(wide_path: &[u16]) -> Option<String> {
+    let _profile = profile::Span::new("signer");
     let mut cert_context: *mut CERT_CONTEXT = ptr::null_mut();
     let mut msg_and_cert_type = CERT_QUERY_ENCODING_TYPE(0);
     let mut content_type = CERT_QUERY_CONTENT_TYPE(0);
@@ -1746,7 +1768,10 @@ fn get_signer_name(wide_path: &[u16]) -> Option<String> {
 }
 
 fn capture_modules_loaded(pid: u32) -> Vec<String> {
-    let modules = process_modules(pid);
+    retain_capture_pipeline(process_capture_modules(pid))
+}
+
+fn retain_capture_pipeline(modules: Vec<String>) -> Vec<String> {
     let has = |name: &str| {
         modules
             .iter()
@@ -1758,18 +1783,19 @@ fn capture_modules_loaded(pid: u32) -> Vec<String> {
 
     if directshow || media_foundation {
         modules
-            .into_iter()
-            .filter(|module| CAPTURE_MODULES.contains(&module.to_ascii_lowercase().as_str()))
-            .collect()
     } else {
         Vec::new()
     }
 }
 
-fn process_modules(pid: u32) -> Vec<String> {
+// Keep the fresh Toolhelp snapshot and enumerate every entry. Only four ASCII
+// basenames can contribute evidence; decoding all other names is wasted work.
+fn process_capture_modules(pid: u32) -> Vec<String> {
+    let _profile = profile::Span::new("module_scan");
     let Ok(snapshot) =
         (unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid) })
     else {
+        profile::module_work(0, 0, 0, true);
         return Vec::new();
     };
     let mut entry = MODULEENTRY32W {
@@ -1777,17 +1803,42 @@ fn process_modules(pid: u32) -> Vec<String> {
         ..Default::default()
     };
     let mut modules = Vec::new();
+    let mut module_entries = 0;
+    let mut decoded_utf16_units = 0;
 
     if unsafe { Module32FirstW(snapshot, &mut entry) }.is_ok() {
         loop {
-            modules.push(wide_array_string(&entry.szModule));
+            module_entries += 1;
+            if let Some(name) = capture_module_name(&entry.szModule) {
+                decoded_utf16_units += name.len();
+                modules.push(String::from_utf16_lossy(name));
+            }
             if unsafe { Module32NextW(snapshot, &mut entry) }.is_err() {
                 break;
             }
         }
     }
     let _ = unsafe { CloseHandle(snapshot) };
+    profile::module_work(module_entries, modules.len(), decoded_utf16_units, false);
     modules
+}
+
+fn capture_module_name(value: &[u16]) -> Option<&[u16]> {
+    let length = value
+        .iter()
+        .position(|unit| *unit == 0)
+        .unwrap_or(value.len());
+    let name = &value[..length];
+    CAPTURE_MODULES
+        .iter()
+        .any(|expected| {
+            name.len() == expected.len()
+                && name
+                    .iter()
+                    .zip(expected.bytes())
+                    .all(|(&unit, byte)| unit <= 0x7f && (unit as u8).eq_ignore_ascii_case(&byte))
+        })
+        .then_some(name)
 }
 
 fn process_command_line(pid: u32) -> Option<String> {
@@ -1862,21 +1913,33 @@ fn process_creation_time(pid: u32) -> Option<u64> {
 }
 
 fn process_path(pid: u32) -> Option<String> {
+    process_path_with_buffer(pid, &mut Vec::new())
+}
+
+fn process_path_with_buffer(pid: u32, buffer: &mut Vec<u16>) -> Option<String> {
     let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()? };
-    let mut buffer = vec![0u16; 32_768];
-    let mut size = buffer.len() as u32;
-    let result = unsafe {
+    let result = query_process_path(buffer, |buffer, size| unsafe {
         QueryFullProcessImageNameW(
             process,
             PROCESS_NAME_WIN32,
             PWSTR(buffer.as_mut_ptr()),
-            &mut size,
+            size,
         )
-        .ok()
-        .map(|_| String::from_utf16_lossy(&buffer[..size as usize]))
-    };
+        .is_ok()
+    });
     let _ = unsafe { CloseHandle(process) };
     result
+}
+
+fn query_process_path(
+    buffer: &mut Vec<u16>,
+    query: impl FnOnce(&mut [u16], &mut u32) -> bool,
+) -> Option<String> {
+    buffer.resize(32_768, 0);
+    // Reset the API's in/out length on every call. A failed query must never
+    // publish prior contents; success decodes only this query's returned units.
+    let mut size = buffer.len() as u32;
+    query(buffer, &mut size).then(|| String::from_utf16_lossy(&buffer[..size as usize]))
 }
 
 #[derive(Clone, Debug)]
@@ -1893,6 +1956,10 @@ pub struct ProcessTable {
 
 impl ProcessTable {
     pub fn load() -> Self {
+        let _profile = profile::Span::new("process_inventory");
+        if let Some(table) = process_inventory::load() {
+            return table;
+        }
         let Ok(snapshot) = (unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) }) else {
             return Self {
                 by_name: HashMap::new(),
@@ -1927,6 +1994,7 @@ impl ProcessTable {
             }
         }
         let _ = unsafe { CloseHandle(snapshot) };
+        profile::inventory_work("toolhelp", by_pid.len(), 0, 0, 0);
         Self { by_name, by_pid }
     }
 
@@ -2163,6 +2231,197 @@ pub fn play_chime() {
 mod tests {
     use super::*;
     use crate::config::ApplicationRule;
+
+    #[test]
+    fn camera_process_path_storage_requeries_replacements_and_failures() {
+        let trusted = r"C:\Program Files\Capture\capture.exe";
+        let replacement = r"C:\Downloads\capture.exe";
+        let apps = [
+            CameraApp {
+                executable: trusted.to_owned(),
+                permission: CameraPermission {
+                    consent: Some("Allow".to_owned()),
+                },
+                non_packaged: true,
+            },
+            CameraApp {
+                executable: replacement.to_owned(),
+                permission: CameraPermission {
+                    consent: Some("Deny".to_owned()),
+                },
+                non_packaged: true,
+            },
+        ];
+        let replies = [
+            (Some(trusted), Some("Allow")),
+            (None, None),
+            (Some(replacement), Some("Deny")),
+            (Some(trusted), Some("Allow")),
+        ];
+        let mut buffer = Vec::new();
+        let mut allocation = None;
+        let mut calls = 0;
+        let mut observations = Vec::new();
+        for (reply, expected_consent) in replies {
+            let observed = query_process_path(&mut buffer, |units, size| {
+                calls += 1;
+                assert_eq!(units.len(), 32_768);
+                assert_eq!(*size, 32_768, "reset even after a shorter result/failure");
+                if let Some(path) = reply {
+                    let path: Vec<u16> = path.encode_utf16().collect();
+                    units[..path.len()].copy_from_slice(&path);
+                    *size = path.len() as u32;
+                    true
+                } else {
+                    // Failed APIs may modify both the buffer and output length.
+                    units[0] = u16::from(b'X');
+                    *size = 1;
+                    false
+                }
+            });
+            assert_eq!(observed.as_deref(), reply);
+            assert_eq!(
+                observed
+                    .as_deref()
+                    .and_then(|path| camera_app_for_process(&apps, path))
+                    .and_then(|app| app.permission.consent.as_deref()),
+                expected_consent
+            );
+            let storage = (buffer.as_ptr(), buffer.capacity());
+            assert_eq!(*allocation.get_or_insert(storage), storage);
+            observations.push(observed);
+        }
+        assert_eq!(
+            calls,
+            replies.len(),
+            "no result, including failure, is cached"
+        );
+        // Previously published owned paths cannot change when storage is reused.
+        assert_eq!(
+            observations
+                .iter()
+                .map(Option::as_deref)
+                .collect::<Vec<_>>(),
+            replies.iter().map(|(path, _)| *path).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn process_path_storage_matches_fresh_decode_at_utf16_and_length_boundaries() {
+        let mut buffer = Vec::new();
+        let rows = [
+            vec![u16::from(b'x'); 32_768],
+            vec![u16::from(b'y'); 32_767],
+            r"C:\Apps\capture.exe".encode_utf16().collect(),
+            "C:\\Apps\\摄像头\u{10400}.exe".encode_utf16().collect(),
+            vec![0xd800, u16::from(b'a'), 0xdc00],
+            vec![u16::from(b'a'), 0, u16::from(b'b')],
+            Vec::new(),
+        ];
+        for row in rows {
+            // Poison the unused tail: only the current returned length counts,
+            // not a terminator or bytes left by a previous longer process path.
+            buffer.fill(0xd800);
+            let observed = query_process_path(&mut buffer, |units, size| {
+                assert_eq!(*size, 32_768);
+                units[..row.len()].copy_from_slice(&row);
+                *size = row.len() as u32;
+                true
+            });
+            assert_eq!(observed, Some(String::from_utf16_lossy(&row)));
+        }
+    }
+
+    #[test]
+    fn capture_module_filter_matches_previous_pipeline_for_all_combinations() {
+        let names = [
+            "KSWDMCAP.AX",
+            "ksproxy.ax",
+            "MFCaptureEngine.dll",
+            "mfsensorgroup.dll",
+        ];
+        for mask in 0..(1 << names.len()) {
+            let mut rows: Vec<Vec<u16>> = [
+                "kernel32.dll",
+                "mfcaptureengine.dll.extra",
+                "prefixkswdmcap.ax",
+                "ksproxy.ax ",
+                "κsproxy.ax",
+            ]
+            .iter()
+            .map(|name| name.encode_utf16().collect())
+            .collect();
+            rows.push(vec![0xd800]);
+            for (index, name) in names.iter().enumerate() {
+                if mask & (1 << index) != 0 {
+                    // Preserve duplicates and original case/order as evidence.
+                    rows.push(name.encode_utf16().chain([0, 0xd800]).collect());
+                    rows.push(name.encode_utf16().collect());
+                }
+            }
+            for reverse in [false, true] {
+                if reverse {
+                    rows.reverse();
+                }
+                let original: Vec<String> = rows.iter().map(|row| wide_array_string(row)).collect();
+                let has = |name: &str| {
+                    original
+                        .iter()
+                        .any(|module| module.eq_ignore_ascii_case(name))
+                };
+                let expected: Vec<String> = if has("kswdmcap.ax")
+                    || (has("MFCaptureEngine.dll")
+                        && (has("mfsensorgroup.dll") || has("ksproxy.ax")))
+                {
+                    original
+                        .iter()
+                        .filter(|module| {
+                            CAPTURE_MODULES.contains(&module.to_ascii_lowercase().as_str())
+                        })
+                        .cloned()
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                let filtered = rows
+                    .iter()
+                    .filter_map(|row| capture_module_name(row).map(String::from_utf16_lossy))
+                    .collect();
+                assert_eq!(
+                    retain_capture_pipeline(filtered),
+                    expected,
+                    "mask={mask}, reverse={reverse}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn capture_module_filter_only_decodes_exact_ascii_basenames() {
+        let name: Vec<u16> = "MfCaptureEngine.DLL".encode_utf16().collect();
+        assert_eq!(capture_module_name(&name), Some(name.as_slice()));
+        let terminated: Vec<u16> = name.iter().copied().chain([0, 0xd800]).collect();
+        assert_eq!(capture_module_name(&terminated), Some(name.as_slice()));
+        let mut padded = [0u16; 256];
+        padded[..name.len()].copy_from_slice(&name);
+        assert_eq!(capture_module_name(&padded), Some(name.as_slice()));
+        let mut unterminated = vec![u16::from(b'x'); 256];
+        unterminated[..name.len()].copy_from_slice(&name);
+        for rejected in [
+            Vec::new(),
+            vec![0],
+            vec![0xd800],
+            unterminated,
+            "mfcaptureengine.dl".encode_utf16().collect(),
+            "mfcaptureengine.dll ".encode_utf16().collect(),
+            "mfcaptureengine.dllx".encode_utf16().collect(),
+            "mfcaptureengine.ＤＬＬ".encode_utf16().collect(),
+            r"C:\Windows\ksproxy.ax".encode_utf16().collect(),
+            "KSWDMCAP.AX".encode_utf16().collect(),
+        ] {
+            assert_eq!(capture_module_name(&rejected), None);
+        }
+    }
 
     fn signature(verified: bool) -> SignatureInfo {
         SignatureInfo {

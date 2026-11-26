@@ -122,6 +122,11 @@ public static class McwAppContext {
                 result["elevated"]=TokenInt(token,20)!=0; result["elevationType"]=TokenInt(token,18);
                 result["hasRestrictions"]=TokenInt(token,21)!=0; result["restricted"]=IsTokenRestricted(token);
                 result["tokenSessionId"]=TokenInt(token,12);
+                var integrity=TokenData(token,25); // TokenIntegrityLevel, TOKEN_MANDATORY_LABEL
+                try {
+                    var sid=new System.Security.Principal.SecurityIdentifier(Marshal.ReadIntPtr(integrity));
+                    result["integritySid"]=sid.Value;
+                } finally { Marshal.FreeHGlobal(integrity); }
                 var data=TokenData(token,10); Statistics statistics;
                 try { statistics=(Statistics)Marshal.PtrToStructure(data,typeof(Statistics)); } finally { Marshal.FreeHGlobal(data); }
                 result["tokenType"]=statistics.Type;

@@ -18,6 +18,95 @@ on:
           - linux
           - macos
           - windows
+          - flutter
+          - flutter-windows
+          - release-candidate
+          - release-candidate-arm-runtime
+          - release-candidate-windows-startup
+      candidate-build-run:
+        description: Source CI run containing the exact Linux ARM64 candidate package
+        type: string
+        default: ''
+      candidate-build-sha:
+        description: Full source SHA of the candidate package
+        type: string
+        default: ''
+      flutter-runtime-replay:
+        description: With native-platform=flutter, replay audited B5 Mac or Linux x64 products without rebuilding; each artifact retains its exact source
+        type: boolean
+        default: false
+      flutter-macos-replay-build-run:
+        description: With flutter-runtime-replay and flutter-intel-only, replay the exact built Intel products of this branch's named run
+        type: string
+        default: ''
+      windows-msi-test-run:
+        description: Requalify exact already-built MSI bytes from this branch's named Windows CI run
+        type: string
+        default: ''
+      windows-native-profiles-only:
+        description: With native-platform=windows, run only the isolated native profile and owned menu rendering proof
+        type: boolean
+        default: false
+      windows-msi-test-source:
+        description: Full source SHA for the MSI qualification artifact
+        type: string
+        default: ''
+      windows-msi-resource-replay:
+        description: Measure an exact archived Windows MSI and the stable MSI on the same hosted desktop
+        type: boolean
+        default: false
+      windows-msi-arm-standard-only:
+        description: Replay the x64 MSI under a standard account on Windows 11 Arm64
+        type: boolean
+        default: false
+      windows-msi-standard-rollback:
+        description: Observe injected rollback registration on Windows 11 Arm64 and probe a Windows Server 2022 x64 standard account
+        type: boolean
+        default: false
+      windows-msi-forensics:
+        description: Diagnose per-user MSI rollback on Windows 11 ARM64; with a source run, sample the exact product instead of building probes
+        type: boolean
+        default: false
+      windows-msi-transaction-probe:
+        description: With Windows MSI forensics alone, test a native multi-package transaction on the existing missing-cabinet fixture
+        type: boolean
+        default: false
+      windows-rebuild-rust-only:
+        description: Rebuild Windows Rust and package it with the audited unchanged Flutter component from the identified source run
+        type: boolean
+        default: false
+      flutter-intel-only:
+        description: Target only Intel; bootstrap diagnostic controls remain separately opt-in
+        type: boolean
+        default: false
+      flutter-arm-only:
+        description: Target only Apple Silicon without rerunning an unavailable Intel host
+        type: boolean
+        default: false
+      flutter-intel-bootstrap-controls:
+        description: Add observational Intel bootstrap probes; results are controlled diagnostics, not unconditioned qualification
+        type: boolean
+        default: false
+      flutter-linux-only:
+        description: Exercise the two Linux distributions without rebuilding the macOS bundles
+        type: boolean
+        default: false
+      flutter-skip-linux-x64:
+        description: Preserve already qualified Linux x64 products when only failed macOS and ARM64 targets need correction
+        type: boolean
+        default: false
+      flutter-skip-linux-arm64:
+        description: Skip a separately diagnosed upstream ARM64 toolchain blocker without converting it into success
+        type: boolean
+        default: false
+      flutter-native-gates-only:
+        description: Run only exact Unix native qualification guard tests; preserve existing Flutter products
+        type: boolean
+        default: false
+      flutter-linux-renderer-probe:
+        description: Compare two renderers on Linux x64, using the pinned stage 4 artifact only with runtime replay
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       native-only:
@@ -31,8 +120,244 @@ permissions:
   contents: read
 
 jobs:
+  flutter-qualification:
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.native-platform == 'flutter' || inputs.native-platform == 'release-candidate') }}
+    uses: ./.github/workflows/flutter-qualification.yml
+    permissions:
+      contents: read
+      actions: read
+    with:
+      runtime-replay: ${{ (inputs.native-platform == 'flutter' && (inputs.flutter-runtime-replay)) || false }}
+      macos-replay-build-run: ${{ (inputs.native-platform == 'flutter' && (inputs.flutter-macos-replay-build-run)) || '' }}
+      intel-only: ${{ (inputs.native-platform == 'flutter' && (inputs.flutter-intel-only)) || false }}
+      arm-only: ${{ (inputs.native-platform == 'flutter' && (inputs.flutter-arm-only)) || false }}
+      intel-bootstrap-controls: ${{ (inputs.native-platform == 'flutter' && (inputs.flutter-intel-bootstrap-controls)) || false }}
+      linux-only: ${{ (inputs.native-platform == 'flutter' && (inputs.flutter-linux-only || inputs.flutter-linux-renderer-probe)) || false }}
+      skip-linux-x64: ${{ (inputs.native-platform == 'flutter' && (inputs.flutter-skip-linux-x64)) || false }}
+      skip-linux-arm64: ${{ (inputs.native-platform == 'flutter' && (inputs.flutter-skip-linux-arm64 || inputs.flutter-linux-renderer-probe)) || false }}
+      native-gates-only: ${{ (inputs.native-platform == 'flutter' && (inputs.flutter-native-gates-only)) || false }}
+      linux-renderer-probe: ${{ (inputs.native-platform == 'flutter' && (inputs.flutter-linux-renderer-probe)) || false }}
+
+  flutter-windows-qualification:
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.native-platform == 'flutter-windows' || inputs.native-platform == 'release-candidate') }}
+    uses: ./.github/workflows/flutter-windows-qualification.yml
+    permissions:
+      contents: read
+      actions: read
+    with:
+      msi-test-run: ${{ (inputs.native-platform == 'flutter-windows' && (inputs.windows-msi-test-run)) || '' }}
+      msi-test-source: ${{ (inputs.native-platform == 'flutter-windows' && (inputs.windows-msi-test-source)) || '' }}
+      msi-resource-replay: ${{ (inputs.native-platform == 'flutter-windows' && (inputs.windows-msi-resource-replay)) || false }}
+      msi-test-arm-standard-only: ${{ (inputs.native-platform == 'flutter-windows' && (inputs.windows-msi-arm-standard-only)) || false }}
+      msi-test-standard-rollback: ${{ (inputs.native-platform == 'flutter-windows' && (inputs.windows-msi-standard-rollback)) || false }}
+      msi-forensics: ${{ (inputs.native-platform == 'flutter-windows' && (inputs.windows-msi-forensics)) || false }}
+      msi-transaction-probe: ${{ (inputs.native-platform == 'flutter-windows' && (inputs.windows-msi-transaction-probe)) || false }}
+      rebuild-rust-only: ${{ (inputs.native-platform == 'flutter-windows' && (inputs.windows-rebuild-rust-only)) || false }}
+      standard-user-in-lab: ${{ inputs.native-platform == 'release-candidate' }}
+
+  release-candidate-audit:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.native-platform == 'release-candidate' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --check
+      - run: cargo install cargo-audit --locked && cargo audit
+
+  release-candidate-windows-startup:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.native-platform == 'release-candidate-windows-startup' }}
+    runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Bind the isolated startup replay to the recorded build
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_RUN: ${{ inputs.candidate-build-run }}
+          BUILD_SHA: ${{ inputs.candidate-build-sha }}
+        run: |
+          if ($env:BUILD_RUN -cnotmatch '^[0-9]+$' -or $env:BUILD_SHA -cnotmatch '^[a-f0-9]{40}$') { throw 'Invalid source run or commit.' }
+          gh run view $env:BUILD_RUN --repo $env:GITHUB_REPOSITORY --json headSha,headBranch,event,workflowName,jobs > "$env:RUNNER_TEMP/source-run.json"
+          if ($LASTEXITCODE -ne 0) { throw 'Source run unavailable.' }
+          python -B installer/release_candidate.py --validate-replay "$env:RUNNER_TEMP/source-run.json" $env:BUILD_SHA
+          if ($LASTEXITCODE -ne 0) { throw 'Source qualification incomplete.' }
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.candidate-build-sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: flutter-b5-windows-evidence
+          run-id: ${{ inputs.candidate-build-run }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/mcw-startup-archived
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: 1.98.1
+      - name: Replay isolated startup without any fixture MSI on this runner
+        shell: pwsh
+        run: |
+          if ($env:RUNNER_ENVIRONMENT -cne 'github-hosted') { throw 'Dedicated GitHub-hosted runner required.' }
+          cargo build --release --locked --features windows-tray,flutter-desktop
+          if ($LASTEXITCODE -ne 0) { throw 'Semantic proof engine build failed.' }
+          $venv = Join-Path $env:RUNNER_TEMP 'mcw-startup-python'
+          python -m venv $venv
+          if ($LASTEXITCODE -ne 0) { throw 'Venv creation failed.' }
+          $py = Join-Path $venv 'Scripts/python.exe'
+          & $py -m pip install psutil==7.2.2 Pillow==12.2.0
+          if ($LASTEXITCODE -ne 0) { throw 'Proof tooling installation failed.' }
+          $inputRoot = Join-Path $env:RUNNER_TEMP 'mcw-startup-archived'
+          $proof = Join-Path $env:LOCALAPPDATA 'MicCamWatchQualification/stage5-startup'
+          "MCW_STARTUP_PROOF=$proof" >> $env:GITHUB_ENV
+          $env:FLUTTER_SUPPRESS_ANALYTICS = 'true'
+          $env:CI = 'true'
+          & $py -B desktop/qualification/windows_b5.py --engine-directory target/release --release-bundle "$inputRoot/normal-bundle" --instrumented-bundle "$inputRoot/consultation-bundle" --startup-bundle "$inputRoot/startup-bundle" --proof $proof --startup-ci
+          if ($LASTEXITCODE -ne 0) { throw 'Startup replay failed.' }
+          $receipt = Get-Content -LiteralPath "$proof/summary.json" -Raw | ConvertFrom-Json
+          if ($receipt.status -cne 'passed' -or !$receipt.startup_executed) { throw 'Missing startup receipt.' }
+          $receipt | ConvertTo-Json -Depth 5
+          Copy-Item -LiteralPath "$env:RUNNER_TEMP/source-run.json" -Destination "$proof/source-run.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: ${{ always() && env.MCW_STARTUP_PROOF != '' }}
+        with:
+          name: candidate-windows-startup-${{ inputs.candidate-build-sha }}
+          path: |
+            ${{ env.MCW_STARTUP_PROOF }}/**/*.json
+            ${{ env.MCW_STARTUP_PROOF }}/**/*.log
+          if-no-files-found: warn
+
+  release-candidate-bundle:
+    if: ${{ always() && !cancelled() && github.event_name == 'workflow_dispatch' && ((inputs.native-platform == 'release-candidate' && needs.flutter-qualification.result == 'success' && needs.flutter-windows-qualification.result == 'success' && needs.release-candidate-audit.result == 'success') || (inputs.native-platform == 'release-candidate-windows-startup' && needs.release-candidate-windows-startup.result == 'success')) }}
+    needs: [flutter-qualification, flutter-windows-qualification, release-candidate-audit, release-candidate-windows-startup]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+      attestations: write
+    env:
+      PACKAGE_SOURCE: ${{ inputs.native-platform == 'release-candidate' && github.sha || inputs.candidate-build-sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: miccamwatch-hybrid-*-${{ env.PACKAGE_SOURCE }}
+          path: candidate-input
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.native-platform == 'release-candidate' && github.run_id || inputs.candidate-build-run }}
+      - run: python3 -B installer/release_candidate.py "$PACKAGE_SOURCE" candidate-input dist
+      - name: Generate SPDX SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          path: .
+          format: spdx-json
+          output-file: dist/miccamwatch-sbom.spdx.json
+          upload-release-assets: false
+          upload-artifact: false
+      - name: Record the packaged Flutter runtime and native components
+        run: python3 -B installer/candidate_sbom.py dist/miccamwatch-sbom.spdx.json "$PACKAGE_SOURCE"
+      - name: Finalize candidate checksums
+        working-directory: dist
+        run: |
+          test -s miccamwatch-sbom.spdx.json
+          sha256sum miccamwatch-* > SHA256SUMS
+          sha256sum --strict --check SHA256SUMS
+          test "$(wc -l < SHA256SUMS)" -eq 9
+      - name: Attest candidate provenance
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: dist/miccamwatch-*
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: verified-hybrid-release-candidate-${{ env.PACKAGE_SOURCE }}
+          if-no-files-found: error
+          retention-days: 30
+          path: dist/*
+
+  release-candidate-arm-runtime:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.native-platform == 'release-candidate-arm-runtime' }}
+    runs-on: ubuntu-22.04-arm
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    env:
+      BUILD_RUN: ${{ inputs.candidate-build-run }}
+      BUILD_SHA: ${{ inputs.candidate-build-sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Verify candidate source run and fetch its ARM64 bytes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "$BUILD_RUN" =~ ^[0-9]+$ && "$BUILD_SHA" =~ ^[a-f0-9]{40}$ ]]
+          gh run view "$BUILD_RUN" --repo "$GITHUB_REPOSITORY" --json headSha,headBranch,event,workflowName,jobs |
+            jq -e --arg sha "$BUILD_SHA" '.headSha == $sha and .headBranch == "work/flutter-hybrid-0220" and .event == "workflow_dispatch" and .workflowName == "CI" and any(.jobs[]; (.name | startswith("flutter-qualification / Ubuntu 22.04 ARM64")) and .conclusion == "success")'
+          gh run download "$BUILD_RUN" --repo "$GITHUB_REPOSITORY" --name "miccamwatch-hybrid-linux-aarch64-$BUILD_SHA" --dir "$RUNNER_TEMP/mcw-arm-stage5-input"
+      - name: Exercise the installed normal Flutter payload on a private ARM64 X11 desktop
+        run: |
+          set -euo pipefail
+          [[ "$RUNNER_ENVIRONMENT" == github-hosted && $(uname -m) == aarch64 ]]
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends dbus-x11 xvfb xauth openbox xfce4-panel xfconf at-spi2-core libgtk-3-0 libx11-dev libpipewire-0.3-0 libgl1-mesa-dri libegl1-mesa libgles2
+          dbus-run-session -- xvfb-run -a -s '-screen 0 1280x1000x24' \
+            bash desktop/qualification/linux_candidate_smoke.sh \
+            "$RUNNER_TEMP/mcw-arm-stage5-input/miccamwatch-hybrid-linux-aarch64.tar.gz" \
+            "$BUILD_SHA" "$RUNNER_TEMP/mcw-arm-stage5-proof"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: candidate-arm64-desktop-${{ inputs.candidate-build-sha }}
+          path: ${{ runner.temp }}/mcw-arm-stage5-proof
+          if-no-files-found: warn
+
+  windows-native-profiles:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.native-platform == 'windows' && inputs.windows-native-profiles-only }}
+    name: Targeted Windows inert profiles and owned native menus
+    runs-on: windows-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # same stable toolchain as the general Windows job
+      - name: Build the exact library-test image before the finite GUI proof
+        run: cargo test --locked --features windows-tray --lib --no-run
+      - name: Verify library-test image admission and exact owned menu rendering
+        shell: powershell
+        run: |
+          if ($env:RUNNER_ENVIRONMENT -cne 'github-hosted') { throw 'Disposable hosted Windows required' }
+          $ErrorActionPreference = 'Stop'
+          & installer/tests/windows-test-image-tests.ps1
+          powershell.exe -NoProfile -STA -File installer/tests/windows-tray-profiles-native.ps1 -OutputDirectory "${{ runner.temp }}/native-windows-profiles" -IsolatedDesktop
+          if ($LASTEXITCODE -ne 0) { throw 'Targeted native profile and renderer proof failed' }
+      - name: Preserve targeted native profile proof
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-proof-windows-profiles
+          if-no-files-found: warn
+          path: ${{ runner.temp }}/native-windows-profiles
+
   windows:
-    if: ${{ !inputs.native-only }}
+    if: ${{ !inputs.native-only && !inputs.windows-native-profiles-only && inputs.native-platform != 'flutter' && inputs.native-platform != 'flutter-windows' && inputs.native-platform != 'release-candidate' && inputs.native-platform != 'release-candidate-arm-runtime' && inputs.native-platform != 'release-candidate-windows-startup' }}
     runs-on: windows-latest
     permissions:
       contents: read
@@ -52,6 +377,10 @@ jobs:
         run: cargo install cargo-audit --locked && cargo audit
       - run: cargo build --release --locked --features windows-tray
         id: windows_release
+      - name: Audit distributed Windows executables for non-system DLL dependencies
+        run: python -B installer/tests/windows_distribution_imports.py target/release/mcw.exe target/release/mcw-tray.exe
+      - name: Verify dependency audit refusal and package-integrity regressions
+        run: python -B installer/tests/test_windows_distribution_imports.py -v
       - name: Verify tray restart releases captured updater streams
         run: cargo test --lib --locked --features windows-tray updater::process::tests::native_restart_releases_captured_streams_while_successor_lives -- --ignored --exact --test-threads=1 --nocapture
       - name: Exercise real Windows top buttons and responsive layout
@@ -128,7 +457,11 @@ jobs:
         if: ${{ !cancelled() && steps.windows_release.outcome == 'success' }}
         timeout-minutes: 8
         shell: powershell
-        run: powershell.exe -NoProfile -STA -File installer/tests/windows-tray-profiles-native.ps1 -OutputDirectory "${{ runner.temp }}/native-windows-profiles" -IsolatedDesktop
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & installer/tests/windows-test-image-tests.ps1
+          powershell.exe -NoProfile -STA -File installer/tests/windows-tray-profiles-native.ps1 -OutputDirectory "${{ runner.temp }}/native-windows-profiles" -IsolatedDesktop
+          if ($LASTEXITCODE -ne 0) { throw 'Native profile and renderer proof failed' }
       - name: Upload native Windows profile evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -180,7 +513,7 @@ jobs:
           path: ${{ runner.temp }}/windows-application-proof
 
   portable:
-    if: ${{ inputs.native-platform != 'windows' }}
+    if: ${{ inputs.native-platform != 'windows' && inputs.native-platform != 'flutter' && inputs.native-platform != 'flutter-windows' && inputs.native-platform != 'release-candidate' && inputs.native-platform != 'release-candidate-arm-runtime' && inputs.native-platform != 'release-candidate-windows-startup' }}
     strategy:
       fail-fast: false
       matrix:
@@ -279,6 +612,9 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --all-targets --locked ${{ matrix.platform == 'linux' && '--features linux-camera-helper' || '' }} -- -D warnings
       - run: cargo test --all-targets --locked ${{ matrix.platform == 'linux' && '--features linux-camera-helper' || '' }}
+      - name: Verify refusal of a disposable process owned by another Mac user
+        if: runner.os == 'macOS'
+        run: cargo test --lib --locked platform::macos::tests::native_other_user_process_is_refused_and_remains_alive -- --exact --ignored
       - name: Exercise Rust builder against native C SPA headers
         if: matrix.platform == 'linux'
         run: cargo test --locked -p libspa --lib native_headers_builder_roundtrip_after_growth -- --nocapture
@@ -308,7 +644,9 @@ jobs:
               payloads[name] = dict(elf_class=64, little_endian=True, e_machine=machine,
                                     glibc_requirements=[".".join(map(str, v)) for v in versions],
                                     sha256=hashlib.sha256(path.read_bytes()).hexdigest())
-          bindings = list(pathlib.Path("target/release/build").glob("libspa-sys-*/out/bindings.rs"))
+          build = pathlib.Path("target/release/build")
+          bindings = sorted(set(build.glob("libspa-sys-*/out/bindings.rs")) |
+                            set(build.glob("libspa-sys/*/out/bindings.rs")))
           assert bindings, "Native libspa bindgen output missing"
           outputs = []
           for index, path in enumerate(bindings):
@@ -342,18 +680,16 @@ jobs:
           tar -xzf "$PACKAGE" -C "$RUNNER_TEMP/native-proof/package"
           echo "MCW_RELEASE_BINARY=$RUNNER_TEMP/native-proof/package/mcw" >> "$GITHUB_ENV"
           python3 - <<'PY'
-          import os, pathlib, subprocess
+          import json, os, pathlib, shutil, subprocess
           root = pathlib.Path(os.environ["RUNNER_TEMP"])
-          source = root / "native-chime.rs"
-          source.write_text('fn main() { match miccamwatch::platform::play_chime() { Ok(()) => println!("native playback accepted"), Err(error) => { eprintln!("{error:#}"); std::process::exit(2); } } }\n')
-          library = pathlib.Path("target/debug/libmiccamwatch.rlib")
-          assert library.is_file(), library
-          try:
-              subprocess.run(["rustc", "--edition=2024", "--crate-name=mcw_native_chime", str(source),
-                              "--extern", "miccamwatch=" + str(library), "-L", "dependency=target/debug/deps",
-                              "-o", str(root / "native-chime")], check=True)
-          finally:
-              source.unlink()
+          result = subprocess.check_output(["cargo", "build", "--locked", "--example",
+                                            "qualification-native-chime", "--message-format=json"], text=True)
+          artifacts = [json.loads(line) for line in result.splitlines() if line.startswith("{")]
+          drivers = [item["executable"] for item in artifacts if item.get("reason") == "compiler-artifact"
+                     and item.get("target", {}).get("name") == "qualification-native-chime"
+                     and item.get("executable")]
+          assert len(drivers) == 1, "Cargo did not identify exactly one native sound driver"
+          shutil.copy2(drivers[0], root / "native-chime")
           PY
           cat > "$RUNNER_TEMP/native-smoke.py" <<'PY'
           import errno, fcntl, json, os, pathlib, pty, re, select, shutil, signal, struct, subprocess, tempfile, termios, time
@@ -846,7 +1182,13 @@ jobs:
                              mcw_cameras_present=bool(cameras), camera_collector=collector,
                              physical_activity_transition_proven=False, macos27_friend_hardware_parity_proven=False)
               (proof / "inventory-scope.json").write_text(json.dumps(summary, indent=2) + "\n")
-              assert collector["state"] in ("healthy", "degraded"), status
+              assert collector["state"] in ("healthy", "degraded", "unavailable"), status
+              camera_accesses = [row for row in status["accesses"] if row["resource"] == "camera"]
+              if collector["state"] == "unavailable":
+                  assert "camera" in status.get("observation_gaps", []), status
+                  assert collector.get("detail") and not camera_accesses, status
+              for access in camera_accesses:
+                  assert access.get("pid") is None and access["application"] == "Unknown application", access
           PY
       - name: Exercise native Linux desktop and extracted package
         if: runner.os == 'Linux'

@@ -43,6 +43,8 @@ struct StatusView<'a> {
     schema_version: u8,
     tool_version: &'static str,
     collectors: &'a [crate::model::CollectorHealth],
+    #[serde(skip_serializing_if = "<[crate::model::Resource]>::is_empty")]
+    observation_gaps: &'a [crate::model::Resource],
     accesses: VisibleAccesses<'a>,
     #[cfg(windows)]
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -130,6 +132,7 @@ fn status_view<'a>(
         schema_version: SCHEMA_VERSION,
         tool_version: env!("CARGO_PKG_VERSION"),
         collectors: &snapshot.collectors,
+        observation_gaps: &snapshot.observation_gaps,
         accesses: VisibleAccesses {
             items: &snapshot.accesses,
             min_risk,
@@ -164,10 +167,11 @@ pub fn print_status(
         .peekable();
 
     if visible.peek().is_none() {
-        if snapshot
-            .collectors
-            .iter()
-            .any(|health| health.state != crate::model::CollectorState::Healthy)
+        if !snapshot.observation_gaps.is_empty()
+            || snapshot
+                .collectors
+                .iter()
+                .any(|health| health.state != crate::model::CollectorState::Healthy)
         {
             println!("{}", lang.observation_incomplete().yellow());
         } else if snapshot.accesses.is_empty() {
@@ -176,31 +180,35 @@ pub fn print_status(
             println!("{}", lang.no_matching_activity().yellow());
         }
     }
-    for collector in &snapshot.collectors {
-        match collector.state {
-            crate::model::CollectorState::Healthy => {}
-            crate::model::CollectorState::Degraded => {
-                println!(
-                    "  {} collector {}: {:?}",
-                    "⚠".yellow().bold(),
-                    collector.collector.bold(),
-                    collector.state
-                );
-            }
-            crate::model::CollectorState::Unavailable => {
-                println!(
-                    "  {} collector {}: {:?}",
-                    "✖".red().bold(),
-                    collector.collector.bold(),
-                    collector.state
-                );
-            }
-        }
+    for collector in snapshot
+        .collectors
+        .iter()
+        .filter(|collector| collector.state != crate::model::CollectorState::Healthy)
+    {
+        print_collector_health(collector);
     }
     for access in visible {
         print_access(access, None, lang);
     }
     Ok(())
+}
+
+pub(crate) fn print_collector_health(collector: &crate::model::CollectorHealth) {
+    use crate::model::CollectorState;
+
+    let marker = match collector.state {
+        CollectorState::Healthy => "✓".green(),
+        CollectorState::Degraded => "⚠".yellow(),
+        CollectorState::Unavailable => "✖".red(),
+    };
+    let detail = collector.detail.as_deref().unwrap_or_default();
+    let separator = if detail.is_empty() { "" } else { " — " };
+    println!(
+        "  {} collector {}: {:?}{separator}{detail}",
+        marker.bold(),
+        collector.collector.bold(),
+        collector.state
+    );
 }
 
 pub fn print_event(
@@ -448,6 +456,31 @@ mod tests {
             &access(Risk::Suspicious),
             Some(Risk::Suspicious)
         ));
+    }
+
+    #[test]
+    fn status_json_preserves_gaps_without_changing_complete_snapshots() {
+        let mut snapshot = Snapshot {
+            collectors: vec![],
+            accesses: vec![access(Risk::Expected)],
+            observation_gaps: vec![Resource::Camera],
+        };
+        let encode = |snapshot: &Snapshot| {
+            serde_json::to_value(status_view(
+                snapshot,
+                None,
+                #[cfg(windows)]
+                None,
+            ))
+            .unwrap()
+        };
+        assert_eq!(
+            encode(&snapshot)["observation_gaps"],
+            serde_json::json!(["camera"])
+        );
+        assert_eq!(encode(&snapshot)["accesses"].as_array().unwrap().len(), 1);
+        snapshot.observation_gaps.clear();
+        assert!(encode(&snapshot).get("observation_gaps").is_none());
     }
 
     #[cfg(windows)]

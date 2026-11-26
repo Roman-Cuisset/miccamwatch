@@ -43,8 +43,62 @@ fn main() -> ExitCode {
     }
 }
 
+/// Handle opt-in development before parsing/initializing operational controls.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn run_development_frontend() -> Result<Option<u8>> {
+    let arguments = std::env::args_os().skip(1).collect::<Vec<_>>();
+    if !arguments
+        .iter()
+        .any(|a| a == "--read-only-development" || a == "--settings-development")
+    {
+        return Ok(None);
+    }
+    #[cfg(not(feature = "flutter-desktop"))]
+    anyhow::bail!("Development modes require flutter-desktop; no collector or controls started");
+    #[cfg(feature = "flutter-desktop")]
+    {
+        let mut mode = None;
+        let mut open = false;
+        let mut theme = "light";
+        let mut arguments = arguments.iter();
+        while let Some(argument) = arguments.next() {
+            if argument == "--read-only-development" || argument == "--settings-development" {
+                anyhow::ensure!(mode.is_none(), "Exactly one development mode is required");
+                mode = Some(argument == "--settings-development");
+            } else if argument == "--open" {
+                anyhow::ensure!(!open, "Repeated --open");
+                open = true;
+            } else if argument == "--desktop-theme" {
+                theme = arguments
+                    .next()
+                    .and_then(|a| a.to_str())
+                    .filter(|a| matches!(*a, "light" | "dark"))
+                    .ok_or_else(|| anyhow::anyhow!("Expected light or dark desktop theme"))?;
+            } else {
+                anyhow::bail!("Unsupported development argument");
+            }
+        }
+        if mode == Some(true) {
+            tray::run_settings_development(Language::detect(), open, theme)?;
+        } else {
+            tray::run_read_only_development(Language::detect(), open, theme)?;
+        }
+        Ok(Some(0))
+    }
+}
+
 fn run() -> Result<u8> {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    if let Some(code) = run_development_frontend()? {
+        return Ok(code);
+    }
     let cli = Cli::parse_localized();
+    #[cfg(all(target_os = "linux", feature = "packaged-desktop"))]
+    let _package_lease = if matches!(&cli.command, Command::Uninstall) {
+        None
+    } else {
+        uninstall::hold_process_lease()?
+    };
     #[cfg(windows)]
     match &cli.command {
         Command::MicrophoneGuard => {
@@ -59,6 +113,16 @@ fn run() -> Result<u8> {
             parent_pid,
             parent_created,
         } => return uninstall::run_worker(*parent_pid, *parent_created),
+        #[cfg(feature = "packaged-desktop")]
+        Command::UpdateWorker {
+            parent_pid,
+            parent_created,
+            fingerprint,
+        } => return updater::run_worker(*parent_pid, *parent_created, fingerprint),
+        #[cfg(feature = "packaged-desktop")]
+        Command::RecoverUpdate { repair } => return updater::recover(*repair),
+        #[cfg(feature = "packaged-desktop")]
+        Command::RecoverMsi { msi } => return updater::prepare_legacy_recovery(msi),
         Command::PortableReceipt => {
             println!("{}", uninstall::portable_receipt()?);
             return Ok(0);
@@ -68,6 +132,13 @@ fn run() -> Result<u8> {
     if matches!(&cli.command, Command::Uninstall) {
         return uninstall::run();
     }
+    #[cfg(feature = "flutter-desktop")]
+    if matches!(&cli.command, Command::Update) {
+        // Dispatch before loading preferences/policy or opening native monitors.
+        return updater::update().map(|()| 0);
+    }
+    #[cfg(all(windows, feature = "packaged-desktop"))]
+    let _package_lease = updater::hold_runtime_lease()?;
     #[cfg(windows)]
     if let Command::Tray { command, .. } = &cli.command
         && matches!(command, None | Some(TrayCommand::Run | TrayCommand::Open))
@@ -366,6 +437,12 @@ fn run() -> Result<u8> {
         | Command::PortableReceipt => {
             unreachable!("internal command dispatched before configuration")
         }
+        #[cfg(all(windows, feature = "packaged-desktop"))]
+        Command::UpdateWorker { .. }
+        | Command::RecoverUpdate { .. }
+        | Command::RecoverMsi { .. } => {
+            unreachable!("Windows maintenance dispatched before configuration")
+        }
         Command::Uninstall => unreachable!("uninstall dispatched before configuration"),
         #[cfg(target_os = "macos")]
         Command::Camera { command } => {
@@ -435,6 +512,13 @@ fn run() -> Result<u8> {
         Command::Notifications { command } => {
             match command {
                 NotificationCommand::Status => {}
+                #[cfg(target_os = "macos")]
+                NotificationCommand::NativeStatus => {
+                    let state = miccamwatch::notify::native_status()?;
+                    println!("macos_authorization={state}");
+                    println!("banner_delivery=unverified");
+                    return Ok(0);
+                }
                 NotificationCommand::Pause { minutes } => {
                     let minutes = i64::try_from(minutes)?;
                     settings = Settings::update(|current| {

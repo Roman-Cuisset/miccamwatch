@@ -10,9 +10,28 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(feature = "packaged-desktop")]
+mod bundle;
 pub(crate) mod download;
+#[cfg(feature = "packaged-desktop")]
+mod hybrid;
+#[cfg(feature = "packaged-desktop")]
+mod msi;
+#[cfg(feature = "packaged-desktop")]
+mod portable;
 pub(crate) mod process;
+#[cfg(feature = "packaged-desktop")]
+mod recovery;
+#[cfg(feature = "packaged-desktop")]
+mod system_library;
 pub(crate) mod transaction;
+#[cfg(feature = "packaged-desktop")]
+pub(crate) use hybrid::recovery_guidance;
+#[cfg(feature = "packaged-desktop")]
+#[doc(hidden)]
+pub use hybrid::{
+    hold_runtime_lease, prepare_legacy_recovery, recover, remove_portable, run_worker,
+};
 
 pub(crate) fn stop_installed_tray() -> Result<bool> {
     let current = env::current_exe().context("failed to locate mcw executable")?;
@@ -28,7 +47,44 @@ pub(crate) fn stop_installed_tray() -> Result<bool> {
     Ok(false)
 }
 
+/// Public metadata only: no installation lock, download, shutdown or mutation.
+#[cfg(feature = "flutter-desktop")]
+pub(crate) fn check_latest_release() -> Result<(String, bool)> {
+    let releases = self_update::backends::github::Update::configure()
+        .repo_owner("Roman-Cuisset")
+        .repo_name("miccamwatch")
+        .bin_name("mcw")
+        .current_version(cargo_crate_version!())
+        .timeout(Duration::from_secs(8))
+        .retries(0)
+        .build()?
+        .get_latest_release()
+        .context("failed to check public release metadata")?;
+    let release = releases.latest().context("no public MicCamWatch release")?;
+    let version = release.version();
+    let tag = format!("v{version}");
+    anyhow::ensure!(
+        release
+            .release_notes_url()
+            .and_then(|url| url
+                .strip_prefix("https://github.com/Roman-Cuisset/miccamwatch/releases/tag/"))
+            == Some(tag.as_str()),
+        "Public release URL does not match this repository and version"
+    );
+    let comparison = self_update::version::cmp_versions(cargo_crate_version!(), version)?;
+    Ok((tag, comparison == Ordering::Less))
+}
+
 pub fn update() -> Result<()> {
+    #[cfg(feature = "packaged-desktop")]
+    return hybrid::update();
+    #[cfg(not(feature = "packaged-desktop"))]
+    legacy_update()
+}
+
+#[cfg_attr(feature = "packaged-desktop", allow(dead_code))]
+fn legacy_update() -> Result<()> {
+    crate::uninstall::ensure_hybrid_transaction_qualified()?;
     let current = env::current_exe().context("failed to locate the installed mcw executable")?;
     crate::uninstall::windows::ensure_binary_update_allowed(&current)?;
     let installation_lock = crate::autostart::lock_installation(&current)?;
@@ -190,6 +246,10 @@ fn tray_inspection_error(path: &Path, error: anyhow::Error) -> anyhow::Error {
 }
 
 fn validate_cli_version(path: &Path, version: &str, stage: &Path) -> Result<()> {
+    validate_reported_version(path, &format!("mcw {version}"), stage)
+}
+
+fn validate_reported_version(path: &Path, expected: &str, stage: &Path) -> Result<()> {
     struct ValidationChild(std::process::Child);
     impl Drop for ValidationChild {
         fn drop(&mut self) {
@@ -219,29 +279,26 @@ fn validate_cli_version(path: &Path, version: &str, stage: &Path) -> Result<()> 
             .map_err(|error| transaction::io_error("validate staged CLI version", path, error))?,
     );
     let deadline = Instant::now() + Duration::from_secs(5);
-    let status = loop {
-        if let Some(status) = child
-            .0
-            .try_wait()
-            .map_err(|error| transaction::io_error("wait for staged CLI validation", path, error))?
-        {
-            break status;
-        }
-        if Instant::now() >= deadline || fs::metadata(&output_path)?.len() > 4096 {
-            child.0.kill().map_err(|error| {
-                transaction::io_error("stop staged CLI validation", path, error)
-            })?;
-            child.0.wait().map_err(|error| {
-                transaction::io_error("wait for stopped CLI validation", path, error)
-            })?;
-            bail!(
-                "staged CLI version validation exceeded its time/output bound; installation unchanged"
-            );
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    };
+    let status =
+        loop {
+            if let Some(status) = child.0.try_wait().map_err(|error| {
+                transaction::io_error("wait for staged CLI validation", path, error)
+            })? {
+                break status;
+            }
+            if Instant::now() >= deadline || fs::metadata(&output_path)?.len() > 4096 {
+                child.0.kill().map_err(|error| {
+                    transaction::io_error("stop staged CLI validation", path, error)
+                })?;
+                child.0.wait().map_err(|error| {
+                    transaction::io_error("wait for stopped CLI validation", path, error)
+                })?;
+                bail!("binary version probe exceeded its time or output limit");
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        };
     if fs::metadata(&output_path)?.len() > 4096 {
-        bail!("staged CLI version validation output is too large; installation unchanged");
+        bail!("binary version probe output is too large");
     }
     let mut bytes = [0u8; 4097];
     let mut file = fs::File::open(&output_path)?;
@@ -254,13 +311,13 @@ fn validate_cli_version(path: &Path, version: &str, stage: &Path) -> Result<()> 
         length += count;
     }
     if length > 4096 {
-        bail!("staged CLI version validation output is too large; installation unchanged");
+        bail!("binary version probe output is too large");
     }
     let reported = std::str::from_utf8(&bytes[..length])
-        .context("staged CLI version output is not valid UTF-8; installation unchanged")?;
-    if !status.success() || reported.trim().strip_prefix("mcw ") != Some(version) {
+        .context("binary version probe output is not valid UTF-8")?;
+    if !status.success() || reported.trim() != expected {
         bail!(
-            "staged CLI did not report expected version mcw {version} (status {status}, output {:?}); installation unchanged",
+            "binary did not report expected version {expected} (status {status}, output {:?})",
             reported.trim()
         );
     }

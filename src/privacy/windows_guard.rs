@@ -2285,6 +2285,31 @@ pub(super) fn restore_legacy(instance_id: &str) -> Result<CameraControlObservati
     reconcile_running()?;
     observation()
 }
+
+/// The desktop confirms the selected instance separately from the global
+/// camera state. The historical CLI continues to return its aggregate report.
+#[cfg(feature = "flutter-desktop")]
+pub(super) fn restore_legacy_verified(instance_id: &str) -> Result<CameraControlObservation> {
+    restore_legacy(instance_id)?;
+    let native = NativeDevice::open(instance_id)?
+        .context("Legacy camera identity is unavailable; restoration could not be confirmed")?;
+    let target = LegacyTarget {
+        instance_id: native.id.clone(),
+        class: class_text(native.info.class).to_owned(),
+    };
+    let mut current = validate_legacy_target(&target)?
+        .context("Legacy camera identity disappeared during restoration readback")?;
+    ensure!(
+        restore_fulfilled(current.status()?, current.disabled_configuration()?),
+        "Legacy camera still has an unconfirmed native restoration"
+    );
+    let actual = observation()?;
+    ensure!(
+        !actual.desired_blocked,
+        "A new camera Block request superseded legacy restoration"
+    );
+    Ok(actual)
+}
 pub(super) fn run(encoded: &str) -> Result<()> {
     ensure!(encoded.len() <= 4096, "camera bootstrap exceeds 4 KiB");
     let bootstrap: Bootstrap =

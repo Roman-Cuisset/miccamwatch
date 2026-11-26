@@ -1,10 +1,11 @@
+use super::TransitionTracker;
 use crate::{
     frontends::cli::Filter,
     history,
     i18n::Language,
     model::{
-        Access, AccessEvent, Action, Activity, CollectorState, EnforcementDecision, Resource, Risk,
-        SCHEMA_VERSION, Snapshot, event_code,
+        Access, AccessEvent, Action, Activity, CollectorHealth, CollectorState,
+        EnforcementDecision, Resource, Risk, SCHEMA_VERSION, Snapshot, event_code,
     },
     output,
     platform::{self, PlatformMonitor},
@@ -17,29 +18,14 @@ use std::{
     fs::OpenOptions,
     io::{BufWriter, Write},
     path::Path,
-    sync::mpsc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
+    thread,
     time::{Duration, Instant},
 };
-
-#[derive(Default)]
-pub struct TransitionTracker {
-    previous: HashMap<String, Access>,
-    unseen: HashSet<Resource>,
-}
-
-impl TransitionTracker {
-    pub fn reconcile(
-        &mut self,
-        snapshot: &Snapshot,
-        emit: impl FnMut(&Access, Action) -> Result<()>,
-    ) -> Result<()> {
-        reconcile(&mut self.previous, &mut self.unseen, snapshot, emit)
-    }
-
-    pub(crate) fn observation_gap(&mut self) {
-        self.unseen.extend([Resource::Microphone, Resource::Camera]);
-    }
-}
 
 pub struct EventDispatcher {
     lang: Language,
@@ -51,6 +37,90 @@ pub struct EventDispatcher {
     history_enabled: bool,
     min_risk: Option<Risk>,
     cooldown: HashMap<String, Instant>,
+    alert_worker: Option<AlertWorker>,
+    alert_queue_full: bool,
+}
+
+struct Alert {
+    access: Access,
+    action: Action,
+    notify: bool,
+    sound: bool,
+}
+
+struct AlertWorker {
+    sender: mpsc::SyncSender<Alert>,
+    stopped: Arc<AtomicBool>,
+}
+
+impl AlertWorker {
+    fn start(lang: Language) -> Result<Self> {
+        let (sender, receiver) = mpsc::sync_channel(32);
+        let stopped = Arc::new(AtomicBool::new(false));
+        let stopping = Arc::clone(&stopped);
+        thread::Builder::new()
+            .name("mcw-notifications".into())
+            .spawn(move || deliver_alerts(receiver, &stopping, lang))
+            .context("cannot start notification worker")?;
+        Ok(Self { sender, stopped })
+    }
+}
+
+impl Drop for AlertWorker {
+    fn drop(&mut self) {
+        self.stopped.store(true, Ordering::Release);
+    }
+}
+
+fn deliver_alerts(receiver: mpsc::Receiver<Alert>, stopped: &AtomicBool, lang: Language) {
+    let mut last_failure = None;
+    while let Ok(alert) = receiver.recv() {
+        if stopped.load(Ordering::Acquire) {
+            break;
+        }
+        let result = (|| -> Result<bool> {
+            // A queued event cannot use settings that have since been disabled.
+            let settings = Settings::load()?;
+            let (notify, sound) = alert_delivery(
+                &settings,
+                alert.notify,
+                alert.sound,
+                alert.access.activity,
+                alert.action,
+            );
+            if let Err(error) = play_alert_chime(stopped, sound, platform::play_chime) {
+                eprintln!("chime failed: {error:#}");
+            }
+            if notify && !stopped.load(Ordering::Acquire) {
+                crate::notify::notify_access(&alert.access, alert.action, lang)
+                    .context("notification failed")?;
+                return Ok(true);
+            }
+            Ok(false)
+        })();
+        match result {
+            Ok(true) => last_failure = None,
+            Ok(false) => {}
+            Err(error) => {
+                let reason = format!("{error:#}");
+                if last_failure.as_ref() != Some(&reason) {
+                    eprintln!("{reason}");
+                    last_failure = Some(reason);
+                }
+            }
+        }
+    }
+}
+
+fn play_alert_chime(
+    stopped: &AtomicBool,
+    requested: bool,
+    play: impl FnOnce() -> Result<()>,
+) -> Result<()> {
+    if requested && !stopped.load(Ordering::Acquire) {
+        play()?;
+    }
+    Ok(())
 }
 
 impl EventDispatcher {
@@ -84,6 +154,8 @@ impl EventDispatcher {
             history_enabled,
             min_risk: None,
             cooldown: HashMap::new(),
+            alert_worker: None,
+            alert_queue_full: false,
         })
     }
 
@@ -119,14 +191,40 @@ impl EventDispatcher {
         let (notify, sound) =
             alert_delivery(&settings, self.notify, self.sound, access.activity, action);
         if (notify || sound) && self.alert_due(&access.key) {
-            if sound && let Err(error) = platform::play_chime() {
-                eprintln!("chime failed: {error:#}");
-            }
-            if notify && let Err(error) = crate::notify::notify_access(access, action, self.lang) {
-                eprintln!("notification failed: {error:#}");
-            }
+            self.enqueue_alert(Alert {
+                access: event.access,
+                action,
+                notify,
+                sound,
+            });
         }
         Ok(())
+    }
+
+    fn enqueue_alert(&mut self, alert: Alert) {
+        let worker = match &self.alert_worker {
+            Some(worker) => worker,
+            None => match AlertWorker::start(self.lang) {
+                Ok(worker) => self.alert_worker.insert(worker),
+                Err(error) => {
+                    eprintln!("{error:#}");
+                    return;
+                }
+            },
+        };
+        match worker.sender.try_send(alert) {
+            Ok(()) => self.alert_queue_full = false,
+            Err(mpsc::TrySendError::Full(_)) => {
+                if !self.alert_queue_full {
+                    eprintln!("{}", self.lang.notification_queue_full());
+                    self.alert_queue_full = true;
+                }
+            }
+            Err(mpsc::TrySendError::Disconnected(_)) => {
+                eprintln!("notification worker is unavailable");
+                self.alert_worker = None;
+            }
+        }
     }
 
     fn alert_due(&mut self, key: &str) -> bool {
@@ -199,23 +297,32 @@ pub fn watch(
     )?;
     dispatcher.min_risk = filter.risk;
     let mut tracker = TransitionTracker::default();
-    let mut previous_health = Vec::new();
+    let mut previous_coverage: Option<(Vec<CollectorHealth>, Vec<Resource>)> = None;
     let mut denial_observations = HashMap::new();
     let mut attempted = HashSet::new();
     loop {
         let snapshot = monitor.snapshot(filter.into())?;
-        let changed = previous_health != snapshot.collectors;
-        if changed
-            && snapshot
-                .collectors
-                .iter()
-                .any(|health| health.state != CollectorState::Healthy)
-        {
-            output::print_status(&snapshot, json, filter.risk, lang)?;
-        } else if changed && !previous_health.is_empty() && json {
-            // Report recovery explicitly, without guessing which capture stopped during
-            // the outage. JSON watch lines with `collectors` are status documents.
-            output::print_status(&snapshot, true, filter.risk, lang)?;
+        let previous = previous_coverage.as_ref();
+        let previous_health = previous.map_or(&[][..], |(health, _)| health.as_slice());
+        let previous_gaps = previous.map_or(&[][..], |(_, gaps)| gaps.as_slice());
+        if json {
+            let changed = previous_health != snapshot.collectors
+                || previous_gaps != snapshot.observation_gaps;
+            let incomplete = !snapshot.observation_gaps.is_empty()
+                || snapshot
+                    .collectors
+                    .iter()
+                    .any(|health| health.state != CollectorState::Healthy);
+            if changed && (previous.is_some() || incomplete) {
+                output::print_status(&snapshot, true, filter.risk, lang)?;
+            }
+        } else {
+            if !snapshot.observation_gaps.is_empty() && previous_gaps != snapshot.observation_gaps {
+                println!("{}", lang.observation_incomplete());
+            }
+            for collector in changed_collector_health(previous_health, &snapshot.collectors) {
+                output::print_collector_health(collector);
+            }
         }
         tracker.reconcile(&snapshot, |access, action| {
             dispatcher.dispatch(access, action)
@@ -223,17 +330,50 @@ pub fn watch(
         if defensive_kill {
             enforce_policy(&snapshot, &mut denial_observations, &mut attempted);
         }
-        previous_health = snapshot.collectors;
+        previous_coverage = Some((snapshot.collectors, snapshot.observation_gaps));
         if stop_rx.recv_timeout(interval).is_ok() {
             return Ok(());
         }
     }
 }
 
+fn changed_collector_health<'a>(
+    previous: &'a [CollectorHealth],
+    current: &'a [CollectorHealth],
+) -> impl Iterator<Item = &'a CollectorHealth> {
+    current.iter().filter(move |health| {
+        match previous
+            .iter()
+            .find(|old| old.collector == health.collector)
+        {
+            Some(old) => {
+                old != *health
+                    && (old.state != CollectorState::Healthy
+                        || health.state != CollectorState::Healthy)
+            }
+            None => health.state != CollectorState::Healthy,
+        }
+    })
+}
+
 fn enforce_policy(
     snapshot: &Snapshot,
     observations: &mut HashMap<(String, String), u8>,
     attempted: &mut HashSet<(String, String)>,
+) {
+    enforce_policy_with(
+        snapshot,
+        observations,
+        attempted,
+        platform::terminate_process_by_pid,
+    );
+}
+
+pub(super) fn enforce_policy_with(
+    snapshot: &Snapshot,
+    observations: &mut HashMap<(String, String), u8>,
+    attempted: &mut HashSet<(String, String)>,
+    mut terminate: impl FnMut(u32, &str) -> Result<()>,
 ) {
     let candidates: HashMap<_, _> = snapshot
         .accesses
@@ -266,7 +406,7 @@ fn enforce_policy(
             continue;
         }
         attempted.insert(identity.clone());
-        match platform::terminate_process_by_pid(pid, &identity.1) {
+        match terminate(pid, &identity.1) {
             Ok(()) => eprintln!(
                 "TERMINATED policy-denied process {} (PID {pid}) after two observations",
                 access.application
@@ -279,65 +419,11 @@ fn enforce_policy(
     }
 }
 
-fn reconcile(
-    previous: &mut HashMap<String, Access>,
-    unseen: &mut HashSet<Resource>,
-    snapshot: &Snapshot,
-    mut emit: impl FnMut(&Access, Action) -> Result<()>,
-) -> Result<()> {
-    for collector in &snapshot.collectors {
-        let resource = match collector.collector {
-            "pipewire_audio" | "coreaudio_input" => Resource::Microphone,
-            "pipewire_video" | "coremediaio_video" => Resource::Camera,
-            _ => continue,
-        };
-        // Limited coverage is not a scan gap unless the collector explicitly
-        // reports one; CoreMediaIO's unknown-client limitation still permits STOP.
-        if collector.state == CollectorState::Unavailable
-            || snapshot.observation_gaps.contains(&resource)
-        {
-            unseen.insert(resource);
-        } else if unseen.remove(&resource) {
-            // Recovery is not evidence of when an earlier capture stopped.
-            // Rebaseline without inventing a STOP across an observation gap.
-            previous.retain(|_, access| access.resource != resource);
-        }
-    }
-    let mut current = HashMap::new();
-    for access in &snapshot.accesses {
-        if !current.contains_key(&access.key) {
-            current.insert(access.key.clone(), access.clone());
-        }
-    }
-    for (key, access) in &current {
-        match previous.get(key) {
-            None => emit(access, Action::Start)?,
-            Some(old) if access_changed(old, access) => emit(access, Action::Update)?,
-            _ => {}
-        }
-    }
-    for (key, old) in previous.iter() {
-        if !current.contains_key(key) && !unseen.contains(&old.resource) {
-            emit(old, Action::Stop)?;
-        }
-    }
-    previous.retain(|_, access| unseen.contains(&access.resource));
-    previous.extend(current);
-    Ok(())
-}
-
-fn access_changed(old: &Access, current: &Access) -> bool {
-    old.activity != current.activity
-        || old.risk != current.risk
-        || old.confidence != current.confidence
-        || old.enforcement != current.enforcement
-        || old.evidence != current.evidence
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Activity, CollectorHealth, Confidence, EnforcementDecision, Risk};
+    use crate::model::Confidence;
+    use crate::watcher::transitions::reconcile;
 
     fn access() -> Access {
         Access {
@@ -379,6 +465,92 @@ mod tests {
             accesses,
             observation_gaps: Vec::new(),
         }
+    }
+
+    #[test]
+    fn watch_reports_only_new_changed_and_recovered_collector_warnings() {
+        let mut camera = CollectorHealth {
+            collector: "coremediaio_video",
+            state: CollectorState::Degraded,
+            detail: Some("client unknown".into()),
+        };
+        let mut microphone = CollectorHealth {
+            collector: "coreaudio_input",
+            state: CollectorState::Healthy,
+            detail: None,
+        };
+        let initial = [camera.clone(), microphone.clone()];
+        assert_eq!(
+            changed_collector_health(&[], &initial).collect::<Vec<_>>(),
+            [&camera]
+        );
+        assert_eq!(changed_collector_health(&initial, &initial).count(), 0);
+
+        microphone.state = CollectorState::Unavailable;
+        let failed = [camera.clone(), microphone.clone()];
+        assert_eq!(
+            changed_collector_health(&initial, &failed).collect::<Vec<_>>(),
+            [&microphone]
+        );
+
+        camera.detail = Some("one device has no running state".into());
+        let changed = [camera.clone(), microphone];
+        assert_eq!(
+            changed_collector_health(&failed, &changed).collect::<Vec<_>>(),
+            [&camera]
+        );
+        assert_eq!(
+            changed_collector_health(&failed, &initial).collect::<Vec<_>>(),
+            [&initial[1]]
+        );
+    }
+
+    #[test]
+    fn stalled_alert_worker_never_blocks_the_dispatcher_queue() -> Result<()> {
+        let mut dispatcher =
+            EventDispatcher::new(Language::En, false, true, None, false, false, false)?;
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let stopped = Arc::new(AtomicBool::new(false));
+        dispatcher.alert_worker = Some(AlertWorker {
+            sender,
+            stopped: Arc::clone(&stopped),
+        });
+        let alert = || Alert {
+            access: access(),
+            action: Action::Start,
+            notify: true,
+            sound: false,
+        };
+        dispatcher.enqueue_alert(alert());
+        dispatcher.enqueue_alert(alert());
+        assert!(dispatcher.alert_queue_full);
+        assert!(receiver.try_recv().is_ok());
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        dispatcher.enqueue_alert(alert());
+        assert!(!dispatcher.alert_queue_full);
+        drop(dispatcher);
+        assert!(stopped.load(Ordering::Acquire));
+        Ok(())
+    }
+
+    #[test]
+    fn chime_is_suppressed_when_owner_stops_after_reading_preferences() -> Result<()> {
+        let stopped = AtomicBool::new(false);
+        let mut count = 0;
+        play_alert_chime(&stopped, true, || {
+            count += 1;
+            Ok(())
+        })?;
+        stopped.store(true, Ordering::Release);
+        play_alert_chime(&stopped, true, || {
+            count += 1;
+            Ok(())
+        })?;
+        assert_eq!(count, 1);
+        Ok(())
     }
 
     #[test]

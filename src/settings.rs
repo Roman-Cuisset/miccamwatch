@@ -27,6 +27,16 @@ pub enum PrivacyProfile {
     Balanced,
 }
 
+impl PrivacyProfile {
+    pub fn assessment_profile(self) -> crate::config::Profile {
+        match self {
+            Self::Private => crate::config::Profile::Strict,
+            Self::Development => crate::config::Profile::Conservative,
+            Self::Meeting | Self::Balanced => crate::config::Profile::Balanced,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
@@ -67,6 +77,12 @@ impl Settings {
         update_at(&settings_path()?, change)
     }
 
+    /// Validate against the latest values while holding the existing stable
+    /// settings lock. A rejected change never replaces the persisted file.
+    pub fn update_checked(change: impl FnOnce(&mut Self) -> Result<()>) -> Result<Self> {
+        update_checked_at(&settings_path()?, change)
+    }
+
     pub fn notifications_paused(&self) -> bool {
         self.pause_notifications_until
             .is_some_and(|until| until > Utc::now())
@@ -85,6 +101,16 @@ fn load_at(path: &std::path::Path) -> Result<Settings> {
 }
 
 fn update_at(path: &std::path::Path, change: impl FnOnce(&mut Settings)) -> Result<Settings> {
+    update_checked_at(path, |settings| {
+        change(settings);
+        Ok(())
+    })
+}
+
+fn update_checked_at(
+    path: &std::path::Path,
+    change: impl FnOnce(&mut Settings) -> Result<()>,
+) -> Result<Settings> {
     fs::create_dir_all(path.parent().context("settings path has no parent")?)?;
     let mut options = fs::OpenOptions::new();
     options.read(true).write(true).create(true).truncate(false);
@@ -102,7 +128,7 @@ fn update_at(path: &std::path::Path, change: impl FnOnce(&mut Settings)) -> Resu
         .context("cannot open settings lock")?;
     lock.lock().context("cannot lock settings")?;
     let mut settings = load_at(path)?;
-    change(&mut settings);
+    change(&mut settings)?;
     save_at(&settings, path)?;
     Ok(settings)
 }
@@ -267,6 +293,62 @@ mod tests {
         assert!(saved.sound_enabled);
         assert_eq!(saved.profile, PrivacyProfile::Meeting);
         assert!(!saved.history_enabled);
+        fs::remove_file(&path).unwrap();
+        fs::remove_file(path.with_extension("lock")).unwrap();
+    }
+
+    fn isolated_path(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "mcw-settings-{label}-{}-{}.toml",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+    }
+
+    #[test]
+    fn checked_rejection_does_not_replace_file_or_leave_the_lock_owned() {
+        let path = isolated_path("checked");
+        let original = "# User comment must survive a rejected write\nnotifications_enabled = false\nsound_enabled = true\nhistory_enabled = false\nmute_on_lock = true\nblock_camera_on_lock = true\nrestore_on_unlock = false\nprofile = \"meeting\"\n";
+        fs::write(&path, original).unwrap();
+        let rejected = update_checked_at(&path, |settings| {
+            settings.history_enabled = true;
+            anyhow::bail!("stale expectation")
+        });
+        assert!(rejected.is_err());
+        assert_eq!(fs::read(&path).unwrap(), original.as_bytes());
+        let saved = update_checked_at(&path, |settings| {
+            anyhow::ensure!(!settings.history_enabled);
+            settings.history_enabled = true;
+            Ok(())
+        })
+        .unwrap();
+        assert!(saved.history_enabled);
+        let stored = load_at(&path).unwrap();
+        assert!(stored.history_enabled && stored.sound_enabled);
+        assert!(!stored.notifications_enabled && !stored.restore_on_unlock);
+        assert!(stored.mute_on_lock && stored.block_camera_on_lock);
+        assert_eq!(stored.profile, PrivacyProfile::Meeting);
+        fs::remove_file(&path).unwrap();
+        fs::remove_file(path.with_extension("lock")).unwrap();
+    }
+
+    #[test]
+    fn checked_change_never_replaces_an_invalid_store_with_defaults() {
+        let path = isolated_path("invalid");
+        let original = "history_enabled = \"not a boolean\"\n";
+        fs::write(&path, original).unwrap();
+        let called = std::cell::Cell::new(false);
+        let result = update_checked_at(&path, |settings| {
+            called.set(true);
+            settings.notifications_enabled = false;
+            Ok(())
+        });
+        assert!(result.is_err());
+        assert!(!called.get());
+        assert_eq!(fs::read(&path).unwrap(), original.as_bytes());
         fs::remove_file(&path).unwrap();
         fs::remove_file(path.with_extension("lock")).unwrap();
     }

@@ -4,6 +4,13 @@ This guide covers the **published stable v0.21.0** packages, including Linux ARM
 
 [Documentation index](README.md) · [Usage and safety](USAGE.md) · [Signing and safe incident handling](SIGNING.md)
 
+For the v0.22.0 candidate, use the complete hybrid package and the upgrade
+path for its installation type. The channel and download links below remain
+on the public v0.21.0. The candidate uses different asset names and the
+v0.21.0 Unix installer expects the old archive layout.
+[Candidate installation and rollback](HYBRID_DISTRIBUTION.md#opérations) ·
+[Windows MSI recovery](WINDOWS_MSI_MAINTENANCE.md).
+
 ## Choose the right package
 
 Use the [official website](https://miccamwatch.pages.dev/#installer), [stable v0.21.0 release](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.21.0), or [latest stable release](https://github.com/Roman-Cuisset/miccamwatch/releases/latest). All links in this table pin the published 0.21.0 assets.

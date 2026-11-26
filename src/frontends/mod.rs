@@ -1,4 +1,6 @@
 pub mod cli;
+#[cfg(feature = "flutter-desktop")]
+pub mod desktop;
 #[cfg(windows)]
 pub mod tray;
 #[cfg(any(target_os = "linux", target_os = "macos"))]

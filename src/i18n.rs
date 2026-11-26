@@ -265,6 +265,23 @@ impl Language {
         }
     }
 
+    #[cfg(unix)]
+    pub(crate) fn notification_queue_full(&self) -> &'static str {
+        match self {
+            Self::Fr => {
+                "La file des notifications est pleine. Certaines alertes peuvent être omises."
+            }
+            Self::De => "Die Mitteilungswarteschlange ist voll. Einige Hinweise können ausfallen.",
+            Self::Es => {
+                "La cola de notificaciones está llena. Es posible que se omitan algunas alertas."
+            }
+            Self::Ja => "通知キューがいっぱいです。一部の通知が省略される場合があります。",
+            Self::Zh => "通知队列已满。部分提醒可能被省略。",
+            Self::Ru => "Очередь уведомлений заполнена. Некоторые оповещения могут быть пропущены.",
+            Self::En => "The notification queue is full. Some alerts may be omitted.",
+        }
+    }
+
     pub fn microphone_status(&self, state: crate::model::MicrophoneMuteState) -> &'static str {
         use crate::model::MicrophoneMuteState::{Mixed, Muted, Unavailable, Unmuted};
         match (self, state) {

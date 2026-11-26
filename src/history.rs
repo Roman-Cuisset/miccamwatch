@@ -12,6 +12,9 @@ use windows::{
     core::w,
 };
 
+mod reader;
+pub use reader::{HistoryBrowser, HistoryEntry, HistoryPage};
+
 // The CLI and tray may write/rotate/clear the same JSONL files concurrently.
 #[cfg(windows)]
 struct HistoryLock(HANDLE);

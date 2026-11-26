@@ -177,3 +177,109 @@ There is no script-level failure cleanup: do not add an `always()` uninstall/pro
 ### Shared implementation dependencies
 
 The orchestrator depends on shared `Get-McwStandardUserContext`, `Assert-McwStandardUserContext`, `Assert-McwFixtureRoot`, and `Assert-McwDisposableFixtureHost`, returning `kind`, `standardUserContext` and `fixtureRoot`. The native and installed application consumers propagate explicit local flags/root without changing the runner route. Runner mode confines paths to real `RUNNER_TEMP`; local mode confines source/payload/Cargo/proof paths to the admitted guest root. Neither this implementation nor the read-only safety smoke proves that a guest exists or that full Windows standard-user qualification has passed.
+
+## MSI hybride v0.22.0 sur un poste de test jetable
+
+Utiliser la procédure de préparation de la VM ci-dessus et ouvrir une session
+interactive sous le compte local standard `mcw_qa_*`. Vérifier que la
+politique Windows Installer existante autorise les installations par
+utilisateur. Placer le MSI, le dossier `bundle` contenant le manifeste et le
+checkout qualifié sous la racine de test détenue par ce compte. Relever le SHA
+du MSI depuis les preuves de construction. Depuis ce checkout, exécuter ce
+script dans Windows PowerShell sous le jeton standard.
+
+```powershell
+.\installer\tests\windows-hybrid-install.ps1 `
+    -LocalDisposableVm -FixtureRoot 'C:\mcw-fixture' `
+    -Candidate 'C:\mcw-fixture\artifacts\miccamwatch-hybrid-windows-x86_64.msi' `
+    -Proof 'C:\mcw-fixture\proof-v022' -SourceRevision $PackageCommit `
+    -ExpectedMsiSha256 $AuditedMsiSha256
+```
+
+`$PackageCommit` est la révision intégrale du manifeste.
+`$AuditedMsiSha256` est l’empreinte consignée par le job de construction.
+Le script vérifie le profil, l’Explorateur et le bureau interactif avant
+installation. Il refuse les chemins préexistants, les liens, les produits
+présents et une politique MSI restrictive. Le reçu couvre le cycle
+d’installation et la fermeture de Flutter. Les prompts UAC doivent faire
+l’objet de leurs propres observations et ne sont pas inclus dans ce reçu.
+
+### Cas interactifs et contrôle de l’enregistrement
+
+Préparer un point de contrôle de VM après l’installation de Windows x64,
+avec UAC et la politique MSI ordinaires. Utiliser un compte administrateur
+séparé, une session Explorer visible pour le compte standard et aucun accès
+aux fichiers de l’hôte. Enregistrer le SHA du paquet, l’édition et
+la build Windows, puis conserver chaque journal avant restauration du
+point de contrôle. Si `DisableMsi` empêche l’installation, classer
+impossible sur cette image et conserver le résultat. Ne pas changer la
+politique ou les permissions.
+
+1. **Témoin.** Exécuter le parcours par utilisateur dans la session standard.
+   Vérifier installation v0.21.0, upgrade v0.22.0, intégrité des fichiers, IPC 10,
+   autostart volontaire, désinstallation et conservation des données. Consigner
+   si aucun dialogue UAC n’apparaît. Pour les parcours visuels qui suivent,
+   lancer `msiexec.exe /i "<paquet vérifié>" /l*v "<journal neuf>"` sans `/qn`.
+2. **Panne injectée.** Exécuter le banc d’essai sur un point de contrôle
+   neuf. La fixture introduit une erreur contrôlée après `RemoveExistingProducts`.
+   Faire un passage depuis v0.21.0, puis repartir du point de contrôle
+   initial avec un dossier de preuve différent et ajouter
+   `-HybridRollbackOnly` pour provoquer la panne après l’installation de
+   v0.22.0.
+   Relever le code MSI, les ProductCode de l’ancien et du nouveau produit,
+   l’UpgradeCode commun et le SID du compte. Rechercher les écritures de
+   registre refusées et les restaurations depuis `.rbf`. Comparer les empreintes
+   des exécutables et des ressources avant/après, vérifier le raccourci,
+   les réglages, l’historique et l’autostart.
+
+   Pour lire indépendamment l’enregistrement, poser dans la console
+   standard les deux points d’arrêt PowerShell ci-dessous avant de
+   lancer le script. Au premier arrêt, le produit à restaurer est
+   installé. Au second, MSI a exécuté la restauration. Garder la
+   session standard ouverte, basculer vers le compte observateur,
+   relever l’état, puis revenir et saisir `c` dans le débogueur
+   PowerShell. Si le script échoue avant le second point, relever l’état
+   immédiatement et conserver le journal.
+
+   ```powershell
+   $FixtureScript = Resolve-Path .\installer\tests\windows-hybrid-install.ps1
+   Set-PSBreakpoint -Script $FixtureScript -Command Copy-FailingFixture,Check-Rollback
+   ```
+
+3. **Annulation MSI.** Revenir au point de contrôle avec v0.21.0 installé.
+   Si l’interface affiche une étape de confirmation, annuler depuis
+   cette étape. Relever le code 1602 s’il est renvoyé et vérifier
+   l’état ancien par comparaison avec le témoin. Si l’opération ne laisse
+   aucune étape annulable, consigner ce résultat distinctement.
+4. **Refus UAC.** Employer un chemin produit qui demande réellement
+   l’élévation et relever l’opération affichée. Refuser sur le bureau
+   sécurisé, sans saisir d’identifiants. Vérifier le code réel et
+   l’absence de changements de fichiers, données, autostart et enregistrement.
+   Le parcours ordinaire par utilisateur peut ne présenter aucun prompt.
+   Une demande lancée par un autre programme ne qualifie pas MicCamWatch.
+5. **Redémarrage.** Si le journal ou le code MSI 3010/1641 indique un
+   redémarrage, conserver le premier reçu, redémarrer uniquement la VM et
+   répéter les vérifications du produit et du parcours de retrait. Consigner
+   « aucun redémarrage demandé » lorsque le scénario réussit sans ce signal.
+
+Pour chaque point de contrôle pertinent, laisser le profil standard chargé
+et ouvrir le compte administrateur séparé dans la même VM. Utiliser ce
+compte pour l’observation uniquement. Charger les fonctions en lecture
+seule et interroger les deux ProductCode pour le SID du compte qui a fait
+l’installation. Le script interroge Windows Installer en contexte
+`MSIINSTALLCONTEXT_USERUNMANAGED`, lit le paquet enregistré dans le cache et
+vérifie l’index `UpgradeCodes` du profil. Conserver le code de retour brut
+de chaque propriété.
+
+```powershell
+. .\installer\tests\windows-hybrid-registration.ps1
+Get-McwMsiRegistration $OldProductCode $StandardSid | ConvertTo-Json -Depth 8
+Get-McwMsiRegistration $NewProductCode $StandardSid | ConvertTo-Json -Depth 8
+```
+
+Le profil standard sert à vérifier les fichiers et ses données applicatives.
+Une entrée dont Windows Installer ne reconnaît plus l’état installé est
+un échec de restauration, même si le CLI redémarre. Un retour
+`ERROR_ACCESS_DENIED` (`5`) du lecteur est une observation non concluante.
+Pour le contexte non géré d’un autre compte, l’API ne peut pas confirmer
+une entrée publiée mais non installée. [MsiGetProductInfoExW](https://learn.microsoft.com/en-us/windows/win32/api/msi/nf-msi-msigetproductinfoexw).

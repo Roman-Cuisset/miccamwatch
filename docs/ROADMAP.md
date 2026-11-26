@@ -1,5 +1,19 @@
 # Roadmap technique MicCamWatch
 
+> **Étape 4 terminée le 26 novembre 2026.** Voir la
+> [consolidation de l’étape 4](HYBRID_STAGE4_CONSOLIDATION.md) et le
+> [transfert Codex](HYBRID_STAGE4_CODEX_HANDOFF.md). Les limites matérielles
+> décrites y sont acceptées par le propriétaire pour v0.22.0 ; elles ne
+> constituent pas à elles seules un blocage de publication. Les défauts
+> critiques restent bloquants. Les entrées historiques ci-dessous conservent
+> leurs dates et leurs révisions.
+
+> **Étape 5 terminée le 26 novembre 2026.** La candidate v0.22.0
+> `de90a76` est qualifiée et son lot est archivé. La stable publiée reste
+> la v0.21.0. [Rapport de qualification](HYBRID_STAGE5_RELEASE_CANDIDATE.md).
+
+> **Point de reprise du 16 novembre 2026.** La parité fonctionnelle de l’étape 2 est qualifiée sur le code `945d69c`. Voir les [reçus de la qualification fonctionnelle](V0.22.0_PARITY_AUDIT.md#qualification-etape-2).
+
 Dernière mise à jour : **2026-10-24**. Responsable : lead architecture/développement.
 Base publiée : [v0.20.0 stable/latest](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.20.0), source `a26522028eafe02591f58c03ceb5c367f2d5d60b`, tag annoté `547f6185a0579876041d1ae7ebcdd6feccdcb5cf`, releaseID 420936561, publiée le 22/10 à 16:13:39Z. [Release native 39807585260](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/39807585260) réussie : neuf assets publics taille/digest API, huit entrées SHA256SUMS et huit sujets de provenance signée SLSA v1 vérifiés ; Windows EXE/MSI non signés, macOS ad-hoc.
 
@@ -2482,3 +2496,1639 @@ Lots futurs **à approuver, aucun correctif appliqué** :
 - Une future installation globale `cargo install --path .` pourrait recréer un doublon dans `.cargo\bin`; préférer les builds/worktrees de développement et les chemins explicites.
 - Les anciennes sauvegardes Cargo, `target/`, les exports et les données Wrangler restent à nettoyer seulement après accord séparé. Ne pas supprimer les journaux de restauration ni les locks.
 - La refonte graphique 0.21.1 n'est pas commencée ; les simplifications Python/Swift/CI documentées ci-dessus restent des travaux futurs.
+
+## 2026-10-27 — Première intégration hybride réelle0.21.1, Windows en lecture seule
+
+- **Décision du propriétaire : architecture hybride retenue.** Ne pas recommencer l'étude ni réécrire le moteur. Branche locale **`work/flutter-hybrid-0211`**, worktree **`%LOCALAPPDATA%\Temp\mcw-flutter-hybrid-0211`**, base `origin/main` **73369abda09bdadce8c779a9559b3e2334a32ecb** vérifiée. Flutter réutilisé depuis l'expérience **b8e1d7f/54e70f6**, sans fusion des prototypes ni anciens résultats simulés.
+- **Tranche délimitée :** feature Rust opt-in `flutter-desktop`, DTO de lecture version1 borné/whitelisté, pipes anonymes privés hérités avec allowlist de handles, enfant suspendu contenu dans un Job Object avant exécution, fenêtre unique jetable et coalescence des seuls instantanés de présentation. Aucun message de mutation/protection/settings ni serveur réseau. Collecteurs/permissions/restauration/historique/CLI/tray/notifications restent Rust. Les fenêtres natives et leurs fonctions restent présentes, dont une entrée explicite de contrôles natifs pour le tray compilé avec la feature.
+- **Qualification hôte prévue sans remplacer le MSI :** `mcw-tray --read-only-development` compile un vrai tray/PlatformMonitor dans un singleton de développement distinct, sans worker de contrôle, reprise de garde, automatisme de verrouillage/restauration, notification ou écriture de préférence/historique. Ce n'est pas une namespace opérationnelle alternative autorisée à modifier le matériel. États de protection consultés uniquement par les API passives existantes.
+- Fichiers : `src/frontends/desktop.rs`, `src/frontends/desktop/windows.rs`, raccords `tray.rs` / `tray/windows_observer.rs`, feature/Cargo/mod et lanceur `mcw-tray`; `desktop/flutter/` reprend la présentation Flutter en remplaçant toutes les lignes fictives par le vrai protocole. État observé, couverture, confiance, application disponible, diagnostic et état demandé/réel/service restent distincts ; absence de donnée et panne ne deviennent pas « sûr ».
+- **Vérifié à ce checkpoint :** build Rust de vérification passé après correction de l'appel Win32 `TrackPopupMenu`; analyse Flutter sans problème, **7tests de protocole passés**, build Windows release/AOT réussi. Clippy a relevé deux avertissements de style corrigés ; la revalidation Rust et la construction release sont en cours. **Pas encore de succès de bout en bout ou de chiffres de performance réelle revendiqué.** Avertissement MSBuild8029 lié au répertoire Temp conservé.
+- [Contrat, sécurité et matrice de migration](FLUTTER_INTEGRATION.md) : réglages, commandes sensibles, historique et autres plateformes non migrés dans cette tranche ; interfaces natives sept langues préservées. Libellés Flutter de base en sept langues, textes techniques du moteur conservés ; pas de parité linguistique complète certifiée. Linux/macOS/runners Flutter non compilés à ce stade ; ARM physique/Intel et packaging futur restent à qualifier.
+- **Point de reprise :** terminer builds/tests Rust, lancer le préfixe isolé à manifeste/SHA exact avec le mode de lecture, vérifier image réellement reçue + arrêt de Flutter + compteur d'observations avançant fenêtre fermée, répéter les cycles, profiler création/moteur/Dart/IPC/première image et mesurer mémoire. Le build Flutter release à rendu par défaut est conservé hors dépôt pour un avant/après honnête, sans moteur résident.
+- Preuves et empreintes privées hors dépôt : **`%LOCALAPPDATA%\MicCamWatchQualification\flutter-hybrid-0211-20261027`**. Empreintes seules des préférences/historique/intentions, sans export de contenu privé ; inventaire du journal caméra protégé refusé par Windows, aucune élévation ou tentative de contournement. Aucun push/main/tag/release/site/installation personnelle autorisé ou effectué.
+
+### 2026-10-27 — Checkpoint réel, profilage et qualification en cours
+
+- Sauvegarde locale initiale **864bbb8**, aucun push. Rust Clippy avec `-D warnings`, les **14tests ciblés du bridge** et les deux binaires release ont réussi. Flutter : analyse, **7tests**, build Windows release/AOT réussis. Nouvelle passe Rust en cours après mise en forme des seuls nouveaux modules et ajout d'un refus sûr du mode de lecture quand la feature n'est pas compilée.
+- **Première exécution réelle réussie :** fenêtre Flutter alimentée par `PlatformMonitor`, applications réellement observées, couverture/confiance et protections passives affichées séparément. Capture claire examinée, sans débordement au DPI125%. Aucun bouton de protection ou de réglage fictif.
+- **Référence par défaut terminée :** trois essais indépendants, douze ouvertures/fermetures au total, un processus Rust fenêtre fermée, deux ouverte ; progression du compteur de collecte après fermeture et sortie de tous les PID de chaque essai. Le temps de création du moteur Flutter domine le démarrage ; les horloges enfant/parent sont distinguées.
+- **Essai Skia Windows :** API officielle `DartProject::set_impeller_switch(Disabled)`, sans préchauffage ni moteur résident. Deux essais complets ont également passé activation répétée de la fenêtre visible, arrêt forcé du seul enfant graphique, collecte Rust continuée et réouverture, puis arrêt du parent avec enfant ouvert sans orphelin. Le troisième essai a été **rejeté**, pas validé : ouverture inattendue pendant l'intervalle de mesure « fermé ». L'origine de cette activation n'est pas établie ; ajout de marqueurs de source des demandes d'ouverture avant qualification finale. Conserver `skia-repeated/qualification.json`, y compris cet échec.
+- **Défaut du harnais corrigé :** il cherchait le titre d'un HWND caché, effectivement vide ; identification désormais par classe + PID, avec nettoyage du seul processus épinglé en cas d'échec du constructeur. Le premier essai incorrect est conservé, pas présenté comme un défaut du tray.
+- `desktop/qualification/windows.py` vérifie un manifeste/SHA du préfixe isolé, refuse le binaire stable connu, mesure mémoire privée/RSS/USS/CPU, capture uniquement le HWND possédé et vérifie les PID à l'arrêt. Les mesures ne comptent ni mémoire GPU ni DWM ; pas de conclusion sur l'absence de fuite à long terme.
+- Logo Flutter générique remplacé dans le runner Windows par la copie strictement identique de l'icône officielle `installer/miccamwatch.ico` (neuf résolutions) ; aucun installateur modifié.
+- **Prochain point :** terminer les vérifications Rust, reconstruire le runner final, répéter les mesures Skia avec traces d'activation, inspecter les captures sombre/diagnostics, vérifier les empreintes des fichiers privés et du MSI stable, puis consigner le bilan et les commandes reproductibles. Ne pas passer aux commandes sensibles/réglages/autres plateformes sans validation du propriétaire.
+
+### 2026-10-27 — Tranche Windows réelle terminée, arrêt avant migration complète
+
+- **Sources runtime sauvegardées et qualifiées : `743f5115dfa923404b3fbdd0427e86c1f28b0f27`.** Nouvelle passe Clippy `-D warnings`, 14tests Rust ciblés et builds release des deux binaires réussis. Chemin natif sans feature : Clippy et build réussis ; refus du flag de développement réellement observé avant tout lancement opérationnel, sortie2 après fermeture de son dialogue.
+- **Qualification finale réelle passée :** trois essais indépendants, chacun avec quatre cycles ordinaires, activation répétée sans doublon, crash du seul enfant graphique, collecte continuée, réouverture et arrêt du parent avec enfant ouvert sans orphelin. Série sombre séparée passée ; captures claire/sombre et navigation Diagnostic réellement examinées au DPI125%. Le processus Rust revient à neuf threads après fermeture, contre onze avec le bridge ouvert.
+- **Optimisation Windows conservée :** chemin Skia via l'API Flutter officielle, moteur toujours terminé à fermeture. Gain des médianes mesuré avant/après, mais un cas lent persiste dans la création du moteur. Chiffres, méthode, tailles, CPU, plages et limites dans [le bilan de première tranche](FLUTTER_0.21.1_FIRST_SLICE.md), pas de promesse « instantané ».
+- **Échecs conservés et distingués :** mauvais identifiant HWND initial du harnais corrigé ; activation inattendue dans une série préliminaire restée sans cause établie, série exclue des comparatifs. Les trois essais finaux instrumentés ne montrent que les activations attendues. Le dossier initialement nommé `final-dark` est en réalité un essai clair ; seule la capture de `final-dark-verified` prouve le sombre. Compatibilité du manifeste UTF8 avec/sans BOM PowerShell vérifiée par la série finale.
+- **Préservation mesurée :** exécutables MSI, préférences, intention micro et journal caméra utilisateur inchangés par SHA-256 ; tray stable d'origine toujours actif. Historique agrandi, mais tous les octets antérieurs conservés et vérifiés par le hash du préfixe initial. Pas d'écriture d'historique dans ce mode de développement. Journal ProgramData non lisible : ne pas prétendre l'avoir vérifié. Aucun UAC, changement de protection, installation ou désinstallation.
+- **Reproduction et limites :** [contrat et commandes](FLUTTER_INTEGRATION.md), préfixe complet `final-runtime` et preuves sous `%LOCALAPPDATA%\MicCamWatchQualification\flutter-hybrid-0211-20261027`. Captures hors Git car elles contiennent des noms/PID d'applications réels. Le moteur est réel mais supplémentaire et en lecture seule, pas une connexion au MSI ; le raccord opérationnel n'est pas lancé ici.
+- **À préserver pour la suite :** réglages/contrôles/historique et interfaces natives toujours présents ; pas de parité linguistique exhaustive certifiée. Windows10, autres DPI/GPU, Linuxx64/ARM64, macOS Intel/Apple Silicon et ARM physique non qualifiés par cette tranche. Packaging/mises à jour et sécurité des futures commandes restent des gates distinctes.
+- **Point d'arrêt demandé :** présenter le bilan, les mesures et les captures au propriétaire ; **attendre son accord avant réglages, commandes sensibles ou autres plateformes**. Aucun push, fusion main, tag, release, déploiement ou remplacement du MSI. `main`/`origin/main` locaux restent sur73369ab ; tag v0.21.0 et huit worktrees conservés.
+
+## 2026-10-27 — Flutter interactif, étape A en cours
+
+- Validation du propriétaire : hybride conservé, interface commune visée, **livraison actuelle limitée à l'étape A**. Branche `work/flutter-hybrid-0211`, reprise propre surb5cf391 ; main73369ab, huit worktrees et stash conservés. Aucun push/main/tag/release/installateur autorisé.
+- [Inventaire exhaustif CLI/tray/Win32/GTK/AppKit](FLUTTER_MIGRATION_MATRIX.md), sourcé surb5cf391 : prise en charge et limites natives, confirmations, réglages, profils, historique, notifications, maintenance et logos. Gaps à ne pas maquiller : pas de navigateur/export d'historique natif, show_ready persisté mais non consommé, pas d'alertes de capture/sons réellement câblés dans le tray Windows. Ne pas créer de nouveaux pouvoirs de blocage pour combler une case.
+- [Contrat de commandes version2](FLUTTER_COMMANDS_STAGE_A.md) : une seule action typée `set_microphone_protection`, booléen explicite, défi CSPRNG par enfant transmis uniquement par pipe privé, ID monotone, génération/intention attendues, confirmation distincte mute/release, une opération en cours, résultat conservé avec état effectif séparé. Pas de commande shell/chemin/périphérique arbitraire ni privilège nouveau.
+- Modules nouveaux préservés : admission portable `desktop/commands.rs`, client/panel Dart `lib/commands.dart`, sonde CPU par thread en lecture seule. Raccordement transport/DTO2 et worker natif en cours ; **ne pas supposer cette révision déjà compilée ni qualifiée**. Les sources de la tranche précédente et son préfixe exécutable restent disponibles.
+- Accord explicite reçu via le choix **« Test local contrôlé »** : données de développement isolées, pas de garde active, toutes les entrées initialement rétablies avant un bref cycle SDK mute/release ; arrêter si état initial/restauration non prouvable. Aucun changement du MSI, de ses données ou d'une protection active, aucune restauration manuelle de vieux journaux d'ownership. Le release Windows rétablit toutes les entrées actives, **ne restaure pas chaque valeur d'origine**.
+- CPU : inventaires processus répétés, signatures et moniteur sensoriel temporaire identifiés comme pistes, **pas encore de cause dominante mesurée**. Attente sensorielle500ms ne vaut pas500msCPU. La sonde de l'ancien PID28616 a constaté sa disparition et s'est arrêtée sans agir ; une mesure interrompue ne constitue pas un résultat. Ne pas diminuer les cadences ni introduire un cache de signatures par chemin/mtime.
+- Point de reprise : finir le raccord du worker Windows et du mode de développement contrôlé, décodage/fraîcheur/UI, puis compiler/tester et exercer un cycle réel réversible uniquement après préflight. Conserver interfaces natives/autres plateformes. Captures, CPU/RAM/latences et résultats seront consignés avant l'arrêt pour validation du propriétaire.
+
+### Étape A — raccord compilable et tests de contrat
+
+- Raccord du protocole2 au superviseur, au worker microphone existant et à Flutter réalisé ; compilation Rust `cargo check --features windows-tray,flutter-desktop --all-targets` et analyse Flutter réussies. **24tests Rust ciblés puis27tests Flutter réussis** ; deux cas additionnels de confirmation du readback ont depuis été ajoutés et restent à exécuter. Les échecs initiaux Flutter étaient des timers de fixtures non libérés avant les invariants du binding, corrigés sans annuler les opérations natives à la fermeture d'un panel.
+- Le nouveau mode explicite `--controlled-development` exige APPDATA/LOCALAPPDATA isolés sous le dossier de qualification et refuse un propriétaire matériel déjà actif. Le worker exige au premier geste un état entièrement rétabli/non demandé avant mutation. Le mode `--read-only-development` reste strictement sans commande ; aucun mécanisme caméra n'a été raccordé.
+- Logo latéral Flutter remplacé par la copie identique du PNG officiel ; ICO Windows déjà identique à la source officielle. Assets et identités Flutter macOS/Linux encore non qualifiés/non unifiés ; pas de changement des installateurs.
+- **CPU réellement mesuré sur60s, Flutter absent :47,79% d'un cœur**, dont47,71% sur un seul thread non principal ; le thread principal consomme0,026%. Sonde de chemins de collecte (5tours) : microphone≈31,25msCPU, caméra≈968,75msCPU, les deux≈1015,63msCPU en médiane. Les collecteurs restent sains dans cette série, sans changer la cadence de production. Le coût dominant est dans le chemin caméra ; signatures/modules et activité sensorielle restent à départager, pas de cache risqué ajouté.
+- Prochain point : conserver ce checkpoint, finir l'attribution CPU, compiler le runtime final, exercer l'interface réelle et le cycle micro autorisé avec restauration contrôlée et traces. **Pas encore de réussite matérielle ni de capture interactive de l'étape A revendiquée.**
+
+### Étape A — checkpoint de qualification avant rebuild graphique
+
+- Sources sauvegardées jusqu'à `a8f23e7` (précédents points `6c5494c`, `b499c78`, `96a787a`). **26tests Rust de contrat/readback, Clippy `-D warnings`, builds release Rust/Flutter et check sans feature Flutter réussis** ; 27tests Flutter déjà réussis. Aucun push ni installation.
+- Attribution CPU instrumentée temporairement :10collectes caméra, médiane registre/modules960,94msCPU ;20vérifications de signatures totalisent8531,25msCPU imbriquées dans9593,75msCPU registre/modules ; activité sensorielle médiane31,25msCPU/534,70msmur. Ne pas additionner les coûts imbriqués. Sondes temporaires retirées, source du collecteur restaurée à l'identique, aucune cadence/confiance modifiée ; le coût reste à optimiser séparément.
+- Préflight matériel réel :1entrée, SDK unmuted, aucune protection demandée/garde active ; collecteurs sains, deux pipelines caméra Ready seulement. Des commandes reçues par la fenêtre ont effectivement produit des readbacks `Muted`/`Unmuted` avec succès. **Ne pas considérer les essais automatisés comme terminés** : plusieurs captures initiales blanches/échec PrintWindow, gestes concurrents non attribués, cycles interrompus avant confirmation automatisée complète.
+- Rétablissement effectué par l'API native du préfixe isolé, confirmé à deux reprises sans interface ouverte ; aucun changement SDK spontané observé dans cet intervalle. Tous les processus de cette session contrôlée sont ensuite sortis normalement ; tray MSI9036 conservé. Journaux sous `%LOCALAPPDATA%\MicCamWatchQualification\flutter-commands-stage-a`.
+- Capture Windows.Graphics.Capture mono-image, limitée au HWND/PID possédé, compilée hors dépôt avec le crate Windows0.62.2 déjà disponible ; aucune capture du bureau ni dépendance de production ajoutée. Une vraie capture montre les commandes actives, mais les premières images blanches doivent être rejetées, pas présentées comme validation.
+- Défauts visuels constatés : dialogue excessivement large, corrigé par limite560pxlogiques et défilement ; icône Flutter toujours visible dans la barre de titre malgré un ICO source strictement identique à l'officiel. Prochaine étape : rebuild Flutter propre ciblé, vérifier la ressource réellement affichée, attendre une surface valide avant les gestes, terminer le cycle automatisé et les mesures. Ne pas migrer les autres commandes/plateformes.
+
+### Étape A — cycle interactif Windows réellement réussi
+
+- Runtime du cycle : Rust `a8f23e7`, UI reconstruite proprement sur `05d50ee`. SDK mute depuis Flutter confirmé (`requested=true`, `Muted`, garde active,1entrée), délai observé459ms ; fermeture réelle du processus Flutter, compteur d'observation430→435, seuls Rust/tray et sa garde native subsistent. Réouverture avec3demandes concurrentes : un seul enfant graphique, intention/garde conservées. Release distinct depuis Flutter confirmé (`requested=false`, `Unmuted`), délai observé411ms ; statut final garde arrêtée, SDK unmuted, caméra inchangée. Sortie normale de tous les PID possédés.
+- Preuves durables : `final-interactive-controlled-cycle.json`, `final-confirmed-muted-light.png`, `final-confirmed-released-dark.png` dans le dossier de qualification. Ces captures de HWND/PID montrent les vrais états, le logo officiel en titre/latéral et le dialogue compact ; aucune donnée simulée. Le nettoyage/rebuild local Flutter a éliminé l'ancienne ressource titre bleue malgré l'égalité préalable des ICO sources.
+- Captures : les images blanches et erreurs de capture antérieures sont conservées comme échecs d'outillage. La passe réussie maintient temporairement l'affichage requis pour son thread et restaure l'état précédent dans `finally`, sans modifier de réglage d'alimentation ni déplacer la souris globale. Ne pas confondre callback `ready`, rendu réellement capturable et état d'un écran inactif.
+- Précisions de sécurité en cours de finalisation : retour de release nommé explicitement unmute (pas “mute confirmé”) ; libellé des sept langues restreint à la santé des **sources de surveillance**, car des collecteurs sains ne prouvent jamais toutes les captures possibles. Contrat/valeurs backend inchangés. Recompilation et mesures finales restent à faire après ces seuls textes.
+
+## 2026-10-28 — Livraison Flutter A terminée, arrêt pour validation
+
+- **Sources qualifiées `34e4e94c170565ef18482280241f9efb4a59a283`**, branche locale `work/flutter-hybrid-0211`. [Bilan détaillé, limites, procédures et reçus](FLUTTER_STAGE_A_RESULTS.md). Les checkpoints `6c5494c`, `b499c78`, `96a787a`, `a8f23e7`, `05d50ee` et `34e4e94` préservent les étapes ; ne pas repartir du prototype ni réattribuer les anciennes mesures.
+- Reprise après interruption : aucun processus expérimental laissé ; le tray MSI a un nouveau PID2888, identifié par son vrai chemin, jamais par l'ancien PID9036. La dernière mesure interrompue n'était pas complète et n'est pas comptée. Aucun nouveau cycle matériel n'a été exécuté le28octobre.
+- **Validation finale :26tests Rust ciblés,27tests Flutter, analyse Flutter, Clippy `-D warnings`, builds release réussis.** Le refus réel d'un mode contrôlé hors périmètre isolé est confirmé, sortie2. Les erreurs de contrat/readback et de confirmation sont testées ; pas de conflit matériel ou refus UAC artificiellement créé.
+- **Mesures durables sur9ouvertures**, mode lecture seule, build34e4e94 : un enfant ouvert, zéro après chaque fermeture ; Rust/tray seul reste vivant. Premier protocole-ready944ms (un lancement), médiane des8réouvertures239ms (220–254), médiane de sortie du processus239ms. **Pas une mesure de premier raster réellement affiché** ; caches Windows non purgés.
+- RSS médiane Rust seul21,51Mio avant, Rust+Flutter133,55Mio ouvert, Rust22,54Mio après9fermetures ; commit privé respectivement3,92/117,26/4,21Mio. Somme RSS peut doubler des pages partagées, GPU/DWM non inclus. Passe distincte du worker contrôlé fermé, sans ordre :19,28MioRSS/4,00Mio commit, un processus. Payload Flutter25,34Mio ; CLI+tray+Flutter37,47Mio,15fichiers SHA-256 vérifiés.
+- CPU de cette passe≈10% d'un cœur (worker contrôlé fermé≈6,96%), mais **pas de correctif CPU revendiqué** : un seul pipeline caméra Ready aujourd'hui contre deux au diagnostic47,79%. Collecteurs, fréquence et confiance inchangés ; coût des signatures toujours à optimiser avec invalidations sûres, sans ignorer Ready ni cacher la confiance par chemin/mtime.
+- **Captures finales34e4e94 réellement affichées/examinées**, français125%/DPI120, clair et sombre : `qualified-controls-light.png`, `qualified-controls-dark.png`, reçu `qualified-controls-captures-20261028.json`. Contrôles réels activables, données natives, libellé « Sources de surveillance », logo officiel titre/latéral ; zéro commande matérielle durant cette passe. Le cycle réel SDK antérieur, avec fermeture/garde/réouverture/release, reste conservé avec ses révisions exactes.
+- Préservation finale : binaires MSI0.21.0 et6fichiers stables hors historique comparés identiques ; historique accru mais préfixe initial intact. SDK passif unmuted, demande/garde absentes ; seul le tray installé reste actif. Pas de modification caméra, permissions, autostart, PATH, installateur, site, branche publique ni autre worktree.
+- **Point d'arrêt obligatoire : attendre l'avis du propriétaire sur cette étape A.** Caméra, préférences, historique, maintenance, autres plateformes et packaging Flutter restent hors livraison ; interfaces natives conservées. Sept langues fournies mais pas toutes validées visuellement ; lecteur d'écran/clavier complets et100%/150% DPI à qualifier. Aucun push/main/tag/release/déploiement autorisé. Prochaine décision : traiter le coût CPU restant et choisir le lot de parité B, uniquement après accord.
+
+## 2026-10-28 — Après validation A : tranche B1 préférences en cours
+
+- Reprise propre sur `80d43c9`, code A `34e4e94` ; main/origin73369ab, tag et8worktrees/stash préservés. Le propriétaire valide A et autorise une tranche fonctionnelle suivante, **sans push ni test matériel modifiant micro/caméra**.
+- Périmètre B1 retenu : préférences natives notifications, sons, historique et profil d'évaluation ; sauvegarde conditionnelle sous le verrou stable existant, fusion des champs non concernés, valeurs enregistrées distinctes du profil réellement appliqué. Windows ne diffuse pas encore les alertes de capture/sons dans son tray : l'interface doit l'expliquer, sans transformer une préférence persistée en capacité opérationnelle.
+- Checkpoint WIP : nouveaux `desktop/preferences.rs`, `preferences_model.dart`, `preferences.dart` et tests, plus `compare_cpu.py`. Admission de l'enveloppe factorisée avec la voie micro ; compteurs/opération en cours séparés par voie, même défi privé possédé. `Settings::update_checked` permet le refus sans remplacer le fichier. Worker de persistance borné, indépendant de Flutter et non bloquant pour la boucle du tray. **Pas encore compilé ni raccordé en bout en bout.**
+- Protocole3 en cours de cutover propre : champ de préférences et événement typé supplémentaires, micro conservé ; aucun interpréteur de commandes arbitraires ou nouvelle autorité matérielle. Restent à raccorder superviseur, tray/observateur, mode de test settings-only isolé, DTO/fixtures et navigation Flutter. Ce mode ne doit créer aucun worker microphone ni reprise de protection.
+- CPU : audit confirme les limites d'un cache de verdicts de signature, même local à un snapshot ; un handle de fichier ne fige pas l'état de confiance Windows. Plus petit gain sûr proposé : ne pas charger l'inventaire processus sensoriel lorsque tous les rapports collectés sont vides, sans déplacer l'ordre d'identité des rapports non vides. Mesures AB/BA avec charge vérifiée identique à produire ; aucune baisse CPU revendiquée.
+- Préparation Unix : producteur/transport Flutter actuellement Windows-only, interfaces natives conservées ; profils et libération micro Unix ne doivent pas hériter de la sémantique Windows « tout rétablir ». Les workflows actuels qualifient les interfaces natives, pas Flutter. Plan de transport/authentification/packaging à documenter, sans port fictif ni validation ARM physique annoncée.
+- Prochain point : finir le raccord, vérifier les nouveaux modèles/contrats, tester CAS/erreurs/timeout/persistance dans les seules données isolées, puis compiler, exercer clair/sombre et mesurer à conditions comparables. Sources A/exécutables qualifiés conservés ; ne pas réexécuter leur cycle matériel.
+
+### B1 — raccord compilé, qualification réelle à poursuivre
+
+- Point de sauvegarde initial `65b5ae8`. Protocole3 raccordé Rust/Dart/C++ ; quatre préférences typées, CAS sous verrou stable, travail de persistance possédé par le tray et non par Flutter. Profil enregistré et profil réellement appliqué distincts. Mode `--settings-development` limité aux chemins de qualification, sans worker microphone ni reprise de protections.
+- Résultats de ce checkpoint : check/Clippy Rust avec `flutter-desktop`,42tests IPC et4tests de persistance réussis ; **ce flag seul ne compile pas le binaire tray, qui exige `windows-tray` : la qualification de celui-ci n'était pas établie ici**. Analyse Flutter et47tests réussis ; avertissement de cible de clic corrigé, puis20tests de préférences repassés sans avertissement. Build Flutter release réussi ; avertissement MSBuild MSB8029 lié au worktree sous Temp.
+- Petit gain CPU implémenté : inventaire processus sensoriel évité uniquement lorsque tous les rapports de la collecte courante sont vides. Ni cache de signature, ni cadence modifiée. **Pas encore de mesure comparative ni de résolution du coût CPU revendiquée.**
+- Prochain point : préfixes exécutables/manifeste SHA-256 isolés, vraie interface préférences clair/sombre, persistance/réouverture/attente du verrou, mesures AB/BA et préservation de l'installation stable. Aucun test matériel, push ou publication exécuté.
+
+## 2026-10-28 — Tranche B1 livrée : préférences réelles, limites CPU conservées
+
+- **Runtime qualifié `a0411ea80fd985c9aa319061c4ad3a1830880aeb`**, branche locale `work/flutter-hybrid-0211`. Checkpoints `65b5ae8` (WIP), `3a661e8` (intégration protocole3/préférences), `a0411ea` (inventaire sensoriel vide évité). [Contrat, résultats, commandes et préparation Unix](FLUTTER_PREFERENCES_B1.md) ; [matrice actualisée](FLUTTER_MIGRATION_MATRIX.md).
+- Quatre commandes de préférences depuis la **vraie fenêtre Flutter** : notifications, sons, futur enregistrement d'historique, profil d'évaluation. Sauvegarde native conditionnelle/fusionnée et relue ; profil enregistré distinct de celui réellement appliqué au collecteur. Profil Private puis Balanced réellement constatés dans les deux champs. Aucun nouveau pouvoir de blocage, aucune modification du sens de la libération micro.
+- Tests réels dans `--settings-development`, données dédiées sous `%LOCALAPPDATA%\MicCamWatchQualification\flutter-preferences-b1-20261028-142703` : refus d'écriture sur le seul fichier de test en lecture seule, octets/valeurs préservés et erreur UI explicite ; verrou stable maintenu, timeout UI incertain sans sauvegarde optimiste, collecte continuée ; fermeture/remplacement de Flutter sans annuler l'écriture, nouvelle session correctement bloquée jusqu'au résultat, réussite après déverrouillage. Toutes les préférences isolées initiales rétablies par Flutter, champs étrangers inchangés.
+- Gestes fiables via MSAA sur HWND/PID possédés, sans déplacer la souris globale. Captures réelles française125% : `preferences-restored-light.png`, `preferences-confirmed-dark.png`, examinées. Logos titre/latéral officiels. Sept langues couvertes par les widgets de réglages, **pas sept validations visuelles natives** ; lecteur d'écran/clavier complets et autres DPI restent à qualifier.
+- **Builds corrigés explicitement `windows-tray,flutter-desktop`** : check tous targets, Clippy `-D warnings`, build release des deux exécutables réussis. Variante native `windows-tray` seule : Clippy strict réussi. Dernière passe avec les deux features :42tests Rust desktop +4tests settings réussis. Flutter : analyse,47tests, build release réussis ;20tests préférences repassés après correction du geste de fixture. Aucun assouplissement de sécurité.
+- Échec d'outillage conservé : le premier packaging avait repris l'ancien tray A car `flutter-desktop` seul faisait ignorer sa cible Cargo. Pas de HWND/tick attendu ; préfixes exclus, manifests archivés, anciennes copies créées ici retirées après succès final (≈76,23Mio), bundle A et runtimes v3 conservés. Ne jamais préparer un manifeste à partir d'un binaire `target/` dont le build a ignoré la cible. Les premiers gestes synthétiques non fiables et une initialisation MSAA trop précoce ne sont pas comptés comme réussites ; leurs reprises fiables sont distinguées.
+- **CPU AB/BA apparié réellement réussi**, A34e4e94 contre B1a0411ea, deux tours,20s par intervalle fermé/ouvert, états CLI identiques aux bornes : un pipeline caméra Ready faible confiance, aucun micro actif observé, mêmes identités et collecteurs sains. Fermé :16,73→16,21% d'un cœur ; ouvert :19,04→16,37%. Deltas fermés +0,46 puis−1,50point : petit échantillon, **pas de gain CPU significatif ni résolution du coût dominant revendiqués**. Signatures toujours vérifiées, pas de cache par chemin/mtime, ordre d'identité/cadence conservés. Compteurs détaillés d'opérations non mesurés sur cette passe, anciennes sondes de signatures conservées séparément. Captures actives contrôlées, plusieurs applis et latence matérielle non testées, faute d'autorisation spécifique.
+- RAM du comparatif : RSS fermé20,73→20,66Mio ; ouvert131,05→135,25Mio. Commit privé fermé4,25→4,11Mio ; ouvert116,83→119,76Mio. Mémoire partagée/GPU non assimilés au commit. Voir le bilan pour USS et méthode.
+- Série B1 supplémentaire :6ouvertures/fermetures, un essai à3demandes concurrentes, un enfant ouvert et zéro après chaque fermeture. Premier protocole-ready541ms ;5réouvertures médiane562ms (504–619), sortie processus médiane423ms. **Pas une mesure du premier raster, ni un gain de lancement démontré sur A.** RSS avant/ouvert/après19,53/131,73/20,85Mio ; une sonde distincte après vraies écritures inclut le worker persistant :20,27MioRSS,5,12Mio commit privé, un processus. CPU19,26% de cette sonde non appariée non attribué artificiellement au worker. Bundle15fichiers38,22Mio, dont Flutter25,88Mio.
+- Préservation vérifiée :9fichiers accessibles de l'installation/données stables, binaires et hors historique identiques ; préfixe historique original conservé. Tray MSI2888 identifié par son vrai chemin toujours actif ; aucun processus de test restant. Aucun UAC, autostart/PATH, installateur, commande matérielle, suppression d'historique stable, push/main/tag/release/site.
+- Unix : plan de transport possédé, cycle de vie, restauration spécifique, logos/identités, sandbox/macOS15 et packaging documenté. Aucun port Flutter Unix ni nouvelle CI distante exécuté ; GTK/AppKit conservés. Aucune validation ARM physique revendiquée. Le raccord opérationnel Windows est compilé mais pas lancé sur le MSI du propriétaire ; la preuve réelle porte sur les préférences isolées.
+- **Point d'arrêt demandé : présenter B1 et attendre validation avant migration plus large/publication.** Priorités proposées : coût des signatures restant, pause/reprise des notifications et inspection/autostart à qualifier en isolation, détails devices/doctor ; caméra/lock et Unix après leurs gates propres. Ne pas inventer de navigateur/export historique ou de préférence langue/thème persistée absents du moteur.
+
+## 2026-10-29 — Tranche B2 en cours, checkpoint d’intégration
+
+- Reprise propre sur `4655f96`, main/origin73369ab, tag v0.21.0 inchangé,8worktrees et stash conservés. Le propriétaire valide B1 ; aucun push, installation stable ou test matériel autorisé.
+- Alertes Windows raccordées aux snapshots existants via politique de transitions/cooldown et worker natif borné ; master/pause/audio persistés relus au moment de la livraison. Identité `MicCamWatch.Qualification` distincte du MSI pour les seuls essais explicites TEST. Les rapports Submitted signifient acceptation WinRT, pas visibilité/audibilité prouvée.
+- Nouveau superviseur Flutter Unix et raccord du tray partagé Linux/macOS, IPC privé et préférences typées, matériel désactivé sur cette première voie ; modes de développement stricts avant initialisation opérationnelle. DTO créé seulement pour une fenêtre ouverte ; dernière observation native déplacée/conservée pour réouverture fraîche. GTK/AppKit conservés en fallback. **Unix non encore compilé ni exécuté à ce checkpoint.**
+- Runners Unix : logos officiels, produit visible MicCamWatch, activation possédée ; bundle macOS `desktop/MicCamWatch.app/Contents/MacOS/MicCamWatch`, Linux `desktop/miccamwatch_desktop` avec runtime complet. Entitlements/signature natifs inchangés. Aucun macOS accessible : code préparé, aucune compilation/validation Mac revendiquée.
+- Windows : check, Clippy strict,10tests notifications,42tests desktop et build release avec `windows-tray,flutter-desktop` réussis. Deux défauts Clippy initiaux corrigés sans assouplir la règle. Les messages de capacités Flutter sont maintenant neutres vis-à-vis de l’OS ; analyse/build graphique à refaire.
+- Profilage local opt-in ajouté (`MCW_COLLECTOR_PROFILE=1`, feature expérimentale) : scopes imbriqués snapshot, inventaire, microphone, caméra, signatures/WinVerifyTrust/signataire ; aucun verdict mis en cache ni cadence réduite. Première sonde API indépendante archivée, **pas encore de gain moteur revendiqué**. Prochain point CPU : profiler le vrai observer puis choisir une optimisation justifiée.
+- Linux disponible : WSL2 Kali x64, noyau6.6.87, WSLg X11/Wayland ; pas de SDK/dev libs initialement. Préparation strictement privée sans `apt install`, hooks système ou élévation : extraction des paquets vérifiés, SDK officiels à SHA-256. Un téléchargement fondé sur les index APT existants a reçu404 ; index privés authentifiés en préparation, aucun package système modifié.
+- Reprise : qualifier d’abord le mode Windows TEST sans Flutter, persistance/audio/erreurs et identité stable ; profiler CPU réel à charge appariée. Finir les outils Linux privés, compiler/corriger puis afficher/exercer le vrai frontend WSLg. Préserver les preuves B1, ne pas lancer le tray opérationnel sur les données stables, documenter limites Mac/ARM et publier uniquement un bilan B2 après qualification.
+
+### B2 — qualification locale et corrections de revue en cours
+
+- Point de sauvegarde précédent `27948eb`. Windows et Linux : analyse Flutter sans erreur, **47tests Flutter réussis sur chaque OS**. Build Flutter Windows release réussi ; MSB8029 lié au worktree Temp reste un avertissement d’outillage. Premier `cargo check --all-targets --features flutter-desktop` Linux réussi avant les corrections de revue ci-dessous ; avertissements préexistants des dépendances vendoriées conservés.
+- Outils Linux privés prêts sous `/home/roman/mcw-qualification/b2-20261029-082656` : Rust1.98.1 et Flutter3.47.8 officiels vérifiés SHA-256, paquets issus des index APT privés authentifiés, extraction seule. Aucun paquet/hook/configuration système installé. Build graphique Linux : dépendance MIME déjà installée réutilisée en lecture seule ; trois bibliothèques runtime absentes du sysroot privé ajoutées avec vérification SHA-256. Édition de liens encore à terminer, aucune interface Linux affichée à ce point.
+- Profil Windows réel, Flutter fermé,30s :28,92% d’un cœur,22,28MioRSS,42cycles et84vérifications WinVerifyTrust. Scopes **inclusifs, non additionnables** :4,578sCPU WinVerifyTrust,1,734s inventaire processus,8,781s snapshot complet. Cette charge diffère de B1 : pas de comparaison directe ni de gain revendiqué.
+- Optimisation ciblée ajoutée : snapshot frais `SystemBasicProcessInformation` sur Windows11 compatible, génération noyau unique pour réutiliser uniquement la date de naissance immuable d’un processus. Toute nouvelle date est confirmée par une seconde génération courante ; les arrivées/réutilisations non échantillonnées imposent le fallback Toolhelp. Aucun verdict signature/token/politique, chemin ou module en cache, aucune cadence réduite. Quatre tests initiaux réussis ; garde d’ascendance supplémentaire ajoutée après revue, tests/Clippy/build et mesures appariées à refaire avant qualification.
+- Revue Unix : six défauts démontrés traités dans le code (groupe possédé nettoyé avant reap, payload exécutable validé, ancêtres XDG épinglés, observateur stop-and-join, fallback natif sur échec avant ready, décès du parent indépendant de Dart). Correctifs et tests ajoutés par les agents, **pas encore compilés/exécutés**. macOS reste sans machine de compilation ; contrôle natif du parent préparé, aucune validation Mac revendiquée.
+- Premier essai de notifications TEST réel : Flutter absent, un seul processus, sortie propre ;2échecs WinRT `0x80070490`, donc **aucune remise réussie revendiquée sur cet essai**. Cause isolée par sonde native : pour un AUMID neuf, `Setting()` échoue avant le premier `Show`, puis le premier envoi officiel initialise le canal et permet sa relecture activée. Un toast TEST silencieux retrouvé dans l’historique du seul canal de qualification. Canal MSI lu uniquement pour disponibilité, jamais utilisé pour envoyer un test ; aucun raccourci/autorisation système modifié.
+- Correctif du premier envoi ajouté : seul le catalogue absent autorise la tentative officielle ; les autres erreurs/refus restent bloquants, et une disponibilité activée est exigée après cette initialisation. Pas encore de build/essai du worker corrigé à ce point. Prochaines preuves : notifications/pause/master/audio persistés et Flutter fermé, mesures CPU AB/BA, vrai affichage/IPC/cycle de vie Linux, puis matrice et bilan B2. Aucun push, merge, tag, déploiement, installation stable ou action matérielle.
+- Après corrections : Clippy Windows strict,5tests d’inventaire/générations,10tests notifications et build release des deux exécutables réussis ; **15tests du superviseur Unix réellement exécutés et réussis sur Linux**. Build Flutter Linux maintenant lié, mais installation du bundle refusée vers `/usr/local` : le cache CMake du premier configure incomplet a conservé son préfixe par défaut. Aucun droit élevé demandé ; remettre explicitement le préfixe sur le bundle privé avant la reprise, sans installation système.
+
+## 2026-10-29 — Tranche B2 livrée, arrêt pour validation avant B3
+
+- Branche locale `work/flutter-hybrid-0211` ; checkpoints `27948eb`, `d37c8e8`, puis `9aa4689`.
+  [Bilan B2 détaillé et limites](FLUTTER_B2_QUALIFICATION.md) ; [matrice de parité](FLUTTER_MIGRATION_MATRIX.md).
+  Aucun push, merge, tag, release, déploiement ni remplacement du MSI stable.
+- **Notifications Windows effectives dans Rust**, indépendamment de Flutter : mêmes snapshots de capture, transitions Active seulement,
+  cooldown30s, file bornée32, master/pause/audio persistés et relus avant livraison. Ready, répétitions et source incomplète ne créent pas de départ.
+  Erreurs et file indisponible restent visibles ; Submitted n'est pas une preuve de bannière affichée ou de son physiquement entendu.
+- Qualification isolée réelle : deux départs TEST remis Flutter fermé ; répétition immédiate supprimée ;
+  désactivation par la vraie fenêtre Flutter, persistance après redémarrage, réactivation et son sauvegardés/relus.
+  Pause/reprise par la CLI native vérifiées après redémarrage, Flutter fermé et collecte continuée.
+  Historique WinRT du seul canal TEST : sept entrées, dont deux demandes audio non silencieuses et cinq silencieuses.
+  Préférences privées remises à leurs valeurs initiales ; aucune commande matérielle B2.
+- Premier AUMID neuf : le préflight `Setting()` pouvait échouer avant le premier `Show`.
+  Correctif qualifié : seule l'absence du catalogue autorise la tentative officielle ; refus/politiques OS restent applicables,
+  et disponibilité relue après initialisation. Les messages opérationnels génériques gardent leur comportement B1.
+- **CPU Windows apparié**, builds release `27948eb` contre `d37c8e8`, deux tours AB/BA,20s par intervalle, mêmes états observés aux bornes :
+  Flutter fermé17,53→11,60% d'un cœur ; ouvert15,94→15,07%, mais deltas ouverts de signes opposés, donc gain ouvert non établi.
+  Une seule caméra Ready dans cette charge ; aucune latence de capture active ni plusieurs applis actives contrôlées revendiquées.
+- Optimisation : inventaire frais `SystemBasicProcessInformation` sur Windows11 compatible ; cache des seules dates de naissance
+  par PID/génération noyau, nouvelles naissances confirmées et fallback Toolhelp sur générations finales non échantillonnées.
+  Aucun cache de signature, jeton, chemin, module, verdict ou autorisation. Windows10 garde le chemin ancien, non mesuré ici.
+  Passe instrumentée séparée : inventaire12,87/14,91msCPU→0,45/0,22ms ; une vérification WinVerifyTrust par snapshot avant/après,
+  34/34 puis36/36 snapshots/vérifications par intervalle et cadence non réduite. Les signatures restent un coût important.
+- Mémoire Windows du comparatif : RSS fermé19,29→20,63Mio ; ouvert132,88→133,99Mio.
+  Sondes fonctionnelles distinctes : worker après remise TEST fermé26,86Mio ; réglages ouverts143,23Mio ; même owner après fermeture20,12Mio.
+  Ne pas mélanger ces modes en un seul benchmark. Bundle de qualification final Windows38,31Mio,15fichiers.
+- **Linux x64 réellement exécuté sous WSLg/X11** : même Flutter release, snapshots Linux réels dégradés/inconnus,
+  six ouvertures/fermetures sur les deux thèmes, demandes répétées réutilisant le même enfant, zéro Flutter après fermeture.
+  Première fenêtre X11 visible≈2,08s puis0,87–0,97s : mesure de fenêtre mappée, pas de premier raster.
+  Arrêt natif propre ; décès du parent jetable termine aussi un enfant explicitement suspendu via `PR_SET_PDEATHSIG`.
+  Captures Windows/français125% et Linux/anglais100% réellement examinées ; pas sept validations visuelles natives.
+- **Limite graphique Linux non masquée** : après stabilisation, llvmpipe logiciel confirmé,
+  fenêtre ouverte270,30–271,24MioRSS et39,09% d'un cœur ; fermée5,75Mio et1,20%, un processus, aucune bibliothèque Flutter dans Rust.
+  Ce n'est ni une validation Linux accéléré/Mint/Wayland physique ni une mesure du tray SNI opérationnel.
+  Aucune cadence, permission, règle ptrace, configuration GPU ou protection modifiée pour améliorer les chiffres.
+- Superviseur Unix renforcé après revue : groupe nettoyé avant reap, payload/ancêtres épinglés,
+  observateur stop-and-join, fallback natif sur échec avant Ready, parent surveillé indépendamment de Dart.
+  GTK/AppKit conservés. Sous macOS, monitor natif préparé mais suspendable avec tout le processus :
+  pas de garantie noyau équivalente à Linux. Aucun hôte/Xcode accessible, donc **aucun build/runtime/IPC/visuel/package macOS qualifié**.
+  Minimum effectif moteur/helper macOS15 conservé. ARM64 : préparation générique, aucune nouvelle compilation Flutter ni validation matérielle B2.
+- Vérifications finales : Clippy Windows strict natif seul et hybride,5tests générations,10tests notifications,42tests desktop,
+  builds release CLI/tray réussis ; Linux Clippy strict,49tests desktop dont15de confinement, build natif release réussi.
+  Flutter Windows/Linux : analyse sans erreur,47tests chacun, builds release réussis.
+  Cache CMake partiel corrigé vers un bundle privé ; garde `/usr/local` refusée par essai négatif avant installation, rebuild privé réussi.
+  Aucun paquet système installé : SDK/paquets vérifiés et extraits dans le répertoire de qualification.
+- Smoke final sur le code `9aa4689` : Windows trois cycles, activations concurrentes sans doublon, collecte continuée,
+  préférences privées identiques ; protocole-ready470/371/309ms dans ce seul essai.
+  Linux réutilisation de fenêtre, capture réelle, fermeture Flutter avec Rust vivant, puis arrêt natif exit0.
+  Bundle Linux final33,36Mio,14fichiers ; pas un package public final.
+- Préservation finale : binaires MSI, préférences stables et identité de notification installée identiques ; préfixe historique original conservé.
+  **Deux journaux d'intention stables ont évolué pendant la session**, auteur exact non établi ; verrou propriétaire actif non lisible.
+  Ils ont été laissés intacts, sans restauration forcée ni interruption du tray MSI/de son enfant.
+  Ne pas convertir ce contrôle en affirmation que tous les états de protection ou les neuf fichiers sont inchangés.
+  Les notifications TEST et leurs seules métadonnées créées ont été retirées après sauvegarde ; catalogue OS non modifié.
+  Un défaut de durée de vie COM du seul outil jetable de nettoyage a été corrigé, vérification finale lecture seule exit0.
+- Preuves privées : `%LOCALAPPDATA%\MicCamWatchQualification\flutter-b2-20261029-082656`
+  et `/home/roman/mcw-qualification/b2-20261029-082656`.
+  Conserver JSON/manifests, journaux et captures ; revue confidentialité avant toute diffusion de ces traces contenant chemins/processus.
+- **Point de reprise B3, après validation du propriétaire** : Linux accéléré/SNI et vraies interactions préférences ;
+  builds/exécution macOS Intel/Apple Silicon et Linux ARM64 ; contrats pause UI/autostart/diagnostics/historique.
+  Commandes caméra/lock, restauration individuelle des sourdines initiales et packaging/updater Flutter restent séparément à qualifier.
+  Aucun remplacement des anciennes interfaces ni annonce de parité complète, compatibilité ARM physique ou publication0.21.1.
+
+## 2026-10-30 — Tranche B3 en cours : pause sûre, Linux Mint et CI Flutter
+
+- Reprise vérifiée sur `570c40b`, arbre propre,8worktrees et stash conservés ; main/origin73369ab et tag stable inchangés.
+  Référence locale non destructive des binaires, préférences, journaux et identité native enregistrée sous
+  `%LOCALAPPDATA%\MicCamWatchQualification\flutter-b3-20261030-081807`.
+- Décision propriétaire : aucun Mac physique/manual ne sera disponible ni exigé comme condition bloquante.
+  Maximiser compilation, tests et exécution graphique automatisée des deux architectures sur runners ; chaque absence de preuve restera explicite.
+- Contrat B3 : protocole4 sans shim ; commandes `notification_pause` / `pause_30_minutes` et `resume`.
+  Comparaison sous verrou du timestamp natif exact observé, calcul serveur30min, sauvegarde/relecture de la vraie échéance ;
+  reprise ne réactive jamais le master notifications. Paramètres arbitraires et état optimiste interdits.
+- Quatre périmètres séparés : Linux/SNI/bundle, macOS/workflow, Flutter/7langues, inventaire CPU.
+  Optimisation candidate limitée au filtrage UTF-16 des noms DLL avant allocation, sans raccourcir l'énumération ni modifier les signatures.
+  Aucun gain B3 revendiqué avant mesures appariées.
+- Écart Linux démontré : binaire B2 Kali exige GLIBC2.39, donc pas de compatibilité Mint21/Ubuntu22.04 annoncée.
+  Préparation d'un vrai build Ubuntu22.04 x64 jetable avec audit ELF, bundle isolé et protocole Mint ; WSLg ne remplace pas le PC Mint.
+- **Autorisation supplémentaire reçue pour une branche CI B3 dédiée seulement**, après validation locale et contrôle des automatismes.
+  Aucune autorisation de push sur main, tag/release/site ou remplacement MSI. La CI publique actuelle ne contient pas encore ce frontend.
+  Pont manuel préparé dans CI existante vers workflow réutilisable ; aucun déclenchement push/PR/tag du nouveau workflow.
+- Inventaire Cloudflare API indisponible sans token dans cette session ; aucune connexion/condition contournée.
+  Prévention documentée : préfixe `[CF-Pages-Skip]` et marqueur `[skip ci]` sur le seul commit de tête envoyé,
+  pour omettre Pages et les workflows push, puis dispatch manuel B3.
+  [Cloudflare officiel](https://developers.cloudflare.com/pages/configuration/git-integration/github-integration/#skipping-a-build-via-a-commit-message) ;
+  [GitHub officiel](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/skip-workflow-runs).
+- Premiers contrôles Windows réussis : check tous targets, Clippy strict,46tests desktop et49tests plateforme, build Rust release.
+  Flutter : analyse sans erreur ;58tests réussis et un nouveau test clavier corrigé pour disposer son timer de fixture avant vérification,
+  puis cas ciblé réussi et build graphique release réussi. Ce n'est pas encore une validation des gestes réels pause/reprise.
+- Checkpoints locaux `3cf3a06` (contrat/UI pause) et `1fe5640` (filtrage DLL et compteurs) ; compilation/macOS/Linux encore à qualifier.
+  Parse Python, YAML manuel/read-only, scripts shell et fixtures natives vérifiés sans action matérielle.
+- Revue sécurité : ancien harness AppKit pouvait capturer tout l'écran si autorisé. L'appel B3 passe maintenant obligatoirement
+  `--no-screen-capture` ; seul le cache de vues possédées et la capture Flutter par windowID restent autorisés. Pas de capture globale.
+- Accès SSH existant identifié en lecture seule : Linux Mint22.2, GPU Intel HD520, compte propriétaire.
+  Session graphique encore à établir ; aucune connexion de bureau, installation ou permission modifiée.
+- Revue commandes confirmée : CAS/horloge serveur/session/rejeu/pending corrects ; portée des notifications corrigée dans les7langues.
+  Sous Windows, master/pause concernent aussi les notifications natives d'opération/erreur ; aucun mécanisme de livraison modifié.
+- Session Mint existante identifiée : X11 via XRDP/XFCE, réutilisable sans nouvelle connexion de bureau.
+  GLX rapporte explicitement llvmpipe/accélération non disponible ; ce relevé n'est pas encore une mesure du vrai enfant Flutter.
+  Ne pas présenter cette session comme un test Intel accéléré ni changer pilote/permissions pour contourner cette limite.
+- Checkpoint CI dédié préparé sur la base de code `48d0d70` ; sources relues et contrôles locaux conservés,
+  qualification macOS/Ubuntu hébergée encore non exécutée à ce point. Ne pousser que le ref CI autorisé avec les marqueurs d'exclusion.
+- Run CI manuel `41023711442` sur `9773a1b` : SDK officiels et versions validés sur les3runners, mais arrêt avant compilation :
+  composant `cargo-clippy` absent du toolchain exact. Correction de préparation : demander explicitement `components: clippy`.
+  Aucun build/test macOS ou bundle Linux réussi sur ce run ; les reçus not-completed sont conservés, pas convertis en succès.
+- Windows Flutter final :59tests réussis en une passe et build release réussi après correction des textes.
+  Premier clic Pause réel a bien sauvegardé l'échéance native ; confirmation accessible en cours, le harness initial cherchait
+  à tort des noms atomiques alors que MSAA regroupe les paragraphes et expose les champs sélectionnables via leur valeur.
+- Checkpoint B3 suivant : gestes Windows pause/reprise, maître désactivé, refus d'écriture et timeout/reconnexion réellement exercés.
+  Deadline native exacte conservée par CAS ; après fermeture, Rust seul soumet/supprime les événements TEST selon la pause persistée.
+  Tous les processus possédés sont terminés ; valeurs privées initiales restaurées, sérialisation LF au lieu de CRLF documentée.
+- Comparatif propre B3 `cpu-clean-9773` terminé :2tours AB/BA,60s par intervalle, charge et signatures comparables.
+  Fermé5,73→5,53% d'un cœur, ouvert8,46→8,00% avec deltas par tour ouverts de signes opposés ; RSS candidat20,77/138,36Mio.
+  Ne pas revendiquer un gros gain ni comparer directement aux11,60% B2 d'un autre contexte. Profilage instrumenté séparé terminé, analyse détaillée à suivre.
+- Run CI `41024851203` sur `fc941c0` : Rust/Flutter release et tests réussis sur Ubuntu22.04 et les deux Mac.
+  Ubuntu53desktop+5settings ; chaque Mac52desktop+5settings. Échec ultérieur de qualification conservé :
+  Linux : socket privé165octets, limite native104 non modifiée ; HOME imbriqué du harness corrigé et feuille privée raccourcie.
+  macOS : vrai entitlement `get-task-allow=true` injecté par Xcode ; Release désactive maintenant uniquement l'injection de base,
+  suivant la recommandation Apple, sans assouplir l'assertion ni le sandbox. Aucune réussite runtime Mac n'est encore affirmée.
+- ZIP des artefacts Mac ne préservait pas les liens de frameworks ; correction d'archivage tar natif, SHA256 et contrôle du sceau
+  après extraction préparée. Préparer les deux préfixes avant inspection conserve aussi le payload instrumenté en cas d'échec.
+  Bundle Ubuntu du run2 intégralement vérifié (19fichiers, ELF, manifeste, SHA256, tar) ; transfert Mint encore à effectuer.
+- Run `41028974295` sur `deef4ec` : builds/tests toujours réussis, debug entitlement supprimé, inspections architecture/sandbox/sceau
+  et restauration tar des deux builds Mac réussies. Session Aqua disponible ; premier lancement arrêté par le même garde de chemin :
+  le socket dépend de **XDG_DATA_HOME**, pas de XDG_RUNTIME_DIR. Le harness Mac utilise désormais un nouveau petit arbre0700 sous
+  `~/mcw-qualification`, propriétaire vérifié ; aucune limite ni permission native assouplie. Nouvelle exécution encore nécessaire.
+- Bundle Ubuntu `fc941c0` transféré et SHA256 vérifié sur Mint22.2 dans un préfixe neuf, sans toucher au mcw stable1406412.
+  Filtre tar Python avait ignoré les modes de répertoire et hérité de l'umask SSH775 ; seuls les8répertoires extraits ont été
+  remis à leurs modes déclarés700. Aucun parent ni droit système modifié ; préfixe et19sommes de contrôle inchangés.
+- Deux défauts du contrôleur Linux reproduits sans mutation : `gdbus` interprétait la profondeur `-1` comme une option ;
+  ajout du terminateur `--`. Locale française masquait «Version needs section» et donnait à tort des versions ELF vides ;
+  seules les sorties de commandes analysées sont maintenant forcées en locale C. Vérification réelle : mcw/runner GLIBC2.34,
+  moteur Flutter2.18, GLIBCXX3.4/CXXABI1.3 ; aucune réduction des plafonds. Stdout/stderr d'échec sont désormais conservés.
+- Mint : vrai SNI possédé, activation et première fenêtre Flutter1040×700 réelle affichée, logo et état inconnu/dégradé honnêtes.
+  Le vrai enfant possède des threads llvmpipe : rendu logiciel confirmé. Capture claire examinée, pas de claim Intel accéléré.
+  Automatisation préférences encore bloquée sur AT-SPI («Settings» indisponible), après fermeture propre0 et zéro UI possédée.
+  Toolkit-accessibility existant=false ; ne jamais activer globalement ou modifier les réglages utilisateur pour contourner le test.
+- Profilage Windows séparé : fermé54vérifications WinVerifyTrust baseline/candidat en60s ; candidat46410entrées de modules
+  fraîches énumérées,162noms décodés. Évitements de décodage = preuve de mécanisme, pas gain CPU mesuré ; coûts inclusifs non additifs.
+  Vérifications de confiance restent fraîches, coût résiduel important ; latence de capture contrôlée non mesurée faute d'action matérielle autorisée.
+- Historique de notifications TEST vidé puis relu0 ; seule la clé AUMID Qualification créée par la mission retirée après contrôle exact
+  des2valeurs et absence de sous-clé. Identité MSI strictement identique ; catalogue Windows géré par l'OS non modifié.
+- Diagnostic AT-SPI établi en lecture seule : registre partagé Mint démarré sur un ancien affichage, échecs de cookie X11
+  «Invalid MIT-MAGIC-COOKIE-1 / Cannot open default display» concordant avec le diagnostic10:19.
+  Pas de mauvaise propriété transfer-full et pas de preuve d'un défaut de fenêtre Flutter ; ne pas réparer le registre utilisateur.
+- Nouveau fixture **de qualification seulement** : bus/registre AT-SPI officiels, adresse privée, EXTERNAL/UID et racine0700,
+  affichage déjà autorisé hérité ; vrai bus de session/SNI conservé. Deux processus possédés, journalisés, bornés et arrêtés en finally,
+  sans service d'activation ni enregistrement de session. Pas de lecture/log de cookie ni réglage global ; seules les applications
+  de qualification reçoivent l'adresse AT-SPI. Contrôleur par exercice pour éviter un cache libatspi traversant les thèmes.
+  Ce code est sauvegardé avant exécution ; succès réel du fixture et des préférences encore à établir.
+- Capture Mint a révélé un texte Windows «release all» inapproprié sur Unix et un pseudo-défaut attendu d'instantané Windows.
+  Contexte moteur validé maintenant passé au panneau ; commande Windows non proposée sans contexte Windows, confirmation invalidée
+  si ce contexte disparaît. Raisons natives Unix conservées, pas de nouveau contrôle matériel ; carte alignée sur toute la largeur.
+  Deux tests de transitions/consentement ajoutés, pas de tests permanents recopiant les paragraphes ou comptant des textes.
+  LSP Dart indisponible dans ce worktree ; références inventoriées et unique appel main.dart migré, analyse/tests/build en cours.
+- Contrôle Windows stable après les essais : binaires MSI, settings, fichiers de protection/verrous strictement identiques.
+  Historique enrichi pendant la session mais préfixe initial intégralement conservé ; aucune troncature/restauration forcée.
+- Mint22.2, bundle Ubuntu figé `fc941c0` : six cycles réels réussis (3clair/3sombre), SNI, même enfant sur activations,
+  préférences sons/pause/reprise, refus natif de lecture, restauration, arrêt0 et zéro Flutter résiduel.
+  Bus/registre AT-SPI privés réellement fonctionnels puis arrêtés ; course normale de disparition `/proc` corrigée uniquement
+  dans le contrôleur. Archive privée vérifiée `mint-first-qualified-evidence.tar.gz`,
+  SHA256 `edf4611cf163f214507881d0e73b44b789db689cb6482faacb05968e30f94175`.
+- Mint XRDP/llvmpipe : RSS final Rust10,11–10,17Mio, ouvert327,73–334,76Mio ; PSS296,05–303,19Mio ouvert.
+  CPU échantillonné24,17–26,21% ouvert,1,45–1,50% fermé ; borne inférieure excluant les enfants très courts entre échantillons.
+  Premières fenêtres mappées4,72–4,84s, réouvertures0,97–1,21s ; aucun résultat accéléré revendiqué.
+  Requalification du produit `7e794d2` et capture d'un dashboard normal après restauration encore à faire.
+- Run `41037181504` (`7e794d2`) : builds/tests des3cibles réussis ; Mac ARM, Flutter réel release puis instrumenté,
+  IPC positif,3activations, fermeture sans moteur résident, réouverture et mort du propriétaire réussis.
+  Fixture natif AppKit échoue ensuite en exigeant à tort le basculement d'une préférence désactivée :
+  correction du test pour conserver l'état autoritatif et exiger zéro événement ; aucun garde de production assoupli.
+- Mac Intel : release/IPC positif réussis ; premier lancement instrumenté,3activations/capture/fermeture réussis ;
+  la réouverture n'atteint pas Ready. Cause non établie. Nouveau reçu persiste le PID avant attente et tente un échantillon
+  en lecture seule du seul enfant encore possédé, sans entitlement de debug, permission ni augmentation du timeout.
+- Replay **runtime seulement** préparé : mêmes produits du run41037181504, IDs et SHA256 ZIP/TAR figés, source produit7e794d2,
+  source du contrôleur séparée. Manifeste/ancêtre/diff/API vérifiés avant exécution ; aucune recompilation Rust/Flutter de production.
+  Seul le producteur de fixtures natif Rust/Swift peut être compilé. Nouveaux contrôles CI encore non exécutés à ce checkpoint.
+- Contrôles locaux actualisés : analyse Flutter sans erreur,61tests et build Windows release réussis ; 19hashes du vrai bundle
+  Linux relus par le restaurateur. Capture PrintWindow actuelle vide malgré47nœuds UIA réels et fenêtre possédée au premier plan :
+  diagnostic de capture en cours, aucune image vide présentée comme validation visuelle ni repli vers le bureau entier.
+- Checkpoint `4cabb1b` : replay runtime uniquement du run41037181504 déclenché sur la branche CI autorisée.
+  Run `41066470241` : ARM passe les deux vrais cycles release/instrumenté et le fixture AppKit corrigé ;
+  Ubuntu passe SNI,12cycles combinés lifecycle/préférences et fermeture des fixtures. Builds/suites initiaux explicitement hérités,
+  étapes de recompilation affichées skipped ; aucune reconstruction ou nouvelle publication de produit.
+- Mint produit final figé `7e794d2` :6nouveaux cycles, préférences/pause/reprise/refus/restauration réussis, zéro UI/fixture résiduel,
+  arrêt des2propriétaires0. Archive SHA256 `5c8408f4cd75eb279164a4f6fb5d386e5c897a540735fa30db05157fcd2d27c9`.
+  Captures Overview clair/sombre normales réellement examinées après relecture de la restauration.
+  RSS fermé9,97–10,24Mio, ouvert325,40–329,76Mio ; PSS ouvert293,77–298,12Mio. CPU ouvert23,07–23,18%, fermé1,60%,
+  toujours borne inférieure des processus échantillonnés et rendu llvmpipe. Ready initial1,41–1,49s mais fenêtre mappée4,86–4,97s :
+  ne pas confondre acquittement protocole et premier affichage utilisable. Réouverture mappée0,98–1,09s, arrêt172–234ms.
+  Stable Mint PID1406412, binaire, absence initiale des préférences/protections et historique strictement préservés.
+- Windows final7e794d2 :3réouvertures,10activations même enfant, crash du seul enfant et relance, collecte continue et fermeture0
+  de tous les PIDs possédés réussis. Ready initial580ms, réouvertures179/193/204ms ; RSS22,97Mio fermé/136,10Mio ouvert
+  sur cette passe descriptive, distincte du comparatif CPU contrôlé. Captures WGC des seuls HWND possédés clair/sombre réussies
+  et examinées ; identité PID/FILETIME/chemin tenue avant/après, aucun picker/capture globale/permission, PrintWindow vide conservé comme échec.
+- Intel replay conserve l'échec de Ready à la réouverture. Échantillon valide de l'enfant2960 sous owner2907 :
+  une seconde dans NSApplication→WindowServer/get_session_port, avant Flutter. Une autre ligne Impeller apparaît ensuite sans PID/temps :
+  pas de preuve d'un blocage permanent du runner ni d'une cause unique. READY_TIMEOUT=15s, IO_TIMEOUT=5s inchangés.
+  Contrôle passif timestampé session/AppKit en préparation ; aucune permission ni garde de production modifiée.
+- Bundle Mint autonome préparé hors dépôt : `miccamwatch-b3-mint.tar.gz`,13501124octets,
+  SHA256 `d17595f5d910a644872bc5ecaaa2f477b2dea7a06a3c52a7a6b7e001d3736254`.
+  Archive produit originale inchangée + contrôleurs4cabb1b séparés + helper vérifié + provenance/SHA256/notice française.
+  Extraction réelle dans un autre préfixe privé Mint,6hashes wrapper,19hashes produit et `linux.py check` réussis ;
+  pas de nouvelle installation ni répétition inutile des6cycles déjà validés sur les mêmes octets.
+- Prochain contrôle **Intel seulement**, sans rebâtir ni relancer les jobs ARM/Linux verts : sondes passives précompilées
+  CGSession/NSScreen et NSApplication.shared, avant ouverture/après fermeture/pendant réouverture. Processus de diagnostic
+  propres, bornés, sans fenêtre, permissions, entrée injectée ou commande produit. Échantillon tardif possédé et journal
+  horodaté ajoutés uniquement à ce mode. Ces contrôles peuvent perturber le timing/contexte ; un succès conditionnel ne
+  clôturera pas à lui seul les échecs Intel non instrumentés. Résultat encore non exécuté à ce checkpoint.
+- Contrôle Intel ciblé `41070188421` sur `e2f3be8`, mêmes produits7e794d2 : sondes sans Flutter réussies avant ouverture
+  (session274ms, AppKit214ms), puis toutes deux sans réponse dans leur fenêtre bornée après fermeture et pendant réouverture.
+  Sonde AppKit et enfant Flutter attendent get_session_port/WindowServer ; sonde session attend SLSessionCopyCurrentDictionary.
+  Enfant5230 encore dans ce bootstrap lors du prélèvement tardif,11,19s après création. Toujours échec Ready15s ;
+  pas de deuxième ligne Metal dans cette séquence horodatée. Les processus de contrôle sont possédés, arrêtés et reapés.
+  ZIP artefact12984942123 vérifié `e9326e141db6eb3175d7c717a6b0ad677e84dddeaa142e767151eed04b005d71`.
+- Conclusion prudente : défaut de réactivité du contexte/service graphique dans cette expérience, pas seulement Dart/IPC.
+  Le déclencheur OS/image/fermeture/contexte de lancement n'est pas établi ; ne pas prétendre que tous les runners Intel
+  sont fondamentalement incapables. Aucun correctif produit sûr démontré, donc aucune permission/sandbox/timeout/signature assoupli.
+  Inspection : propriétaire Mac de développement sans DesktopHost permanent, contrairement au tray opérationnel.
+  Prochain discriminant : qualification native menu bar persistante avec mutations désactivées et contrôle fermeture AppKit sans Flutter.
+  AppKit de secours conservé, pas d'exigence de Mac physique ; l'échec Intel reste explicitement ouvert.
+- Fin B3 pour validation propriétaire : Windows commandes/erreurs/cycles/captures, Mint6cycles/captures/bundle et ARM CI réels acquis ;
+  comparaison CPU fermée5,73→5,53%, différence modeste, pas résolution générale. Linux accéléré/Wayland/ARM Flutter et parité complète
+  encore non qualifiés. Rapport détaillé `docs/FLUTTER_B3_QUALIFICATION.md`, matrice actualisée, preuves privées indexées et hashées
+  dans `%LOCALAPPDATA%\MicCamWatchQualification\flutter-b3-20261030-081807\B3-EVIDENCE-INDEX.json`.
+  Windows MSI/settings/protections/verrous inchangés ; préfixe initial de l'historique conservé, identité installée inchangée.
+  Mint stable strictement préservé. Main73369ab, tag06d800b→3d74686,8worktrees et stash conservés. Aucun changement site/README,
+  aucune release/déploiement ni push sur main/branche de travail. Seule la branche CI explicitement autorisée a été poussée.
+  Arrêt après sauvegarde documentaire ; attendre validation B3 avant migration des protections/installations ou publication.
+
+## 2026-10-30 — Tranche B4 en cours : consultation réelle, autostart et hôte macOS permanent
+
+- Reprise vérifiée sur `14ae566`, branche `work/flutter-hybrid-0211` propre ; main73369ab, tag stable,8worktrees et stash préservés.
+  État initial et empreintes du MSI/settings/protections archivés dans
+  `%LOCALAPPDATA%\MicCamWatchQualification\flutter-b4-20261030-202725`.
+- Contrat Flutter IPC5 sans shim4 : nouvelle voie de consultation authentifiée, bornée et indépendante des commandes micro/préférences.
+  Le protocole du helper AppKit reste4. Historique lu depuis les vrais JSONL schema3, pagination par curseur opaque,
+  fichiers ouverts bornés, verrou court, résultats incomplets explicites ; aucun historique reconstruit à partir des snapshots.
+- Flutter : écrans Historique/Diagnostics et carte démarrage automatique, sept langues, thèmes communs, confirmations et états périmés.
+  Autostart : contrôle natif du mode opérationnel, comparaison de l'état observé, verrou existant et relecture effective.
+  **Revue en cours : l'ownership Unix doit être renforcé pour la portée « cette installation » avant toute qualification de cette écriture.**
+  Aucun autostart quotidien ni périphérique modifié.
+- macOS : qualification préparée avec le vrai DesktopHost AppKit permanent et le même superviseur Flutter entre les fermetures.
+  Actions sensibles désactivées ; menu/NSStatusItem réellement interrogés ; sondes possédées, pas de clic physique revendiqué.
+  Les nouveaux builds et cycles Intel/Apple Silicon n'ont pas encore été exécutés à ce checkpoint.
+- Mint : inventaire en lecture seule du vrai PC ; session utilisateur XRDP/X11 `:10`, llvmpipe et accélération=false.
+  GPU Intel i915 présent, mais nœuds de rendu non accessibles à cet utilisateur ; siège local=greeter LightDM, pas de session utilisateur autorisée.
+  Ne changer ni groupes, pilotes, permissions ni login. Aucun résultat accéléré revendiqué.
+- ARM64 : pas d'archive SDK Linux ARM64 officielle3.47.8 ; bootstrap depuis la révision Git Flutter officielle exacte et artefacts
+  Dart/GTK AArch64 officiels préparé sur runner `ubuntu-24.04-arm` jetable. Empreintes mesurées distinctes d'une signature ou SHA upstream inexistant.
+  Build Flutter/Rust, suites et audit ELF prévus ; aucune nouvelle qualification ARM64 exécutée à ce checkpoint.
+- CPU Windows : réutilisation d'un seul tampon de chemin UTF16 par passe caméra, sans cache de confiance ni changement de fréquence.
+  Gain non encore mesuré ; signatures et identités restent relues. Ne pas annoncer d'amélioration avant comparatif apparié.
+- Premières vérifications B4 : `cargo check --all-targets --locked --features windows-tray,flutter-desktop` réussi après correction
+  de l'import de Policy ; `flutter analyze --no-pub` sans erreur ; parse des quatre scripts Python et YAML CI réussi.
+  Suites, builds release, nouvelles captures et mesures encore à exécuter. Checkpoint volontairement WIP, pas validation finale.
+- Reprise : résoudre l'ownership autostart Unix ; terminer les suites/clippy/builds locaux ; pousser seulement le ref CI déjà autorisé
+  avec `[CF-Pages-Skip] [skip ci]` et dispatch manuel frais (pas replay B3), analyser les reçus Mac/Linux/ARM, puis gestes/captures Windows/Mint.
+  Aucun push de la branche de travail/main, tag, release, déploiement ou remplacement du stable autorisé.
+- Sauvegarde WIP locale `79b35db` effectuée avant les opérations longues. Revue indépendante ensuite :
+  correction de l'ownership Unix (registre et journal d'une autre installation préservés, y compris cible absente),
+  séparation des changements de présentation/observation Unix, suppression du profil par défaut trompeur dans le diagnostic.
+  Les deux revues ciblées confirment les corrections à l'inspection ; ce n'est pas une preuve d'exécution Unix.
+- Contrat strict : un test a révélé que les variantes Serde unitaires ignoraient les champs supplémentaires ;
+  elles sont maintenant des variantes struct sans champ, sans élargir les opérations acceptées.
+  Tests Windows réussis :50desktop,11historique,5autostart,19plateforme ; Clippy strict tous targets et build Rust release réussis.
+  Flutter :88cas réussis lors de la suite initiale ; échec de fixture clavier (timer de requête non terminé), puis cas ciblé corrigé réussi.
+  Analyse et build Windows release réussis ; avertissement MSBuild sur le worktree sous Temp conservé, pas masqué.
+  Formatage limité aux nouveaux modules B4. Aucun test physique ni changement de protections/autostart utilisateur.
+- CI fraîche `41120973121` sur `d7f778a` : Ubuntu22.04 x64 réussi (build/suites/package et runtime hébergé).
+  Les deux Mac échouent avant build release sur un champ `details_label` réservé à Linux dans la nouvelle vue de qualification ;
+  champ maintenant gardé par son cfg Linux, sans modifier les interfaces opérationnelles.
+  ARM64 : source/Dart officiels et MD5 vérifiés, puis garde trop étroit refusant la licence à la racine du ZIP.
+  Extraction désormais limitée au seul sous-arbre `dart-sdk/*` ; métadonnées conservées dans le ZIP original, jamais déversées dans le cache.
+  Sonde privée : métadonnées légitimes acceptées ; chemins absolus, traversées, séparateurs ambigus, NUL et liens symboliques refusés.
+- Reprise après interruption : aucun processus B4/benchmark encore actif. Comparatif CPU arrêté avant fin du premier tour ;
+  données partielles et empreinte conservées séparément, pas de gain ni comparaison complète revendiqués.
+  Prochain run CI limité aux trois cibles échouées ; bundle x64 déjà vert conservé, pas de reconstruction inutile.
+
+## 2026-10-31 — B4 : reprise des preuves et correction des contrôleurs
+
+- Reprise réelle sur `f480963`, après `79b35db` et `d7f778a` ; seul le document de bilan encore non suivi a été sauvegardé avec le correctif CI.
+  Comparatif CPU interrompu la veille : trois intervalles individuels conservés, aucun tour apparié complet ; ne pas les assembler à une autre charge.
+- Run `41186590122` : les deux Mac compilent Rust/Flutter release et passent leurs suites ; le script shell s'arrête avant le runtime
+  sur `extra[@]: unbound variable` (Bash macOS). Remplacement par les paramètres positionnels `"$@"`, sans changer les délais.
+  Produits malheureusement non archivés avant cet appel ; nouvelle sauvegarde tar des deux apps et du moteur ajoutée **avant** toute qualification,
+  pour éviter de perdre à nouveau des produits construits. Ces builds doivent être reconstruits une fois car aucun payload récupérable n'existe dans leurs artefacts.
+- ARM64 : l'archive officielle contrôlée par MD5 contient un vrai `frontend_server_aot.dart.snapshot` ELF x86-64 (EM62),
+  alors que gen_snapshot/flutter_tester/impellerc et les bibliothèques sont AArch64. Défaut correspondant à Flutter#156309, encore ouvert.
+  Le SDK Dart ARM officiel du même moteur contient le composant AArch64 attendu (EM183) ; règle amont : copie depuis le SDK Dart.
+  Assemblage explicite du composant **cible officiel**, avec SHA256 des deux composants figés, archive Dart intégralement vérifiée sur runner,
+  relecture et audit de tous les ELF natifs maintenus. Aucun compilateur x64 accepté/exécuté, aucune source Flutter modifiée ni SDK tiers.
+  Ceci reste à exécuter : ne pas annoncer le build ARM réussi avant résultat.
+- Windows : les deux premiers arrêts étaient des défauts de préparation/contrôleur, pas une preuve d'échec du frontend :
+  répertoire natif `APPDATA/MicCamWatch` manquant dans le préfixe privé, puis alias PowerShell5 `[ulong]` invalide (`[UInt64]` utilisé).
+  Démarrage/Ready réels ensuite acquis ; MSAA visait le HWND conteneur au lieu de son unique enfant direct FLUTTERVIEW.
+  Contrôleur lié maintenant au bon enfant possédé, PID/FILETIME/parent/classe contrôlés ; WGC/fermeture restent sur le HWND principal.
+  Aucun lecteur d'écran global, permission, délai ou garde produit modifié ; chaque échec et arrêt propre sont conservés.
+- Mint : premier run B4 confirme sons/pause/reprise/refus/restauration, autostart lu désactivé en développement, vraie page Historique
+  (deux événements existants) et capture possédée. Échec ultérieur d'oracle Diagnostics : inspecteur lisait Name mais pas AT-SPI Text
+  des SelectableText. Lecture Text bornée ajoutée au seul contrôleur privé, avec les mêmes identités et libérations GLib.
+  Stable, préférences, historique, groupes et permissions intacts ; zéro processus de qualification résiduel.
+- Inspection du vrai log Windows : émetteur C++ de timing encore en protocole3 ; migré vers5 comme Rust/Dart.
+  Cette correction est native Windows uniquement ; protocole du helper AppKit4 inchangé.
+
+- Qualification Mint B4 complète le31octobre : préfixe privé `mint-b4-20261031-093523-88f7f9ae`,
+ 12cycles clair/sombre réussis, vrais événements historiques et rafraîchissement, Doctor natif détaillé,
+ autostart relu uniquement, préférences/refus/restauration et SNI réels. Stable strictement préservé,
+ aucun processus de qualification restant ; archive de preuves téléchargée et SHA256 vérifié.
+ Le sampler accepte maintenant ESRCH pendant la lecture mémoire d'un processus déjà disparu,
+ comme l'absence de fichier déjà gérée : métrique explicitement indisponible, jamais processus vivant inventé.
+ Le contrôleur corrigé est épinglé séparément ; bundle produit et ancien contrôleur archivés restent identiques.
+- Captures réelles Historique/Diagnostics Windows et Mint, clair et sombre, examinées : même identité,
+ textes lisibles, limites de couverture explicites. Windows :30→60→30 événements relus conformes aux vrais JSONL.
+ Limite de l'oracle d'accessibilité Windows : MSAA ne publie pas ici l'indisponibilité du bouton autostart ;
+ UIA expose seulement FLUTTERVIEW, pas ses boutons. État désactivé **non vérifié par ces fournisseurs**,
+ et aucune action d'écriture invoquée. Tests Dart et barrières Rust séparés ne valent pas validation d'un lecteur d'écran.
+ Un essai WGC ultérieur a refusé un corps noir ; reçu conservé sans fallback, sans invalider les captures antérieures acquises.
+- Build Windows release du correctif C++ de timing5 réussi ; avertissement MSBuild Temp conservé.
+ Prochaines étapes : cycles Windows ciblés sans réessayer les captures déjà acquises, comparatif CPU complet au calme,
+ analyse des reçus du run `41188772673` macOS/ARM64, puis bilan B4 et matrice. Aucun changement d'installation stable.
+- CI `41188772673` sur7e47596 : Mac Intel et Apple Silicon passent avec le véritable DesktopHost AppKit permanent.
+ Sur chaque architecture : IPC release et arrêt des enfants à la mort du propriétaire ; dans le préfixe instrumenté distinct,
+ trois fermetures/réouvertures via l'action Status native, même helper/NSStatusItem visible entre les cycles, singleton et Exit propres.
+ Captures Flutter réelles examinées, bundles/seals/architectures archivés ; aucune qualification matérielle/TCC, notarisation ou installation annoncée.
+ L'échec B3 du propriétaire sans menu bar permanent n'est plus reproduit par cette architecture représentative ;
+ cela n'établit pas la cause universelle du blocage WindowServer ni le succès de toutes les configurations macOS.
+- ARM64 : bootstrap officiel assemblé, Rust/Flutter release et suites réussis sur Ubuntu24.04 ARM64 ;89tests Flutter,
+ 57desktop,12historique,9autostart et5settings Rust. Audit ELF AArch64/package réussi. Ni exécution du bureau Flutter ARM,
+ ni GPU, ni Raspberry Pi/SBC physique qualifiés. Artefacts des trois cibles téléchargés une seule fois et SHA256 GitHub vérifiés.
+- Vérification approfondie des logs : le filtre `frontends::tray::unix::menu_tests::qualification_` sélectionnait **zéro test**.
+ Le module est aliasé `frontends::tray` ; filtre et fixture exacte corrigés, garde imposant un vrai test enfant ajoutée.
+ Ces gardes natives ne sont donc pas comptées comme passées par le run vert. Nouveau mode CI Rust ciblé quatre Unix,
+ sans reconstruire les bundles Flutter ; résultat encore attendu à ce checkpoint. Sélection vide explicitement refusée.
+- Windows : parcours réel clair/sombre et deux réouvertures en rafale par thème terminés sans erreur ;
+ lecture Historique après chaque nouveau processus, observation Rust maintenue sans Flutter, copie JSONL inchangée.
+ Reçu volontairement `exercised_with_unverified_accessibility`, pas succès inventé de l'oracle autostart.
+
+## 2026-10-31 — Fin de tranche B4 : résultats et point de reprise
+
+- Résultats et limites détaillés : `docs/FLUTTER_B4_QUALIFICATION.md` ; matrice actualisée.
+  Historique réel paginé et Doctor détaillé utilisables dans Flutter Windows/Mint, autostart relu sans écriture hôte.
+  Consultation IPC5 bornée, curseurs et refus stricts ; helper natif AppKit4 conservé.
+- CI complémentaire `41191181077`, source `5a797f2` : les deux gardes natives sont réellement sélectionnées et exécutées
+  sur macOS Intel/ARM et Linux x64/ARM. Les quatre reçus et SHA256 d'artefacts sont vérifiés ; aucun bundle Flutter reconstruit.
+  Le précédent résultat à zéro test reste consigné comme non exécuté, pas transformé en succès.
+- Comparatif Windows complet : deux tours AB/BA de60secondes par état, observations frontières équivalentes.
+  CPU fermé3,333→3,177%, ouvert7,894→8,155% d'un cœur logique ; **pas de gain CPU général démontré**.
+  Le tampon UTF16 réutilisé évite des allocations sans cache de confiance ni changement de cadence.
+  Profil séparé30secondes :56/57snapshots, cadence comparable1,88–1,90/s ; aucun événement de signature/WinVerifyTrust/module-scan
+  dans cette charge inactive. Leur coût actuel et la latence de détection en capture active restent non mesurés.
+  Ne pas comparer ces chiffres à ceux d'anciennes charges pour annoncer un gain fictif.
+- Windows : Rust seul environ18,00Mio RSS, avec Flutter135,23Mio sur la vue d'ensemble du comparatif ;
+  protocole prêt623/541ms, fin du processus343/366ms sur ses deux propriétaires. Disponibilité IPC, pas premier pixel.
+  Le parcours de consultation distinct confirme quatre réouvertures en rafale, lectures réelles et absence de Flutter après fermeture.
+- Mint :12cycles réels clair/sombre, SNI et préférences/refus/restauration réussis. Après consultation, Rust seul11,96–12,00Mio RSS ;
+  ouvert316,61–329,54Mio, PSS285,31–298,29Mio sous llvmpipe. Première fenêtre mappée environ5,1s, réouvertures médianes1,06–1,14s.
+  Mesures CPU Linux sur5secondes, bornes inférieures incluant seulement les enfants observés ; aucun résultat GPU accéléré revendiqué.
+- Mac Intel/ARM : builds/suites/seals et véritables cycles automatisés acquis sur le DesktopHost AppKit permanent.
+  Trois réouvertures par architecture dans le préfixe instrumenté distinct ; IPC/arrêt propriétaire sur le vrai release.
+  Captures Flutter claires examinées ; panneaux B4/macOS, thème sombre Flutter natif, TCC et matériel non vérifiés.
+  Aucun Mac physique manuel requis. Repli AppKit conservé.
+- ARM64 : build et tests natifs Ubuntu24.04, quatre ELF AArch64 et les15payloads du bundle vérifiés individuellement ;
+  archive `d89a9e940b82ba5d27d3943194c83d0eaa551829218c840f61a929659597d900`.
+  Ni runtime graphique/SNI ARM, ni GPU, ni SBC physique, ni compatibilité Mint21/Ubuntu22.04 annoncés.
+- Préservation finale : MSI, préférences et autostart MicCamWatch identiques ; préfixe complet de l'historique initial conservé.
+  **Deux journaux natifs de protection diffèrent du reçu initial du30octobre** ; leurs contenus/horodatages actuels sont sauvegardés,
+  sans retour forcé à l'ancien état. Attribution des écritures non enregistrée ; ne pas l'inventer.
+  Garde microphone existante issue du MSI encore active, tray quotidien absent à l'inventaire final ; aucune commande de libération/redémarrage envoyée.
+  Un verrou propriétaire actif refuse la lecture : pas de contournement/UAC. Zéro processus B4 restant.
+  Main/origin73369ab, tag06d800b→3d74686,8worktrees et stash conservés. Seul le ref CI autorisé a été poussé.
+- Preuves privées et contrôleurs reproductibles : `%LOCALAPPDATA%\MicCamWatchQualification\flutter-b4-20261030-202725`,
+  index `B4-EVIDENCE-INDEX.json` avec empreintes. Les vrais historiques/diagnostics contiennent des informations locales ;
+  aucune publication brute de ces preuves sans revue de confidentialité.
+- Reprise après validation propriétaire : compléter l'accessibilité native Windows des contrôles désactivés ;
+  automatiser panneaux/commandes sûres et thème sombre Flutter macOS ; qualifier Linux dans une session accélérée déjà autorisée ;
+  poursuivre runtime ARM et parité caméra/lock/maintenance selon leurs contrats et restaurations.
+  Les écritures autostart d'une installation réelle et tout contrôle matériel nécessitent une qualification isolée adaptée.
+  Ne pas supprimer GTK/AppKit, modifier le MSI quotidien, pousser main/work, publier0.21.1 ou déployer le site sans nouvel accord.
+
+## 2026-11-02 — Début B5 : audit stable et intégration CRT
+
+- Reprise réelle sur `34d5578`, worktree Flutter propre. Main/origin `73369ab`, tag stable `06d800b`→`3d74686`,
+  neuf worktrees et stash `a373866` conservés ; branche CRT `2451088` propre et inchangée.
+- `AGENTS.md` et `RULES.md` globaux lus explicitement, identiques. Modèle principal annoncé par le runtime :
+  `openai-codex/gpt-6.1-sol`. Réglages de tâches sans override, sélection par appel désactivée ;
+  absence de preuve du routage résolu de chaque agent/fallback : **aucun sous-agent utilisé**,
+  aucun paramètre global modifié et aucun appel auxiliaire à un modèle non vérifié.
+- Audit Windows strictement passif : un tray du MSI actif, une seule entrée Run vers ce tray ;
+  exécutables MSI et préférences identiques aux empreintes B4. Aucune garde microphone séparée observée.
+  Intention enregistrée génération34 : `requested=false`, `release_pending=false`.
+  Cela ne constitue pas une mesure de l'état physique ou SDK du microphone. Aucun redémarrage, arrêt, réglage,
+  autorisation ni contrôle matériel envoyé ; aucune attribution rétroactive du changement d'intention.
+- Commits DeepSeek repris dans l'ordre : `889f7e8`→`718aea6`, `6bc365c`→`2048747`, `2451088`→`8a4e4c8`.
+  Seul conflit dans le préambule du tray : version interrogée d'abord, puis toutes les barrières et modes Flutter
+  conservés. Ces commits d'intégration ne sont pas encore une qualification B5.
+- Inspection PE du véritable frontend B4 : le runner C++ importe aussi `MSVCP140`, `VCRUNTIME140` et
+  `VCRUNTIME140_1`. Le CRT statique Rust seul ne corrige pas le bundle hybride. Runtime CMake statique
+  Windows préparé ; moteur Flutter officiel inchangé. Build et audit du résultat encore à exécuter.
+- Reproduction privée d'une faiblesse de l'auditeur préparé : une DLL tierce existant dans son répertoire
+  de recherche est étiquetée « composant Windows ». Corriger cette classification avant de faire confiance à la garde.
+- Preuves privées : `%LOCALAPPDATA%\MicCamWatchQualification\flutter-b5-20261102-080321`.
+  Aucun push autorisé pour B5 ; préparer puis demander le périmètre CI avant tout envoi.
+
+### B5 — Premier point sauvegardé : binaires et packages Windows
+
+- Build release Rust natif `windows-tray` réussi avec CRT statique. Copies privées :
+  `mcw.exe`9470976octets, `mcw-tray.exe`3358208octets. Les cinq requêtes réelles de version,
+  dont `--version` combiné aux options de développement/ouverture, quittent0 sans accès aux
+  répertoires de préférences volontairement inutilisables ; version de développement Cargo encore0.21.0.
+- Build release Flutter Windows réussi avec runtime C++ statique ; runner376320octets,
+  moteur officiel21289472octets inchangé. Audit des quatre vrais PE Rust/runner/moteur réussi.
+  L'AOT Dart Windows est réellement un ELF64 little-endian EM62, pas un PE ; identité conservée séparément.
+- Garde durcie : imports ordinaires/différés, familles CRT complètes, liste OS explicite plutôt que
+  présence dans System32, PE bornés et refus des dépendances inconnues. Mode bundle vérifiant aussi
+  le moteur Flutter ; archives devant contenir exactement les deux exécutables correspondant aux bytes du build.
+  Neuf tests de régression réussis ; les véritables anciens binaires dynamiques sont effectivement refusés par la CLI.
+- MSI WiX5.0.2 construit et ZIP produit en privé avec reçu portable réel. Extraction administrative `/a`
+  seulement, **aucune installation/désinstallation**. Six copies natives (build/ZIP/MSI) vérifiées conformes
+  et sans CRT dynamique ; aucun remplacement d'asset public.
+- Documentation winget corrigée : observations limitées aux versions inspectées, statut du mainteneur
+  sans trace DLL distante, distinction Rust/CMake, limites Media Foundation et LoadLibrary.
+  Le générateur exige désormais un plancher de runtime explicitement justifié si cette dépendance est demandée ;
+  absence de plancher effectivement refusée avant création de fichiers. Aucun manifeste futur ni SHA inventé.
+- Vérification distante B4 : runs41188772673 et41191181077 toujours réussis, sources conformes aux reçus.
+  Aucune nouvelle CI B5 exécutée ; Clippy/suite/build Rust hybride locaux encore en cours à ce checkpoint.
+- Mint : session c3 X11 `:10`, renderer GLX llvmpipe LLVM20.1.2, `Accelerated: no`.
+  « direct rendering: Yes » ne prouve pas une accélération matérielle. Siège0 toujours greeter LightDM,
+  utilisateur de qualification sans accès au groupe render ; aucune configuration, permission ou session modifiée.
+
+### B5 — Point sauvegardé : canal IPC Windows et essais réels
+
+- Builds Rust natif et hybride release réussis ; Clippy strict hybride et suite :
+  265 tests bibliothèque, 1 CLI, 3 tray réussis, 6 ignorés. Analyse Flutter propre,
+  89 tests réussis et build AOT instrumenté de consultation effectué.
+  Ces résultats précèdent la nouvelle requête COM d'autostart décrite ci-dessous.
+- Essais réels sur WinSta0/Default, données et binaires uniquement sous le répertoire
+  privé B5 : trois cycles de la version non instrumentée en clair réussis,
+  puis deux cycles complets des panneaux réels réussis. Historique/rafraîchissement,
+  autostart de développement effectivement désactivé, préférence notifications modifiée
+  puis relue et restaurée par Rust, À propos et diagnostics natifs affichés.
+  Le troisième cycle des panneaux reste en échec : historique devenu incertain ;
+  **la qualification complète n'est pas annoncée réussie**.
+- Défaut réel corrigé et reproduit avant/après : stderr du frontend Windows partageait
+  stdout avec le protocole typé, provoquant `output_rejected` sur les diagnostics.
+  Désormais stderr utilise une poignée diagnostique explicitement dupliquée ou NUL,
+  séparée des deux pipes IPC ; authentification, validation et limites inchangées.
+  Les preuves graphiques sont réellement reçues après correction ; aucun contournement
+  du parseur et aucun thread graphique résident ajouté.
+- Contrôleur Windows : fin vérifiée par poignée/génération FILETIME et état noyau,
+  non par simple existence du PID. Arrêts propres réels et absence de processus propres
+  résiduels confirmés, y compris après l'échec des panneaux. Aucun processus quotidien arrêté.
+- Le pilote instrumenté utilise les callbacks sémantiques réellement rendus, pas des clics
+  globaux ; la sonde Flutter montre que l'action tappable peut être sous le nœud identifié.
+  Cette instrumentation release/AOT est désactivée dans le build normal ; elle ne remplace
+  pas une qualification d'accessibilité MSAA/UIA externe.
+- Travaux suivants encore non qualifiés : séparer fraîcheur des collecteurs et connexion
+  du canal de consultation ; remplacer l'assimilation de tous les échecs `schtasks /Query`
+  à une absence par une requête COM locale distinguant absence et refus/erreur ;
+  scénarios autostart mutateurs réservés à un runner jetable, jamais à ce Windows quotidien.
+- Contrôleurs Windows/macOS étendus et workflows préparés localement. Aucun nouveau run B5,
+  aucun push, aucune modification des protections ou de l'installation stable.
+
+### B5 — Requête d'autostart native, états inconnus et restauration
+
+- Cause inspectée : `registered_task` assimilait tout code non nul de schtasks à
+  une absence. Remplacement Windows uniquement par `ITaskService` local/current-user,
+  `GetFolder`/`GetTask`/`Xml`, sans identifiants, élévation ou mutation implicite.
+  Seul HRESULT Win32 FILE_NOT_FOUND devient None ; accès refusé, RPC et autres erreurs
+  restent des erreurs/états inconnus. Le XML reste UTF16 entre les API natives ;
+  le décodeur de sortie console et son ancien test sont supprimés.
+- Appelants revus par LSP : état, opt-in, contrôle après création, refresh, opt-out
+  et désinstallation conservent leurs verrous/propriétés/CAS. Runtime COM existant
+  conservé et correctement possédé ; aucun verdict de confiance mis en cache.
+- Cinq tests ciblés d'autostart et Clippy strict réussis. Nouveau build release natif :
+  CLI9475072octets, tray3360256octets ; audits PE et deux versions immédiates réussis.
+  La vraie requête passive depuis le préfixe privé quitte1/disabled, sans stderr :
+  cela concerne cette installation de qualification, pas l'entrée Run MSI quotidienne.
+- Matrice actualisée avec l'état B5 encore incomplet et l'analyse des sourdines :
+  libération manuelle Windows = unmute explicite, pas restauration des valeurs antérieures.
+  Journal automatique distinct, déjà conservateur envers les entrées pré-sourdines,
+  générations et changements externes. Aucune refonte profonde ni action matérielle.
+- Contrôleur CI préparé pour activation, nouvel owner, désactivation, Run étranger,
+  accès en écriture refusé sur son seul verrou privé, et StartupApproved désactivé.
+  Ces écritures sont interdites localement et **pas encore exécutées** ; la CI B5
+  nécessite toujours une autorisation fraîche avant tout push.
+
+### B5 — Six cycles de panneaux Windows réussis, préparation CI isolée
+
+- Après correction, six cycles complets de la même interface Flutter/AOT et du vrai
+  Rust B5 passent : trois clair, trois sombre. Historique et actualisation réels,
+  écriture autostart réellement indisponible en développement, notifications modifiées
+  puis restaurées via Rust, À propos et doctor natif ; aucune erreur Flutter/layout.
+  Valeurs privées des préférences inchangées, native ticks après chaque fermeture,
+  tous les processus possédés réellement terminés. Captures WGC limitées à la fenêtre
+  possédée, PID/génération/chemin vérifiés ; deux images effectivement examinées.
+- Régression mise en évidence : les requêtes de consultation étaient invalidées
+  quand l'observation devenait périmée malgré un IPC valide. Elles suivent désormais
+  `transportLive`, comme les préférences, et non `isLive`. Le deuxième cycle clair
+  final confirme réellement `observation_fresh=false` et `transport_live=true` avec
+  consultation réussie ; les cartes d'observation continuent à afficher l'inconnu.
+- Ready acquitte la première frame validée/rendue avec IPC vivant, même si le
+  collecteur est périmé ; aucune garantie de capture/protection ajoutée, aucun délai
+  produit augmenté. Un essai pendant compilation avait initialisé Flutter en13,2s
+  et échoué ; conservé comme échec sous contention, pas réutilisé comme benchmark.
+- Suite complète après COM :269tests Rust réussis,6ignorés ; releases natif/hybride
+  et analyse Flutter réussies. Dernier hybride CLI9934336octets, tray3890176octets ;
+  runner376320octets et moteur officiel21289472octets. Les quatre PE réels passent
+  la garde CRT/bundle. Les packages MSI/ZIP précédents sont des fixtures **natives** ;
+  ils ne prouvent pas encore un installateur Flutter complet.
+- Préparation macOS : builds normaux distincts de l'AOT de qualification, panneaux
+  réels et préférences privées,8scénarios par architecture (anglais clair/sombre puis
+  six autres langues en sombre), trois fermetures/réouvertures par hôte AppKit permanent.
+  Helper natif toujours non mutateur ; aucun test manuel sur Mac physique prévu.
+- Nouveau workflow Windows réutilisable, déclenché uniquement par dispatch CI dédié :
+  CRT natif/hybride, exactitude MSI/ZIP par extraction `/a`, UI normale et instrumentée,
+  autostart opérationnel uniquement sur runner GitHub jetable/WinSta0 sans installation
+  ni enregistrement existant. Aucun test mutateur autostart exécuté sur ce PC.
+- Prochaine autorisation à demander : seul ref `ci/flutter-b5-20261102`, tip marqué
+  `[CF-Pages-Skip] [skip ci]`, puis dispatch Windows et Unix (deux Mac/Linux x64/ARM64).
+  Work/main, tag, release et site hors périmètre ; aucun push B5 effectué à ce point.
+
+### B5 — CI autorisée, premier préflight Windows diagnostiqué
+
+- Autorisation explicite reçue pour le seul ref `ci/flutter-b5-20261102` et les
+  qualifications Windows/Unix. Source initiale `90d69b4738f76485e40f1002125de1d46c6254c3`.
+  Runs Windows41422726881 et Unix41422733643 ; aucun push work/main, tag, release ou site.
+- Windows41422726881 échoue **avant tout build/test MicCamWatch** : première invocation
+  du SDK officiel extrait écrit `Running pub upgrade` sur stdout avant le JSON ;
+  ConvertFrom-Json refuse correctement ces bytes. SHA256 de l'archive vérifié,
+  aucun écart de framework/moteur démontré. Journaux conservés.
+- Correction limitée à la préparation : bootstrap explicite avec journal, puis requête
+  machine séparée, JSON brut conservé avant validation. Exact même framework/moteur/Dart
+  requis ; aucune extraction permissive ni suppression des contrôles. Étape PowerShell
+  exacte exécutée localement avec succès. Relance Windows sur le seul ref CI autorisé ;
+  le run Unix initial demeure indépendant et n'est pas recommencé.
+
+### B5 — Preuves CI récupérées après interruption
+
+- Windows41424009387 réussi, source `91be31a`. ZIP d'artefact vérifié contre le
+  digest GitHub `28574a4bfc9c9b88866e1c71ccaeabaf0145a37e90b3afb7d793a2234d309b60`.
+  Reçus réels vérifiés : activation, nouvel owner puis désactivation, Run étranger
+  conservé, accès en écriture refusé, StartupApproved désactivé respecté ; chaque
+  Flutter possédé termine et les préférences privées restent identiques.
+  **WinSta0, jeton administrateur : aucune qualification sous compte standard revendiquée.**
+  Aucun installateur installé, aucune protection matérielle modifiée.
+- Unix41422733643, source `90d69b4` : Linux x64, Linux ARM64 et Apple Silicon réussis ;
+  leurs trois ZIP d'artefacts/digests GitHub et les archives internes Mac vérifiés.
+  Apple Silicon : huit scénarios,32 preuves de panneaux réels,24 réouvertures avec
+  hôtes AppKit permanents, sept langues et anglais clair/sombre. Ce n'est ni une
+  validation TCC/périphérique, ni une signature Developer ID/notarisation.
+- Intel : builds Rust/Flutter normal/instrumenté et suites réussis, première étape
+  graphique échouée après21s. Puis étape de synthèse non terminée ; annotation
+  GitHub confirme la limite globale50min, pas une annulation par concurrence.
+  Journaux individuels refusés404 et aucun artefact Intel final livré. Cause exacte
+  du premier échec non établie : **ne pas annoncer Intel qualifié**.
+- Durcissement du contrôleur CI uniquement : téléverser les produits figés avant
+  tout test graphique, borner runtime/synthèse/archivage, supprimer l'interpréteur
+  Python inutile de la synthèse. Séparer ciblage Intel des sondes bootstrap :
+  une relance ciblée ordinaire ne doit pas devenir implicitement un essai conditionné.
+  YAML et synthèse shell exécutée localement avec le vrai reçu Apple Silicon validés.
+  Ne pas augmenter les délais produit ; conserver les trois cibles déjà réussies.
+  Les produits Intel non livrés imposent un rebuild ciblé, pas celui des cinq cibles.
+- Comparatif CPU initial rejeté : une caméra réelle passe ready→active avec changement
+  de confiance/périphérique/preuve pendant la dernière borne. Aucune action matérielle
+  effectuée, aucun résultat partiel promu en gain. Comparatif strict relancé dans un
+  nouveau répertoire, sans ignorer la différence. Contrôleur `ReadOnlyHost` aligné sur
+  le suivi FILETIME du parent ; aucun changement de surveillance/signature/cadence.
+- Nouveaux packages natifs du dernier build local vérifiés par extraction `/a` :
+  MSI4534272octets SHA256 `8bfee2c6785ff66ac17b45d247fc429aa0a9c37abefabe06f6f234b82ebe31ca` ;
+  ZIP5768732octets SHA256 `60ee359dc86ca4b7d45f31b038de948f699e7e5bcc207464230f2581e2eb43a4`.
+  Ce sont des fixtures natives privées, pas une release ou un MSI Flutter complet.
+
+### B5 — Mesures contrôlées, Mint réel et diagnostic de capture Mac
+
+- Comparatif Windows propre terminé : deux paires AB/BA,60s par état, snapshots
+  sémantiquement identiques aux bornes, deux processus caméra-capables ready/low,
+  pas un scénario de capture active provoqué. Tous les processus possédés terminés.
+  CPU normalisé à un cœur logique ; RSS cumulé pouvant compter des pages partagées.
+
+  | État Windows | B4 CPU % | B5 CPU % | B4 RSS Mio | B5 RSS Mio |
+  |---|---:|---:|---:|---:|
+  | Flutter fermé |36.983|35.910|20.187|20.210|
+  | Flutter ouvert |32.562|34.157|138.133|136.504|
+
+  **Aucun gain CPU général démontré** : les deux deltas ouverts sont défavorables.
+  B5 privé engagé4.60/121.77Mio fermé/ouvert ; protocole Ready médian246ms sur deux
+  lancements avec caches ordinaires, pas un temps disque-froid ou une latence de détection.
+- Profil séparé explicite15s, non mélangé au benchmark :9snapshots,18vérifications
+  de signatures dans chaque variante ; WinVerifyTrust représente33.16% d'un cœur
+  dans B5, contre37.43% pour le scope snapshot inclusif. Scopes imbriqués, ne pas les
+  additionner.344énumérations Toolhelp fraîches ; aucune vérification supprimée.
+  Pas de cache de verdict ni de changement de cadence : identité/taille/date seules
+  ne capturent pas le magasin de confiance, révocation, catalogue et politique.
+- Mint22.2 : nouveau bundle CI90d69b4, vrai SNI, préférences/erreurs/restauration,
+  historique/diagnostics et six cycles (trois par thème) réussis. Sortie Flutter
+  complète, aucune terminaison forcée, données/processus quotidiens et SHA des
+  produits identiques avant/après. Renderer Flutter réellement llvmpipe ; nœuds i915
+  non accessibles, siège local toujours greeter ; aucune modification système/GPU.
+
+  | Mint XRDP/X11 logiciel | Clair | Sombre |
+  |---|---:|---:|
+  | RSS fermé après cycles, Mio |10.773|10.484|
+  | RSS ouvert Rust + Flutter, Mio |324.723|324.785|
+  | PSS ouvert, Mio |295.474|295.497|
+  | CPU fermé, % d'un cœur |1.699|1.500|
+  | CPU ouvert, % d'un cœur |23.321|24.142|
+  | Premier mapping visible, ms |5675|4832|
+  | Mapping médian des réouvertures, ms |1081|1032|
+  | Sortie processus médiane, ms |186|226|
+
+  Intervalles10s et enfants éphémères omis : CPU descriptif/plancher, pas un résultat
+  GPU accéléré. Deux échecs de préparation conservés : modes0775 du nouveau répertoire
+  extrait et bit exécutable du helper perdu par ZIP/SCP Windows. Corrigés seulement
+  sur les nouvelles copies possédées et hash-vérifiées ; aucun garde affaibli.
+- Intel41454270155 : normal sandbox/IPC et premier scénario de panneaux réels passent ;
+  échec ensuite sur l'activation SIGUSR1 après capture legacy. Produits/journaux
+  désormais sauvegardés et digests vérifiés. La relation causale avec la capture
+  reste à tester ; ne pas réécrire le moteur ou augmenter les délais pour la masquer.
+- Revue des PNG Apple Silicon : certains textes latins présentent des artefacts ;
+  succès des interactions ≠ qualité visuelle prouvée. Diagnostic préparé avec
+  ScreenCaptureKit, filtre strict sur la fenêtre/PID/exécutable possédé, autorisation
+  Screen Recording préexistante seulement, sans prompt ni capture d'écran entier.
+  Nouveau helper de qualification Swift encore non compilé/exécuté à ce checkpoint.
+- Rejeu actualisé sur les produits B5 réellement livrés (ARM90d69b4, Intel a7f562d),
+  pins par artefact/source/run/SHA, modes readonly/settings distincts, contrôles
+  d'ascendance/diff et sceaux inchangés. Pas de rebuild Rust/Flutter pour ce diagnostic.
+
+- Diagnostic41460549455 : les deux replays ont restauré exactement les produits
+  attendus ; nouveau helper Swift compilé sans erreur sur les deux architectures,
+  mais abort `CGS_REQUIRE_INIT (did_initialize)` avant la capture. Il s'agit du
+  helper de diagnostic async sans `NSApplication`, pas d'une erreur de compilation
+  ou d'une preuve de régression du frontend. Initialisation AppKit background-only
+  ajoutée avant la lecture du grant CG ; aucun prompt/permission changé.
+- Vérification finale stable en lecture seule : exécutables MSI, réglages,
+  intentions micro/caméra, processus et autostart identiques aux empreintes B5
+  initiales. Aucun processus de qualification Windows restant.
+- Rejeu41461416119 : compilation et restitution des deux produits toujours bonnes,
+  mais `setActivationPolicy(.prohibited)` retourne false pour le helper CLI et
+  notre garde arrête le diagnostic avant capture ; ce retour ne prouve pas l'échec
+  du frontend. Remplacement par l'ordre du probe Aqua existant, déjà exécuté :
+  `NSScreen.screens` avant `CGPreflightScreenCaptureAccess`, sans changer la policy,
+  créer une fenêtre ou demander une autorisation. Les deux échecs restent conservés.
+
+### B5 — Défaut visuel Mac reproduit et essai Skia ciblé
+
+- Rejeu41462562178, produits figés : Apple Silicon réussit les huit scénarios,
+  32preuves de panneaux et24réouvertures ; les huit captures ScreenCaptureKit
+  proviennent exclusivement des fenêtres possédées, sans nouveau grant.
+  ZIP `58473764cc2a68663b641f9f824f5acae2e99216688eb4539759f45705acec67`,
+  TAR `c936e6c36c09713ff9630d7603e268b227bcaeff0230da4ce324ff78f28b6dc6`.
+- Les défauts de glyphes latins sont identiques avec ScreenCaptureKit et l'ancien
+  screencapture : le nouveau chemin ne les résout pas. L'interface est donc
+  sémantiquement testée, mais ne doit pas être déclarée visuellement qualifiée.
+- Intel : annotation GitHub exacte «The hosted runner lost communication with
+  the server» ; aucun artefact final reçu, pas de succès graphique extrapolé.
+  Le dernier Intel exploitable reste41454270155 et son activation SIGUSR1 échouée.
+- Flutter3.47 documente le retour Skia par `FLTEnableImpeller=false` dans Info.plist :
+  https://docs.flutter.dev/perf/impeller#macos. Essai Mac uniquement de cette option
+  officiellement supportée ; pas de modification du thème, de Rust, des permissions,
+  de la sandbox ou des renderers Windows/Linux. Ce n'est pas encore une correction
+  validée : un nouveau build/capture Apple Silicon doit établir le résultat.
+- Nouveau filtre CI Apple Silicon strict, mutuellement exclusif du filtre Intel,
+  pour éviter de reconstruire les autres plateformes déjà qualifiées.
+  Revalider l'option à chaque mise à jour du SDK : Flutter annonce son retrait futur.
+
+### B5 — Correction visuelle Apple Silicon établie
+
+- CI41471689681, source `01aae74e4430faed0564372c23819af0e2c858f6`, réussie :
+  nouveaux builds normaux/instrumentés et suites, sceaux et sandbox identiques,
+  puis huit scénarios,32preuves réelles et24réouvertures avec le même hôte AppKit.
+  Les huit PNG ScreenCaptureKit ont été examinés, y compris sept langues sombres :
+  textes latins maintenant lisibles, sans les glyphes corrompus du renderer par défaut.
+  Le contrôle agit sur le renderer Mac, pas sur la logique de surveillance.
+- Artefact13156323629 : ZIP `97f10902532ade49a0118a79831f9f4963089b55a0ecf08ac346d6ebba97aba0`,
+  TAR `dcfd3b27f428e7d4c45029a4253ee74a657dc008ef8c77ab96331c1c8394d4e4`.
+  Pin ARM du replay actualisé vers ces vrais produits ; aucune re-signature des
+  anciens artefacts. Le plist Mac reste un changement produit pour tout replay Mac,
+  et est seulement sans effet sur les produits Linux figés.
+- Nouveau bundle Windows normal :42170620octets (40.217Mio),15fichiers hors manifeste
+  de qualification, dont28346108octets pour le frontend. Pas un MSI Flutter final.
+- Prochaine opération ciblée : build/qualification Intel avec ce renderer corrigé,
+  sans relancer Windows/Linux/ARM déjà vérifiés ; aucune prétention de test physique.
+
+## 2026-11-02 — B5 terminée : qualification et point de reprise
+
+### Résultats définitifs
+
+- **Intel41476279179 réussi**, source `c75fbd870212a387aac3fd49957ce2f1f8bf20aa` :
+  compilation Rust/Flutter, suites, sceaux/architectures/sandbox et huit scénarios
+  graphiques réels sans bootstrap conditionnant l'essai.32preuves/24réouvertures ;
+  trois activations singleton par scénario, Status/Exit du vrai hôte AppKit,
+  restauration des préférences privées et absence de résidu possédé vérifiées.
+  Les sept captures sombres et la claire ont été examinées : textes lisibles.
+- Artefact Intel13158772655 : ZIP
+  `6cda83b9946e99d8f954c5623743c05b4f9d3dd258af7b8c76de96f8391fbdc0`,
+  TAR `6863268305246ce9f79e16653451cbedea2af765842193c2215484c42b283cf3`.
+  Les deux pins Mac pointent désormais vers les vrais produits Skia qualifiés.
+  Les variantes normales exactes ARM/Intel ont aussi passé IPC et disparition des
+  enfants natifs/Flutter à la mort du propriétaire. Aucun nouveau grant TCC.
+- **Windows41424009387 réussi** : CRT statique natif/hybride, audit réel PE et
+  MSI/ZIP natifs, versions sans effet de bord, tests/suites et autostart en compte
+  hébergé jetable. Token administrateur sur WinSta0 ; pas une validation compte
+  standard ou Windows vierge. Les six vrais cycles de panneaux locaux confirment
+  consultations/historique/diagnostics, préférences et poursuite Rust après sortie.
+- **Linux41422733643** : jobs x64 et ARM64 individuellement réussis, malgré le
+  statut global annulé de l'ancien run à cause du job Intel. Mint22.2 B5 réel
+  également réussi (six cycles, vrai SNI, commandes/préférences/erreurs/restauration).
+  Renderer llvmpipe confirmé ; pas de mesure GPU accélérée ni de bureau ARM physique.
+- Derniers totaux Windows locaux :269tests Rust réussis,6ignorés ; Clippy strict
+  natif/hybride et89tests Flutter/analyse réussis ;9tests du garde PE réussis.
+  Les mesures Windows/Mint et leur protocole sont consignés ci-dessus :
+  **aucun gain CPU général revendiqué**, pas de cache de confiance ou cadence réduite.
+- Installation quotidienne auditée sans correction : tray MSI0.21.0 présent,
+  aucune garde micro autonome observée, intention micro non demandée à cet instant.
+  Empreintes exécutables/réglages/intentions, identité du processus et autostart
+  identiques avant/après. Ce constat ne certifie pas l'état physique SDK des entrées.
+- Routage : principal `openai-codex/gpt-6.1-sol`/Codex OAuth. AGENTS/RULES présents
+  et lus ; héritage/défauts/rôles/fallbacks de délégation insuffisamment démontrables.
+  **Zéro sous-agent**, aucun autre modèle/fournisseur ou paramètre global modifié.
+
+### Sauvegarde et limites
+
+- Branche locale `work/flutter-hybrid-0211` conservée. Seule la branche CI
+  `ci/flutter-b5-20261102` a été poussée après l'autorisation ciblée ; main/tag stable,
+  neuf worktrees, stash et branche CRT séparée préservés. Aucun nouveau tag/release,
+  remplacement du MSI, contrôle matériel ou déploiement de site.
+- Preuves privées durables :
+  `%LOCALAPPDATA%\MicCamWatchQualification\flutter-b5-20261102-080321`,
+  index `B5-EVIDENCE-INDEX.json`, archives originales et SHA vérifiés, captures
+  Windows/Mint/Mac, reçus de cycles/restauration et profils CPU distincts.
+- Non qualifié : Windows sans runtime VC préinstallé, soumission winget publique,
+  MSI Flutter complet et cycle installé/mise à jour/désinstallation, autostart Unix
+  opérationnel écrit depuis Flutter, fonctions matérielles/TCC, accessibilité
+  native externe et toutes les combinaisons DPI, GPU Mint ou bureau ARM physique.
+  **Aucun test manuel sur Mac physique n'est une condition de reprise.**
+
+### Instructions de reprise après validation utilisateur
+
+1. Relire cette section et `FLUTTER_MIGRATION_MATRIX.md` ; ne pas recommencer
+   les builds/tests/panneaux réussis si leurs composants n'ont pas changé.
+2. Garder le retour Skia Mac avec le SDK épinglé ; le requalifier à tout changement
+   d'engine. Les anciens artefacts par défaut restent des preuves d'échec, pas les
+   nouveaux pins. Ne pas modifier/re-signer les produits déjà archivés.
+3. Reprendre la parité restante explicitement : caméra/lock/maintenance, commandes
+   micro Unix, API persistantes langue/thème, mise à jour et packaging hybride.
+   Distinguer toujours observation, demande, sourdine et protection confirmée.
+4. Avant toute refonte de la libération micro manuelle, faire valider le contrat
+   durable par endpoint et les tests crash/CAS/original/externe décrits plus haut ;
+   B5 conserve l'effet actuel explicite d'unmute, pas une restauration individuelle.
+5. CPU : repartir du comparatif accepté `cpu-b4-b5-matched-2`, pas du premier essai
+   invalidé. WinVerifyTrust reste dominant ; ne pas recycler un verdict à partir
+   des seules dates/tailles. La latence de détection active n'a pas été mesurée.
+6. Mint : n'inventer aucune accélération ; un essai GPU nécessite une session
+   autorisée réellement accélérée, pas un changement de droits/driver silencieux.
+7. Attendre l'accord utilisateur avant la tranche suivante, toute installation,
+   publication, fusion ou modification des protections quotidiennes.
+
+## 2026-11-04 — v0.22.0, étape1/6 : audit de parité et planification
+
+- **Décision propriétaire : seule prochaine version publique = v0.22.0 hybride
+  Rust/Flutter ; pas de0.21.1 intermédiaire.** La candidate locale
+  `release/0.21.1-candidate` à `f4d68ae` est conservée comme preuve/outillage,
+  mais son périmètre natif et ses reports automatiques vers0.21.2 ne sont plus
+  le plan de publication. Aucun historique précédent supprimé.
+- Reprise vérifiée : main/origin `73369ab`, B5 `b6f820b`, branche CRT `2451088`,
+  tag `06d800b`→`3d74686`, stash `a373866`. Branche documentaire isolée
+  `docs/v022-parity-plan` créée sur B5, worktree `mcw-v022-stage1-20261104`.
+  **Aucun code, version produit, site, protection ou installation changé.**
+- Attention environnement : dix worktrees enregistrés au départ, dont cinq
+  signalés prunable sans entrée Git utilisable ; `work/github-visibility`
+  contient215 suppressions non indexées. État préexistant consigné, origine
+  non établie. Ne pas prune/reset/restore ces répertoires. Les refs restent
+  présentes ; les éventuels anciens fichiers non suivis ne sont pas certifiés.
+- [Audit exhaustif0.22 et matrice](V0.22.0_PARITY_AUDIT.md) : source publique
+  v0.21.0 et code B5, disponibilités W/L/M, Rust/IPC/Flutter, tests existants et
+  manquants, risques/travail/acceptation par fonction, priorités P0/P1/P2.
+  Les anciens documents de migration sont conservés avec renvoi normatif.
+- [Plan définitif des étapes2–6](RELEASE_0.22.0_PLAN.md) : dépendances,
+  fichiers/contrats, gates, risques, rollback, protocole CPU/RAM et séparation
+  Sol/DeepSeek en sessions principales indépendantes autorisées.
+- Principaux manques : micro Unix désactivé volontairement dans le bridge,
+  caméra/lock/maintenance non migrés, besoins avancés CLI/TUI à exposer sans
+  shell, durées notifications/copie diagnostics/langues, identité/version et
+  packaging installé hybride. L'accès à une fenêtre native de secours n'est
+  **pas** une parité Flutter terminée.
+- Restauration : Windows release manuel = unmute explicite des entrées actives,
+  pas restitution individuelle ; originaux lock Windows retenus dans la garde,
+  token/pending persistés mais pas les valeurs par endpoint après perte de
+  cette garde. Code conservateur refuse le restore aveugle. Journaux Unix et
+  politique d'intention externe restent distincts. Aucun changement matériel.
+- Distribution : WXS encore deux EXEs natifs, updater/reçus pair-only et garde
+  d'archives exactement deux EXEs ne qualifient pas le troisième runner et ses
+  ressources. ARM Flutter B5 construit sous Ubuntu24.04 ne prouve pas le
+  plancher glibc2.35/22.04 de la release native ; résolution explicite exigée.
+- CRT retrouvé : blobs .cargo, auditeur PE durci, neuf tests et générateur winget
+  identiques B5/RC ; préambule version B5 conserve les modes hybrides. Ne pas
+  recherry-pick les correctifs initiaux ni rétrograder l'auditeur. Aucun asset
+  public0.21.0 ou manifeste winget0.13.4 prétendu corrigé.
+- `docs/WINGET.md` actualisé : PR441153 fusionnée le3novembre, même identifiant
+  RomanCuisset.MicCamWatch ; prochaine mise à jour seulement après publication
+  GitHub0.22 vérifiée, sans URL/SHA inventé ni fermeture de l'ancienne PR fusionnée.
+- Preuves B5 recontrôlées par API : Windows41424009387 réussi ; jobs Linux
+  x64/ARM64 de41422733643 réussis malgré run global annulé ; Mac ARM41471689681
+  et Intel41476279179 réussis, chacun avec son vrai SHA. Évidences et bundle
+  normal privés relus et hash-vérifiés. Pas une nouvelle CI0.22.
+- Smoke inerte réel : aide/version CLI stable, quatre PE du bundle B5 audités
+  (Rust/runner/moteur), versions B5 immédiates avec chemins settings invalides.
+  Aucun build/suite/GUI/mutation de protection relancé pour cet audit.
+- CPU : protocole comparatif réelle0.21 vs futur0.22 préparé, pas exécuté.
+  WinVerifyTrust et les scénarios Active restent à mesurer ; Mint llvmpipe
+  n'est pas accéléré. Objectif historique15MB inchangé. `watch --no-kill`
+  Windows peut reprendre une garde demandée ; pas une sonde passive à lancer
+  sur la machine quotidienne. Les chemins privés ne suffisent pas à isoler
+  l'ancien singleton/ressource système.
+- Routage : principal Sol/Codex OAuth, zéro sous-agent faute de preuve effective.
+  Un premier find a révélé25tentatives externes OpenRouter toutes échouées402,
+  0token ; outil exclu aussitôt et incident signalé. Aucun réglage global changé,
+  aucun autre outil à modèle auxiliaire utilisé ensuite.
+- Preuves privées d'étape1 :
+  `%LOCALAPPDATA%\MicCamWatchQualification\audit-022-stage1-20261104-124241`.
+  Rapport public agrégé seulement ; journaux de chemins/processus privés à ne
+  pas publier sans revue.
+- **Point d'arrêt : ÉTAPE1/6 terminée, aucune RC0.22 proposée.** Étape2
+  recommandée avec GPT-6.1 Sol/Codex OAuth/xhigh après nouvel accord.
+  Les P0/P1 doivent être complets avant proposition de RC ; pas de push, main,
+  tag, release, winget, déploiement ou contrôle matériel autorisé ici.
+
+## 2026-11-10 — v0.22.0, étape 2/6 : sauvegarde de la parité Flutter en cours
+
+- Base vérifiée `e3af148` (B5 et documents d'étape 1), branche isolée
+  `work/flutter-hybrid-0220`, worktree `C:\Users\stcui\Documents\mcw-flutter-0220`.
+  Aucune fusion/push, aucun changement de main, des autres worktrees ou du MSI.
+- Nouveau canal typé `tools` dans le protocole Flutter/Rust **6** : requêtes
+  authentifiées et bornées, préparation native puis confirmation à usage unique
+  (30 s ; 3 s pour une terminaison), observation avant l'effet et relecture après.
+  Le jeton provient du CSPRNG système, jamais d'un PRNG de présentation.
+- Réutilisation des backends Unix microphone et caméra, inspection macOS,
+  préférences de verrouillage avec comparaison sous verrou du stockage, inventaire,
+  détails d'application, politique/validation de fichier bornée et chemins.
+  La terminaison conserve l'instance native et refuse les processus MCW ; le
+  résultat distingue requête de terminaison acceptée et sortie effectivement vérifiée.
+- **Blocage P0 volontaire : caméra Windows non activée dans ce nouveau worker.**
+  Elle doit rejoindre le coordinateur natif caméra (générations, lock/restore,
+  opérations manuelles). Un appel direct concurrent affaiblirait son contrat.
+  Les contrôles natifs sont conservés ; un bouton désactivé n'est pas une parité.
+- La fermeture Flutter ne restaure aucun périphérique. Les sorties normales du
+  propriétaire attendent les opérations admises, y compris lorsque l'UI a disparu.
+  Aucun journal d'originaux ni contrat de libération microphone Windows réécrit.
+- UI commune : page Contrôles, effacement confirmé de l'historique réel,
+  copie du rapport natif, durées de pause 1–10080 minutes avec horloge Rust,
+  paragraphes À propos traduits en sept langues. Versions source alignées sur
+  0.22.0 ; ce n'est ni une release ni un remplacement du frontend de production.
+- Les opérations de mise à jour/removal du bundle hybride ne sont pas inventées :
+  la consultation expose leur indisponibilité ; le vrai transactionnel reste à traiter.
+- Première analyse Flutter passée. Suite initiale : 96 réussites, un échec du
+  nouveau test de corrélation ; cause démontrée : typage perdu dans une Map
+  imbriquée de requête locale, pas une autorisation Rust manquante. Correction par
+  conservation du contrôle typé ; les **8 tests tools repassent**. Les 89 tests
+  existants avaient réussi ; aucun assouplissement du décodeur.
+- Le premier cargo check du bridge avait réussi sans la feature `windows-tray` :
+  cela ne qualifie pas le tray complet. Le résultat du job Rust/features complètes
+  a été perdu lors de l'interruption du processus OMP ; il reste à obtenir.
+- Preuves : `%LOCALAPPDATA%\MicCamWatchQualification\v022-stage2-20261110-093726`.
+  Journaux Flutter conservés, y compris l'échec initial ; pas de preuve fraîche
+  macOS/ARM64. WSL accessible, mais outils Rust/Flutter non trouvés dans son PATH.
+- **Point de reprise immédiat :** qualifier Rust avec `windows-tray,flutter-desktop`,
+  examiner les erreurs réelles, puis lancer la qualification graphique Windows
+  dans un préfixe privé. Actualiser ensuite la matrice des 44 familles et le plan.
+  Ne pas déclarer l'étape 2 terminée : contrôles P0 et maintenance restent incomplets.
+- Routage : travail sans sous-agent, faute de preuve de routage effectif
+  modèle/fournisseur. Aucun réglage global OMP changé.
+
+### Reprise du checkpoint et vérification des contrats
+
+- Sauvegarde locale `9937427` créée avant reprise des opérations longues.
+  Analyse Flutter de nouveau passée ; **10 tests tools** passent après correction
+  de la corrélation, déduplication des détails par PID et refus des contrôles
+  reposant sur un readback d'une ancienne session.
+- Rust Windows complet : première exécution 107 tests frontend réussis, trois
+  ignorés et quatre échecs de fixtures (Ready resté en protocole 5 ; deadline CAS
+  du nouveau test de durées ignorait la valeur protégée initiale). Pas de
+  contournement du parseur/CAS : fixtures réparées pour la vraie version et le
+  vrai état initial ; les **60 tests desktop** passent, puis **Clippy strict
+  windows-tray,flutter-desktop/all-targets** passe.
+- Scénario graphique de qualification `parity` préparé : utilise les vrais boutons,
+  Rust et les pipes, dans `settings_development` seulement. Il ne permet aucune
+  action matérielle ni autostart ; vérifie aussi l'effacement de l'historique du
+  préfixe privé, sa relecture et les consultations natives. Normal AOT et build
+  instrumenté seront distingués dans les preuves.
+- SDK Linux B2 retrouvé sous WSL, hors PATH : préfixe privé
+  `/home/roman/mcw-qualification/b2-20261029-082656`, Rust/Flutter/sysroot déjà
+  préparés. Ne pas refaire cette installation ni modifier ses paquets système ;
+  réutiliser l'outillage avec une copie de source et des sorties de test privées.
+
+### Sauvegardes GitHub désormais autorisées
+
+- Autorisation utilisateur explicite de pousser fréquemment les sauvegardes :
+  uniquement `work/flutter-hybrid-0220`, commits utiles et cohérents, sans réécrire
+  l'historique ni créer de commits vides. Main, tags, releases et site restent exclus.
+- Références distantes relues avant le premier push : main `73369ab`, tag annoté
+  v0.21.0 `06d800b` pointant sur `3d74686` ; branche distante 0.22 encore absente.
+- Automatisations inspectées : release sur tags `v*`/dispatch, site Actions sur
+  main et chemins site, CI générale sur push. Les commits de sauvegarde portent
+  les préfixes officiels `[CF-Pages-Skip]` et `[skip ci]` pour éviter tout
+  déploiement Pages et distinguer sauvegarde et véritable qualification CI.
+- Les deux binaires Rust Windows **release** de `52f8613`, avec
+  `windows-tray,flutter-desktop`, viennent de compiler avec succès. Reçu et sorties
+  conservés dans les preuves privées ; aucun exécutable installé remplacé.
+
+### 2026-11-11 — Compilation multiplateforme et sauvegardes de l'étape 2
+
+- Checkpoints `9937427`, `52f8613` et `ae13b73` désormais sauvegardés sur
+  `origin/work/flutter-hybrid-0220`, sans main/tag/release/déploiement.
+- Builds Flutter Windows release normal et instrumenté `parity` réussis sur
+  `ae13b73` ; bundles séparés figés dans les preuves privées, pas installés.
+- Premier test Linux réel avec le SDK/sysroot B2 réutilisé : compilation arrêtée
+  sur la fixture `desktop::unix::opening_fixture`, à laquelle manquaient les
+  nouveaux champs de contexte et de suivi du travail admis. Initialisation
+  corrigée comme dans le constructeur de production ; nouvelle exécution requise.
+  Les avertissements des dépendances vendoriées ne sont pas masqués.
+- Suite Linux finale : **67 tests desktop réussis**, puis Clippy strict
+  `flutter-desktop/all-targets` réussi avec le sysroot privé. Le contexte de la
+  fixture imbriquée utilise `Default::default()` (son parent n'est pas le module
+  de production) ; les deux erreurs de compilation précédentes restent conservées.
+- Windows : **12 cycles UI réussis**, six en release normale et six avec scénario
+  `parity`, répartis clair/sombre. Les vrais boutons ont interrogé Rust, changé puis
+  rétabli la préférence de notification privée, effacé/relu uniquement l'historique
+  privé et vérifié que périphériques/verrouillage/autostart restent interdits en
+  développement. Chaque sortie termine Flutter, les ticks Rust continuent, tous
+  les processus possédés finissent et les valeurs des préférences privées reviennent.
+  Captures WGC des seules fenêtres possédées examinées en clair/sombre ; les détails
+  techniques natifs restent parfois en anglais, sans prétendre à une traduction
+  intégrale ni à une validation lecteur d'écran externe.
+- Coût descriptif de la release normale, intervalles de 8 s seulement : RSS fermé
+  initial 19,66–22,74 Mio, ouvert 135,87–140,04 Mio, fermé final 21,12–23,93 Mio ;
+  commit privé ouvert 120,55–121,30 Mio. CPU fermé 5,36–6,62 % / ouvert 7,47–7,66 %
+  d'un cœur. Ready première ouverture observée 523 ms, réouvertures suivantes
+  280–323 ms ; fenêtre réellement visible 395–649 ms, sortie 252–296 ms.
+  Ni comparaison à la stable, ni campagne CPU de l'étape 4, ni mesure disque-froid.
+
+### Choix explicite des sept langues — fenêtre uniquement
+
+- `main.dart`/`labels.dart` : sélecteur commun en/fr/de/es/ja/zh/ru et option
+  « Suivre le moteur ». Un choix explicite résiste aux nouveaux snapshots pendant
+  cette fenêtre ; une nouvelle fenêtre revient à la langue CLI/politique.
+  Aucun nouveau champ persistant ni changement de langue/politique Rust.
+- Analyse et **suite Flutter complète : 99 tests réussis**. Builds Windows release
+  normal et `parity` de nouveau réussis. Huit cycles supplémentaires réels :
+  deux normaux et six instrumentés clair/sombre ; sélection des sept langues par
+  les vrais menus, retour à la langue moteur, relecture des contrôles et extinction
+  complète de chaque UI. Préférences privées rétablies ; commandes matérielles et
+  autostart toujours interdites dans ce mode. Pas une validation visuelle manuelle
+  complète de chaque panneau en sept langues ni une traduction des messages OS.
+- CI macOS exacte de `eff1ce9` lancée explicitement, sans replay B5 ni publication :
+  [42976746704](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/42976746704).
+  Ce SHA précède le sélecteur ; aucun succès de ce run ne qualifiera implicitement
+  cette modification Dart ultérieure. Son résultat reste à examiner.
+- Le scénario `parity` termine désormais sur Réglages pour conserver une preuve
+  visuelle du vrai sélecteur ; deux nouvelles fenêtres clair/sombre ont repassé
+  le scénario complet et leurs captures possédées ont été examinées. Aucun
+  événement souris/clavier global ni capture du bureau n'a été utilisé.
+- Audit des fichiers réellement exécutés : paire Rust release + runner et moteur
+  du bundle Flutter normal actuel, **4 PE sans CRT dynamique inattendu ni autre
+  dépendance non déclarée**, imports ordinaires et différés. `mcw --version` et
+  `mcw-tray --version` retournent immédiatement 0.22.0 avec sortie 0, même sans
+  répertoire de préférences disponible. Pas une preuve Windows vierge/MSI hybride.
+
+### Qualification Linux et macOS de la tranche — résultats conservés
+
+- Linux : source archivée `4aeabd6`, SDK/sysroot B2 réutilisé sans installation
+  système ; pub offline/lockfile, **99 tests Flutter et build release Linux x64**
+  réussis. Preuves `linux-flutter-release.*`. Aucun nouveau runtime Mint/SNI,
+  GPU, ARM ou plancher ABI Ubuntu22.04 revendiqué.
+- [CI macOS 42976746704](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/42976746704)
+  sur **`eff1ce976111ae18b577f8d789935d5b2870328d`** : Intel et Apple Silicon
+  réussis. Par cible : Clippy, 66 desktop + 5 settings + 12 history + 7 autostart
+  + 2 gates Rust, 99 tests Flutter, builds release, architecture et seals.
+- Pas seulement les jobs verts : reçus `graphical-receipt.json` et huit scénarios
+  par cible examinés ; **24 réouvertures / 32 preuves UI par architecture**, hôte
+  AppKit permanent, unicité et fin Flutter, menus et préférences privées. Release
+  normale distincte de l'instrumentation : snapshot réel et teardown après mort
+  du propriétaire ; ses cycles graphiques non instrumentés restent non exécutés.
+- Quatre archives téléchargées et SHA-256 vérifiés : preuves Intel
+  `4ebffbe75989a8057c2cb049ecdd66dd7892cee40bfcaa9b440c884c4b104343`,
+  produits Intel `7c845614e866327a9a6fce8e890d39238e65a6cb69e526692f46ab2781bcd0ff`,
+  preuves ARM `3607f844de908c2c0033337ad80bbcbbd5b0c0c7cb7759aa3573b0b06b79cb40`,
+  produits ARM `dc32d83e9aad6e3146e5376a8fb5c067541a83112178909c31be5cd4c2a065a7`.
+  Archives durables dans les preuves locales, indépendantes de leur rétention CI.
+- Captures natives Intel clair et ARM sombre examinées : diagnostics réels,
+  caméra inconnue/dégradée explicitement visible. Avertissements MediaToolbox du
+  runner conservés ; pas de TCC/matériel, Developer ID, notarisation ou installation
+  qualifiés. Aucun Mac manuel exigé. Le sélecteur postérieur à `eff1ce9` n'est pas
+  inclus dans ce run, même si ses sources actuelles compilent sous Windows/Linux.
+- Matrice des **44 familles actualisée** dans l'audit, matrice historique reliée,
+  plan corrigé : **étape 2 incomplète**, pas étape 3/RC. Points de reprise P0 :
+  coordinateur caméra Windows/reprise/legacy, enforcement watcher, Exit Rust et
+  maintenance liée au vrai owner/bundle complet. P1 : filtres/session/logs et
+  détail d'application multi-accès. Aucun de ces manques n'est validé par le secours natif.
+
+### Contrôle de préservation et reprise sûre
+
+- Main local/distant reste `73369ab`, tag v0.21.0 objet `06d800b` → `3d74686`.
+  B5 `b6f820b`, RC native `f4d68ae`, branche CRT `2451088` et stash `a373866`
+  inchangés. Tous les enregistrements de worktree sont conservés ; seul le HEAD
+  du worktree contrôlé `mcw-flutter-0220` évolue. Les problèmes historiques des
+  autres worktrees n'ont été ni nettoyés ni restaurés.
+- Les cinq empreintes de référence du quotidien sont identiques : deux binaires
+  MSI, settings, intention micro et journal caméra. Autostart HKCU identique.
+  Pas de promesse de hash complet de l'historique quotidien : il n'était pas
+  intégralement haché au départ et les tests n'y ont rien écrit.
+- La lecture finale constate un tray MSI PID 8948, différent du PID 12340 initial.
+  Cause non établie ; **aucun processus quotidien lancé, arrêté ou relancé par
+  cette qualification**, aucune protection touchée pour expliquer ou corriger
+  ce changement. Ne pas attribuer une continuité de processus à une simple
+  identité de fichiers ; aucune réparation automatique n'a été tentée.
+- Les preuves, reproductions privées et archives CI sont dans
+  `%LOCALAPPDATA%\MicCamWatchQualification\v022-stage2-20261110-093726`.
+  Les logs bruts, tokens, noms d'applications et chemins personnels ne sont pas
+  ajoutés à Git. Les commits sont ciblés ; seuls la branche de développement et
+  le workflow de qualification explicite sont publiés/exécutés, pas main/site/release.
+- Reprise : lire d'abord le delta des 44 familles dans `V0.22.0_PARITY_AUDIT.md`
+  et le statut du plan. Les P0/P1 restants interdisent de déclarer l'étape 2
+  terminée ou d'avancer à l'étape 3. Aucun changement d'architecture/contrat de
+  restauration sensible par simple contournement de bouton désactivé.
+- Modèle principal : `openai-codex/gpt-6.1-sol`, OpenAI Codex OAuth. Aucun
+  sous-agent, routage exact non démontré ; aucun réglage global changé.
+
+## 2026-11-12 — v0.22.0, finalisation étape 2 : coordinateur caméra Windows
+
+- Reprise vérifiée sur `work/flutter-hybrid-0220` à `93e8003`, synchronisée
+  avec origin, sans modification ni fichier non suivi dans ce worktree. Les
+  quatre documents de référence ont été lus intégralement. Aucun nettoyage des
+  autres worktrees, du stash ou des suppressions historiques ; aucun sous-agent,
+  faute de preuve technique du routage modèle/fournisseur/authentification.
+- IPC **7** : commandes caméra Block, Allow, Resume et récupération historique
+  d'un identifiant Windows exact. Le jeton préparé est à usage unique ; Rust
+  retient la révision privée du coordinateur. Aucun numéro de génération ni
+  droit natif n'est accepté depuis Dart.
+- `src/frontends/desktop/camera_owner.rs`, `tools.rs`, `windows.rs` et
+  `src/frontends/tray.rs` : délégation bornée au propriétaire permanent, même
+  worker caméra natif, même coordination des restaurations/verrouillages.
+  Une révision modifiée, une opération pendante, une admission expirée ou une
+  file indisponible refusent l'effet. La fermeture Flutter n'annule pas un effet
+  déjà admis. Les résultats sont rendus après mise à jour du coordinateur puis
+  relecture native ; un délai ou une relecture inconnue ne devient pas succès.
+- Block/Allow et récupération explicite remplacent l'intention manuelle, tandis
+  que Resume conserve le contrat de restauration natif. UAC reste entièrement
+  natif. La récupération historique exige un ID exact borné, un avertissement
+  distinct et la confirmation ; aucun ancien enregistrement non signé ne devient
+  une autorité. La reprise confirme le service demandé, pas un blocage universel.
+- Flutter : commandes, textes dans les sept langues et avertissement avancé ;
+  les actions restent désactivées en développement. Correction démontrée par
+  test : après annulation du dialogue, rafraîchir immédiatement les contrôles
+  au lieu d'attendre le prochain snapshot.
+- Vérifications Windows locales : **113 tests frontends réussis, 3 ignorés** ;
+  Clippy strict tous targets ; analyse Flutter ; **101 tests Flutter réussis** ;
+  builds Rust release hybride et Flutter release normal/instrumenté réussis.
+  Les premiers tests Rust/Clippy précèdent le changement mécanique IPC6→7 ;
+  le build Rust et les tests/builds Flutter ont ensuite utilisé IPC7.
+- Vraies fenêtres Contrôles clair/sombre capturées par HWND/PID/génération
+  possédés et examinées. **Six cycles** (trois par thème), ouvertures concurrentes,
+  IPC réel, sept langues dans le scénario, fermeture complète du frontend et
+  progression de l'observation Rust après fermeture. Aucun effet caméra/micro
+  réel n'a été exécuté ; refus/UAC et révisions testés par fixtures.
+- Le reçu clair conserve un échec du harnais : comparaison des octets TOML après
+  sérialisation Rust. Les huit préférences relues sont strictement identiques ;
+  les trois cycles et l'arrêt possédé étaient réussis. Le diagnostic séparé
+  `persistence-review.json` conserve cette distinction, sans effacer l'échec.
+  Le scénario sombre compare les valeurs et réussit. Les captures montrent les
+  actions de développement désactivées, pas une qualification matérielle.
+- Preuves privées : `%LOCALAPPDATA%\MicCamWatchQualification\v022-stage2-final-20261112-084140`.
+  Pas de logs bruts, secrets, chemins utilisateur ou exécutables ajoutés à Git.
+- **Étape 2 encore en cours** : poursuivre enforcement, sortie contrôlée,
+  sessions/journaux, multi-accès et maintenance. Aucune qualification nouvelle
+  Linux/macOS de ce code à ce point ; ne pas réattribuer les anciens résultats.
+  Pas de publication, changement MSI stable, protection quotidienne ou site.
+
+
+### 2026-11-12 — Enforcement natif depuis Flutter
+
+- `watcher/enforcement.rs` détient une autorité de session dans Rust. Les deux
+  algorithmes existants Windows/Unix sont réutilisés par des callbacks natifs
+  testables ; aucun second collecteur, service ou moteur n'est lancé. Le tray
+  Windows applique l'enforcement dans son worker d'observation, Unix dans sa
+  boucle existante. Fréquence et vérifications de confiance inchangées.
+- Activation/désactivation Flutter par préparation, confirmation explicite,
+  révision privée, politique/profil encore identiques et relecture du résultat.
+  Refus des commandes en développement. Deux observations actives explicitement
+  Deny et identité native conservée restent nécessaires ; Ready/Alert/identité
+  absente/couverture perdue ne donnent pas une autorisation de terminer.
+- La désactivation attend la fin d'un effet natif déjà admis ; elle n'annule pas
+  une terminaison. Les compteurs distinguent demandes natives acceptées et erreurs,
+  pas une promesse que tous les processus sont arrêtés ou les périphériques bloqués.
+- **Contrat de durée explicite** : comme les flags `watch --kill/--no-kill`,
+  l'activation appartient à cette session Rust ; fermer/réouvrir Flutter ne la
+  perd pas, redémarrer Rust la désactive. La politique TOML et son action restent
+  consultables, inchangées ; aucun nouveau réglage persistant n'est inventé.
+  L'ancien tray n'appliquait pas automatiquement `action=kill` ; on ne transforme
+  pas silencieusement cette configuration en nouvelle autorisation de terminaison.
+- Tests : trois tests Rust du runtime (deux observations, PID réutilisé,
+  déconnexion du frontend, redémarrage, gaps, refus natif), refus de préparation
+  en développement, Clippy strict et analyse Flutter réussis. Les 14 tests
+  `tools_test.dart` réussissent, dont intent non optimiste, refus et session
+  remplacée. Un test initial utilisait `Snapshot.clone()` non disponible :
+  corrigé uniquement dans la fixture, sans ajouter de copie au modèle produit.
+- Builds release Windows Rust/Flutter réussis. Six nouveaux cycles graphiques
+  réels clair/sombre ont vérifié la lecture de l'état Rust désactivé, IPC,
+  préférences privées restaurées et absence de frontend résiduel. Captures de la
+  page Contrôles examinées ; le panneau enforcement se trouve plus bas que le
+  viewport capturé, **pas encore de preuve visuelle desktop de ce panneau**.
+  Aucun processus quotidien ou fixture système réel n'a été terminé.
+- Qualifications Linux/macOS encore à effectuer pour ce delta. L02, les
+  sessions/journaux, multi-accès et contrats maintenance restent à terminer ;
+  l'étape2 n'est pas déclarée achevée.
+
+
+### 2026-11-12 — Sortie explicite du moteur depuis Flutter
+
+- Nouvelle voie privée `desktop/exit_owner.rs` : préparation à usage unique,
+  révision native, admission bornée, refus si occupé/périmé/déconnecté. La
+  fermeture normale de Flutter ne demande **jamais** cette sortie.
+- `tools.rs` distingue `quit_engine` des contrôles de périphériques. La sortie
+  utilise seulement l'autorité du propriétaire natif ; elle n'exige pas de sonde
+  matérielle ni de chargement des préférences. Les commits matériels restent
+  autorisés uniquement après récupération de leur préparation côté serveur et
+  contrôle du mode opérationnel ; aucun droit matériel n'est donné au mode isolé.
+- Windows Win32 et son propriétaire de développement réutilisent leur prédicat
+  natif d'arrêt, hors le ticket de consultation de sortie lui-même, puis attendent
+  la fin des travaux admis et l'écriture de la réponse IPC avant le même WM_CLOSE.
+  Aucun TerminateProcess d'un moteur ou d'une garde ; les gardes persistantes ne
+  sont ni libérées ni réinitialisées. Les nouvelles commandes sont refusées après
+  admission de la sortie.
+- Unix est raccordé au même mécanisme : fin de la boucle native, drain des
+  workers, fermeture du frontend et nettoyage existant. La restauration finale
+  existante reste limitée aux originaux détenus, session positivement déverrouillée
+  et intention de verrouillage ; aucun changement de contrat de restauration.
+- Flutter présente « Quitter MicCamWatch » avec confirmation et explication dans
+  les sept langues, séparément de fermer la fenêtre. Une demande admise n'est
+  jamais présentée comme une preuve que le moteur est déjà terminé.
+- Windows : **66 tests desktop**, **105 tests Flutter**, Clippy strict, analyse,
+  builds release Rust et Flutter réussis. Les refus couvrent état occupé,
+  révision ancienne, expiration, double demande, propriétaire absent et perte du
+  frontend ; la préparation Quit n'autorise pas les commandes matérielles.
+- **Quatre vrais arrêts** demandés depuis Flutter (clair/sombre, deux propriétaires
+  neufs par thème) : confirmation rendue, événement natif `exit_admitted`, code
+  de sortie du moteur **0**, toutes les générations de processus possédées
+  terminées, préférences privées inchangées. Le harnais n'a envoyé aucun message
+  d'arrêt pour obtenir ces résultats ; son nettoyage n'a vérifié que des moteurs
+  déjà terminés. Les cycles précédents de simple fermeture continuent à prouver
+  que Rust reste actif dans cet autre cas.
+- Premier essai GUI conservé en échec : le bouton avait une ValueKey mais aucun
+  identifiant de sémantique pour le pilote. Ajout du vrai identifiant accessible
+  `tools.confirm`, puis quatre arrêts réussis avec le bundle corrigé.
+  Preuves : `explicit-quit-v2-*/receipt.json` dans le préfixe privé de finalisation.
+- Aucune sortie sur l'instance stable quotidienne, aucune garde désactivée, aucun
+  test matériel. Unix/macOS : raccordement implémenté, nouvelle qualification
+  encore à faire à ce checkpoint. L'étape 2 continue avec les P1 restants.
+
+
+## 2026-11-13 — Étape 2/6 : applications multi-accès et protocole 8
+
+**Branche : `work/flutter-hybrid-0220`. Code : `b2ac919`. Étape toujours
+incomplète ; aucun passage automatique au packaging de l'étape 3.**
+
+- Nouveau `desktop/applications.rs` Rust : instantané par PID, toutes les
+  ressources/périphériques, curseur privé consommable une seule fois, refus
+  d'identités contradictoires, budget réel de JSON et troncature annoncée.
+  Flutter présente la date, le caractère non live, la continuation et l'absence
+  d'autorité de terminaison d'une simple lecture. Plus de limite silencieuse
+  aux seize premiers boutons d'application.
+- Le test desktop réel a trouvé une collision du champ `enforcement` :
+  décision d'évaluation d'un accès et statut d'application automatique ne sont
+  pas le même contrat. Le runtime est maintenant `enforcement_runtime`, IPC 8
+  dans Rust/Dart et le timing Win32 ; ancien protocole refusé, pas de shim.
+  Le test de régression empêche de transformer une décision observée en runtime.
+- La réponse d'une ancienne session, même déjà complétée avant son remplacement,
+  n'est plus relabellisée comme appartenant à la session courante. Fermer Flutter
+  supprime les continuations, pas la garde Rust.
+
+### Vérifications réellement exécutées
+
+- 69 tests Rust desktop réussis ; Clippy strict et analyse Flutter réussis ;
+  builds release Rust hybride et Flutter Windows réussis.
+- Suite Flutter complète : 108 réussites, un échec de consommateur de la nouvelle
+  clé. Après correction du panneau, 20/20 tests tools réussis. Échec et reçus
+  initiaux conservés ; ne pas prétendre qu'une invocation complète finale avait
+  déjà réussi. La CI ultérieure devra qualifier le commit exact.
+- Six cycles desktop sur de vraies observations (trois clair, trois sombre) :
+  requêtes réellement attribuées, rafales sans doublon, disparition de Flutter,
+  ticks Rust après fermeture, préférences privées identiques, arrêt owner code 0.
+- Captures HWND possédées examinées en clair et sombre, dont application et
+  panneau d'enforcement. Défilement par messages au seul HWND Flutter possédé ;
+  aucun contrôle de la souris de l'hôte. Les captures avec noms/chemins restent
+  privées hors Git.
+- Plusieurs ressources pour un même PID : fixtures déterministes uniquement ;
+  le processus réel consulté n'avait qu'un accès. Aucune terminaison ni commande
+  matérielle. L'état de risque ou une décision de politique ne prouve jamais
+  qu'un périphérique est bloqué.
+- Source P0 `ee8daa8` : sous WSL Linux, 71 tests desktop, 3 tests enforcement et
+  Clippy strict réussis. Ce reçu ne qualifie pas encore IPC 8/O04 ou un bureau
+  Linux accéléré. Pas de nouvelle validation macOS de ce code à ce point.
+- Le build Flutter interrompu du 12 avait laissé un reçu « running » malgré
+  une sortie de compilation ; seule cette étape a été reprise pour obtenir un
+  code retour observé. Les compilations/tests déjà aboutis n'ont pas été relancés
+  sans changement justifiant leur réexécution.
+
+Preuves durables : `%LOCALAPPDATA%\MicCamWatchQualification\v022-stage2-final-20261112-084140`,
+notamment `applications-v8-*`, les deux échecs réels initiaux, et
+`qualify_applications_v8.py`. Sources et empreintes figées dans les préfixes privés.
+Installation quotidienne, garde, préférences et périphériques non modifiés.
+Aucun sous-agent : routage fournisseur/modèle/authentification non prouvé.
+
+**Reprise :** O02/O05 (filtres, cadence et sessions/journaux), U01/U02
+(contrats de maintenance), traductions/capacités restantes et qualification
+Unix/macOS du nouveau code. Ne pas assimiler les transactions hybrides de
+l'étape 3 à une fonctionnalité déjà distribuable.
+
+
+### 2026-11-13 — Maintenance hybride sûre et métadonnées publiques
+
+Code `4e7b20b`, branche `work/flutter-hybrid-0220`.
+
+- Nouveau `desktop/maintenance.rs` : diagnostic passif du vrai exécutable,
+  instructions du gestionnaire issues des fonctions natives existantes, et
+  `check_updates` sans transaction. Les vérifications de provenance ne sont pas
+  dupliquées : leur sortie formatée est livrée à la CLI ou au DTO.
+- Windows réutilise self_update déjà présent, timeout 8 s/retries 0, version
+  sémantique et URL officielle exactes. Unix réutilise son résolveur HTTPS ;
+  le nouveau check borné ignore `.curlrc`, pas l'ancien appel d'update natif.
+  Aucune dépendance réseau ou plugin Flutter ajouté.
+- Flutter : résultat version/date/URL, distinction développement/public, état
+  antérieur périmé en cas d'erreur/déconnexion, gestionnaire non confirmé honnête,
+  sept langues. Une consultation n'est ni un téléchargement ni une preuve de
+  signature. Les captures finales montrent moteur 0.22.0 et release v0.21.0.
+- Garde de transaction au début des API Rust update/uninstall/worker et dispatch
+  CLI hybride précoce avant préférences/politique. Aucun remplacement de paire
+  Rust ou retrait partiel d'un bundle Flutter non qualifié. Les boutons restent
+  explicitement désactivés ; les demandes IPC d'installation/suppression sont
+  rejetées par schéma, pas simulées en réussite.
+- Les fonctions de transactions natives sans `flutter-desktop` restent en place.
+  Il ne s'agit pas de qualifier un installateur hybride : ce travail demeure
+  étape 3, avec les vrais reçus, ownership, fichiers Flutter et rollback.
+- Le build initial a exposé un accès `pub(crate)` invalide depuis la crate
+  binaire : corrigé en utilisant l'entrée publique update déjà existante, sans
+  élargir l'API ni modifier la protection.
+
+**Vérifié :** quatre tests Rust, 23 tests Flutter tools/maintenance avec les
+14 variantes langue/thème, Clippy strict hybride et natif de secours, analyse
+Flutter, builds release. Quatre fenêtres réelles (deux par thème) :
+consultation de gestionnaire puis vraie requête GitHub publique, fermeture
+Flutter, observation Rust poursuivie, owner terminé à 0, préférences privées
+inchangées. Les deux dernières captures ont été examinées sur le panneau
+réel des versions ; un premier déplacement de harness ne montrait que le haut
+des contrôles, et n'est pas revendiqué comme preuve visuelle de ce panneau.
+La qualification utilise maintenant `Scrollable.ensureVisible` dans le seul
+arbre de widgets possédé, sans souris/clavier globaux.
+
+Deux commandes version : sortie 0 et 0.22.0 ; update/uninstall hybrides :
+refus explicite **sortie 2**, payload et scope privé SHA-256 identiques.
+Le premier harness attendait 1 par erreur ; son échec est conservé et la
+convention du produit n'a pas été changée. Garde PE exécutée sur les deux Rust
+et les deux PE du bundle Flutter figé : imports normaux/différés conformes,
+aucun CRT dynamique inattendu. Ni Windows vierge ni MSI/ZIP hybride qualifié.
+
+Preuves durables : même répertoire `v022-stage2-final-20261112-084140`,
+`maintenance-*`, `qualify_maintenance_windows.py`,
+`qualify_cli_refusals.py`, `qualify_maintenance_visual.py`.
+Les scripts et résultats initiaux restent présents. Pas de changement de
+l'installation quotidienne, de garde, de préférences, d'historique ou de
+périphérique. Zéro sous-agent.
+
+**Suite de l'étape 2 :** O02/O05 (sessions, filtres/cadence, journaux), complétude
+des autres familles et nouvelles qualifications Linux/macOS du commit exact.
+Ne pas annoncer l'étape terminée ni commencer l'étape 3 sur ce seul checkpoint.
+
+### 2026-11-13 — Filtres de présentation réels, protocole 9 et scopes traduits
+
+Code sauvegardé : `85c6493`. `DesktopAccess` transmet maintenant le **risque
+calculé par Rust**, indépendamment de la confiance ; protocole strict **9**.
+Flutter filtre les lignes d'observation par ressource, risque natif minimal
+et inclusion des Ready. Les cartes globales, sondes, protections, notifications
+et cadences restent inchangées. Filtres locaux à la fenêtre, pas une préférence
+`show_ready` prétendument active ni une nouvelle session `watch`.
+
+Les scopes microphone/caméra sont six identifiants fermés traduits dans les
+sept langues. « Classé bloqué » décrit une évaluation, pas un blocage matériel.
+La reprise UAC caméra n'est plus affichée sur les OS sans cette capacité.
+Le contrôle microphone suit aussi la langue choisie pour cette fenêtre.
+
+Vérifications Windows : **74 tests Rust desktop, 115 tests Flutter**, Clippy
+strict, analyse Flutter et deux builds release réussis. Tests de rendu dans
+sept langues, deux thèmes et trois facteurs de texte (1/1,25/1,5).
+Six vraies ouvertures/fermetures depuis le propriétaire privé (trois par thème),
+actions sur les widgets rendus et observations réelles ; zéro processus Flutter
+résiduel, compteur Rust progressant après fermeture, préférences privées
+identiques, sortie coopérative du propriétaire à 0. Captures clair/sombre
+réellement examinées, sans injection d'observations fictives.
+
+Preuves : `v022-stage2-final-20261112-084140/view-v9-*` et
+`qualify_view_v9_windows.py` dans le répertoire de qualification privé.
+O02 reste **partiel** : cadence/session avancée non implémentée ; O05
+session/journaux explicites reste ouvert. Ne pas présenter ce filtre borné
+comme la parité complète de `watch`, ni comme une preuve d'absence de capture.
+
+### 2026-11-13 — Point de sauvegarde : 44 familles et qualification Unix exacte
+
+- Filtres/scopes `85c6493`, preuves documentées `b6dccc5`.
+- Outillage `6094f3a` : trois tests d'enforcement exécutés dans les jobs Linux
+  x64/ARM64 et macOS ; nouveau scénario **Flutter Quit** sur les deux Macs,
+  distinct de fermer NSWindow et du menu Exit natif. Build AOT séparé identifié,
+  confirmation sur widgets réels, propriétaire à 0 et absence de processus dans
+  les seuls chemins privés ; aucune augmentation de délai du produit.
+- Garde locale du nouveau harness : Windows refusé **avant** création de
+  répertoire/préfixe/lancement. AST Python et YAML vérifiés ; ce n'est pas une
+  exécution macOS. Aqua, sandbox et scellements restent obligatoires.
+- Qualification manuelle autorisée du SHA exact `6094f3a15c980d465ea70abd16442f7c59567705` :
+  [43402431543](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/43402431543).
+  Quatre cibles Unix demandées, sans runtime-replay ni bootstrap Intel ;
+  résultats **en attente** à ce checkpoint. Ne pas annoncer une CI réussie.
+- Audit PE actuel : les quatre images du préfixe Windows protocole 9 passent
+  la garde des imports normaux/différés. Pas une preuve MSI/ZIP ou Windows vierge.
+
+La section 9 de `V0.22.0_PARITY_AUDIT.md` contient un tableau courant des
+**44 familles**, contrôlées une fois chacune, séparant contrats fonctionnels,
+matériel non testé et étapes ultérieures. Les branches et plans historiques
+ne sont pas réécrits. Aucun sous-agent : routage effectif non prouvé.
+
+**Écart restant identifié, non masqué : O02/O05.** Les filtres de vue sont réels,
+mais cadence/session avancée et sorties `watch` n'ont pas de contrat Flutter
+complet. Les sources et les raisons de sécurité précises sont au §9.1 :
+collecteur unique, transitions complètes natives et destination de log possédée.
+Pas de deuxième `mcw watch`, de sink synthétique ou d'autorité arbitraire sur des
+fichiers pour prétendre terminer. Ce sont des P1 de l'étape 2, pas du packaging.
+
+**Prochaine opération sûre :** attendre le job local `gh run watch` déjà lancé,
+examiner les vrais reçus/logs/architectures/captures du run ci-dessus, corriger
+ses éventuels défauts et sauvegarder les preuves durables. Comparer ensuite les
+références protégées et les empreintes de l'installation quotidienne au baseline.
+Ne pas commencer l'étape 3 et ne pas conclure l'étape 2 terminée tant que O02/O05
+ne sont pas implémentés/testés.
+
+### 2026-11-13 — Quatre cibles Unix réussies, preuves téléchargées et examinées
+
+Run [43402431543](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/43402431543),
+source `6094f3a` : **quatre jobs réussis**. Logs intégraux et quatre artefacts
+conservés durablement hors dépôt ; empreintes des archives et source des produits
+macOS comparées. Le détail numérique est au §9.2 de l'audit, pas déduit du vert CI.
+
+- Linux x64 : Rust/Clippy, 115 Flutter, release et ELF ; 12 cycles réels Xvfb
+  (6 lifecycle + 6 préférences), SNI réel, propriétaire à 0 et aucun frontend
+  restant. Rendu logiciel, pas de mesure GPU/Mint accéléré.
+- Linux ARM64 : Rust/Clippy, 115 Flutter, release et ELF aarch64, Ubuntu24.04.
+  Pas d'exécution graphique/application, GPU, SBC physique ou compatibilité
+  Ubuntu22.04/Mint21 déduite.
+- Chaque Mac : 115 Flutter, Rust/Clippy/release, huit scénarios langue/thème,
+  24 close/reopen et 32 preuves de panneaux ; **deux Quit Flutter réels**, un
+  par thème, confirmation rendue → propriétaire à 0 → plus aucun processus du
+  préfixe privé. AppKit permanent, NSWindow réellement visible, protocole natif4
+  distinct du protocole Flutter9. Sandbox inchangée ; architectures, scellements
+  et minimum15 contrôlés. Quatre captures Flutter ScreenCaptureKit en clair/sombre
+  examinées, avec autorisation préexistante, jamais accordée par le test.
+- Limites : pas de matériel/TCC, Developer ID/notarisation, installateur ou
+  transaction d'update/uninstall hybride qualifiés. Aucun Mac manuel à organiser.
+
+**Défaut du test découvert et corrigé**, pas du produit : namespace Linux
+`frontends::tray::unix::menu_tests` sélectionnait zéro garde. `5ed7303` choisit le
+vrai namespace et exige les deux noms avant exécution. Contrôle ciblé sans
+rebuild Flutter :
+[43406668221](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/43406668221),
+source `5ed7303`, encore en cours à ce checkpoint. Le premier contrôle syntaxique
+direct du fichier Windows échouait sur CRLF ; le blob Git indexé LF passe, sans
+modifier artificiellement les conditions de CI. Reçus des deux essais conservés.
+
+Préservation vérifiée : cinq fichiers témoins (deux EXE MSI, préférences, intention
+micro et état caméra) **strictement identiques au début** ; main/origin main
+`73369ab`, tag annoté `06d800b` → `3d74686`, anciennes branches/candidate/CRT,
+12 worktrees et stash `a373866` conservés. Main propre ; les 215 suppressions
+historiques `work/github-visibility` restent présentes sans restauration.
+Zéro sous-agent, aucune installation quotidienne, action matérielle, publication,
+tag, fusion main ou déploiement.
+
+Reprise : terminer l'examen du contrôle de gardes ciblé ; O02/O05 demeurent les
+deux familles P1 fonctionnelles non achevées. Aucun passage automatique étape 3.
+
+### 2026-11-13 — Arrêt contrôlé de finalisation : preuves CI complètes, O02/O05 ouverts
+
+Contrôle ciblé
+[43406668221](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/43406668221)
+**réussi**, source `5ed7303e8ebdd610c7ae7ece9f16800832138e6a`.
+Les quatre artefacts ont été téléchargés et examinés : source exacte, les deux
+noms de tests attendus, puis **2 passed / 0 failed** sur chacune des quatre
+cibles Unix. Aucun rebuild Flutter ; les produits/cycles/captures de
+`43402431543` restent les preuves du code commun `6094f3a`.
+
+Sauvegardes utiles depuis `93e8003` : caméra `e7e990e`, enforcement `d90fa7f`,
+sortie propriétaire `79f9de3`, multi-accès `b2ac919`, maintenance `4e7b20b`,
+filtres/protocole9 `85c6493`, qualification Mac Quit `6094f3a`, garde Linux
+non-vide `5ed7303`. Les commits documentaires intermédiaires restent conservés
+sur `work/flutter-hybrid-0220`, notamment `a384b9d` (44 familles) et `1f6f82b`
+(preuves Unix). Tous ces commits sont poussés uniquement sur cette branche,
+avec skips de déploiement ; aucune release, aucun tag, aucune fusion main.
+
+Preuves durables :
+`%LOCALAPPDATA%\MicCamWatchQualification\v022-stage2-final-20261112-084140`.
+Les archives/logs reçus sont conservés au-delà de la rétention GitHub ;
+`native-gates-verified.json`, `unix-verified-receipts.json`,
+`stable-before.json`/`stable-after.json` et les captures permettent la reprise
+sans mémoire de conversation. Échecs initiaux et corrections restent traçables.
+
+**ÉTAPE 2/6 : INCOMPLÈTE.** Seuls les besoins fonctionnels avancés **O02/O05**
+restent ouverts dans le tableau courant : une session possédée par le moniteur
+unique avec cadence demandée/effective et des sinks explicites sûrs.
+Ne pas lancer une deuxième CLI `watch`, inventer des transitions depuis la vue
+bornée, ni autoriser un chemin de log arbitraire via le parent Rust.
+Le §9.1 de l'audit décrit les composants et tests nécessaires ; ces P1 ne sont
+pas reportés au packaging et ne sont pas reclassés optionnels.
+
+Prochain point de reprise : **finir ces contrats et leur UI dans l'étape 2**,
+avec GPT-6.1 Sol / OpenAI Codex OAuth / xhigh ; ne pas commencer l'étape 3.
+Zéro sous-agent utilisé, faute de preuve du routage modèle/fournisseur/auth.
+Les validations matérielles/UAC/Polkit/TCC et bundles installés restent bornées
+aux autorisations futures ; la garde et l'installation quotidienne sont intactes.
+
+### 2026-11-13 — Arrêt demandé par l'utilisateur et passation vers Codex
+
+L'implémentation menée avec oh-my-pi s'arrête à `f70c7f7` (branche
+`work/flutter-hybrid-0220`, distante synchronisée, arbre propre). Rien n'est
+supprimé : les 17 commits, les preuves et l'historique restent en place, et
+aucune ligne de code produit n'est modifiée après `f70c7f7`.
+
+Décisions de portée validées par l'utilisateur le 13 novembre 2026 :
+
+- **O02 = présentation seulement** : la cadence de collecte native ne change pas ;
+  Flutter ne règle que la diffusion et affiche cadence native/demandée/effective,
+  sans revendiquer la parité `watch --interval`.
+- **O05 = répertoire possédé par Rust** : journaux JSONL créés dans
+  `data_dir()/sessions`, chemin affiché après consentement ; aucun chemin fourni
+  par Flutter.
+
+Ces décisions bornent O02/O05 ; elles ne les terminent pas. L'étape reste
+**2/6 INCOMPLÈTE** et l'étape 3 n'est pas commencée. Le plan d'implémentation
+précis, les fichiers à modifier, les tests d'acceptation, les invariants, les
+limites et la procédure de reprise sont dans
+[`docs/HANDOFF_CODEX_2026-11-13.md`](HANDOFF_CODEX_2026-11-13.md).
+
+Aucun sous-agent, aucune publication, aucune modification de `main`, du tag
+v0.21.0, de l'installation stable ou des 12 worktrees.
+
+
+
+## 2026-11-16 — Reprise de la session d’observation
+
+- O02 expose les intervalles natif, demandé et effectif. Le réglage agit sur
+  la livraison Flutter. La boucle de collecte et l’inventaire caméra gardent
+  leurs durées natives.
+- O05 ajoute la création confirmée d’un journal JSONL privé, suivi par le
+  propriétaire Rust et fermé à sa sortie. Le journal part des événements
+  natifs, avec un plafond de 32 Mio et un état d’échec consultable.
+- La qualification logicielle de `9b48753` a réussi. Le scénario Windows
+  opérationnel a vérifié le consentement, la poursuite de la session après
+  fermeture de Flutter, la clôture du journal et le redémarrage inactif.
+  Les résultats par cible et les limites figurent dans
+  [l’audit de parité](V0.22.0_PARITY_AUDIT.md#94-reprise-du-16-novembre-2026).
+
+## 2026-11-16 — Parité fonctionnelle Flutter terminée
+
+Le commit `945d69c` vérifie les relectures natives des protections Windows
+et des restaurations micro Unix. Flutter rend le rapport d’inspection
+caméra macOS. L’essai de disque plein injecté complète les preuves du
+journal explicite. Le protocole reste à la version 10.
+
+Les tests Windows, Linux x64 et ARM64, macOS Intel et Apple Silicon sont
+consignés dans les [reçus de la qualification fonctionnelle](V0.22.0_PARITY_AUDIT.md#qualification-etape-2). La validation suivante
+porte sur le bundle installé et ses transactions, après accord pour
+démarrer l’étape 3.
+
+## 2026-11-17 — Première qualification des paquets hybrides v0.22.0
+
+La disposition Rust et Flutter, les huit SHA-256, la preuve ABI sous Ubuntu
+22.04 et les cycles installés par OS figurent dans le [rapport de distribution](HYBRID_DISTRIBUTION.md).
+L’étape 3 reste incomplète. La mise à jour Rust du bundle Windows et la
+récupération du ZIP portable restent ouvertes.
+
+## 2026-11-17 — Maintenance hybride Windows
+
+Le code de maintenance Rust et les preuves de la bascule ZIP, de la reprise,
+du retrait et de la délégation MSI sont dans le
+[rapport de distribution](HYBRID_DISTRIBUTION.md). Le cycle MSI normal en
+compte standard sous Windows 11 ARM64 a réussi pour le paquet x64 émulé.
+Le rétablissement d’un enregistrement MSI après la panne injectée reste à
+qualifier, ainsi que le bureau x64 standard et UAC. L’étape 3 reste incomplète.
+
+## 2026-11-24 — Audit multiplateforme de l’étape 4
+
+La reprise part de `e773cbf`, après la clôture de l’étape 3 dans la
+[preuve de récupération MSI](WINDOWS_MSI_MAINTENANCE.md). Les correctifs
+de diagnostic macOS, les fenêtres Flutter, l’explication des profils et
+la mesure du lecteur d’historique figurent dans le
+[registre d’audit](HYBRID_STAGE4_AUDIT.md). La qualification de la
+terminaison native, des bannières et du matériel garde des critères
+spécifiques.
