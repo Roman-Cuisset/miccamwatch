@@ -1271,14 +1271,14 @@ mod tests {
                 })
                 .unwrap();
         }
-        assert_eq!(
-            events,
-            vec![
+        assert!(matches!(
+            events.as_slice(),
+            [
                 crate::model::Action::Start,
                 crate::model::Action::Start,
                 crate::model::Action::Stop
             ]
-        );
+        ));
     }
 
     #[test]
