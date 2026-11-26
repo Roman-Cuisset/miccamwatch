@@ -48,6 +48,15 @@ and nine exact-tag build-provenance subjects were verified after download.
 See [validation and release status](docs/VALIDATION.md#public-release-0210) for
 the recovered publication record, source-specific qualification and hardware limits.
 
+**v0.22.0 candidate.** The optional consultation window moves to a separate
+Flutter process. Rust still owns monitoring, privacy controls, the tray, local
+history and preferences. Closing the window leaves the tray and monitor running.
+The candidate uses complete hybrid packages, with a per-user MSI on Windows,
+managed archives on Linux and a sealed application bundle on macOS. The v0.21.0
+two-file updater cannot migrate these bundles. Use the platform-specific
+installation and recovery instructions for the candidate.
+[Hybrid distribution and maintenance](docs/HYBRID_DISTRIBUTION.md).
+
 ## Features
 
 - **Live observations:** microphone and camera activity, with process/PID attribution when the platform can prove it.

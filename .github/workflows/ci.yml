@@ -20,6 +20,7 @@ on:
           - windows
           - flutter
           - flutter-windows
+          - release-candidate
       flutter-runtime-replay:
         description: With native-platform=flutter, replay audited B5 Mac or Linux x64 products without rebuilding; each artifact retains its exact source
         type: boolean
@@ -110,38 +111,95 @@ permissions:
 
 jobs:
   flutter-qualification:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.native-platform == 'flutter' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.native-platform == 'flutter' || inputs.native-platform == 'release-candidate') }}
     uses: ./.github/workflows/flutter-qualification.yml
     permissions:
       contents: read
       actions: read
     with:
-      runtime-replay: ${{ inputs.flutter-runtime-replay || false }}
-      macos-replay-build-run: ${{ inputs.flutter-macos-replay-build-run || '' }}
-      intel-only: ${{ inputs.flutter-intel-only || false }}
-      arm-only: ${{ inputs.flutter-arm-only || false }}
-      intel-bootstrap-controls: ${{ inputs.flutter-intel-bootstrap-controls || false }}
-      linux-only: ${{ inputs.flutter-linux-only || inputs.flutter-linux-renderer-probe || false }}
-      skip-linux-x64: ${{ inputs.flutter-skip-linux-x64 || false }}
-      skip-linux-arm64: ${{ inputs.flutter-skip-linux-arm64 || inputs.flutter-linux-renderer-probe || false }}
-      native-gates-only: ${{ inputs.flutter-native-gates-only || false }}
-      linux-renderer-probe: ${{ inputs.flutter-linux-renderer-probe || false }}
+      runtime-replay: ${{ (inputs.native-platform == 'flutter' && (inputs.flutter-runtime-replay)) || false }}
+      macos-replay-build-run: ${{ (inputs.native-platform == 'flutter' && (inputs.flutter-macos-replay-build-run)) || '' }}
+      intel-only: ${{ (inputs.native-platform == 'flutter' && (inputs.flutter-intel-only)) || false }}
+      arm-only: ${{ (inputs.native-platform == 'flutter' && (inputs.flutter-arm-only)) || false }}
+      intel-bootstrap-controls: ${{ (inputs.native-platform == 'flutter' && (inputs.flutter-intel-bootstrap-controls)) || false }}
+      linux-only: ${{ (inputs.native-platform == 'flutter' && (inputs.flutter-linux-only || inputs.flutter-linux-renderer-probe)) || false }}
+      skip-linux-x64: ${{ (inputs.native-platform == 'flutter' && (inputs.flutter-skip-linux-x64)) || false }}
+      skip-linux-arm64: ${{ (inputs.native-platform == 'flutter' && (inputs.flutter-skip-linux-arm64 || inputs.flutter-linux-renderer-probe)) || false }}
+      native-gates-only: ${{ (inputs.native-platform == 'flutter' && (inputs.flutter-native-gates-only)) || false }}
+      linux-renderer-probe: ${{ (inputs.native-platform == 'flutter' && (inputs.flutter-linux-renderer-probe)) || false }}
 
   flutter-windows-qualification:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.native-platform == 'flutter-windows' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.native-platform == 'flutter-windows' || inputs.native-platform == 'release-candidate') }}
     uses: ./.github/workflows/flutter-windows-qualification.yml
     permissions:
       contents: read
       actions: read
     with:
-      msi-test-run: ${{ inputs.windows-msi-test-run || '' }}
-      msi-test-source: ${{ inputs.windows-msi-test-source || '' }}
-      msi-resource-replay: ${{ inputs.windows-msi-resource-replay || false }}
-      msi-test-arm-standard-only: ${{ inputs.windows-msi-arm-standard-only || false }}
-      msi-test-standard-rollback: ${{ inputs.windows-msi-standard-rollback || false }}
-      msi-forensics: ${{ inputs.windows-msi-forensics || false }}
-      msi-transaction-probe: ${{ inputs.windows-msi-transaction-probe || false }}
-      rebuild-rust-only: ${{ inputs.windows-rebuild-rust-only || false }}
+      msi-test-run: ${{ (inputs.native-platform == 'flutter-windows' && (inputs.windows-msi-test-run)) || '' }}
+      msi-test-source: ${{ (inputs.native-platform == 'flutter-windows' && (inputs.windows-msi-test-source)) || '' }}
+      msi-resource-replay: ${{ (inputs.native-platform == 'flutter-windows' && (inputs.windows-msi-resource-replay)) || false }}
+      msi-test-arm-standard-only: ${{ (inputs.native-platform == 'flutter-windows' && (inputs.windows-msi-arm-standard-only)) || false }}
+      msi-test-standard-rollback: ${{ (inputs.native-platform == 'flutter-windows' && (inputs.windows-msi-standard-rollback)) || false }}
+      msi-forensics: ${{ (inputs.native-platform == 'flutter-windows' && (inputs.windows-msi-forensics)) || false }}
+      msi-transaction-probe: ${{ (inputs.native-platform == 'flutter-windows' && (inputs.windows-msi-transaction-probe)) || false }}
+      rebuild-rust-only: ${{ (inputs.native-platform == 'flutter-windows' && (inputs.windows-rebuild-rust-only)) || false }}
+      standard-user-in-lab: ${{ inputs.native-platform == 'release-candidate' }}
+
+  release-candidate-audit:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.native-platform == 'release-candidate' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --check
+      - run: cargo install cargo-audit --locked && cargo audit
+
+  release-candidate-bundle:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.native-platform == 'release-candidate' }}
+    needs: [flutter-qualification, flutter-windows-qualification, release-candidate-audit]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: miccamwatch-hybrid-*-${{ github.sha }}
+          path: candidate-input
+      - run: python3 -B installer/release_candidate.py candidate-input dist "$GITHUB_SHA"
+      - name: Generate SPDX SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          path: .
+          format: spdx-json
+          output-file: dist/miccamwatch-sbom.spdx.json
+          upload-release-assets: false
+          upload-artifact: false
+      - name: Finalize candidate checksums
+        working-directory: dist
+        run: |
+          test -s miccamwatch-sbom.spdx.json
+          sha256sum miccamwatch-* > SHA256SUMS
+          sha256sum --strict --check SHA256SUMS
+          test "$(wc -l < SHA256SUMS)" -eq 9
+      - name: Attest candidate provenance
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: dist/miccamwatch-*
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: verified-hybrid-release-candidate-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 30
+          path: dist/*
 
   windows-native-profiles:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.native-platform == 'windows' && inputs.windows-native-profiles-only }}
@@ -174,7 +232,7 @@ jobs:
           path: ${{ runner.temp }}/native-windows-profiles
 
   windows:
-    if: ${{ !inputs.native-only && !inputs.windows-native-profiles-only && inputs.native-platform != 'flutter' && inputs.native-platform != 'flutter-windows' }}
+    if: ${{ !inputs.native-only && !inputs.windows-native-profiles-only && inputs.native-platform != 'flutter' && inputs.native-platform != 'flutter-windows' && inputs.native-platform != 'release-candidate' }}
     runs-on: windows-latest
     permissions:
       contents: read
@@ -330,7 +388,7 @@ jobs:
           path: ${{ runner.temp }}/windows-application-proof
 
   portable:
-    if: ${{ inputs.native-platform != 'windows' && inputs.native-platform != 'flutter' && inputs.native-platform != 'flutter-windows' }}
+    if: ${{ inputs.native-platform != 'windows' && inputs.native-platform != 'flutter' && inputs.native-platform != 'flutter-windows' && inputs.native-platform != 'release-candidate' }}
     strategy:
       fail-fast: false
       matrix:

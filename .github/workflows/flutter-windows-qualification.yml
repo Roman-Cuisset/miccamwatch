@@ -27,6 +27,9 @@ on:
       rebuild-rust-only:
         type: boolean
         default: false
+      standard-user-in-lab:
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -209,11 +212,15 @@ jobs:
           & powershell.exe -NoProfile -NonInteractive -STA -File installer/tests/windows-hybrid-install.ps1 -Candidate (Join-Path $output 'miccamwatch-hybrid-windows-x86_64.msi') -Proof (Join-Path $output 'lifecycle') -RustMsiTest $tests[0].executable -SampleDesktopResources
           if ($LASTEXITCODE -ne 0) { throw 'Installed hybrid lifecycle failed' }
       - name: Qualify the same per-user MSI transaction under a genuine standard account
-        if: ${{ !inputs.rebuild-rust-only }}
+        if: ${{ !inputs.rebuild-rust-only && !inputs.standard-user-in-lab }}
         run: |
           $output = Join-Path $env:MCW_B5_PROOF 'hybrid-distribution'
           & powershell.exe -NoProfile -NonInteractive -File installer/tests/windows-hybrid-standard.ps1 -Candidate (Join-Path $output 'miccamwatch-hybrid-windows-x86_64.msi') -Proof (Join-Path $output 'standard')
           if ($LASTEXITCODE -ne 0) { throw 'Standard-account MSI qualification failed' }
+      - name: Record the remaining standard-user qualification
+        if: ${{ inputs.standard-user-in-lab }}
+        run: |
+          'Run this exact candidate SHA-256 under a genuine standard account in the isolated Windows x64 lab before approval. The hosted runner has previously refused this transaction under DisableMsi=1.' >> $env:GITHUB_STEP_SUMMARY
       - name: Preserve exact hybrid Windows distribution and installation receipts
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
