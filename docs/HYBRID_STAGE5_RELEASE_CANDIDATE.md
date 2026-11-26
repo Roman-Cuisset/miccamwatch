@@ -1,12 +1,12 @@
 # MicCamWatch v0.22.0 — qualification de la candidate
 
-**ÉTAPE 5/6 : INCOMPLÈTE.** Construction et qualification en cours sur
+**ÉTAPE 5/6 : INCOMPLÈTE.** Qualification en cours sur
 `work/flutter-hybrid-0220`. Révision de construction
 `de90a76311445ba6607e6f3df4fce988a1ffc343`. Le compte standard de la VM est un
 critère séparé et doit utiliser le MSI exact de cette révision.
 [CI 45835303021](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/45835303021).
 
-La source de l’étape 4 était `a6d5d83b03e2315fd62d27c9f34349b6f36220f7`.
+Le HEAD documentaire de l’étape 4 était `a6d5d83b03e2315fd62d27c9f34349b6f36220f7`.
 La branche intègre la préparation de l’assemblage RC et le README distribué.
 Rust, Dart, Swift, le code WiX, les formats de bundle et les verrous de
 dépendances du produit sont identiques à ceux du HEAD de l’étape 4.
@@ -32,15 +32,68 @@ Les paquets candidats passent le contrôle du contenu et de la révision
 par les constructeurs natifs, puis celui de leurs empreintes à l’assemblage.
 L’ensemble prévu comprend huit paquets, le SBOM SPDX et `SHA256SUMS`.
 Les SHA-256, la couverture du SBOM, les signatures et les neuf attestations
-restent à relever et à vérifier après construction.
+du lot final sont contrôlés séparément. Les huit paquets de la CI source ont
+été téléchargés et leurs empreintes comparées aux manifestes de plateforme.
+Le MSI, les trois EXE Windows et `flutter_windows.dll` sont `NotSigned`.
+Les deux apps macOS ont passé la relecture de leurs scellés ad hoc et de
+leurs conteneurs sur les runners natifs.
+
+```text
+184b0510569fced919c8cfd62f94f34c831bcfa309136ebe51ee9d4281d74d2a  miccamwatch-hybrid-windows-x86_64.msi
+6917a95ff09832f0b95822ac92fe2f6ee041790aec431d11f7dfe8c4efd952bc  miccamwatch-hybrid-windows-x86_64.zip
+7f8e7dd5be086c99521f4556095be73b9157e472d8e42da6160272fe070be253  miccamwatch-hybrid-linux-x86_64.tar.gz
+da434485889fc5631f69a95fa8aa9275378ad6d3368a68ec59b6c9dfa9e54cc1  miccamwatch-hybrid-linux-aarch64.tar.gz
+18099c4ebdb64dd41fb818f47cacec7b77d74743a7ad8351ecdf6f3a51c798f0  miccamwatch-hybrid-macos-x86_64.dmg
+44c56509fbe384da3fbd3db791f589c44dd294f5f3d00b165d4f9edffb86ffc9  miccamwatch-hybrid-macos-x86_64.tar.gz
+2037f4ae3e56a8aa1f904cc2219c22f8e96ceb5b12e42bac67e52bf2f5a12556  miccamwatch-hybrid-macos-aarch64.dmg
+16b1b74030a02d6ae4c042c2ef2c1823c936ac1b6b5ec245da77cc2fe2c2f26f  miccamwatch-hybrid-macos-aarch64.tar.gz
+```
+
+## État des contrôles
+
+- Formatage Rust et audit de `Cargo.lock` réussis. Les quatre avertissements
+  de maintenance `chrono`, `zbus_names`, `zvariant` et `zvariant_derive`
+  restent visibles. Preuves sous `target/stage5-qualification/45835303021`.
+- Les quatre jobs Unix de la CI source sont réussis. Les deux installations
+  Linux utilisent les archives exactes dans des conteneurs Ubuntu 22.04
+  natifs. Elles vérifient les refus de protection et de bail exclusif, le
+  retrait de l’autostart et la conservation des données. Le test d’échange
+  et de rollback utilise des bundles de test distincts. Les deux DMG ont
+  passé le cycle d’installation et de rollback d’application. Les reçus
+  macOS indiquent que les bannières n’ont pas été observées.
+- Le MSI Windows a réussi dans le runner hébergé, dont le scénario de
+  rollback et les 34 tests Rust de maintenance empaquetée. Le run source
+  reste en échec car le test de démarrage exige un runner vierge et a
+  refusé le dossier laissé après le scénario MSI. Une reprise sur un
+  runner séparé réutilise les bundles Flutter du run source et compile
+  uniquement le moteur de test. [Reprise Windows](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/45840695609).
+- Sur Linux ARM64, le premier essai de bureau a révélé l’absence de
+  `libGLESv2.so.2` sur le runner minimal. Après installation de `libgles2`,
+  deux fenêtres possédées ont été ouvertes et fermées avec IPC prêt, puis
+  le tray est resté actif. La CI a ensuite qualifié ce parcours séparément
+  du retrait déjà contrôlé en conteneur. Le rendu est celui de Xvfb et ne
+  prouve pas l’accélération sur matériel réel.
+  [Preuve ARM64](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/45840703349).
+
+Le passage de la candidate exacte sous compte standard dans `MCW-Win11-x64-Lab`
+est **réussi**. Les trois transactions MSI ont rendu le code 0. L’observateur
+administrateur distinct a confirmé le ProductCode
+`{AD7C13A4-524E-4667-A0E9-66066FE9346C}`, l’UpgradeCode
+`{8FC9317B-4517-4E83-9F52-CF3257584BF6}`, la version, le cache et le retrait
+de l’inscription. L’IPC 10, l’intégrité du payload, l’arrêt du frontend avec
+le tray encore actif et la conservation des données ont été vérifiés.
+Les reçus et journaux sont dans
+`target/stage4-qualification/lab-consolidated-20261126-142901`.
+La tâche avait attendu l’alimentation secteur. Le diagnostic a relevé la
+condition batterie, le bureau QA actif et aucun client MSI concurrent. Le
+branchement au secteur a permis la reprise avec les mêmes réglages.
 
 L’étape 4 a conservé des preuves logicielles pour l’IPC, les sept langues,
 les deux thèmes, l’historique, les préférences, le démarrage et l’autostart,
 le cycle Flutter et les limites des collecteurs. Les gardes de récupération
 et l’ensemble des pannes historiques restent attachés aux révisions réellement
-exercées. Le passage positif MSI de la candidate requiert une nouvelle mesure
-dans la VM à cause du changement d’octets. La politique `DisableMsi=1` du
-runner standard hébergé reste intacte.
+exercées. Le passage positif en VM couvre le nouveau MSI. La politique
+`DisableMsi=1` du runner standard hébergé reste intacte.
 
 ## Limites acceptées
 

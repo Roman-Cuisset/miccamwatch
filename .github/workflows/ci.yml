@@ -223,12 +223,15 @@ jobs:
           $env:CI = 'true'
           & $py -B desktop/qualification/windows_b5.py --engine-directory target/release --release-bundle "$inputRoot/normal-bundle" --instrumented-bundle "$inputRoot/consultation-bundle" --startup-bundle "$inputRoot/startup-bundle" --proof $proof --startup-ci
           if ($LASTEXITCODE -ne 0) { throw 'Startup replay failed.' }
+          $receipt = Get-Content -LiteralPath "$proof/summary.json" -Raw | ConvertFrom-Json
+          if ($receipt.status -cne 'passed' -or !$receipt.startup_executed) { throw 'Missing startup receipt.' }
+          $receipt | ConvertTo-Json -Depth 5
+          Copy-Item -LiteralPath "$env:RUNNER_TEMP/source-run.json" -Destination "$proof/source-run.json"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: ${{ always() && env.MCW_STARTUP_PROOF != '' }}
         with:
           name: candidate-windows-startup-${{ inputs.candidate-build-sha }}
           path: |
-            ${{ runner.temp }}/source-run.json
             ${{ env.MCW_STARTUP_PROOF }}/**/*.json
             ${{ env.MCW_STARTUP_PROOF }}/**/*.log
           if-no-files-found: warn
@@ -263,6 +266,8 @@ jobs:
           output-file: dist/miccamwatch-sbom.spdx.json
           upload-release-assets: false
           upload-artifact: false
+      - name: Record the packaged Flutter runtime and native components
+        run: python3 -B installer/candidate_sbom.py dist/miccamwatch-sbom.spdx.json "$PACKAGE_SOURCE"
       - name: Finalize candidate checksums
         working-directory: dist
         run: |
