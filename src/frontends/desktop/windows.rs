@@ -30,7 +30,10 @@ use windows::{
             HWND, LPARAM, SetHandleInformation, WAIT_OBJECT_0, WPARAM,
         },
         Security::SECURITY_ATTRIBUTES,
-        Storage::FileSystem::{BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle},
+        Storage::FileSystem::{
+            BY_HANDLE_FILE_INFORMATION, FILE_TYPE_DISK, FILE_TYPE_PIPE, GetFileInformationByHandle,
+            GetFileType,
+        },
         System::{
             Console::{GetStdHandle, STD_ERROR_HANDLE},
             JobObjects::{
@@ -868,33 +871,44 @@ fn pipe() -> Result<(OwnedHandle, OwnedHandle)> {
     unsafe { CreatePipe(&mut read, &mut write, Some(&security), 0) }?;
     Ok(unsafe { (own(read), own(write)) })
 }
-fn diagnostic_stderr() -> Result<OwnedHandle> {
+fn diagnostic_stderr(source: Option<HANDLE>) -> Result<OwnedHandle> {
     // Never merge native/rendering diagnostics with the authenticated JSON lane.
-    // A GUI launch without a console has no stderr; use the Windows null device.
-    // Duplicate only this deliberate sink and include it in the explicit handle
-    // list, not all inheritable handles belonging to the Rust owner.
-    let fallback;
-    let source = match unsafe { GetStdHandle(STD_ERROR_HANDLE) } {
-        Ok(handle) if !handle.is_invalid() => handle,
-        _ => {
-            fallback = OpenOptions::new().write(true).open(r"\\.\NUL")?;
-            handle(&fallback)
-        }
-    };
-    let mut duplicate = HANDLE::default();
-    unsafe {
-        DuplicateHandle(
-            GetCurrentProcess(),
-            source,
-            GetCurrentProcess(),
-            &mut duplicate,
-            0,
-            true,
-            DUPLICATE_SAME_ACCESS,
+    if let Some(source) = source.filter(|&source| {
+        matches!(
+            unsafe { GetFileType(source) },
+            FILE_TYPE_DISK | FILE_TYPE_PIPE
         )
+    }) {
+        let mut duplicate = HANDLE::default();
+        unsafe {
+            DuplicateHandle(
+                GetCurrentProcess(),
+                source,
+                GetCurrentProcess(),
+                &mut duplicate,
+                0,
+                true,
+                DUPLICATE_SAME_ACCESS,
+            )
+        }
+        .context("prepare desktop diagnostics handle")?;
+        return Ok(unsafe { own(duplicate) });
     }
-    .context("prepare desktop diagnostics handle")?;
-    Ok(unsafe { own(duplicate) })
+
+    // Explorer launches the GUI without stderr. The Flutter runner also rejects
+    // character devices (including NUL and console handles) before engine startup.
+    let (read, write) = pipe().context("create desktop diagnostics pipe")?;
+    unsafe {
+        SetHandleInformation(handle(&read), HANDLE_FLAG_INHERIT.0, HANDLE_FLAGS(0))?;
+    }
+    // Drain until the child releases the write handle, including spawn failures.
+    std::thread::Builder::new()
+        .name("desktop-diagnostics".into())
+        .spawn(move || {
+            let _ = std::io::copy(&mut File::from(read), &mut std::io::sink());
+        })
+        .context("drain desktop diagnostics pipe")?;
+    Ok(write)
 }
 
 fn spawn(path: &Path, mut initial: DesktopSnapshot, theme: &'static str) -> Result<Child> {
@@ -915,7 +929,7 @@ fn spawn(path: &Path, mut initial: DesktopSnapshot, theme: &'static str) -> Resu
     }?;
     let (child_stdin, parent_stdin) = pipe()?;
     let (parent_stdout, child_stdout) = pipe()?;
-    let child_stderr = diagnostic_stderr()?;
+    let child_stderr = diagnostic_stderr(unsafe { GetStdHandle(STD_ERROR_HANDLE) }.ok())?;
     unsafe {
         SetHandleInformation(
             handle(&parent_stdin),
@@ -1174,5 +1188,20 @@ mod tests {
         ] {
             assert!(needs_reopen(closing, disconnected, exited, ready, window));
         }
+    }
+
+    #[test]
+    fn shell_launch_supplies_a_drained_diagnostic_pipe() -> Result<()> {
+        let nul = OpenOptions::new().write(true).open(r"\\.\NUL")?;
+        for existing in [None, Some(handle(&nul))] {
+            let child_stderr = diagnostic_stderr(existing)?;
+            assert_eq!(
+                unsafe { GetFileType(handle(&child_stderr)) },
+                FILE_TYPE_PIPE
+            );
+            // Write more than the anonymous pipe's buffer to exercise the reader.
+            File::from(child_stderr).write_all(&[0; 128 * 1024])?;
+        }
+        Ok(())
     }
 }

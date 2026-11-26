@@ -2292,6 +2292,7 @@ fn open_flutter_desktop(hwnd: HWND) -> bool {
     let opened = supervisor.open(frame, "light");
     if let Some(state) = self::state(hwnd) {
         if let Err(error) = &opened {
+            eprintln!("mcw: Flutter desktop could not start: {error:#}");
             state.settings_error = Some(format!("Flutter desktop: {error:#}"));
         }
         state.flutter = Some(supervisor);
@@ -2740,9 +2741,20 @@ fn build_context_menu(
             let _ = AppendMenuW(menu, MF_STRING, CMD_RESUME_CAMERA, PCWSTR(resume.as_ptr()));
         }
         let notifications = format_wide(if settings.notifications_paused() {
-            "Resume notifications"
+            windows_desktop::words(
+                lang,
+                [
+                    "Resume notifications",
+                    "Reprendre les notifications",
+                    "Benachrichtigungen fortsetzen",
+                    "Reanudar las notificaciones",
+                    "通知を再開",
+                    "恢复通知",
+                    "Возобновить уведомления",
+                ],
+            )
         } else {
-            "Pause notifications for 1 hour"
+            windows_desktop::pause_notifications_label(lang)
         });
         let _ = AppendMenuW(
             menu,
@@ -2788,8 +2800,30 @@ fn build_context_menu(
         );
         let _ = AppendMenuW(menu, MF_POPUP, profiles.0 as usize, PCWSTR(label.as_ptr()));
         let autostart = format_wide(match autostart_state {
-            crate::autostart::AutostartState::Enabled => "Disable autostart",
-            crate::autostart::AutostartState::Disabled => "Enable autostart",
+            crate::autostart::AutostartState::Enabled => windows_desktop::words(
+                lang,
+                [
+                    "Disable autostart",
+                    "Désactiver le démarrage automatique",
+                    "Autostart deaktivieren",
+                    "Desactivar el inicio automático",
+                    "自動起動を無効にする",
+                    "关闭自动启动",
+                    "Отключить автозапуск",
+                ],
+            ),
+            crate::autostart::AutostartState::Disabled => windows_desktop::words(
+                lang,
+                [
+                    "Enable autostart",
+                    "Activer le démarrage automatique",
+                    "Autostart aktivieren",
+                    "Activar el inicio automático",
+                    "自動起動を有効にする",
+                    "开启自动启动",
+                    "Включить автозапуск",
+                ],
+            ),
         });
         let _ = AppendMenuW(
             menu,
@@ -2798,7 +2832,18 @@ fn build_context_menu(
             PCWSTR(autostart.as_ptr()),
         );
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-        let exit = format_wide("Exit");
+        let exit = format_wide(windows_desktop::words(
+            lang,
+            [
+                "Exit",
+                "Quitter",
+                "Beenden",
+                "Salir",
+                "終了",
+                "退出",
+                "Выход",
+            ],
+        ));
         let _ = AppendMenuW(menu, MF_STRING, CMD_EXIT, PCWSTR(exit.as_ptr()));
         Ok(menu)
     }

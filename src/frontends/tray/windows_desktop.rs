@@ -264,6 +264,20 @@ pub(super) fn open_label(lang: Language) -> &'static str {
         ],
     )
 }
+pub(super) fn pause_notifications_label(lang: Language) -> &'static str {
+    words(
+        lang,
+        [
+            "Pause notifications for 1 hour",
+            "Suspendre les notifications pendant 1 h",
+            "Benachrichtigungen 1 Stunde pausieren",
+            "Pausar las notificaciones durante 1 hora",
+            "通知を1時間停止",
+            "暂停通知1小时",
+            "Приостановить уведомления на час",
+        ],
+    )
+}
 fn check_labels(lang: Language) -> [&'static str; 9] {
     [
         words(
@@ -302,18 +316,7 @@ fn check_labels(lang: Language) -> [&'static str; 9] {
                 "Локальная история",
             ],
         ),
-        words(
-            lang,
-            [
-                "Pause notifications for 1 hour",
-                "Suspendre les notifications 1 h",
-                "Benachrichtigungen 1 Stunde pausieren",
-                "Pausar notificaciones 1 hora",
-                "通知を1時間停止",
-                "暂停通知1小时",
-                "Приостановить уведомления на час",
-            ],
-        ),
+        pause_notifications_label(lang),
         words(
             lang,
             [

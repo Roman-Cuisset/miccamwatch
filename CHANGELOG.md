@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.22.1
+
+- Fixed Windows Flutter startup when MicCamWatch runs from the tray or a
+  shortcut without a console.
+- Translated the Windows tray's notification, autostart and quit actions into
+  all seven supported languages.
+
 ## v0.22.0 — 2026-11-26
 
 - Added a Flutter consultation window in seven languages and two themes.
