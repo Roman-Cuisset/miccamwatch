@@ -587,7 +587,7 @@ try {
     Assert-Registration 'installed-baseline' '0.21.0'
     if ($SampleDesktopResources) {
         $report.desktopResources = [ordered]@{
-            scope = 'Single hosted sample, observed tray and visible UI only, no capture injection'
+            scope = if ($LocalDisposableVm) { 'Single native x64 guest standard-user serial sample; no capture injection or ABBA claim' } else { 'Single hosted sample, observed tray and visible UI only, no capture injection' }
             processAccounting = 'Exact tray/UI handles, with no OS process or transient helper accounting'
         }
         Measure-BaselineDesktop
@@ -661,12 +661,14 @@ try {
             }
             if (!$ready) { throw 'Missing installed IPC ready receipt before closing Flutter' }
             $report.installedIpcReady = $true
+            $observedReadyMs = $openTimer.ElapsedMilliseconds
             if ($LocalDisposableVm) {
                 if ($ui[0].HasExited) { throw 'Owned UI exited before frame qualification' }
                 $report.displayChangeRecovery = [McwLabFrameProof]::Check($ui[0].MainWindowHandle, [uint32]$ui[0].Id)
             }
             if ($SampleDesktopResources) {
-                $report.desktopResources.candidateWindowVisibleAndIpcMs = $openTimer.ElapsedMilliseconds
+                $report.desktopResources.candidateWindowVisibleAndIpcMs = $observedReadyMs
+                $report.desktopResources.candidateTimingScope = 'Cold Rust owner plus visible Flutter window and IPC ready; baseline opens an already-running native owner. Not a matched startup comparison.'
                 Measure-DesktopResources 'candidate-open' @($launch, $ui[0])
             }
             $closeTimer = [Diagnostics.Stopwatch]::StartNew()
