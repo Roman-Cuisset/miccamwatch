@@ -207,6 +207,8 @@ function Invoke-Msi([string]$Operation, [string]$Payload, [string]$Label, [int]$
     $ui = if ($LocalDisposableVm) { '/qb' } else { '/qn' }
     $arguments = '{0} "{1}" {2} /norestart /l*v "{3}"' -f $Operation,$Payload,$ui,$log
     $process = Start-Process -FilePath "$env:WINDIR\System32\msiexec.exe" -WindowStyle Hidden -PassThru -ArgumentList $arguments
+    # Retain the exact process handle before a fast MSI can exit (PowerShell 5).
+    $null = $process.Handle
     $transaction = [ordered]@{ pid=$process.Id; parent=$PID; firstUtc=[DateTime]::UtcNow.ToString('O') }
     $report["transaction-$Label"] = $transaction
     $timeout = if ($LocalDisposableVm) { 600000 } else { 180000 }

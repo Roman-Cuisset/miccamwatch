@@ -13,6 +13,10 @@ $proof = Join-Path $localRoot "lab-consolidated-$runId"
 $inputRoot = "C:\MCWLab\Stage4-Input-$runId"
 $guestRoot = "C:\Users\mcw_qa_lab01\AppData\Local\MCWStage4-$runId"
 $report = [ordered]@{status='starting'; vmId=$vmId; uuid=$uuid; source=$Request.source; guestRoot=$guestRoot; operations=[ordered]@{}}
+$report.harnessHashes=@(foreach($file in 'windows-stage4-lab.ps1','windows-hybrid-install.ps1','windows-stage4-observer.ps1','windows-fixture-context.ps1','windows-hybrid-registration.ps1') {
+    $path=Join-Path $PSScriptRoot $file
+    @{file=$file;sha256=(Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()}
+})
 New-Item -ItemType Directory -Path $proof | Out-Null
 function Save-LabReport {
     $report.utc=[DateTimeOffset]::UtcNow.ToString('o')
