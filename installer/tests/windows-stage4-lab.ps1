@@ -38,7 +38,11 @@ function Invoke-Lab([scriptblock]$Command, [object[]]$Parameters=@()) {
 }
 function Run-Standard([string]$Phase, [string]$File, [switch]$Observe) {
     $name="MCW-Stage4-$runId-$Phase"
-    $arguments='-NoProfile -NonInteractive -WindowStyle Hidden -File "'+$File+'"'
+    $errorFile="C:\Users\mcw_qa_lab01\AppData\Local\Temp\MCW-Stage4-$runId-$Phase.txt"
+    $wrapper="try { & '$File' } catch { `$_ | Out-String | Set-Content -LiteralPath '$errorFile' -Encoding utf8; exit 1 }"
+    # Explicit owner approval on 2026-11-26: QA test processes only. No persistent
+    # execution policy, GPO or Windows Installer policy is modified.
+    $arguments='-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy RemoteSigned -EncodedCommand '+[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($wrapper))
     Invoke-Lab {
         param($name,$arguments)
         if ((Get-CimInstance Win32_ComputerSystem).UserName -ine "$env:COMPUTERNAME\mcw_qa_lab01" -or
@@ -157,6 +161,7 @@ foreach ($entry in @(@{path=$base;name='installation'},@{path=(Join-Path $env:AP
 '@.Replace('__INPUT__',$inputRoot).Replace('__ROOT__',$guestRoot)
     Invoke-Lab {param($path,$text) [IO.File]::WriteAllText($path,$text,[Text.UTF8Encoding]::new($true))} @("$inputRoot\prepare.ps1",$prepare)
     Run-Standard 'prepare' "$inputRoot\prepare.ps1"
+    if ($Request.prepareOnly) { $report.status='prepared-without-msi'; return }
     $work=@'
 $ErrorActionPreference='Stop'
 $root='__ROOT__'
@@ -181,6 +186,16 @@ try {
 } finally {
     Save-LabReport
     if ($Session.State -eq 'Opened') {
+        try {
+            $report.guestScriptPolicy=Invoke-Lab {Get-ExecutionPolicy -List | Select-Object Scope,ExecutionPolicy}
+            foreach ($phase in 'prepare','lifecycle') {
+                $file="C:\Users\mcw_qa_lab01\AppData\Local\Temp\MCW-Stage4-$runId-$phase.txt"
+                if (Invoke-Lab {param($path) Test-Path -LiteralPath $path} @($file)) {Copy-Item -LiteralPath $file -Destination $proof -FromSession $Session}
+            }
+            $errors=Invoke-Lab {param($path) @(Get-ChildItem -LiteralPath $path -Filter 'task-error-*.txt' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName)} @($inputRoot)
+            foreach ($file in $errors) { Copy-Item -LiteralPath $file -Destination $proof -FromSession $Session }
+            Save-LabReport
+        } catch { $report.diagnosticCopyError=$_.ToString(); Save-LabReport }
         foreach ($name in 'proof','observations','preparation.json','workload-error.txt') {
             try {
                 if (Invoke-Lab {param($path) Test-Path -LiteralPath $path} @("$guestRoot\$name")) {

@@ -462,9 +462,13 @@ jobs:
           source.write_text('fn main() { match miccamwatch::platform::play_chime() { Ok(()) => println!("native playback accepted"), Err(error) => { eprintln!("{error:#}"); std::process::exit(2); } } }\n')
           library = pathlib.Path("target/debug/libmiccamwatch.rlib")
           assert library.is_file(), library
+          dependencies = {pathlib.Path("target/debug/deps")}
+          dependencies.update(path.parent for path in pathlib.Path("target/debug/deps").rglob("*")
+                              if path.suffix in (".rlib", ".rmeta", ".dylib", ".so"))
+          search = [argument for path in sorted(dependencies) for argument in ("-L", "dependency=" + str(path))]
           try:
               subprocess.run(["rustc", "--edition=2024", "--crate-name=mcw_native_chime", str(source),
-                              "--extern", "miccamwatch=" + str(library), "-L", "dependency=target/debug/deps",
+                              "--extern", "miccamwatch=" + str(library), *search,
                               "-o", str(root / "native-chime")], check=True)
           finally:
               source.unlink()
