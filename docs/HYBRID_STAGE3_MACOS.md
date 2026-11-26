@@ -180,4 +180,8 @@ verdict des contrôles internes de MicCamWatch et le résultat de l’appel
 de terminaison effectivement utilisé. Relever la provenance du refus
 et vérifier que le message indique la bonne cause. Exercer le cas
 autorisé et les refus légitimes avec les protections macOS ordinaires.
-L’étape 5 doit confirmer les résultats sur un Mac de qualification.
+La fermeture normale est désormais qualifiée sur une fixture AppKit durcie.
+Le cas Vorssaint réel reste non vérifié et le refus natif de terminaison
+forcée reste possible. Le propriétaire accepte cette limite pour v0.22.0.
+Un nouvel essai sur Mac physique n’est pas requis pour la publication.
+[Bilan de qualification et décision du 26 novembre](HYBRID_STAGE4_CODEX_HANDOFF.md).

@@ -1,5 +1,13 @@
 # Roadmap technique MicCamWatch
 
+> **Étape 4 terminée le 26 novembre 2026.** Voir la
+> [consolidation de l’étape 4](HYBRID_STAGE4_CONSOLIDATION.md) et le
+> [transfert Codex](HYBRID_STAGE4_CODEX_HANDOFF.md). Les limites matérielles
+> décrites y sont acceptées par le propriétaire pour v0.22.0 ; elles ne
+> constituent pas à elles seules un blocage de publication. Les défauts
+> critiques restent bloquants. L’étape 5 n’est pas commencée. Les entrées
+> historiques ci-dessous conservent leurs dates et leurs révisions.
+
 > **Point de reprise du 16 novembre 2026.** La parité fonctionnelle de l’étape 2 est qualifiée sur le code `945d69c`. Voir les [reçus de la qualification fonctionnelle](V0.22.0_PARITY_AUDIT.md#qualification-etape-2).
 
 Dernière mise à jour : **2026-10-24**. Responsable : lead architecture/développement.

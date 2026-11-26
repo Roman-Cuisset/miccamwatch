@@ -1,8 +1,16 @@
 # MicCamWatch v0.22.0 — plan définitif en six étapes
 
-> Reprise du 26 novembre : [consolidation de l’étape 4](HYBRID_STAGE4_CONSOLIDATION.md).
-> Neon est intégré ; la clôture attend les qualifications consolidées et les
-> décisions explicites sur les preuves encore indisponibles. L’étape 5 ne démarre pas.
+> **Étape 4 terminée le 26 novembre 2026.** Les qualifications consolidées,
+> le MSI hybride en compte standard et la dernière CI Windows sont validés.
+> L’étape 5 attend une mission distincte.
+> [Bilan et preuves de l’étape 4](HYBRID_STAGE4_CONSOLIDATION.md).
+
+> **Décision du propriétaire du 26 novembre 2026 :** les limites matérielles
+> détaillées dans le [transfert Codex](HYBRID_STAGE4_CODEX_HANDOFF.md) sont
+> acceptées pour v0.22.0 et ne deviennent pas des conditions physiques
+> obligatoires de publication à l’étape 5. Aucun testeur Mac n’est sollicité.
+> Un défaut critique de sécurité ou de fonctionnement établi reste bloquant ;
+> une fonction sans preuve n’est jamais déclarée corrigée.
 
 > **Point de reprise du 16 novembre 2026.** La parité fonctionnelle de l’étape 2 est qualifiée sur le code `945d69c`. Voir les [reçus de la qualification fonctionnelle](V0.22.0_PARITY_AUDIT.md#qualification-etape-2).
 
@@ -82,7 +90,7 @@ Dépendance : une application fonctionnelle et des payloads réels, non un proto
 - Préserver cadence et qualité de surveillance, comparer latences réelles avant/après. Aucune suppression de vérification ou collecte pour embellir CPU/RAM.
 - Étudier le renderer réellement actif sous Mint. Comparer llvmpipe et accéléré seulement si accès déjà autorisé ; pas de modification de groupes/driver/session ou désactivation GPU silencieuse.
 - Corriger thèmes, overflow sept langues, About/version, noms/logos/icônes, clavier/focus/contrastes/lecteurs d'écran dans `desktop/flutter/lib` et runners. Contenu commun ; décorations/permissions natives peuvent différer. Pas de nouveau logo, dépendance décorative lourde ou moteur Flutter gardé chaud.
-- Traiter en priorité le [refus de terminaison macOS signalé pour Vorssaint, UID 501](HYBRID_STAGE3_MACOS.md#arrêt-ciblé-dun-processus-utilisateur). Vérifier le résultat sur un Mac de qualification à l’étape 5 avant publication.
+- Traiter en priorité le [refus de terminaison macOS signalé pour Vorssaint, UID 501](HYBRID_STAGE3_MACOS.md#arrêt-ciblé-dun-processus-utilisateur). La fermeture normale distincte est qualifiée sur une fixture durcie ; Vorssaint réel reste non vérifié. Selon la décision du propriétaire du 26 novembre, une nouvelle vérification sur Mac physique n’est pas une condition obligatoire de publication. Conserver les refus natifs et les limites explicites, sans déclarer Vorssaint corrigé.
 - Couvrir les refus `task_for_pid` et les UID, l’état caméra macOS `Degraded`, les transitions de capture et l’attribution des applications. Examiner aussi les notifications sans bannière, les permissions et leurs messages, les profils de sécurité, les dimensions des fenêtres Flutter et l’ergonomie sur les trois OS.
 
 ### Tests, acceptation et arrêt4
@@ -94,6 +102,13 @@ P0/P1 de lisibilité/accessibilité basique terminés ; raffinements facultatifs
 ## 5. Étape5 — release candidate et qualification
 
 Créer une branche RC0.22 isolée depuis le code intégré vérifié, pas depuis la candidate native0.21.1. Aucun P0/P1 ouvert ; geler les fonctionnalités et documenter chaque preuve sur le commit exact.
+
+Les limites matérielles explicitement acceptées dans le
+[transfert Codex](HYBRID_STAGE4_CODEX_HANDOFF.md) restent des limites de
+qualification de v0.22.0. Elles ne constituent pas, à elles seules, des défauts
+critiques établis ni de nouvelles obligations de matériel avant publication.
+Cette décision ne lève aucun défaut critique de sécurité ou de fonctionnement.
+Ne pas solliciter le testeur Mac. Cette mise à jour du plan ne démarre pas l’étape 5.
 
 ### Checklist d'entrée et de qualification
 

@@ -112,11 +112,11 @@ déconseille de comparer des processus par le seul PID.
 | Flutter officiel 3.47.8 `analyze --no-pub` | Aucun problème |
 | Flutter `test --no-pub` | 131/131 après `a0b40f0`, dont refus de faux succès, annulation de fermeture normale et retrait d’autorité à la reconnexion |
 | Qualification Flutter Unix consolidée | [45770903856](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/45770903856), source `3496cc0` ; tests caméra macOS initialement non compilables, corrigés dans `7daa359` |
-| Qualification MSI exact | [45770908439](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/45770908439), source `3496cc0` ; en cours lors de cette entrée |
+| Qualification MSI exacte | [45770908439](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/45770908439), source `3496cc0`. Refus du compte standard hébergé |
 | CI générale initiale | [45770913849](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/45770913849), source `3496cc0` ; erreurs macOS du nouveau test et chemin historique des bindings Linux, corrigées sans supprimer les critères |
-| Reprise Flutter Apple Silicon | [45771443063](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/45771443063), source `7daa359` ; contrôles natifs réussis, suite graphique en cours |
-| CI native corrigée | [45772220951](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/45772220951), source `4f48f31` ; en cours |
-| Reprise Flutter Intel | [45772225874](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/45772225874), source `4f48f31` ; en cours |
+| Reprise Flutter Apple Silicon | [45771443063](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/45771443063), source `7daa359`. Réussie |
+| Reprise native Unix | [45772220951](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/45772220951), source `4f48f31`. Échec à la préparation des paquets des quatre jobs |
+| Reprise Flutter Intel | [45772225874](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/45772225874), source `4f48f31`. Réussie |
 
 ### Résultats et corrections complémentaires
 
@@ -161,15 +161,14 @@ ni `Cargo.lock` depuis `2aae176`. La
 porte sur ce harnais corrigé.
 
 Les journaux de cette reprise sont sous
-`C:/Users/stcui/Documents/miccamwatch/target/stage4-qualification`.
+`Documents/miccamwatch/target/stage4-qualification` dans le profil Windows.
 Une CI échouée reste une CI échouée, même quand des étapes individuelles ont
 réussi. Les reçus d’autres sources ne sont pas renommés au HEAD documentaire.
 
 ## Laboratoire et limites de clôture
 
-VM vérifiée : `MCW-Win11-x64-Lab`, génération 2, GUID
-`cb46ea19-9415-423a-9b89-2459da960886`, SMBIOS
-`4B01C3A6-C913-41AC-B759-66148DFCAB64`, Windows AMD64 natif.
+La VM `MCW-Win11-x64-Lab` est de génération 2 et exécute Windows AMD64 natif.
+Les identifiants vérifiés figurent dans les reçus locaux du laboratoire.
 La VM était arrêtée puis a été démarrée pour cette mission. Le checkpoint
 `01 - Windows 11 x64 propre` et les deux autres checkpoints sont conservés.
 La carte virtuelle est déconnectée. PowerShell Direct fonctionne avec
@@ -211,9 +210,87 @@ tray = `5A0253EA90A77BF7478F6A9F1826290F6A6055723CB12BDF4975B89BDFB1B6FE`.
 Son processus tray était PID 18072 au contrôle de cette reprise.
 La lecture ultérieure retrouve également la v0.21.0, ProductCode
 `{86CDFED5-BA07-4C91-8BC7-8A856198DC33}`, dans la clé Uninstall WOW6432Node
-et les InstallProperties Windows Installer du profil hôte. Un contrôle après
-la qualification finale reste nécessaire.
+et les InstallProperties Windows Installer du profil hôte. Le contrôle final
+après les transactions MSI est conservé dans `host-stable-elevated-readonly.json`.
 
-**ÉTAPE 4/6 : INCOMPLÈTE** à cette entrée : les campagnes et la VM sont en
-cours, et aucun report explicite des preuves matérielles/P0 restantes n’est
-considéré comme accepté.
+## Résultat consolidé et décision du propriétaire
+
+La candidate `2aae176` réussit les quatre jobs Flutter Unix de
+[45774068870](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/45774068870).
+Les qualifications natives Linux x64/ARM64 de
+[45776813397](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/45776813397)
+et Mac Intel/ARM de
+[45777558636](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/45777558636)
+réussissent également. Le refus entre utilisateurs sur Mac est réellement
+exercé ; l’identité propre de la fixture est transmise par son pipe retenu,
+car macOS peut interdire à l’appelant de lire ses métadonnées libproc.
+Le helper du produit conserve ses droits ordinaires et refuse les deux actions.
+
+La CI générale a aussi révélé des gardes historiques de harnais : le programme
+sonore compilé hors Cargo, un emplacement d’exécutable de test obsolète, la
+liste des candidats Linux arrêtée à 0.21.0 et une exigence de caméra « dégradée »
+même sans aucun périphérique. Les corrections conservent les critères :
+compilation sonore via Cargo, admission du seul test fraîchement construit
+dans le dépôt, candidat concret 0.22.0 avec helper/installateur privilégié
+identiques à v0.21.0, et état indisponible avec lacune et aucun accès affirmé.
+Aucun résultat d’échec historique n’est converti en succès.
+
+### MSI Windows 11 x64 standard : réussi
+
+Le reçu `lab-consolidated-20261126-074148` porte sur le MSI exact de `2aae176`,
+SHA-256 `b12719da3aa6673068ade756908a2e83846653afde55b6e43bf596f1e55d1582`.
+Installation baseline, upgrade et désinstallation : trois codes MSI 0.
+Le client est un véritable utilisateur standard interactif, intégrité moyenne,
+sans groupe administrateur. Aucun UAC n’a été nécessaire à ce cycle positif.
+L’observateur est le compte administrateur distinct.
+
+ProductCode hybride `{9343EA2E-03F3-4177-97ED-F65BC08EE44A}`,
+UpgradeCode commun `{8FC9317B-4517-4E83-9F52-CF3257584BF6}` : enregistrement
+installé, version et cache conformes, autre produit absent. Après retrait :
+1605, index UpgradeCode absent pour le produit et trois contextes à 259.
+Composants Rust/Flutter, IPC 10, fermeture réelle de Flutter laissant Rust actif,
+données et désinstallation sont vérifiés. Le stimulus WM_DISPLAYCHANGE sur
+la fenêtre possédée est exercé ; aucun retrait physique d’écran n’est revendiqué.
+
+Le nouveau checkpoint `04 - Avant qualification consolidee 2aae176` est conservé.
+Le reçu final de la VM ne contient aucun client MSI, application ou tâche MCW
+active. La session Direct est fermée et son credential mémoire disposé.
+La politique effective est de nouveau Restricted et les portées persistantes
+restent indéfinies. La stable hôte conserve ses deux empreintes,
+ses deux inscriptions de registre et son tray PID 18072.
+
+Les courts relevés VM et leurs limites sont détaillés dans
+[le transfert Codex](HYBRID_STAGE4_CODEX_HANDOFF.md). Flutter fermé revient
+à un seul processus, 16,32 Mio RSS et 3,29 Mio privés médians. Les ouvertures
+baseline et candidate n’ont pas le même périmètre de mesure ; elles ne sont
+pas utilisées pour annoncer un gain ou une régression de latence.
+
+### Limites de qualification acceptées pour v0.22.0
+
+Le propriétaire a confirmé explicitement le 26 novembre que les absences de
+matériel ne sont **pas des conditions physiques obligatoires de publication**,
+y compris à l’étape 5. Les fonctions non prouvées, restrictions natives et
+risques résiduels sont détaillés dans le transfert : Vorssaint réel, caméra
+après veille, bannières/autorisation persistante, parcours lecteurs d’écran,
+retrait physique d’écran, GPU Linux et charges de capture physiques.
+Ces limites ne deviennent jamais des preuves positives. Aucun contact avec
+le testeur Mac n’est demandé. Un défaut critique de sécurité ou de
+fonctionnement effectivement établi reste bloquant.
+
+Sur la CI Windows `45778888517`, l’échec se limitait au rendu des menus qui
+conservait le même ancien garde Cargo que le pilote des profils. Les deux
+appellent maintenant le même contrôle strict d’image et conservent les gardes
+de PID/naissance/fenêtre. Les 12 cas purs passent en PowerShell 7 et 5.1 ; le
+scénario GUI complet ciblé de
+[45783944115](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/45783944115)
+réussit. La CI Windows complète sur `935310d` réussit aussi, avec les tests
+Rust, Clippy strict, l’audit de dépendances, le build Release, les profils,
+le tray, la transaction de mise à jour et la qualification de l’application
+installée. Les preuves restent rattachées au
+[run 45784960802](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/45784960802).
+
+**ÉTAPE 4/6 : TERMINÉE.** La qualification logicielle des cinq cibles, le
+scénario MSI hybride en compte standard dans la VM x64 et la dernière CI
+Windows sont validés. Les limites matérielles acceptées et les risques
+résiduels figurent dans le [rapport de transfert](HYBRID_STAGE4_CODEX_HANDOFF.md).
+L’étape 5 attend une mission distincte.
