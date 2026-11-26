@@ -2,8 +2,12 @@
 
 > **Étape 4 terminée le 26 novembre 2026.** Les qualifications consolidées,
 > le MSI hybride en compte standard et la dernière CI Windows sont validés.
-> L’étape 5 attend une mission distincte.
 > [Bilan et preuves de l’étape 4](HYBRID_STAGE4_CONSOLIDATION.md).
+
+> **Étape 5 terminée le 26 novembre 2026.** La candidate `de90a76` dispose
+> des huit paquets vérifiés, du SBOM et des neuf attestations. La publication
+> attend l’autorisation de l’étape 6.
+> [Qualification et transfert de la candidate](HYBRID_STAGE5_RELEASE_CANDIDATE.md).
 
 > **Décision du propriétaire du 26 novembre 2026 :** les limites matérielles
 > détaillées dans le [transfert Codex](HYBRID_STAGE4_CODEX_HANDOFF.md) sont
@@ -101,14 +105,17 @@ P0/P1 de lisibilité/accessibilité basique terminés ; raffinements facultatifs
 
 ## 5. Étape5 — release candidate et qualification
 
-Créer une branche RC0.22 isolée depuis le code intégré vérifié, pas depuis la candidate native0.21.1. Aucun P0/P1 ouvert ; geler les fonctionnalités et documenter chaque preuve sur le commit exact.
+La mission du propriétaire a autorisé la qualification sur
+`work/flutter-hybrid-0220`. Geler les fonctionnalités et documenter chaque
+preuve sur le commit exact. Un défaut critique établi reste une condition
+d’arrêt.
 
 Les limites matérielles explicitement acceptées dans le
 [transfert Codex](HYBRID_STAGE4_CODEX_HANDOFF.md) restent des limites de
 qualification de v0.22.0. Elles ne constituent pas, à elles seules, des défauts
 critiques établis ni de nouvelles obligations de matériel avant publication.
 Cette décision ne lève aucun défaut critique de sécurité ou de fonctionnement.
-Ne pas solliciter le testeur Mac. Cette mise à jour du plan ne démarre pas l’étape 5.
+Ne pas solliciter le testeur Mac.
 
 ### Checklist d'entrée et de qualification
 

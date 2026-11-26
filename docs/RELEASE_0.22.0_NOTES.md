@@ -38,7 +38,9 @@ in their supplied layout.
   interruption or leaves an ambiguous registration. A downgrade is not an MSI
   rollback. [MSI recovery](WINDOWS_MSI_MAINTENANCE.md).
 - **Linux x64 and ARM64.** Use the matching GNU/Linux archive with glibc
-  2.35 or newer and the documented PipeWire and GTK dependencies. Use the
+  2.35 or newer and the documented PipeWire and GTK dependencies. The Flutter
+  window also requires EGL/OpenGL ES libraries. Ubuntu 22.04 minimal images
+  may need `libgles2`. Use the
   managed hybrid installer and retain its rollback slot. Preserve ownership of
   existing package-manager installations. [Installation and rollback](HYBRID_DISTRIBUTION.md#opérations).
 - **macOS 15 or later.** Select the Intel or Apple Silicon DMG or archive.

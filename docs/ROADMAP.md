@@ -5,8 +5,12 @@
 > [transfert Codex](HYBRID_STAGE4_CODEX_HANDOFF.md). Les limites matérielles
 > décrites y sont acceptées par le propriétaire pour v0.22.0 ; elles ne
 > constituent pas à elles seules un blocage de publication. Les défauts
-> critiques restent bloquants. L’étape 5 n’est pas commencée. Les entrées
-> historiques ci-dessous conservent leurs dates et leurs révisions.
+> critiques restent bloquants. Les entrées historiques ci-dessous conservent
+> leurs dates et leurs révisions.
+
+> **Étape 5 terminée le 26 novembre 2026.** La candidate v0.22.0
+> `de90a76` est qualifiée et son lot est archivé. La stable publiée reste
+> la v0.21.0. [Rapport de qualification](HYBRID_STAGE5_RELEASE_CANDIDATE.md).
 
 > **Point de reprise du 16 novembre 2026.** La parité fonctionnelle de l’étape 2 est qualifiée sur le code `945d69c`. Voir les [reçus de la qualification fonctionnelle](V0.22.0_PARITY_AUDIT.md#qualification-etape-2).
 

@@ -10,7 +10,10 @@ approuver la publication après lecture du rapport de qualification.
    matrice, les résultats de la VM, les huit paquets, le SBOM SPDX,
    `SHA256SUMS` et les neuf attestations. Vérifier chaque sujet contre le
    dépôt, le chemin `.github/workflows/ci.yml`, le ref de branche, le SHA et
-   le runner GitHub hébergé. Conserver l’archive et les preuves localement.
+   le runner GitHub hébergé. Pour un assemblage de reprise, relever le SHA
+   de l’assemblage dans l’attestation et le SHA du build dans les manifestes
+   des paquets. Vérifier les deux en rapprochant les artefacts du run source.
+   Conserver l’archive et les preuves localement.
 2. Vérifier les références distantes et la version publique. Le workflow
    `release.yml` en place réagit aux tags `v*` et assemble les anciens
    paquets natifs. Avant création du tag, préparer et faire valider sa
@@ -39,6 +42,9 @@ qui laisse la commande v0.21.0 explicitement épinglée pendant la bascule.
 L’ancienne commande échouerait sur les noms et le contenu hybrides.
 Les anciens clients Windows ne doivent pas découvrir un ZIP hybride sous
 le nom historique du ZIP natif.
+
+Le parcours Linux mentionne les bibliothèques EGL/OpenGL ES nécessaires à
+Flutter. Sur Ubuntu 22.04 minimal, l’essai ARM64 a requis `libgles2`.
 
 Adapter les liens, exemples SHA et commandes des sept langues à la nouvelle
 liste d’artefacts. Les liens de vérification doivent montrer les noms exacts
