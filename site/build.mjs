@@ -51,7 +51,7 @@ function validateRelease(value) {
     throw new Error('site/release.json must be an object.');
   }
   const fields = ['version', 'source', 'installerSource', 'installerSha256', 'assembly', 'sourceArchiveSha256', 'manifestSha256'];
-  if (Object.keys(value).length !== fields.length + 1 || fields.some((field) => typeof value[field] !== 'string')) {
+  if (Object.keys(value).length !== fields.length + 2 || fields.some((field) => typeof value[field] !== 'string')) {
     throw new Error('site/release.json must contain the release and legacy installer pins plus the asset map.');
   }
   if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.test(value.version)) {
@@ -74,6 +74,15 @@ function validateRelease(value) {
       Object.keys(value.assets).length !== expectedAssets.length ||
       expectedAssets.some(name => !Object.hasOwn(value.assets, name) || !/^[a-f0-9]{64}$/.test(value.assets[name]))) {
     throw new Error('site/release.json must pin all nine release subjects.');
+  }
+  const windows = value.windows;
+  const windowsAssets = expectedAssets.filter(name => name.startsWith('miccamwatch-hybrid-windows-'));
+  if (!windows || typeof windows !== 'object' || Object.keys(windows).length !== 2 ||
+      typeof windows.version !== 'string' || !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(windows.version) ||
+      !windows.assets || typeof windows.assets !== 'object' ||
+      Object.keys(windows.assets).length !== windowsAssets.length ||
+      windowsAssets.some(name => !Object.hasOwn(windows.assets, name) || !/^[a-f0-9]{64}$/.test(windows.assets[name]))) {
+    throw new Error('site/release.json must pin the Windows version and both Windows assets.');
   }
   return value;
 }
@@ -119,6 +128,9 @@ function themeControl(catalog) {
 function renderText(content, filename, release, origin, catalog = null, privacy = null) {
   const tokens = {
     __MCW_VERSION__: release.version,
+    __MCW_WINDOWS_VERSION__: release.windows?.version,
+    __MCW_WINDOWS_SHA256SUMS__: release.windows && Object.entries(release.windows.assets)
+      .map(([name, sum]) => `${sum}  ${name}`).join("\n"),
     __MCW_SOURCE__: release.source,
     __MCW_INSTALLER_SHA256__: release.installerSha256,
     __MCW_ASSEMBLY__: release.assembly,

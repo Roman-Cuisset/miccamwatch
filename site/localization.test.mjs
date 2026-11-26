@@ -74,7 +74,7 @@ test('pageMetadata declares canonical root and Schema WebSite structured data on
   assert.doesNotMatch(privacyMeta, /WebSite/);
 });
 
-test("theme and upcoming version are translated in all seven catalogs", () => {
+test("theme and platform versions are present in all seven catalogs", () => {
   const catalog = (code) => JSON.parse(readFileSync(new URL("./locales/" + code + ".json", import.meta.url), "utf8"));
   const master = catalog("fr");
   const template = readFileSync(new URL("./templates/index.html", import.meta.url), "utf8");
@@ -84,10 +84,18 @@ test("theme and upcoming version are translated in all seven catalogs", () => {
       "home.upcoming.title", "home.upcoming.lead", "home.upcoming.status", "home.upcoming.stable"]) {
       assert.ok(current.messages[key]?.trim(), lang.code + ": " + key);
     }
-    const announcement = localizedPage(template, current, "index.html").split('class="upcoming shell"')[1].split("</section>")[0];
-    assert.match(announcement, /v0\.22\.0/);
+    const page = localizedPage(template, current, "index.html");
+    const announcement = page.split('class="upcoming shell"')[1].split("</section>")[0];
+    assert.match(announcement, /Windows v__MCW_WINDOWS_VERSION__/);
+    assert.match(announcement, /macOS v__MCW_VERSION__/);
     assert.match(announcement, /Flutter.*|.*Flutter/);
     assert.deepEqual([...announcement.matchAll(/href="([^"]*)"/g)].map((match) => match[1]), ["#installer"]);
+    const downloads = [...page.matchAll(/href="[^"]*\/download\/v([^/]+)\/(miccamwatch-hybrid-[^"]+)"/g)];
+    assert.equal(downloads.length, 8);
+    for (const [, version, asset] of downloads) {
+      assert.equal(version, asset.startsWith('miccamwatch-hybrid-windows-')
+        ? '__MCW_WINDOWS_VERSION__' : '__MCW_VERSION__');
+    }
   }
 });
 

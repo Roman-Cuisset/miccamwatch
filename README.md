@@ -40,7 +40,8 @@ screenshots of the 0.21.0 windows. Their
 
 | Channel | What is available |
 | --- | --- |
-| **Public stable: [v0.22.0](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.22.0)** | Complete hybrid packages for Windows x64, Linux x64/ARM64 and macOS Apple Silicon/Intel. |
+| **Windows x64: [v0.22.1](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.22.1)** | Corrective release for Flutter startup and Windows tray translations. |
+| **Linux and macOS: [v0.22.0](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.22.0)** | Complete hybrid packages for Linux x64/ARM64 and macOS Apple Silicon/Intel. |
 | **Previous release: [v0.21.0](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.21.0)** | Native Win32, GTK and AppKit consultation windows. |
 
 The consultation window runs in a separate Flutter process. Rust owns
@@ -86,10 +87,11 @@ See [platform limits](docs/USAGE.md#observation-and-control-limits).
 
 ### Windows — MSI or portable ZIP
 
-Download the [v0.22.0 MSI](https://github.com/Roman-Cuisset/miccamwatch/releases/download/v0.22.0/miccamwatch-hybrid-windows-x86_64.msi)
+Download the [v0.22.1 MSI](https://github.com/Roman-Cuisset/miccamwatch/releases/download/v0.22.1/miccamwatch-hybrid-windows-x86_64.msi)
 for a per-user installation, PATH registration, and a Start Menu entry.
-It upgrades an existing v0.21.0 MSI installation. Alternatively, extract the
-[complete portable ZIP](https://github.com/Roman-Cuisset/miccamwatch/releases/download/v0.22.0/miccamwatch-hybrid-windows-x86_64.zip)
+To apply the fix to v0.22.0, run the MSI over the existing MSI installation.
+The shared in-app release check still reports v0.22.0. For a portable
+installation, use the [complete v0.22.1 ZIP](https://github.com/Roman-Cuisset/miccamwatch/releases/download/v0.22.1/miccamwatch-hybrid-windows-x86_64.zip)
 in a separate user-owned folder.
 Open a new terminal after MSI installation; for a ZIP, run the executables from
 its extracted directory or configure PATH explicitly.
