@@ -975,7 +975,7 @@ mod tests {
         let binary = temporary.path().join("fixture");
         ensure_native_success(
             Command::new("/usr/bin/cc")
-                .args(["native/fixtures/other_user_process.c", "-o"])
+                .args(["native/fixtures/other_user_process.c", "-lproc", "-o"])
                 .arg(&binary)
                 .status()?,
         )?;
@@ -987,38 +987,26 @@ mod tests {
             .spawn()?;
         let result = (|| -> Result<()> {
             let mut line = String::new();
-            BufReader::new(child.stdout.take().context("fixture stdout missing")?)
-                .read_line(&mut line)?;
-            let pid: i32 = line
-                .trim()
-                .parse()
-                .context("cross-user fixture did not report its PID")?;
-            let read_identity = || -> Result<libc::proc_bsdinfo> {
-                let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
-                let size = std::mem::size_of_val(&info) as i32;
-                anyhow::ensure!(
-                    unsafe {
-                        libc::proc_pidinfo(
-                            pid,
-                            libc::PROC_PIDTBSDINFO,
-                            0,
-                            (&mut info as *mut libc::proc_bsdinfo).cast(),
-                            size,
-                        )
-                    } == size,
-                    "cross-user identity unavailable"
-                );
-                Ok(info)
-            };
-            let before = read_identity()?;
+            let mut output = BufReader::new(child.stdout.take().context("fixture stdout missing")?);
+            output.read_line(&mut line)?;
+            let fields = line
+                .split_whitespace()
+                .map(str::parse::<u64>)
+                .collect::<std::result::Result<Vec<_>, _>>()?;
             anyhow::ensure!(
-                before.pbi_uid != unsafe { libc::getuid() },
+                fields.len() == 4
+                    && fields[0] > 4
+                    && fields[0] <= i32::MAX as u64
+                    && fields[2] > 0
+                    && fields[3] < 1_000_000,
+                "fixture did not report its authentic self-observed process identity"
+            );
+            let pid = fields[0] as i32;
+            anyhow::ensure!(
+                fields[1] != unsafe { libc::getuid() } as u64,
                 "fixture unexpectedly belongs to the caller"
             );
-            let instance = format!(
-                "macos:microphone:{pid}:{}:{}",
-                before.pbi_start_tvsec, before.pbi_start_tvusec
-            );
+            let instance = format!("macos:microphone:{pid}:{}:{}", fields[2], fields[3]);
             for mode in ["terminate", "close-application"] {
                 let reply: serde_json::Value = native_request(
                     mode,
@@ -1026,11 +1014,15 @@ mod tests {
                     Duration::from_secs(20),
                 )?;
                 assert_eq!(reply["effect"]["ok"], false, "{reply}");
-                let after = read_identity()?;
-                assert_eq!(
-                    (after.pbi_start_tvsec, after.pbi_start_tvusec),
-                    (before.pbi_start_tvsec, before.pbi_start_tvusec)
-                );
+                // The ordinary caller may legitimately lack cross-user libproc
+                // visibility. Prove liveness through this retained fixture pipe;
+                // do not acquire administrator authority for the product helper.
+                let input = child.stdin.as_mut().context("fixture stdin missing")?;
+                input.write_all(b"p")?;
+                input.flush()?;
+                let mut alive = String::new();
+                output.read_line(&mut alive)?;
+                assert_eq!(alive.trim(), "alive");
             }
             Ok(())
         })();
