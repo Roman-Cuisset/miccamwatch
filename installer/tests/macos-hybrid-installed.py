@@ -61,11 +61,17 @@ def inspect_embedded_helper(app, direct):
     engine = app / "Contents/MacOS/mcw"
     parts = ("Info.plist", "MacOS/MicCamWatchHelper", "_CodeSignature/CodeResources")
     image = engine.read_bytes()
-    candidates = direct.parent.glob("build/miccamwatch-*/out/MicCamWatchHelper.app")
+    build = direct.parent / "build"
+    candidates = set(build.glob("miccamwatch-*/out/MicCamWatchHelper.app")) | set(
+        build.glob("miccamwatch/*/out/MicCamWatchHelper.app"))
     matching = [helper for helper in candidates
                 if all((helper / "Contents" / part).read_bytes() in image for part in parts)]
     require(len(matching) == 1, "could not identify the exact signed Swift helper embedded in the packaged engine")
-    helper, = matching
+    embedded, = matching
+    helper = app / "Contents/Helpers/MicCamWatchHelper.app"
+    require(all((helper / "Contents" / part).read_bytes() ==
+                (embedded / "Contents" / part).read_bytes() for part in parts),
+            "installed notification helper differs from the exact embedded signed helper")
     binary = helper / "Contents/MacOS/MicCamWatchHelper"
     plist = plistlib.loads((helper / "Contents/Info.plist").read_bytes())
     identity = "com.roman-cuisset.miccamwatch.helper"
@@ -84,7 +90,8 @@ def inspect_embedded_helper(app, direct):
     require(all(f"/{name}.framework/" in linkage.stdout for name in frameworks),
             "Missing native capture or user notification framework")
     return {"bundle_id": identity, "signature_verified": True, "entitlements": {},
-            "frameworks": frameworks, "engine_sha256": digest(engine), "helper_sha256": digest(binary)}
+            "frameworks": frameworks, "engine_sha256": digest(engine), "helper_sha256": digest(binary),
+            "installed_bundle": str(helper), "matches_embedded_bytes": True}
 
 
 def inspect_collectors(engine, env):

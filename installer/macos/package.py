@@ -152,7 +152,10 @@ def main():
         shutil.copy2(binary, executables / 'mcw')
         parts = ("Info.plist", "MacOS/MicCamWatchHelper", "_CodeSignature/CodeResources")
         image = binary.read_bytes()
-        helpers = [helper for helper in binary.parent.glob("build/miccamwatch-*/out/MicCamWatchHelper.app")
+        build = binary.parent / "build"
+        candidates = set(build.glob("miccamwatch-*/out/MicCamWatchHelper.app")) | set(
+            build.glob("miccamwatch/*/out/MicCamWatchHelper.app"))
+        helpers = [helper for helper in candidates
                    if all((helper / "Contents" / part).read_bytes() in image for part in parts)]
         check(len(helpers) == 1, "exact embedded notification helper could not be identified")
         installed_helper = contents / "Helpers/MicCamWatchHelper.app"

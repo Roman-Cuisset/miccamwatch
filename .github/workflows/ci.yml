@@ -420,7 +420,9 @@ jobs:
               payloads[name] = dict(elf_class=64, little_endian=True, e_machine=machine,
                                     glibc_requirements=[".".join(map(str, v)) for v in versions],
                                     sha256=hashlib.sha256(path.read_bytes()).hexdigest())
-          bindings = list(pathlib.Path("target/release/build").glob("libspa-sys-*/out/bindings.rs"))
+          build = pathlib.Path("target/release/build")
+          bindings = sorted(set(build.glob("libspa-sys-*/out/bindings.rs")) |
+                            set(build.glob("libspa-sys/*/out/bindings.rs")))
           assert bindings, "Native libspa bindgen output missing"
           outputs = []
           for index, path in enumerate(bindings):
