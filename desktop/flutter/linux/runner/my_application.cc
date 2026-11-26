@@ -50,6 +50,42 @@ static void set_bundled_window_icon(GtkWindow* window) {
   }
 }
 
+static void fit_window(GtkWindow* window) {
+  GdkWindow* native = gtk_widget_get_window(GTK_WIDGET(window));
+  if (native == nullptr) return;
+  GdkMonitor* monitor = gdk_display_get_monitor_at_window(gtk_widget_get_display(GTK_WIDGET(window)), native);
+  if (monitor == nullptr) return;
+  GdkRectangle work;
+  gdk_monitor_get_workarea(monitor, &work);
+  GdkGeometry minimum = {};
+  minimum.min_width = MIN(640, MAX(1, work.width - 24));
+  minimum.min_height = MIN(440, MAX(1, work.height - 64));
+  gtk_window_set_geometry_hints(window, nullptr, &minimum, GDK_HINT_MIN_SIZE);
+  gint x, y, width, height;
+  gtk_window_get_position(window, &x, &y);
+  gtk_window_get_size(window, &width, &height);
+  width = MIN(width, MAX(1, work.width - 24));
+  height = MIN(height, MAX(1, work.height - 64));
+  gtk_window_resize(window, width, height);
+  gtk_window_move(window, CLAMP(x, work.x, work.x + MAX(0, work.width - width)),
+                  CLAMP(y, work.y, work.y + MAX(0, work.height - height)));
+}
+
+static gboolean save_window(GtkWidget* widget, GdkEvent*, gpointer) {
+  GtkWindow* window = GTK_WINDOW(widget);
+  if (gtk_window_is_maximized(window)) return FALSE;
+  gint x, y, width, height;
+  gtk_window_get_position(window, &x, &y);
+  gtk_window_get_size(window, &width, &height);
+  g_autofree gchar* directory = g_build_filename(g_get_user_config_dir(), "miccamwatch-desktop", nullptr);
+  if (g_mkdir_with_parents(directory, 0700) == 0) {
+    g_autofree gchar* path = g_build_filename(directory, "window.ini", nullptr);
+    g_autofree gchar* data = g_strdup_printf("[window]\nx=%d\ny=%d\nwidth=%d\nheight=%d\n", x, y, width, height);
+    g_file_set_contents(path, data, -1, nullptr);
+  }
+  return FALSE;
+}
+
 // Implements GApplication::activate.
 static void my_application_activate(GApplication* application) {
   MyApplication* self = MY_APPLICATION(application);
@@ -96,6 +132,24 @@ static void my_application_activate(GApplication* application) {
   minimum.min_width = MIN(640, available_width);
   minimum.min_height = MIN(440, available_height);
   gtk_window_set_geometry_hints(window, nullptr, &minimum, GDK_HINT_MIN_SIZE);
+  g_autofree gchar* frame_path = g_build_filename(
+      g_get_user_config_dir(), "miccamwatch-desktop", "window.ini", nullptr);
+  g_autoptr(GKeyFile) frame = g_key_file_new();
+  if (g_key_file_load_from_file(frame, frame_path, G_KEY_FILE_NONE, nullptr)) {
+    const int width = g_key_file_get_integer(frame, "window", "width", nullptr);
+    const int height = g_key_file_get_integer(frame, "window", "height", nullptr);
+    const int x = g_key_file_get_integer(frame, "window", "x", nullptr);
+    const int y = g_key_file_get_integer(frame, "window", "y", nullptr);
+    if (width >= 1 && width <= 20000 && height >= 1 && height <= 20000 &&
+        x >= -100000 && x <= 100000 && y >= -100000 && y <= 100000) {
+      gtk_window_set_default_size(window, MIN(width, available_width), MIN(height, available_height));
+      gtk_window_move(window, x, y);
+    }
+  }
+  g_signal_connect(window, "delete-event", G_CALLBACK(save_window), nullptr);
+  g_signal_connect_object(gtk_window_get_screen(window), "monitors-changed",
+      G_CALLBACK(fit_window), window, G_CONNECT_SWAPPED);
+  g_signal_connect_object(window, "map", G_CALLBACK(fit_window), window, G_CONNECT_SWAPPED);
 
   g_autoptr(FlDartProject) project = fl_dart_project_new();
   // The Linux software compositor draws through Skia. Impeller text aborts

@@ -19,6 +19,11 @@ namespace {
 #endif
 
 constexpr const wchar_t kWindowClassName[] = L"FLUTTER_RUNNER_WIN32_WINDOW";
+constexpr const wchar_t kFrameKey[] = L"Software\\MicCamWatch\\FlutterWindow";
+struct SavedFrame {
+  RECT rect;
+  UINT dpi;
+};
 
 
 // The number of Win32Window objects that currently exist.
@@ -138,6 +143,22 @@ bool Win32Window::Create(const std::wstring& title,
   LONG height = frame.bottom - frame.top;
   LONG x = target_point.x;
   LONG y = target_point.y;
+  SavedFrame saved = {};
+  DWORD bytes = sizeof(saved);
+  if (RegGetValueW(HKEY_CURRENT_USER, kFrameKey, L"Frame", RRF_RT_REG_BINARY,
+                   nullptr, &saved, &bytes) == ERROR_SUCCESS &&
+      bytes == sizeof(saved) && saved.dpi >= 48 && saved.dpi <= 960 &&
+      saved.rect.right > saved.rect.left && saved.rect.bottom > saved.rect.top &&
+      saved.rect.left >= -100000 && saved.rect.top >= -100000 &&
+      saved.rect.right <= 100000 && saved.rect.bottom <= 100000) {
+    monitor = MonitorFromRect(&saved.rect, MONITOR_DEFAULTTONEAREST);
+    dpi = FlutterDesktopGetDpiForMonitor(monitor);
+    if (dpi == 0) dpi = 96;
+    x = saved.rect.left;
+    y = saved.rect.top;
+    width = MulDiv(saved.rect.right - saved.rect.left, dpi, saved.dpi);
+    height = MulDiv(saved.rect.bottom - saved.rect.top, dpi, saved.dpi);
+  }
   MONITORINFO monitor_info = {};
   monitor_info.cbSize = sizeof(monitor_info);
   if (GetMonitorInfo(monitor, &monitor_info)) {
@@ -155,6 +176,7 @@ bool Win32Window::Create(const std::wstring& title,
   if (!window) {
     return false;
   }
+  FitToWorkArea();
 
   UpdateTheme(window);
 
@@ -191,6 +213,16 @@ Win32Window::MessageHandler(HWND hwnd,
                             WPARAM const wparam,
                             LPARAM const lparam) noexcept {
   switch (message) {
+    case WM_CLOSE:
+      SaveFrame();
+      break;
+    case WM_EXITSIZEMOVE:
+      SaveFrame();
+      return 0;
+    case WM_DISPLAYCHANGE:
+    case WM_SETTINGCHANGE:
+      FitToWorkArea();
+      return 0;
     case WM_DESTROY:
       window_handle_ = nullptr;
       Destroy();
@@ -206,6 +238,7 @@ Win32Window::MessageHandler(HWND hwnd,
 
       SetWindowPos(hwnd, nullptr, newRectSize->left, newRectSize->top, newWidth,
                    newHeight, SWP_NOZORDER | SWP_NOACTIVATE);
+      FitToWorkArea();
 
       return 0;
     }
@@ -231,6 +264,39 @@ Win32Window::MessageHandler(HWND hwnd,
   }
 
   return DefWindowProc(window_handle_, message, wparam, lparam);
+}
+
+void Win32Window::FitToWorkArea() {
+  if (!window_handle_ || IsIconic(window_handle_) || IsZoomed(window_handle_)) return;
+  RECT rect;
+  MONITORINFO info = {};
+  info.cbSize = sizeof(info);
+  if (!GetWindowRect(window_handle_, &rect) ||
+      !GetMonitorInfo(MonitorFromRect(&rect, MONITOR_DEFAULTTONEAREST), &info)) return;
+  const RECT& work = info.rcWork;
+  const LONG width = std::min(rect.right - rect.left, work.right - work.left);
+  const LONG height = std::min(rect.bottom - rect.top, work.bottom - work.top);
+  const LONG x = std::clamp(rect.left, work.left, work.right - width);
+  const LONG y = std::clamp(rect.top, work.top, work.bottom - height);
+  if (x != rect.left || y != rect.top || width != rect.right - rect.left ||
+      height != rect.bottom - rect.top) {
+    SetWindowPos(window_handle_, nullptr, x, y, width, height, SWP_NOZORDER | SWP_NOACTIVATE);
+  }
+}
+
+void Win32Window::SaveFrame() {
+  if (!window_handle_ || IsIconic(window_handle_) || IsZoomed(window_handle_)) return;
+  SavedFrame saved = {};
+  if (!GetWindowRect(window_handle_, &saved.rect)) return;
+  saved.dpi = GetDpiForWindow(window_handle_);
+  if (saved.dpi == 0) saved.dpi = 96;
+  HKEY key;
+  if (RegCreateKeyExW(HKEY_CURRENT_USER, kFrameKey, 0, nullptr, 0, KEY_SET_VALUE,
+                      nullptr, &key, nullptr) == ERROR_SUCCESS) {
+    RegSetValueExW(key, L"Frame", 0, REG_BINARY,
+                  reinterpret_cast<const BYTE*>(&saved), sizeof(saved));
+    RegCloseKey(key);
+  }
 }
 
 void Win32Window::Destroy() {

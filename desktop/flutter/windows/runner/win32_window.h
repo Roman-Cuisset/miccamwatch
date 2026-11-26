@@ -91,6 +91,8 @@ class Win32Window {
   static Win32Window* GetThisFromHandle(HWND const window) noexcept;
 
   void UpdateTheme(HWND window);
+  void FitToWorkArea();
+  void SaveFrame();
 
   bool quit_on_close_ = false;
   bool dark_frame_ = false;
