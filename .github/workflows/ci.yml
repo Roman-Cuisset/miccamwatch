@@ -22,6 +22,7 @@ on:
           - flutter-windows
           - release-candidate
           - release-candidate-arm-runtime
+          - release-candidate-windows-startup
       candidate-build-run:
         description: Source CI run containing the exact Linux ARM64 candidate package
         type: string
@@ -167,23 +168,93 @@ jobs:
       - run: cargo fmt --check
       - run: cargo install cargo-audit --locked && cargo audit
 
+  release-candidate-windows-startup:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.native-platform == 'release-candidate-windows-startup' }}
+    runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Bind the isolated startup replay to the recorded build
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_RUN: ${{ inputs.candidate-build-run }}
+          BUILD_SHA: ${{ inputs.candidate-build-sha }}
+        run: |
+          if ($env:BUILD_RUN -cnotmatch '^[0-9]+$' -or $env:BUILD_SHA -cnotmatch '^[a-f0-9]{40}$') { throw 'Invalid source run or commit.' }
+          gh run view $env:BUILD_RUN --repo $env:GITHUB_REPOSITORY --json headSha,headBranch,event,workflowName,jobs > "$env:RUNNER_TEMP/source-run.json"
+          if ($LASTEXITCODE -ne 0) { throw 'Source run unavailable.' }
+          python -B installer/release_candidate.py --validate-replay "$env:RUNNER_TEMP/source-run.json" $env:BUILD_SHA
+          if ($LASTEXITCODE -ne 0) { throw 'Source qualification incomplete.' }
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.candidate-build-sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: flutter-b5-windows-evidence
+          run-id: ${{ inputs.candidate-build-run }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/mcw-startup-archived
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: 1.98.1
+      - name: Replay isolated startup without any fixture MSI on this runner
+        shell: pwsh
+        run: |
+          if ($env:RUNNER_ENVIRONMENT -cne 'github-hosted') { throw 'Dedicated GitHub-hosted runner required.' }
+          cargo build --release --locked --features windows-tray,flutter-desktop
+          if ($LASTEXITCODE -ne 0) { throw 'Semantic proof engine build failed.' }
+          $venv = Join-Path $env:RUNNER_TEMP 'mcw-startup-python'
+          python -m venv $venv
+          if ($LASTEXITCODE -ne 0) { throw 'Venv creation failed.' }
+          $py = Join-Path $venv 'Scripts/python.exe'
+          & $py -m pip install psutil==7.2.2 Pillow==12.2.0
+          if ($LASTEXITCODE -ne 0) { throw 'Proof tooling installation failed.' }
+          $inputRoot = Join-Path $env:RUNNER_TEMP 'mcw-startup-archived'
+          $proof = Join-Path $env:LOCALAPPDATA 'MicCamWatchQualification/stage5-startup'
+          "MCW_STARTUP_PROOF=$proof" >> $env:GITHUB_ENV
+          $env:FLUTTER_SUPPRESS_ANALYTICS = 'true'
+          $env:CI = 'true'
+          & $py -B desktop/qualification/windows_b5.py --engine-directory target/release --release-bundle "$inputRoot/normal-bundle" --instrumented-bundle "$inputRoot/consultation-bundle" --startup-bundle "$inputRoot/startup-bundle" --proof $proof --startup-ci
+          if ($LASTEXITCODE -ne 0) { throw 'Startup replay failed.' }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: ${{ always() && env.MCW_STARTUP_PROOF != '' }}
+        with:
+          name: candidate-windows-startup-${{ inputs.candidate-build-sha }}
+          path: |
+            ${{ runner.temp }}/source-run.json
+            ${{ env.MCW_STARTUP_PROOF }}/**/*.json
+            ${{ env.MCW_STARTUP_PROOF }}/**/*.log
+          if-no-files-found: warn
+
   release-candidate-bundle:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.native-platform == 'release-candidate' }}
-    needs: [flutter-qualification, flutter-windows-qualification, release-candidate-audit]
+    if: ${{ always() && !cancelled() && github.event_name == 'workflow_dispatch' && ((inputs.native-platform == 'release-candidate' && needs.flutter-qualification.result == 'success' && needs.flutter-windows-qualification.result == 'success' && needs.release-candidate-audit.result == 'success') || (inputs.native-platform == 'release-candidate-windows-startup' && needs.release-candidate-windows-startup.result == 'success')) }}
+    needs: [flutter-qualification, flutter-windows-qualification, release-candidate-audit, release-candidate-windows-startup]
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      actions: read
       id-token: write
       attestations: write
+    env:
+      PACKAGE_SOURCE: ${{ inputs.native-platform == 'release-candidate' && github.sha || inputs.candidate-build-sha }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          pattern: miccamwatch-hybrid-*-${{ github.sha }}
+          pattern: miccamwatch-hybrid-*-${{ env.PACKAGE_SOURCE }}
           path: candidate-input
-      - run: python3 -B installer/release_candidate.py candidate-input dist "$GITHUB_SHA"
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.native-platform == 'release-candidate' && github.run_id || inputs.candidate-build-run }}
+      - run: python3 -B installer/release_candidate.py "$PACKAGE_SOURCE" candidate-input dist
       - name: Generate SPDX SBOM
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
         with:
@@ -205,7 +276,7 @@ jobs:
           subject-path: dist/miccamwatch-*
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: verified-hybrid-release-candidate-${{ github.sha }}
+          name: verified-hybrid-release-candidate-${{ env.PACKAGE_SOURCE }}
           if-no-files-found: error
           retention-days: 30
           path: dist/*
@@ -238,7 +309,7 @@ jobs:
           set -euo pipefail
           [[ "$RUNNER_ENVIRONMENT" == github-hosted && $(uname -m) == aarch64 ]]
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends dbus-x11 xvfb xauth openbox xfce4-panel xfconf libgtk-3-0 libx11-dev libpipewire-0.3-0 libgl1-mesa-dri libegl1-mesa
+          sudo apt-get install -y --no-install-recommends dbus-x11 xvfb xauth openbox xfce4-panel xfconf at-spi2-core libgtk-3-0 libx11-dev libpipewire-0.3-0 libgl1-mesa-dri libegl1-mesa libgles2
           dbus-run-session -- xvfb-run -a -s '-screen 0 1280x1000x24' \
             bash desktop/qualification/linux_candidate_smoke.sh \
             "$RUNNER_TEMP/mcw-arm-stage5-input/miccamwatch-hybrid-linux-aarch64.tar.gz" \
@@ -281,7 +352,7 @@ jobs:
           path: ${{ runner.temp }}/native-windows-profiles
 
   windows:
-    if: ${{ !inputs.native-only && !inputs.windows-native-profiles-only && inputs.native-platform != 'flutter' && inputs.native-platform != 'flutter-windows' && inputs.native-platform != 'release-candidate' && inputs.native-platform != 'release-candidate-arm-runtime' }}
+    if: ${{ !inputs.native-only && !inputs.windows-native-profiles-only && inputs.native-platform != 'flutter' && inputs.native-platform != 'flutter-windows' && inputs.native-platform != 'release-candidate' && inputs.native-platform != 'release-candidate-arm-runtime' && inputs.native-platform != 'release-candidate-windows-startup' }}
     runs-on: windows-latest
     permissions:
       contents: read
@@ -437,7 +508,7 @@ jobs:
           path: ${{ runner.temp }}/windows-application-proof
 
   portable:
-    if: ${{ inputs.native-platform != 'windows' && inputs.native-platform != 'flutter' && inputs.native-platform != 'flutter-windows' && inputs.native-platform != 'release-candidate' && inputs.native-platform != 'release-candidate-arm-runtime' }}
+    if: ${{ inputs.native-platform != 'windows' && inputs.native-platform != 'flutter' && inputs.native-platform != 'flutter-windows' && inputs.native-platform != 'release-candidate' && inputs.native-platform != 'release-candidate-arm-runtime' && inputs.native-platform != 'release-candidate-windows-startup' }}
     strategy:
       fail-fast: false
       matrix:
