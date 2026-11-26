@@ -159,8 +159,8 @@ jobs:
         shell: powershell
         run: |
           if ($env:RUNNER_ENVIRONMENT -cne 'github-hosted') { throw 'Disposable hosted Windows required' }
+          $ErrorActionPreference = 'Stop'
           & installer/tests/windows-test-image-tests.ps1
-          if ($LASTEXITCODE -ne 0) { throw 'Image admission tests failed' }
           powershell.exe -NoProfile -STA -File installer/tests/windows-tray-profiles-native.ps1 -OutputDirectory "${{ runner.temp }}/native-windows-profiles" -IsolatedDesktop
           if ($LASTEXITCODE -ne 0) { throw 'Targeted native profile and renderer proof failed' }
       - name: Preserve targeted native profile proof
@@ -273,8 +273,8 @@ jobs:
         timeout-minutes: 8
         shell: powershell
         run: |
+          $ErrorActionPreference = 'Stop'
           & installer/tests/windows-test-image-tests.ps1
-          if ($LASTEXITCODE -ne 0) { throw 'Image admission tests failed' }
           powershell.exe -NoProfile -STA -File installer/tests/windows-tray-profiles-native.ps1 -OutputDirectory "${{ runner.temp }}/native-windows-profiles" -IsolatedDesktop
           if ($LASTEXITCODE -ne 0) { throw 'Native profile and renderer proof failed' }
       - name: Upload native Windows profile evidence
