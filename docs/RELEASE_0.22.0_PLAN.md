@@ -1,5 +1,9 @@
 # MicCamWatch v0.22.0 — plan définitif en six étapes
 
+> Reprise du 26 novembre : [consolidation de l’étape 4](HYBRID_STAGE4_CONSOLIDATION.md).
+> Neon est intégré ; la clôture attend les qualifications consolidées et les
+> décisions explicites sur les preuves encore indisponibles. L’étape 5 ne démarre pas.
+
 > **Point de reprise du 16 novembre 2026.** La parité fonctionnelle de l’étape 2 est qualifiée sur le code `945d69c`. Voir les [reçus de la qualification fonctionnelle](V0.22.0_PARITY_AUDIT.md#qualification-etape-2).
 
 Date : **2026-11-04**. Décision propriétaire : une seule prochaine version publique, **v0.22.0 hybride Rust + Flutter**. Aucun calendrier artificiel. Ce plan n'autorise aucun push, merge, tag, release, déploiement ou modification de l'installation quotidienne.

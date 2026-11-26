@@ -1,5 +1,9 @@
 # MicCamWatch v0.22.0 — audit de l’étape 4
 
+La [consolidation du 26 novembre](HYBRID_STAGE4_CONSOLIDATION.md) suit
+l’intégration Neon, les nouveaux correctifs et leurs preuves propres.
+Les résultats historiques ci-dessous restent rattachés à leurs révisions.
+
 Base `e773cbf266cc25471a627265d6379cf627ebcfa5` sur
 `work/flutter-hybrid-0220`. Les validations sont rattachées au code qu’elles
 ont réellement exécuté. Les preuves [d’installation hybride](HYBRID_DISTRIBUTION.md)
