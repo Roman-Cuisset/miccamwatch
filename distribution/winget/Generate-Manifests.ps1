@@ -1,6 +1,8 @@
 param(
     [Parameter(Mandatory = $true)][ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version,
     [Parameter(Mandatory = $true)][ValidatePattern('^[0-9a-fA-F]{64}$')][string]$InstallerSha256,
+    [ValidateSet('miccamwatch-windows-x86_64.msi', 'miccamwatch-hybrid-windows-x86_64.msi')]
+    [string]$InstallerFileName = 'miccamwatch-windows-x86_64.msi',
     [ValidatePattern('^\d+\.\d+\.\d+$')][string]$ManifestVersion = '1.28.0',
     # Where to write manifests/r/RomanCuisset/MicCamWatch/<version>/. Defaults to
     # this script's directory; pass a scratch directory to validate a draft
@@ -59,7 +61,7 @@ Commands:
   - mcw
 Installers:
   - Architecture: x64
-    InstallerUrl: $baseUrl/miccamwatch-windows-x86_64.msi
+    InstallerUrl: $baseUrl/$InstallerFileName
     InstallerSha256: $($InstallerSha256.ToUpperInvariant())
 $dependencies
 ManifestType: installer
