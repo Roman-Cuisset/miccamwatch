@@ -9,6 +9,8 @@ class Labels {
 }
 
 const _labels = <String, List<String>>{
+  'close_application': ['Request application close', 'Demander la fermeture de l’application', 'Schließen der Anwendung anfordern', 'Solicitar el cierre de la aplicación', 'アプリの終了を要求', '请求关闭应用', 'Запросить закрытие приложения'],
+  'closeApplicationScope': ['Requests a normal macOS application close. The application may ask to save or refuse. Completion requires observed exit. Microphone permissions are managed separately.', 'Demande une fermeture normale sous macOS. L’application peut demander un enregistrement ou refuser. La fin doit être observée pour confirmer le résultat. Les permissions du microphone se gèrent séparément.', 'Fordert ein normales Schließen unter macOS an. Die Anwendung kann Speichern verlangen oder ablehnen. Der Abschluss wird erst nach beobachtetem Ende bestätigt. Mikrofonrechte werden separat verwaltet.', 'Solicita un cierre normal en macOS. La aplicación puede pedir guardar o negarse. Se confirma al observar su salida. Los permisos del micrófono se gestionan por separado.', 'macOS に通常の終了を要求します。アプリが保存の確認を表示したり、拒否する場合があります。終了を確認して完了とします。マイクの権限は別途管理されます。', '请求 macOS 应用正常关闭。应用可能要求保存或拒绝。仅在观察到退出后确认完成。麦克风权限单独管理。', 'Запрашивает обычное закрытие в macOS. Приложение может предложить сохранение или отказать. Завершение подтверждается после наблюдаемого выхода. Разрешения микрофона управляются отдельно.'],
   'overview': ['Overview', 'Vue d’ensemble', 'Übersicht', 'Resumen', '概要', '概览', 'Обзор'],
   'controls': ['Controls', 'Contrôles', 'Steuerung', 'Controles', '操作', '控制', 'Управление'],
   'interfaceLanguage': ['Interface language', 'Langue de l’interface', 'Sprache der Oberfläche', 'Idioma de la interfaz', '表示言語', '界面语言', 'Язык интерфейса'],

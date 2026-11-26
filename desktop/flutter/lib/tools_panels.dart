@@ -97,6 +97,7 @@ class _NativeToolsPanelState extends State<NativeToolsPanel> {
             if (control.kind.startsWith('microphone')) Text(l[prepared.state!.text('microphone_scope')]),
             if (control.kind.startsWith('camera')) Text(l[prepared.state!.text('camera_scope')]),
             if (control.kind == 'quit_engine') Text(l['quitScope']),
+            if (control.kind == 'close_application') Text(l['closeApplicationScope']),
             if (control.kind == 'camera_restore_legacy') ...[
               Text(l['cameraLegacyAllow']),
               Text(l['cameraLegacyWarning']),
@@ -281,6 +282,13 @@ class _NativeToolsPanelState extends State<NativeToolsPanel> {
                 data!['pid'] is int && data!['process_identity_confirmed'] == true
                 ? () => _apply(NativeControl.terminate(data!['pid'] as int)) : null),
             Text(l['terminateScope']),
+            if (Theme.of(context).platform == TargetPlatform.macOS) ...[
+              action('close_application', Icons.close,
+                enabled && detailSession == client.session && client.operational &&
+                  data!['pid'] is int && data!['process_identity_confirmed'] == true
+                  ? () => _apply(NativeControl.closeApplication(data!['pid'] as int)) : null),
+              Text(l['closeApplicationScope']),
+            ],
           ],
         ]),
         _ToolCard(title: l['policyAndPaths'], children: [

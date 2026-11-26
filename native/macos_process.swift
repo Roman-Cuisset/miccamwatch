@@ -1,4 +1,5 @@
 import CoreGraphics
+import AppKit
 import Darwin
 import Foundation
 
@@ -16,12 +17,16 @@ func processEffect(mode: String, args: [String]) -> NativeEffectReply {
             return NativeEffectReply(ok: false, error: "session-lock takes no arguments", state: "unknown")
         }
         return publicSessionLockEvidence()
-    case "terminate":
+    case "terminate", "close-application":
         guard args.count == 2, let pid = Int32(args[0]), pid > 1,
               pid != getpid(), pid != getppid(), !args[1].isEmpty else {
             return NativeEffectReply(ok: false, error: "refusing to terminate a protected or unattributed process", state: nil)
         }
         do {
+            if mode == "close-application" {
+                try closeObservedApplication(pid: pid, expectedInstance: args[1])
+                return NativeEffectReply(ok: true, error: nil, state: "application_exited")
+            }
             try terminateObservedTask(pid: pid, expectedInstance: args[1])
             return NativeEffectReply(ok: true, error: nil, state: nil)
         } catch {
@@ -171,5 +176,47 @@ private func terminateObservedTask(pid: Int32, expectedInstance: String) throws 
     let terminated = task_terminate(task)
     guard terminated == KERN_SUCCESS else {
         throw ProcessEffectError(description: "retained task termination failed (Mach \(terminated))")
+    }
+}
+
+private func closeObservedApplication(pid: Int32, expectedInstance: String) throws {
+    let uid = getuid()
+    guard uid != 0, uid == geteuid() else {
+        throw ProcessEffectError(description: "request application closure as its ordinary user, without sudo")
+    }
+    // Retain AppKit's application instance before correlating public libproc
+    // evidence. A later PID reuse must never redirect the requested operation.
+    guard let application = NSRunningApplication(processIdentifier: pid),
+          !application.isTerminated, let launched = application.launchDate,
+          let executable = application.executableURL,
+          let bundle = application.bundleURL, bundle.pathExtension == "app",
+          !bundle.path.hasPrefix("/System/") else {
+        throw ProcessEffectError(description: "a running user application bundle could not be identified")
+    }
+    let before = try readEffectIdentity(pid)
+    try validateEffectIdentity(before, expectedInstance: expectedInstance, uid: uid)
+    let birth = Double(before.info.pbi_start_tvsec) + Double(before.info.pbi_start_tvusec) / 1_000_000
+    guard abs(launched.timeIntervalSince1970 - birth) < 1,
+          executable.path == before.executable,
+          getsid(pid) > 0, getsid(pid) == getsid(getpid()) else {
+        throw ProcessEffectError(description: "application executable, launch identity or login session differs from the observed process")
+    }
+    let after = try readEffectIdentity(pid)
+    try validateEffectIdentity(after, expectedInstance: expectedInstance, uid: uid)
+    guard after.executable == before.executable,
+          let current = NSRunningApplication(processIdentifier: pid),
+          current.isEqual(application), !application.isTerminated,
+          application.launchDate == launched else {
+        throw ProcessEffectError(description: "application instance changed before the close request")
+    }
+    guard application.terminate() else {
+        throw ProcessEffectError(description: "the application or macOS declined the normal close request")
+    }
+    let deadline = Date().addingTimeInterval(10)
+    while !application.isTerminated && Date() < deadline {
+        RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+    }
+    guard application.isTerminated else {
+        throw ProcessEffectError(description: "close requested; application exit remains unconfirmed, check for an unsaved document or confirmation in the application")
     }
 }

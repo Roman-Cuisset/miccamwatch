@@ -84,6 +84,9 @@ pub enum Control {
     Terminate {
         pid: u32,
     },
+    CloseApplication {
+        pid: u32,
+    },
     AutomaticEnforcement {
         enabled: bool,
     },
@@ -94,6 +97,9 @@ impl Request {
         match self {
             Self::Prepare {
                 control: Control::Terminate { pid },
+            }
+            | Self::Prepare {
+                control: Control::CloseApplication { pid },
             }
             | Self::Application { pid } => ensure!(*pid > 1, "Invalid process identity"),
             Self::ApplicationNext { cursor } => ensure!(
@@ -235,7 +241,10 @@ impl Session {
             .prepared
             .take()
             .context("No current native confirmation; refresh and confirm again")?;
-        let lifetime = if matches!(prepared.control, Control::Terminate { .. }) {
+        let lifetime = if matches!(
+            prepared.control,
+            Control::Terminate { .. } | Control::CloseApplication { .. }
+        ) {
             Duration::from_secs(3)
         } else {
             Duration::from_secs(30)
@@ -396,7 +405,9 @@ impl Session {
                         context.explicit_policy,
                     )
                 });
-                let target = if let Control::Terminate { pid } = control {
+                let target = if let Control::Terminate { pid } | Control::CloseApplication { pid } =
+                    control
+                {
                     let target = process_access(pid, context)?;
                     let executable = target
                         .executable
@@ -450,7 +461,10 @@ impl Session {
                     enforcement_policy,
                     created: Instant::now(),
                 });
-                let seconds = if matches!(control, Control::Terminate { .. }) {
+                let seconds = if matches!(
+                    control,
+                    Control::Terminate { .. } | Control::CloseApplication { .. }
+                ) {
                     3
                 } else {
                     30
@@ -783,7 +797,7 @@ fn same_control_state(before: &NativeState, after: &NativeState, control: &Contr
                 && before.lock_camera == after.lock_camera
                 && before.restore_on_unlock == after.restore_on_unlock
         }
-        Control::Terminate { .. } => true, // retained instance is revalidated by the native termination API.
+        Control::Terminate { .. } | Control::CloseApplication { .. } => true,
         Control::AutomaticEnforcement { .. } => true,
         _ => {
             before.camera == after.camera
@@ -893,6 +907,10 @@ fn validate_control(control: &Control, state: &NativeState) -> Result<()> {
         Control::Terminate { pid } => ensure!(
             *pid > 4 && *pid != std::process::id(),
             "Protected or ambiguous process target"
+        ),
+        Control::CloseApplication { pid } => ensure!(
+            cfg!(target_os = "macos") && *pid > 4 && *pid != std::process::id(),
+            "Normal application closure requires an identified macOS user application"
         ),
         Control::AutomaticEnforcement { .. } => {}
         Control::QuitEngine => bail!("Quit must use the native owner's separate exit contract"),
@@ -1069,6 +1087,21 @@ fn apply(
             crate::platform::terminate_process_by_pid(*pid, instance)?;
             return Ok(serde_json::json!({"pid":pid,"instance":instance,
                 "native_termination_request_accepted":true,"process_exit_confirmed":false}));
+        }
+        #[cfg(target_os = "macos")]
+        Control::CloseApplication { pid } => {
+            let instance = expected_instance
+                .filter(|s| !s.is_empty())
+                .context("No retained application instance")?;
+            let state = crate::platform::unix::native_effect(
+                "close-application",
+                &[&pid.to_string(), instance],
+            )?;
+            ensure!(
+                state.as_deref() == Some("application_exited"),
+                "Application exit was not confirmed"
+            );
+            return Ok(serde_json::json!({"application_exit_confirmed": true}));
         }
         #[allow(unreachable_patterns)]
         _ => bail!("This native control is not supported on this platform"),
@@ -1327,6 +1360,7 @@ mod tests {
             Control::MicrophoneMute,
             Control::CameraBlock,
             Control::Terminate { pid: 12345 },
+            Control::CloseApplication { pid: 12345 },
             Control::AutomaticEnforcement { enabled: true },
         ] {
             assert!(

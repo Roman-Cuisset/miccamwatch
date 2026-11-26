@@ -30,6 +30,16 @@ void complete(ConsultationClient client, Map<String, dynamic> report, {
 }
 
 void main() {
+  test('normal closure is distinct from force and requires observed exit', () {
+    final close = NativeControl.closeApplication(12345);
+    expect(close.toJson(), {'kind': 'close_application', 'pid': 12345});
+    expect(NativeControl.fromJson(close.toJson()), close);
+    expect(close, isNot(NativeControl.terminate(12345)));
+    expect(() => NativeControl.closeApplication(1), throwsArgumentError);
+    expect(() => NativeControl.fromJson({...close.toJson(), 'instance': 'forged'}), throwsFormatException);
+    expect(() => NativeReport.fromJson(report(control: close.toJson(), data: {'request_accepted': true})), throwsFormatException);
+    expect(NativeReport.fromJson(report(control: close.toJson(), data: {'application_exit_confirmed': true})).outcome, 'completed');
+  });
   testWidgets('macOS inspection displays the returned refusal and retires it on reconnect', (tester) async {
     tester.view.physicalSize = const Size(900, 1300);
     tester.view.devicePixelRatio = 1;

@@ -88,7 +88,7 @@ fn deliver_alerts(receiver: mpsc::Receiver<Alert>, stopped: &AtomicBool, lang: L
                 alert.access.activity,
                 alert.action,
             );
-            if sound && let Err(error) = platform::play_chime() {
+            if let Err(error) = play_alert_chime(stopped, sound, platform::play_chime) {
                 eprintln!("chime failed: {error:#}");
             }
             if notify && !stopped.load(Ordering::Acquire) {
@@ -110,6 +110,17 @@ fn deliver_alerts(receiver: mpsc::Receiver<Alert>, stopped: &AtomicBool, lang: L
             }
         }
     }
+}
+
+fn play_alert_chime(
+    stopped: &AtomicBool,
+    requested: bool,
+    play: impl FnOnce() -> Result<()>,
+) -> Result<()> {
+    if requested && !stopped.load(Ordering::Acquire) {
+        play()?;
+    }
+    Ok(())
 }
 
 impl EventDispatcher {
@@ -522,6 +533,23 @@ mod tests {
         assert!(!dispatcher.alert_queue_full);
         drop(dispatcher);
         assert!(stopped.load(Ordering::Acquire));
+        Ok(())
+    }
+
+    #[test]
+    fn chime_is_suppressed_when_owner_stops_after_reading_preferences() -> Result<()> {
+        let stopped = AtomicBool::new(false);
+        let mut count = 0;
+        play_alert_chime(&stopped, true, || {
+            count += 1;
+            Ok(())
+        })?;
+        stopped.store(true, Ordering::Release);
+        play_alert_chime(&stopped, true, || {
+            count += 1;
+            Ok(())
+        })?;
+        assert_eq!(count, 1);
         Ok(())
     }
 

@@ -150,6 +150,15 @@ def main():
         executables.mkdir(parents=True)
         resources.mkdir()
         shutil.copy2(binary, executables / 'mcw')
+        parts = ("Info.plist", "MacOS/MicCamWatchHelper", "_CodeSignature/CodeResources")
+        image = binary.read_bytes()
+        helpers = [helper for helper in binary.parent.glob("build/miccamwatch-*/out/MicCamWatchHelper.app")
+                   if all((helper / "Contents" / part).read_bytes() in image for part in parts)]
+        check(len(helpers) == 1, "exact embedded notification helper could not be identified")
+        installed_helper = contents / "Helpers/MicCamWatchHelper.app"
+        installed_helper.parent.mkdir(exist_ok=True)
+        run("ditto", helpers[0], installed_helper)
+        run("codesign", "--verify", "--deep", "--strict", installed_helper)
         run('xcrun', 'clang', '-arch', arch, '-mmacosx-version-min=15.0', '-O2',
             '-Wall', '-Wextra', '-Werror', repo / 'installer/macos/launcher.c',
             '-o', executables / 'MicCamWatch')
@@ -188,7 +197,7 @@ def main():
             source = args.flutter.resolve(strict=True)
             expected = verify_flutter(source, arch, version)
             nested = contents / "Helpers/MicCamWatch.app"
-            nested.parent.mkdir()
+            nested.parent.mkdir(exist_ok=True)
             run("ditto", source, nested)
             check(verify_flutter(nested, arch, version) == expected, "nested Flutter app differs")
             (resources / "miccamwatch-bundle.json").write_text(json.dumps({

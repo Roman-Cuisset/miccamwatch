@@ -20,6 +20,10 @@ class NativeControl {
     if (pid <= 4 || pid > 0xffffffff) throw ArgumentError.value(pid, 'pid');
     return NativeControl._('terminate', Map.unmodifiable({'pid': pid}));
   }
+  factory NativeControl.closeApplication(int pid) {
+    if (pid <= 4 || pid > 0xffffffff) throw ArgumentError.value(pid, 'pid');
+    return NativeControl._('close_application', Map.unmodifiable({'pid': pid}));
+  }
   factory NativeControl.enforcement(bool enabled) =>
       NativeControl._('automatic_enforcement', Map.unmodifiable({'enabled': enabled}));
   factory NativeControl.restoreLegacyCamera(String instanceId) {
@@ -42,9 +46,10 @@ class NativeControl {
       return NativeControl.lock(microphone: _bool(data['microphone']),
         camera: _bool(data['camera']), restore: _bool(data['restore']));
     }
-    if (kind == 'terminate') {
+    if (kind == 'terminate' || kind == 'close_application') {
       final data = _object(value, {'kind', 'pid'});
-      return NativeControl.terminate(_int(data['pid'], 5, 0xffffffff));
+      final pid = _int(data['pid'], 5, 0xffffffff);
+      return kind == 'terminate' ? NativeControl.terminate(pid) : NativeControl.closeApplication(pid);
     }
     if (kind == 'automatic_enforcement') {
       final data = _object(value, {'kind', 'enabled'});
@@ -329,6 +334,10 @@ class NativeReport {
       throw const FormatException('Invalid native report data');
     }
     _boundedData(rawData, 0);
+    if (control?.kind == 'close_application' && outcome == 'completed' &&
+        (rawData is! Map<String, dynamic> || rawData['application_exit_confirmed'] != true)) {
+      throw const FormatException('Application exit was not observed');
+    }
     if (control?.kind == 'camera_inspect' && outcome != 'prepared' &&
         (rawData != null || outcome == 'completed')) {
       final inspection = CameraInspection.fromJson(rawData);
