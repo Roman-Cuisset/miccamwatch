@@ -32,6 +32,10 @@ on:
         description: Requalify exact already-built MSI bytes from this branch's named Windows CI run
         type: string
         default: ''
+      windows-native-profiles-only:
+        description: With native-platform=windows, run only the isolated native profile and owned menu rendering proof
+        type: boolean
+        default: false
       windows-msi-test-source:
         description: Full source SHA for the MSI qualification artifact
         type: string
@@ -139,8 +143,36 @@ jobs:
       msi-transaction-probe: ${{ inputs.windows-msi-transaction-probe || false }}
       rebuild-rust-only: ${{ inputs.windows-rebuild-rust-only || false }}
 
+  windows-native-profiles:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.native-platform == 'windows' && inputs.windows-native-profiles-only }}
+    name: Targeted Windows inert profiles and owned native menus
+    runs-on: windows-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # same stable toolchain as the general Windows job
+      - name: Verify library-test image admission and exact owned menu rendering
+        shell: powershell
+        run: |
+          if ($env:RUNNER_ENVIRONMENT -cne 'github-hosted') { throw 'Disposable hosted Windows required' }
+          & installer/tests/windows-test-image-tests.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Image admission tests failed' }
+          powershell.exe -NoProfile -STA -File installer/tests/windows-tray-profiles-native.ps1 -OutputDirectory "${{ runner.temp }}/native-windows-profiles" -IsolatedDesktop
+          if ($LASTEXITCODE -ne 0) { throw 'Targeted native profile and renderer proof failed' }
+      - name: Preserve targeted native profile proof
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-proof-windows-profiles
+          if-no-files-found: warn
+          path: ${{ runner.temp }}/native-windows-profiles
+
   windows:
-    if: ${{ !inputs.native-only && inputs.native-platform != 'flutter' && inputs.native-platform != 'flutter-windows' }}
+    if: ${{ !inputs.native-only && !inputs.windows-native-profiles-only && inputs.native-platform != 'flutter' && inputs.native-platform != 'flutter-windows' }}
     runs-on: windows-latest
     permissions:
       contents: read
@@ -240,7 +272,11 @@ jobs:
         if: ${{ !cancelled() && steps.windows_release.outcome == 'success' }}
         timeout-minutes: 8
         shell: powershell
-        run: powershell.exe -NoProfile -STA -File installer/tests/windows-tray-profiles-native.ps1 -OutputDirectory "${{ runner.temp }}/native-windows-profiles" -IsolatedDesktop
+        run: |
+          & installer/tests/windows-test-image-tests.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Image admission tests failed' }
+          powershell.exe -NoProfile -STA -File installer/tests/windows-tray-profiles-native.ps1 -OutputDirectory "${{ runner.temp }}/native-windows-profiles" -IsolatedDesktop
+          if ($LASTEXITCODE -ne 0) { throw 'Native profile and renderer proof failed' }
       - name: Upload native Windows profile evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

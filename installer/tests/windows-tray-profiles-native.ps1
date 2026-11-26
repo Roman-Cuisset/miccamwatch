@@ -117,19 +117,8 @@ $executables = @($build | ForEach-Object {
     } catch { }
 } | Select-Object -Unique)
 if ($executables.Count -ne 1) { throw 'Cannot uniquely identify the freshly built miccamwatch library-test executable.' }
-$executable = [IO.Path]::GetFullPath($executables[0])
-$target = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../../target')) + [IO.Path]::DirectorySeparatorChar
-if (-not $executable.StartsWith($target, [StringComparison]::OrdinalIgnoreCase)) {
-    throw 'Refusing a non-repository/non-test executable image.'
-}
-$relative = $executable.Substring($target.Length).Replace('/', '\')
-$legacyTest = $relative -match '^(?:debug|release)\\deps\\miccamwatch-[0-9a-f]+\.exe$'
-$currentTest = $relative -match '^(?:debug|release)\\build\\miccamwatch\\(?<hash>[0-9a-f]+)\\out\\miccamwatch-\k<hash>\.exe$'
-if (-not ($legacyTest -or $currentTest)) { throw 'Refusing an unexpected Cargo test artifact layout.' }
-for ($item = Get-Item -LiteralPath $executable -Force; $null -ne $item; $item = $item.Parent) {
-    if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Refusing a redirected Cargo test path.' }
-    if ($item.FullName.TrimEnd('\') -ieq $target.TrimEnd('\')) { break }
-}
+. (Join-Path $PSScriptRoot 'windows-test-image.ps1')
+$executable = Assert-McwRepositoryTestImage $executables[0]
 $scope = Join-Path $directory 'scope'
 [void][IO.Directory]::CreateDirectory((Join-Path $scope 'roaming/MicCamWatch'))
 [void][IO.Directory]::CreateDirectory((Join-Path $scope 'local'))
