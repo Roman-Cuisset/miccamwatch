@@ -21,6 +21,15 @@ on:
           - flutter
           - flutter-windows
           - release-candidate
+          - release-candidate-arm-runtime
+      candidate-build-run:
+        description: Source CI run containing the exact Linux ARM64 candidate package
+        type: string
+        default: ''
+      candidate-build-sha:
+        description: Full source SHA of the candidate package
+        type: string
+        default: ''
       flutter-runtime-replay:
         description: With native-platform=flutter, replay audited B5 Mac or Linux x64 products without rebuilding; each artifact retains its exact source
         type: boolean
@@ -201,6 +210,46 @@ jobs:
           retention-days: 30
           path: dist/*
 
+  release-candidate-arm-runtime:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.native-platform == 'release-candidate-arm-runtime' }}
+    runs-on: ubuntu-22.04-arm
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    env:
+      BUILD_RUN: ${{ inputs.candidate-build-run }}
+      BUILD_SHA: ${{ inputs.candidate-build-sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Verify candidate source run and fetch its ARM64 bytes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "$BUILD_RUN" =~ ^[0-9]+$ && "$BUILD_SHA" =~ ^[a-f0-9]{40}$ ]]
+          gh run view "$BUILD_RUN" --repo "$GITHUB_REPOSITORY" --json headSha,headBranch,event,workflowName,jobs |
+            jq -e --arg sha "$BUILD_SHA" '.headSha == $sha and .headBranch == "work/flutter-hybrid-0220" and .event == "workflow_dispatch" and .workflowName == "CI" and any(.jobs[]; (.name | startswith("flutter-qualification / Ubuntu 22.04 ARM64")) and .conclusion == "success")'
+          gh run download "$BUILD_RUN" --repo "$GITHUB_REPOSITORY" --name "miccamwatch-hybrid-linux-aarch64-$BUILD_SHA" --dir "$RUNNER_TEMP/mcw-arm-stage5-input"
+      - name: Exercise the installed normal Flutter payload on a private ARM64 X11 desktop
+        run: |
+          set -euo pipefail
+          [[ "$RUNNER_ENVIRONMENT" == github-hosted && $(uname -m) == aarch64 ]]
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends dbus-x11 xvfb xauth openbox xfce4-panel xfconf libgtk-3-0 libx11-dev libpipewire-0.3-0 libgl1-mesa-dri libegl1-mesa
+          dbus-run-session -- xvfb-run -a -s '-screen 0 1280x1000x24' \
+            bash desktop/qualification/linux_candidate_smoke.sh \
+            "$RUNNER_TEMP/mcw-arm-stage5-input/miccamwatch-hybrid-linux-aarch64.tar.gz" \
+            "$BUILD_SHA" "$RUNNER_TEMP/mcw-arm-stage5-proof"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: candidate-arm64-desktop-${{ inputs.candidate-build-sha }}
+          path: ${{ runner.temp }}/mcw-arm-stage5-proof
+          if-no-files-found: warn
+
   windows-native-profiles:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.native-platform == 'windows' && inputs.windows-native-profiles-only }}
     name: Targeted Windows inert profiles and owned native menus
@@ -232,7 +281,7 @@ jobs:
           path: ${{ runner.temp }}/native-windows-profiles
 
   windows:
-    if: ${{ !inputs.native-only && !inputs.windows-native-profiles-only && inputs.native-platform != 'flutter' && inputs.native-platform != 'flutter-windows' && inputs.native-platform != 'release-candidate' }}
+    if: ${{ !inputs.native-only && !inputs.windows-native-profiles-only && inputs.native-platform != 'flutter' && inputs.native-platform != 'flutter-windows' && inputs.native-platform != 'release-candidate' && inputs.native-platform != 'release-candidate-arm-runtime' }}
     runs-on: windows-latest
     permissions:
       contents: read
@@ -388,7 +437,7 @@ jobs:
           path: ${{ runner.temp }}/windows-application-proof
 
   portable:
-    if: ${{ inputs.native-platform != 'windows' && inputs.native-platform != 'flutter' && inputs.native-platform != 'flutter-windows' && inputs.native-platform != 'release-candidate' }}
+    if: ${{ inputs.native-platform != 'windows' && inputs.native-platform != 'flutter' && inputs.native-platform != 'flutter-windows' && inputs.native-platform != 'release-candidate' && inputs.native-platform != 'release-candidate-arm-runtime' }}
     strategy:
       fail-fast: false
       matrix:
