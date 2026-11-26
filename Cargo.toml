@@ -22,6 +22,10 @@ name = "mcw-camera-helper"
 path = "src/bin/mcw-camera-helper.rs"
 required-features = ["linux-camera-helper"]
 
+[[example]]
+name = "qualification-native-chime"
+path = "installer/tests/native_chime.rs"
+
 [features]
 default = []
 windows-tray = []

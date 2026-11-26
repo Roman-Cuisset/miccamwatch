@@ -36,7 +36,7 @@ function Invoke-Lab([scriptblock]$Command, [object[]]$Parameters=@()) {
     } -ErrorAction Stop
     Invoke-Command -Session $Session -ScriptBlock $Command -ArgumentList $Parameters -ErrorAction Stop
 }
-function Run-Standard([string]$Phase, [string]$File, [switch]$Observe) {
+function Run-Standard([string]$Phase, [string]$File) {
     $name="MCW-Stage4-$runId-$Phase"
     $errorFile="C:\Users\mcw_qa_lab01\AppData\Local\Temp\MCW-Stage4-$runId-$Phase.txt"
     $wrapper="try { & '$File' } catch { `$_ | Out-String | Set-Content -LiteralPath '$errorFile' -Encoding utf8; exit 1 }"
@@ -57,34 +57,11 @@ function Run-Standard([string]$Phase, [string]$File, [switch]$Observe) {
     do {
         Start-Sleep -Seconds 1
         $state=Invoke-Lab {
-            param($name,$root,$observe,$sid)
-            if ($observe) {
-                . "$root\windows-hybrid-registration.ps1"
-                foreach ($file in Get-ChildItem -LiteralPath "$root\proof" -Filter 'observe-*.json' -ErrorAction SilentlyContinue) {
-                    $phase=$file.BaseName.Substring(8)
-                    if ($phase -cnotin 'installed-baseline','installed-hybrid','removed-hybrid') { throw 'Unexpected requested observation phase.' }
-                    $destination="$root\observations\$phase.json"
-                    if (Test-Path -LiteralPath $destination) { continue }
-                    $request=Get-Content -LiteralPath $file.FullName -Raw | ConvertFrom-Json
-                    $receipt=[ordered]@{phase=$phase; targetSid=$sid; observerSid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value;
-                        current=(Get-McwMsiRegistration $request.current $sid); other=(Get-McwMsiRegistration $request.other $sid)}
-                    $receipt.current.contexts=@(Get-McwMsiContexts $request.current $sid)
-                    $receipt.other.contexts=@(Get-McwMsiContexts $request.other $sid)
-                    if (@($receipt.other.contexts | Where-Object status -eq 259).Count -ne 3 -or
-                        ($phase -ceq 'removed-hybrid' -and @($receipt.current.contexts | Where-Object status -eq 259).Count -ne 3) -or
-                        ($phase -cne 'removed-hybrid' -and
-                          (@($receipt.current.contexts | Where-Object status -eq 0).Count -ne 1 -or
-                           @($receipt.current.contexts | Where-Object { $_.status -eq 0 -and $_.context -eq 2 -and $_.sid -ceq $sid }).Count -ne 1))) {
-                        throw 'Independent observer found an unexpected Windows Installer context.'
-                    }
-                    $receipt | ConvertTo-Json -Depth 14 | Set-Content -LiteralPath "$destination.tmp" -Encoding utf8
-                    Move-Item -LiteralPath "$destination.tmp" -Destination $destination
-                }
-            }
+            param($name)
             $task=Get-ScheduledTask -TaskName $name
             $info=Get-ScheduledTaskInfo -TaskName $name
             @{state=[string]$task.State; result=$info.LastTaskResult; last=$info.LastRunTime.ToUniversalTime().ToString('o')}
-        } @($name,$guestRoot,[bool]$Observe,$sid)
+        } @($name)
         $report.operations[$Phase]=$state
         Save-LabReport
         if ($state.state -eq 'Ready' -and $state.result -ne 267009) { break }
@@ -112,8 +89,20 @@ try {
         if ((Get-PSDrive C).Free -lt 10GB) { throw 'Guest disk space is insufficient.' }
         @{freeGiB=[math]::Round((Get-PSDrive C).Free/1GB,2); loggedIn=(Get-CimInstance Win32_ComputerSystem).UserName; noMsiClients=$true}
     }
-    Invoke-Lab {param($path) if (Test-Path -LiteralPath $path) {throw 'Input root already exists.'}; New-Item -ItemType Directory -Path $path | Out-Null} @($inputRoot)
-    foreach ($file in 'windows-hybrid-install.ps1','windows-fixture-context.ps1','windows-hybrid-registration.ps1') {
+    Invoke-Lab {
+        param($path)
+        if (Test-Path -LiteralPath $path) {throw 'Input root already exists.'}
+        New-Item -ItemType Directory -Path $path | Out-Null
+        $acl=[Security.AccessControl.DirectorySecurity]::new()
+        $acl.SetAccessRuleProtection($true,$false)
+        foreach($identity in 'S-1-5-18','S-1-5-32-544','S-1-5-21-1745080491-1157776599-3695790684-1001','S-1-5-21-1745080491-1157776599-3695790684-1002') {
+            $rights=if($identity -eq 'S-1-5-21-1745080491-1157776599-3695790684-1002'){'ReadAndExecute'}else{'FullControl'}
+            $rule=[Security.AccessControl.FileSystemAccessRule]::new([Security.Principal.SecurityIdentifier]::new($identity),$rights,'ContainerInherit,ObjectInherit','None','Allow')
+            $acl.AddAccessRule($rule)
+        }
+        Set-Acl -LiteralPath $path -AclObject $acl
+    } @($inputRoot)
+    foreach ($file in 'windows-hybrid-install.ps1','windows-fixture-context.ps1','windows-hybrid-registration.ps1','windows-stage4-observer.ps1') {
         Assert-Lab
         Copy-Item -LiteralPath (Join-Path $PSScriptRoot $file) -Destination "$inputRoot\$file" -ToSession $Session
     }
@@ -162,20 +151,38 @@ foreach ($entry in @(@{path=$base;name='installation'},@{path=(Join-Path $env:AP
     Invoke-Lab {param($path,$text) [IO.File]::WriteAllText($path,$text,[Text.UTF8Encoding]::new($true))} @("$inputRoot\prepare.ps1",$prepare)
     Run-Standard 'prepare' "$inputRoot\prepare.ps1"
     if ($Request.prepareOnly) { $report.status='prepared-without-msi'; return }
+    $report.observer=Invoke-Lab {
+        param($inputRoot,$guestRoot,$preflight)
+        $installer=New-Object -ComObject WindowsInstaller.Installer
+        $codes=@(foreach($file in 'candidate.msi','baseline.msi') {
+            $db=$installer.OpenDatabase((Join-Path $inputRoot $file),0)
+            $view=$db.OpenView("SELECT ``Value`` FROM ``Property`` WHERE ``Property``='ProductCode'")
+            [void]$view.Execute();$record=$view.Fetch();$record.StringData(1)
+            [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($record)
+            [void]$view.Close();[void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($view)
+            [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($db)
+        })
+        $arguments='-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy RemoteSigned -File "'+$inputRoot+'\windows-stage4-observer.ps1" -FixtureRoot "'+$guestRoot+'" -CandidateCode "'+$codes[0]+'" -BaselineCode "'+$codes[1]+'"'
+        if($preflight){$arguments+=' -Preflight'}
+        $process=Start-Process -FilePath "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" -ArgumentList $arguments -WindowStyle Hidden -PassThru
+        if($preflight -and (!$process.WaitForExit(30000) -or $process.ExitCode -ne 0)){throw 'Read-only observer preflight failed.'}
+        @{pid=$process.Id;candidateCode=$codes[0];baselineCode=$codes[1];role='read-only MSI observer; process-scoped RemoteSigned explicitly authorized'}
+    } @($inputRoot,$guestRoot,[bool]$Request.observerOnly)
+    if($Request.observerOnly){$report.status='observer-verified-without-msi';return}
     $work=@'
 $ErrorActionPreference='Stop'
 $root='__ROOT__'
 try {
     if ([guid](Get-CimInstance Win32_ComputerSystemProduct).UUID -ne [guid]'4B01C3A6-C913-41AC-B759-66148DFCAB64') {throw 'Wrong guest.'}
-    & "$root\windows-hybrid-install.ps1" -Candidate "$root\candidate.msi" -Proof "$root\proof" -SourceRevision '__SOURCE__' -LocalDisposableVm -FixtureRoot $root -ExpectedMsiSha256 '__HASH__' -BaselineMsi "$root\baseline.msi" -PositiveLifecycleOnly -ObserveRegistration -SampleDesktopResources
+    & "$root\windows-hybrid-install.ps1" -Candidate "$root\candidate.msi" -Proof "$root\proof" -SourceRevision '__SOURCE__' -LocalDisposableVm -FixtureRoot $root -ExpectedMsiSha256 '__HASH__' -BaselineMsi "$root\baseline.msi" -PositiveLifecycleOnly -ObserveRegistration -ObservationRoot '__INPUT__\observations' -SampleDesktopResources
 } catch {
     $_ | Out-String | Set-Content -LiteralPath "$root\workload-error.txt" -Encoding utf8
     exit 1
 }
-'@.Replace('__ROOT__',$guestRoot).Replace('__SOURCE__',[string]$Request.source).Replace('__HASH__',[string]$Request.msiSha256)
+'@.Replace('__ROOT__',$guestRoot).Replace('__INPUT__',$inputRoot).Replace('__SOURCE__',[string]$Request.source).Replace('__HASH__',[string]$Request.msiSha256)
     Invoke-Lab {param($path,$text) [IO.File]::WriteAllText($path,$text,[Text.UTF8Encoding]::new($true))} @("$guestRoot\run.ps1",$work)
     $report.status='qualifying'; Save-LabReport
-    Run-Standard 'lifecycle' "$guestRoot\run.ps1" -Observe
+    Run-Standard 'lifecycle' "$guestRoot\run.ps1"
     $report.result=Invoke-Lab {param($path) Get-Content -LiteralPath $path -Raw | ConvertFrom-Json} @("$guestRoot\proof\result.json")
     if ($report.result.status -cne 'passed' -or !$report.result.standardUserQualified -or !$report.result.installedIpcReady -or
         !$report.result.installedFlutterClosedTrayContinued -or !$report.result.userDataPreserved -or !$report.result.msiUninstall) {throw 'Consolidated lifecycle receipt is incomplete.'}
@@ -187,7 +194,13 @@ try {
     Save-LabReport
     if ($Session.State -eq 'Opened') {
         try {
-            $report.guestScriptPolicy=Invoke-Lab {Get-ExecutionPolicy -List | Select-Object Scope,ExecutionPolicy}
+            Invoke-Lab {param($path) if(Test-Path -LiteralPath $path){[IO.File]::WriteAllText((Join-Path $path 'observer.stop'),'stop')}} @($inputRoot)
+            if(Invoke-Lab {param($path) Test-Path -LiteralPath $path} @("$inputRoot\observations")) {
+                Copy-Item -LiteralPath "$inputRoot\observations" -Destination (Join-Path $proof 'independent-observations') -FromSession $Session -Recurse
+            }
+        } catch {$report.observerCopyError=$_.ToString();Save-LabReport}
+        try {
+            $report.guestScriptPolicy=Invoke-Lab {Get-ExecutionPolicy -List | ForEach-Object { @{scope=[string]$_.Scope;policy=[string]$_.ExecutionPolicy} }}
             foreach ($phase in 'prepare','lifecycle') {
                 $file="C:\Users\mcw_qa_lab01\AppData\Local\Temp\MCW-Stage4-$runId-$phase.txt"
                 if (Invoke-Lab {param($path) Test-Path -LiteralPath $path} @($file)) {Copy-Item -LiteralPath $file -Destination $proof -FromSession $Session}

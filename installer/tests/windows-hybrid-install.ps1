@@ -12,6 +12,7 @@ param(
     [string]$ExpectedMsiSha256,
     [string]$RustMsiTest,
     [string]$BaselineMsi,
+    [string]$ObservationRoot,
     [switch]$SampleDesktopResources
 )
 $ErrorActionPreference = 'Stop'
@@ -81,6 +82,9 @@ if ($LocalDisposableVm) {
     throw 'This scenario requires a disposable GitHub-hosted Windows runner.'
 }
 if ($BaselineMsi -and !$LocalDisposableVm) { throw 'An offline baseline is confined to the admitted local VM.' }
+if ($ObservationRoot -and (!$LocalDisposableVm -or !$ObserveRegistration -or ![IO.Path]::IsPathRooted($ObservationRoot))) {
+    throw 'An external observation directory requires the independently observed local VM.'
+}
 if ($PositiveLifecycleOnly -and ($HybridRollbackOnly -or !$ObserveRegistration -or
     (!$LocalDisposableVm -and $env:PROCESSOR_ARCHITECTURE -cne 'ARM64'))) {
     throw 'The positive-only replay requires an independently observed standard-account fixture.'
@@ -231,7 +235,7 @@ function Observe-Registration([string]$Phase, [string]$Current, [string]$Other) 
     $request = Join-Path $Proof "observe-$Phase.json"
     @{ current = $Current; other = $Other } | ConvertTo-Json | Set-Content -LiteralPath "$request.tmp" -Encoding utf8
     Move-Item -LiteralPath "$request.tmp" -Destination $request
-    $receipt = Join-Path $PSScriptRoot "observations\$Phase.json"
+    $receipt = if ($ObservationRoot) { Join-Path $ObservationRoot "$Phase.json" } else { Join-Path $PSScriptRoot "observations\$Phase.json" }
     $timer = [Diagnostics.Stopwatch]::StartNew()
     while (!(Test-Path -LiteralPath $receipt -PathType Leaf)) {
         if ($timer.Elapsed.TotalSeconds -gt 30) { throw "Independent observer did not answer $Phase" }

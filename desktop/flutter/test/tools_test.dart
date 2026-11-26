@@ -40,6 +40,53 @@ void main() {
     expect(() => NativeReport.fromJson(report(control: close.toJson(), data: {'request_accepted': true})), throwsFormatException);
     expect(NativeReport.fromJson(report(control: close.toJson(), data: {'application_exit_confirmed': true})).outcome, 'completed');
   });
+  testWidgets('normal macOS close needs confirmation and retires on reconnect', (tester) async {
+    tester.view.physicalSize = const Size(900, 2400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    var sequence = 1;
+    var commits = 0;
+    late ConsultationClient client;
+    client = ConsultationClient(send: (message) async {
+      final request = message['request'] as Map<String, dynamic>;
+      final tools = (request['operation'] as Map<String, dynamic>)['request'] as Map<String, dynamic>;
+      final action = tools['action'];
+      if (action == 'commit') commits++;
+      if (action == 'prepare') expect(tools['control'], {'kind': 'close_application', 'pid': 12345});
+      final response = action == 'application'
+        ? report(data: {'pid': 12345, 'application': 'Fixture recorder', 'resource': 'microphone',
+            'device': 'input-one', 'access_index': 1, 'access_count': 1, 'next_cursor': null,
+            'snapshot_not_live': true, 'process_identity_confirmed': true,
+            'snapshot_read_at': '2026-11-26T07:00:00Z', 'truncated': false})
+        : action == 'prepare'
+          ? report(outcome: 'prepared', state: nativeState(), control: {'kind': 'close_application', 'pid': 12345},
+              data: {'confirmation_seconds': 3})
+          : report(state: nativeState());
+      complete(client, response, id: request['id'] as int, sequence: ++sequence);
+    });
+    client.update(fixtures.view(), fixtures.sessionA, sequence, true, operational: true);
+    await tester.pumpWidget(MaterialApp(theme: ThemeData(platform: TargetPlatform.macOS),
+      home: Scaffold(body: SingleChildScrollView(child: NativeToolsPanel(client: client, locale: 'fr',
+        accesses: const [{'pid': 12345, 'application': 'Fixture recorder', 'resource': 'microphone'}])))));
+    await tester.pumpAndSettle();
+    final application = find.byKey(const ValueKey('tools.application.12345'));
+    await tester.ensureVisible(application);
+    await tester.tap(application);
+    await tester.pumpAndSettle();
+    final close = find.byKey(const ValueKey('tools.close_application'));
+    await tester.ensureVisible(close);
+    await tester.tap(close);
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(TextButton, 'Annuler'));
+    await tester.pumpAndSettle();
+    expect(commits, 0);
+    client.update(fixtures.view(), fixtures.sessionB, 1, true, operational: true);
+    await tester.pump();
+    expect(tester.widget<OutlinedButton>(close).onPressed, isNull);
+    await tester.pumpWidget(const SizedBox());
+    client.dispose();
+  });
   testWidgets('macOS inspection displays the returned refusal and retires it on reconnect', (tester) async {
     tester.view.physicalSize = const Size(900, 1300);
     tester.view.devicePixelRatio = 1;

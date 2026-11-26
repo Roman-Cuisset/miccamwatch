@@ -456,22 +456,16 @@ jobs:
           tar -xzf "$PACKAGE" -C "$RUNNER_TEMP/native-proof/package"
           echo "MCW_RELEASE_BINARY=$RUNNER_TEMP/native-proof/package/mcw" >> "$GITHUB_ENV"
           python3 - <<'PY'
-          import os, pathlib, subprocess
+          import json, os, pathlib, shutil, subprocess
           root = pathlib.Path(os.environ["RUNNER_TEMP"])
-          source = root / "native-chime.rs"
-          source.write_text('fn main() { match miccamwatch::platform::play_chime() { Ok(()) => println!("native playback accepted"), Err(error) => { eprintln!("{error:#}"); std::process::exit(2); } } }\n')
-          library = pathlib.Path("target/debug/libmiccamwatch.rlib")
-          assert library.is_file(), library
-          dependencies = {pathlib.Path("target/debug/deps")}
-          dependencies.update(path.parent for path in pathlib.Path("target/debug/deps").rglob("*")
-                              if path.suffix in (".rlib", ".rmeta", ".dylib", ".so"))
-          search = [argument for path in sorted(dependencies) for argument in ("-L", "dependency=" + str(path))]
-          try:
-              subprocess.run(["rustc", "--edition=2024", "--crate-name=mcw_native_chime", str(source),
-                              "--extern", "miccamwatch=" + str(library), *search,
-                              "-o", str(root / "native-chime")], check=True)
-          finally:
-              source.unlink()
+          result = subprocess.check_output(["cargo", "build", "--locked", "--example",
+                                            "qualification-native-chime", "--message-format=json"], text=True)
+          artifacts = [json.loads(line) for line in result.splitlines() if line.startswith("{")]
+          drivers = [item["executable"] for item in artifacts if item.get("reason") == "compiler-artifact"
+                     and item.get("target", {}).get("name") == "qualification-native-chime"
+                     and item.get("executable")]
+          assert len(drivers) == 1, "Cargo did not identify exactly one native sound driver"
+          shutil.copy2(drivers[0], root / "native-chime")
           PY
           cat > "$RUNNER_TEMP/native-smoke.py" <<'PY'
           import errno, fcntl, json, os, pathlib, pty, re, select, shutil, signal, struct, subprocess, tempfile, termios, time
