@@ -155,6 +155,8 @@ jobs:
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # same stable toolchain as the general Windows job
+      - name: Build the exact library-test image before the finite GUI proof
+        run: cargo test --locked --features windows-tray --lib --no-run
       - name: Verify library-test image admission and exact owned menu rendering
         shell: powershell
         run: |
