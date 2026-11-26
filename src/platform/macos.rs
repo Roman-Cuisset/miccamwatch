@@ -958,6 +958,98 @@ mod tests {
     use super::*;
 
     #[test]
+    #[ignore = "requires an explicitly disposable hosted Mac and its fixture-only sudo authority"]
+    fn native_other_user_process_is_refused_and_remains_alive() -> Result<()> {
+        use std::{
+            io::{BufRead, BufReader},
+            os::unix::fs::PermissionsExt,
+        };
+        anyhow::ensure!(
+            std::env::var("RUNNER_ENVIRONMENT").as_deref() == Ok("github-hosted"),
+            "cross-user fixture is admitted only on a disposable hosted runner"
+        );
+        let temporary = tempfile::Builder::new()
+            .prefix("mcw-other-user-")
+            .tempdir_in("/private/tmp")?;
+        fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o755))?;
+        let binary = temporary.path().join("fixture");
+        ensure_native_success(
+            Command::new("/usr/bin/cc")
+                .args(["native/fixtures/other_user_process.c", "-o"])
+                .arg(&binary)
+                .status()?,
+        )?;
+        let mut child = Command::new("/usr/bin/sudo")
+            .args(["-n", "-u", "nobody"])
+            .arg(&binary)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()?;
+        let result = (|| -> Result<()> {
+            let mut line = String::new();
+            BufReader::new(child.stdout.take().context("fixture stdout missing")?)
+                .read_line(&mut line)?;
+            let pid: i32 = line
+                .trim()
+                .parse()
+                .context("cross-user fixture did not report its PID")?;
+            let read_identity = || -> Result<libc::proc_bsdinfo> {
+                let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+                let size = std::mem::size_of_val(&info) as i32;
+                anyhow::ensure!(
+                    unsafe {
+                        libc::proc_pidinfo(
+                            pid,
+                            libc::PROC_PIDTBSDINFO,
+                            0,
+                            (&mut info as *mut libc::proc_bsdinfo).cast(),
+                            size,
+                        )
+                    } == size,
+                    "cross-user identity unavailable"
+                );
+                Ok(info)
+            };
+            let before = read_identity()?;
+            anyhow::ensure!(
+                before.pbi_uid != unsafe { libc::getuid() },
+                "fixture unexpectedly belongs to the caller"
+            );
+            let instance = format!(
+                "macos:microphone:{pid}:{}:{}",
+                before.pbi_start_tvsec, before.pbi_start_tvusec
+            );
+            for mode in ["terminate", "close-application"] {
+                let reply: serde_json::Value = native_request(
+                    mode,
+                    &[&pid.to_string(), &instance],
+                    Duration::from_secs(20),
+                )?;
+                assert_eq!(reply["effect"]["ok"], false, "{reply}");
+                let after = read_identity()?;
+                assert_eq!(
+                    (after.pbi_start_tvsec, after.pbi_start_tvusec),
+                    (before.pbi_start_tvsec, before.pbi_start_tvusec)
+                );
+            }
+            Ok(())
+        })();
+        // EOF belongs to the retained fixture, not to a numeric PID. Never ask
+        // the product to kill it during cleanup or escalate the rejected action.
+        drop(child.stdin.take());
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while child.try_wait()?.is_none() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(20));
+        }
+        anyhow::ensure!(
+            child.try_wait()?.is_some(),
+            "cross-user fixture did not exit after owned stdin closed"
+        );
+        let _ = child.wait();
+        result
+    }
+
+    #[test]
     fn native_close_application_observes_a_hardened_fixture_exit() -> Result<()> {
         let temporary = tempfile::tempdir()?;
         let app = temporary.path().join("MCWCloseFixture.app");

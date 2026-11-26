@@ -391,6 +391,9 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --all-targets --locked ${{ matrix.platform == 'linux' && '--features linux-camera-helper' || '' }} -- -D warnings
       - run: cargo test --all-targets --locked ${{ matrix.platform == 'linux' && '--features linux-camera-helper' || '' }}
+      - name: Verify refusal of a disposable process owned by another Mac user
+        if: runner.os == 'macOS'
+        run: cargo test --lib --locked platform::macos::tests::native_other_user_process_is_refused_and_remains_alive -- --exact --ignored
       - name: Exercise Rust builder against native C SPA headers
         if: matrix.platform == 'linux'
         run: cargo test --locked -p libspa --lib native_headers_builder_roundtrip_after_growth -- --nocapture
@@ -958,7 +961,13 @@ jobs:
                              mcw_cameras_present=bool(cameras), camera_collector=collector,
                              physical_activity_transition_proven=False, macos27_friend_hardware_parity_proven=False)
               (proof / "inventory-scope.json").write_text(json.dumps(summary, indent=2) + "\n")
-              assert collector["state"] in ("healthy", "degraded"), status
+              assert collector["state"] in ("healthy", "degraded", "unavailable"), status
+              camera_accesses = [row for row in status["accesses"] if row["resource"] == "camera"]
+              if collector["state"] == "unavailable":
+                  assert "camera" in status.get("observation_gaps", []), status
+                  assert collector.get("detail") and not camera_accesses, status
+              for access in camera_accesses:
+                  assert access.get("pid") is None and access["application"] == "Unknown application", access
           PY
       - name: Exercise native Linux desktop and extracted package
         if: runner.os == 'Linux'
