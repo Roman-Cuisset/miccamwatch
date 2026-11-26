@@ -40,27 +40,20 @@ screenshots of the 0.21.0 windows. Their
 
 | Channel | What is available |
 | --- | --- |
-| **Public stable: [0.21.0](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.21.0)** | Windows x64 ZIP/MSI, Linux x64/ARM64 archives, macOS Apple Silicon/Intel archives and DMGs. Redesigned native Win32/GTK/AppKit consultation windows, unified activation and retained-window behavior. |
+| **Public stable: [v0.22.0](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.22.0)** | Complete hybrid packages for Windows x64, Linux x64/ARM64 and macOS Apple Silicon/Intel. |
+| **Previous release: [v0.21.0](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.21.0)** | Native Win32, GTK and AppKit consultation windows. |
 
-Published on **2026-10-26** from immutable source `3d74686`.
-All ten public assets match the original tag-run packages; nine named checksums
-and nine exact-tag build-provenance subjects were verified after download.
-See [validation and release status](docs/VALIDATION.md#public-release-0210) for
-the recovered publication record, source-specific qualification and hardware limits.
-
-**v0.22.0 candidate.** The optional consultation window moves to a separate
-Flutter process. Rust still owns monitoring, privacy controls, the tray, local
-history and preferences. Closing the window leaves the tray and monitor running.
-The candidate uses complete hybrid packages, with a per-user MSI on Windows,
-managed archives on Linux and a sealed application bundle on macOS. The v0.21.0
-two-file updater cannot migrate these bundles. Use the platform-specific
-installation and recovery instructions for the candidate.
-[Hybrid distribution and maintenance](docs/HYBRID_DISTRIBUTION.md).
+The consultation window runs in a separate Flutter process. Rust owns
+monitoring, controls, the tray and local data. Closing the window leaves the
+tray and monitor running. When upgrading from v0.21.0, use the per-user MSI
+or replace the complete archive or application bundle for your system.
+[Release notes](docs/RELEASE_0.22.0_NOTES.md) ·
+[Qualification and source provenance](docs/HYBRID_STAGE5_RELEASE_CANDIDATE.md).
 
 ## Features
 
 - **Live observations:** microphone and camera activity, with process/PID attribution when the platform can prove it.
-- **Readable interfaces:** a live terminal dashboard, retained native consultation windows, tray/menu-bar status, notifications, and optional system sounds.
+- **Readable interfaces:** a live terminal dashboard, a Flutter consultation window, native tray or menu bar, notifications and optional system sounds.
 - **Scoped controls:** supported microphone mute and owned camera controls, with explicit permission and restoration handling.
 - **Profiles and preferences:** Balanced, Private, Meeting, and Development; saved settings and opt-in autostart.
 - **Diagnostics:** collector health, permissions, incomplete coverage, and requested versus effective protection.
@@ -72,12 +65,12 @@ media recorder. Runtime requirements and permissions differ by platform.
 
 ## Supported Operating Systems
 
-The following packages are available in **stable 0.21.0**:
+The following platforms are supported in v0.22.0:
 
 | Platform | Monitoring | Controls and prerequisites |
 | --- | --- | --- |
 | **Windows 10 / 11, x64** | Native audio sessions and camera-activity evidence; verified process attribution where available. | Capture-endpoint mute; administrator-approved camera device control. |
-| **Desktop Linux, x64 / ARM64** | Running PipeWire capture links and authenticated process identity; limited direct V4L2 evidence. | glibc 2.35+, user PipeWire service; GTK3 for the consultation window; optional separately installed Polkit-authorized USB camera helper. |
+| **Desktop Linux, x64 / ARM64** | Running PipeWire capture links and authenticated process identity; limited direct V4L2 evidence. | glibc 2.35+, PipeWire, GTK3 and EGL/OpenGL ES for Flutter. USB camera control requires the optional Polkit-authorized helper. |
 | **macOS 15+, Apple Silicon / Intel** | CoreAudio input activity; CoreMediaIO camera running-state with unknown camera client/PID. | Writable input mute; manually approved MCW-owned camera restriction profile. |
 
 Linux desktop effects require the appropriate notification service and a
@@ -93,9 +86,11 @@ See [platform limits](docs/USAGE.md#observation-and-control-limits).
 
 ### Windows — MSI or portable ZIP
 
-Download the [0.21.0 MSI](https://github.com/Roman-Cuisset/miccamwatch/releases/download/v0.21.0/miccamwatch-windows-x86_64.msi)
+Download the [v0.22.0 MSI](https://github.com/Roman-Cuisset/miccamwatch/releases/download/v0.22.0/miccamwatch-hybrid-windows-x86_64.msi)
 for a per-user installation, PATH registration, and a Start Menu entry.
-Alternatively, extract the [portable ZIP](https://github.com/Roman-Cuisset/miccamwatch/releases/download/v0.21.0/miccamwatch-windows-x86_64.zip).
+It upgrades an existing v0.21.0 MSI installation. Alternatively, extract the
+[complete portable ZIP](https://github.com/Roman-Cuisset/miccamwatch/releases/download/v0.22.0/miccamwatch-hybrid-windows-x86_64.zip)
+in a separate user-owned folder.
 Open a new terminal after MSI installation; for a ZIP, run the executables from
 its extracted directory or configure PATH explicitly.
 
@@ -106,16 +101,16 @@ mcw status --lang en
 mcw top
 ```
 
-The Windows package contains `mcw.exe` (CLI) and `mcw-tray.exe` (console-free
-tray host). The MSI is their installer, not a third resident application.
-Start Menu activation, `mcw-tray.exe --open` or `mcw tray open` opens the retained
-consultation window; plain `mcw-tray.exe`/autostart stays background-only.
+The Windows package contains the CLI, the native tray and the Flutter window.
+Start Menu activation, `mcw-tray.exe --open` or `mcw tray open` opens the
+consultation. Autostart launches the tray in the background.
+[MSI recovery](docs/WINDOWS_MSI_MAINTENANCE.md).
 
 ### macOS — native application
 
-Choose the matching 0.21.0 DMG:
-[Apple Silicon](https://github.com/Roman-Cuisset/miccamwatch/releases/download/v0.21.0/miccamwatch-macos-aarch64.dmg) ·
-[Intel](https://github.com/Roman-Cuisset/miccamwatch/releases/download/v0.21.0/miccamwatch-macos-x86_64.dmg).
+Choose the matching v0.22.0 DMG.
+[Apple Silicon](https://github.com/Roman-Cuisset/miccamwatch/releases/download/v0.22.0/miccamwatch-hybrid-macos-aarch64.dmg) ·
+[Intel](https://github.com/Roman-Cuisset/miccamwatch/releases/download/v0.22.0/miccamwatch-hybrid-macos-x86_64.dmg).
 Mount it, drag `MicCamWatch.app` to Applications, then open the copied application.
 The menu-bar icon provides access to the native consultation and controls.
 
@@ -124,27 +119,19 @@ Bundles are ad-hoc sealed, **not Developer ID signed or notarized**;
 [security and signing guidance](docs/SIGNING.md) explains the limits.
 Do not bypass Gatekeeper or quarantine protections.
 
-### Linux and macOS — command-line installation
+### Linux — managed hybrid bundle
 
-Download an immutable installer from the published 0.21.0 source and inspect it
-before execution:
+Choose the matching archive and verify it against the release's
+[`SHA256SUMS`](https://github.com/Roman-Cuisset/miccamwatch/releases/download/v0.22.0/SHA256SUMS).
+[x64](https://github.com/Roman-Cuisset/miccamwatch/releases/download/v0.22.0/miccamwatch-hybrid-linux-x86_64.tar.gz) ·
+[ARM64](https://github.com/Roman-Cuisset/miccamwatch/releases/download/v0.22.0/miccamwatch-hybrid-linux-aarch64.tar.gz).
 
-```sh
-curl --proto '=https' --tlsv1.2 -fsSL \
-  https://raw.githubusercontent.com/Roman-Cuisset/miccamwatch/3d74686ace7b04728794765f9eb57c0c0a8bc84c/installer/install.sh \
-  -o mcw-install.sh
-sh mcw-install.sh --version v0.21.0 --add-path
-```
+Use the reviewed Python installer from the tagged source to install the complete
+bundle under your user account. The legacy one-line Unix installer serves the
+previous release. [Installation and rollback](docs/HYBRID_DISTRIBUTION.md#opérations).
 
-This installs into `$HOME/.local/bin` without sudo. `--add-path` explicitly
-permits managed shell PATH configuration; use `--no-modify-path` to leave it alone.
-The installer verifies the selected release archive against its `SHA256SUMS`;
-that manifest does **not** contain a checksum for the installer script itself.
-
-For archive verification, dependencies, custom prefixes, package-manager
-ownership, and old-version migrations, see the [installation guide](docs/INSTALLATION.md).
-Windows EXEs/MSI are **unsigned**, as are the macOS archive CLI binaries.
-Checksums and GitHub provenance are not platform signing or a reason to ignore a security warning.
+Windows EXEs and MSI are **unsigned**. The macOS app has an ad-hoc seal.
+Follow platform signing and security rules when installing.
 
 ## Everyday usage
 

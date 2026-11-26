@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.22.0 — candidate
+## v0.22.0 — 2026-11-26
 
 - Added a Flutter consultation window in seven languages and two themes.
   Rust retains the monitor, CLI, tray, privacy controls and local data.
@@ -17,7 +17,7 @@
 
 [Release notes and limits](docs/RELEASE_0.22.0_NOTES.md).
 
-## v0.21.0 — public stable
+## v0.21.0 — 2026-10-26
 
 Native consultation windows, unified desktop and tray activation, and native
 GNU/Linux ARM64 packages. [Full release history](docs/RELEASE_HISTORY.md).

@@ -1,5 +1,10 @@
 # Roadmap technique MicCamWatch
 
+> **v0.22.0 publiée le 26 novembre 2026.** Le suivi public donne priorité à
+> la stabilité, aux problèmes signalés et aux mises à jour correctives.
+> Les fonctionnalités d’une éventuelle v0.23.0 ne sont pas décidées.
+> [Release v0.22.0](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.22.0).
+
 > **Étape 4 terminée le 26 novembre 2026.** Voir la
 > [consolidation de l’étape 4](HYBRID_STAGE4_CONSOLIDATION.md) et le
 > [transfert Codex](HYBRID_STAGE4_CODEX_HANDOFF.md). Les limites matérielles
@@ -9,8 +14,8 @@
 > leurs dates et leurs révisions.
 
 > **Étape 5 terminée le 26 novembre 2026.** La candidate v0.22.0
-> `de90a76` est qualifiée et son lot est archivé. La stable publiée reste
-> la v0.21.0. [Rapport de qualification](HYBRID_STAGE5_RELEASE_CANDIDATE.md).
+> `de90a76` est qualifiée et son lot est archivé.
+> [Rapport de qualification](HYBRID_STAGE5_RELEASE_CANDIDATE.md).
 
 > **Point de reprise du 16 novembre 2026.** La parité fonctionnelle de l’étape 2 est qualifiée sur le code `945d69c`. Voir les [reçus de la qualification fonctionnelle](V0.22.0_PARITY_AUDIT.md#qualification-etape-2).
 

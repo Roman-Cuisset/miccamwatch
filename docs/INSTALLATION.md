@@ -1,19 +1,22 @@
 # Installation and maintenance
 
-This guide covers the **published stable v0.21.0** packages, including Linux ARM64 and native Win32/GTK3/AppKit consultation windows. See [validation and limits](VALIDATION.md#public-release-0210) and [release history](RELEASE_HISTORY.md) for exact public-package evidence and source-specific qualification; publication does not certify physical capture hardware.
+**v0.22.0 is the published stable release.** Choose the matching full hybrid
+package and verify the named checksum. Upgrading a v0.21.0 MSI uses the
+v0.22.0 MSI. Linux uses the managed hybrid bundle and macOS replaces the
+whole app. [v0.22.0 packages](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.22.0) ·
+[Install, upgrade and rollback](HYBRID_DISTRIBUTION.md#opérations) ·
+[Windows MSI recovery](WINDOWS_MSI_MAINTENANCE.md).
 
 [Documentation index](README.md) · [Usage and safety](USAGE.md) · [Signing and safe incident handling](SIGNING.md)
 
-For the v0.22.0 candidate, use the complete hybrid package and the upgrade
-path for its installation type. The channel and download links below remain
-on the public v0.21.0. The candidate uses different asset names and the
-v0.21.0 Unix installer expects the old archive layout.
-[Candidate installation and rollback](HYBRID_DISTRIBUTION.md#opérations) ·
-[Windows MSI recovery](WINDOWS_MSI_MAINTENANCE.md).
+The remainder of this page documents **v0.21.0**. Its Unix installer expects
+the legacy archive layout. Keep the explicit v0.21.0 version argument if
+using that installer. [v0.21.0 evidence](VALIDATION.md#public-release-0210).
 
 ## Choose the right package
 
-Use the [official website](https://miccamwatch.pages.dev/#installer), [stable v0.21.0 release](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.21.0), or [latest stable release](https://github.com/Roman-Cuisset/miccamwatch/releases/latest). All links in this table pin the published 0.21.0 assets.
+The links in this table pin the published v0.21.0 assets. Use the
+[official website](https://miccamwatch.pages.dev/#installer) for current packages.
 
 | System | Package | Requirements and intended use |
 | --- | --- | --- |

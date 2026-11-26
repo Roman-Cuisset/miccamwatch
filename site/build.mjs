@@ -50,15 +50,31 @@ function validateRelease(value) {
   if (!value || Array.isArray(value) || typeof value !== 'object') {
     throw new Error('site/release.json must be an object.');
   }
-  const fields = ['version', 'source', 'installerSha256'];
-  if (Object.keys(value).length !== fields.length || fields.some((field) => typeof value[field] !== 'string')) {
-    throw new Error('site/release.json must contain only version, source and installerSha256 strings.');
+  const fields = ['version', 'source', 'installerSource', 'installerSha256', 'assembly', 'sourceArchiveSha256', 'manifestSha256'];
+  if (Object.keys(value).length !== fields.length + 1 || fields.some((field) => typeof value[field] !== 'string')) {
+    throw new Error('site/release.json must contain the release and legacy installer pins plus the asset map.');
   }
   if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.test(value.version)) {
     throw new Error('Release version must be a semantic version without a v prefix.');
   }
-  if (!/^[a-f0-9]{40}$/.test(value.source)) throw new Error('Release source must be a lowercase 40-character Git commit.');
-  if (!/^[a-f0-9]{64}$/.test(value.installerSha256)) throw new Error('Installer SHA256 must be lowercase 64-character hexadecimal.');
+  for (const field of ['source', 'installerSource', 'assembly']) {
+    if (!/^[a-f0-9]{40}$/.test(value[field])) throw new Error(`Invalid release commit: ${field}.`);
+  }
+  for (const field of ['installerSha256', 'sourceArchiveSha256', 'manifestSha256']) {
+    if (!/^[a-f0-9]{64}$/.test(value[field])) throw new Error(`Invalid release digest: ${field}.`);
+  }
+  const expectedAssets = [
+    'miccamwatch-hybrid-linux-aarch64.tar.gz', 'miccamwatch-hybrid-linux-x86_64.tar.gz',
+    'miccamwatch-hybrid-macos-aarch64.dmg', 'miccamwatch-hybrid-macos-aarch64.tar.gz',
+    'miccamwatch-hybrid-macos-x86_64.dmg', 'miccamwatch-hybrid-macos-x86_64.tar.gz',
+    'miccamwatch-hybrid-windows-x86_64.msi', 'miccamwatch-hybrid-windows-x86_64.zip',
+    'miccamwatch-sbom.spdx.json',
+  ];
+  if (!value.assets || typeof value.assets !== 'object' || Array.isArray(value.assets) ||
+      Object.keys(value.assets).length !== expectedAssets.length ||
+      expectedAssets.some(name => !Object.hasOwn(value.assets, name) || !/^[a-f0-9]{64}$/.test(value.assets[name]))) {
+    throw new Error('site/release.json must pin all nine release subjects.');
+  }
   return value;
 }
 function validatePrivacy(value) {
@@ -105,6 +121,12 @@ function renderText(content, filename, release, origin, catalog = null, privacy 
     __MCW_VERSION__: release.version,
     __MCW_SOURCE__: release.source,
     __MCW_INSTALLER_SHA256__: release.installerSha256,
+    __MCW_ASSEMBLY__: release.assembly,
+    __MCW_SOURCE_ARCHIVE_SHA256__: release.sourceArchiveSha256,
+    __MCW_MANIFEST_SHA256__: release.manifestSha256,
+    __MCW_SHA256SUMS__: release.assets && Object.entries(release.assets)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([name, sum]) => `${sum}  ${name}`).join("\n"),
   };
   if (catalog) Object.assign(tokens, {
     __MCW_LANG__: catalog.language,
@@ -232,13 +254,13 @@ async function publishedInstaller(release) {
   let installer = await readRegularFile(path.join(root, 'installer', 'install.sh'));
   let actualDigest = createHash('sha256').update(installer).digest('hex');
   if (actualDigest !== release.installerSha256) {
-    const url = `https://raw.githubusercontent.com/Roman-Cuisset/miccamwatch/${release.source}/installer/install.sh`;
+    const url = `https://raw.githubusercontent.com/Roman-Cuisset/miccamwatch/${release.installerSource}/installer/install.sh`;
     const response = await fetch(url, { redirect: 'error', signal: AbortSignal.timeout(30_000) });
     if (!response.ok) throw new Error(`Published installer request failed: HTTP ${response.status}. Output was not modified.`);
     installer = Buffer.from(await response.arrayBuffer());
     actualDigest = createHash('sha256').update(installer).digest('hex');
     if (actualDigest === release.installerSha256) {
-      console.log(`Using verified published installer from ${release.source}; development installer differs.`);
+      console.log(`Using verified legacy installer from ${release.installerSource}; development installer differs.`);
     }
   }
   if (actualDigest !== release.installerSha256) {

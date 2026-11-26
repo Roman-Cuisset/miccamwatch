@@ -1,5 +1,20 @@
 {
-  "version": "0.21.0",
-  "source": "3d74686ace7b04728794765f9eb57c0c0a8bc84c",
-  "installerSha256": "ef5dc62e71659261de0ad79b6b558e7d2446106d3adaed6019c27e651ce454bd"
+  "version": "0.22.0",
+  "source": "de90a76311445ba6607e6f3df4fce988a1ffc343",
+  "assembly": "18800c7f9e364bafdd6e4b8c7908dc8ab65148ec",
+  "installerSource": "3d74686ace7b04728794765f9eb57c0c0a8bc84c",
+  "installerSha256": "ef5dc62e71659261de0ad79b6b558e7d2446106d3adaed6019c27e651ce454bd",
+  "manifestSha256": "fac09865f14e7b1091d647b4c3d77537ba0313d0d30a2a3c6736b372a972c376",
+  "sourceArchiveSha256": "dee3fd135440f30d0775ab859fd3c8bed23ba0437a8cb83954ea4c99e051cee1",
+  "assets": {
+    "miccamwatch-hybrid-linux-aarch64.tar.gz": "da434485889fc5631f69a95fa8aa9275378ad6d3368a68ec59b6c9dfa9e54cc1",
+    "miccamwatch-hybrid-linux-x86_64.tar.gz": "7f8e7dd5be086c99521f4556095be73b9157e472d8e42da6160272fe070be253",
+    "miccamwatch-hybrid-macos-aarch64.dmg": "2037f4ae3e56a8aa1f904cc2219c22f8e96ceb5b12e42bac67e52bf2f5a12556",
+    "miccamwatch-hybrid-macos-aarch64.tar.gz": "16b1b74030a02d6ae4c042c2ef2c1823c936ac1b6b5ec245da77cc2fe2c2f26f",
+    "miccamwatch-hybrid-macos-x86_64.dmg": "18099c4ebdb64dd41fb818f47cacec7b77d74743a7ad8351ecdf6f3a51c798f0",
+    "miccamwatch-hybrid-macos-x86_64.tar.gz": "44c56509fbe384da3fbd3db791f589c44dd294f5f3d00b165d4f9edffb86ffc9",
+    "miccamwatch-hybrid-windows-x86_64.msi": "184b0510569fced919c8cfd62f94f34c831bcfa309136ebe51ee9d4281d74d2a",
+    "miccamwatch-hybrid-windows-x86_64.zip": "6917a95ff09832f0b95822ac92fe2f6ee041790aec431d11f7dfe8c4efd952bc",
+    "miccamwatch-sbom.spdx.json": "b9e2a6856ea6a6db54b8fd68c11161000d7d06343ab0dfc3ccaf202577aca208"
+  }
 }

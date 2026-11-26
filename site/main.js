@@ -1,18 +1,5 @@
 "use strict";
 
-// The immutable HTTPS command in HTML remains usable without JavaScript.
-const installerCommand = document.querySelector("[data-installer-command]");
-const installerNote = document.getElementById("installer-origin-note");
-if (installerCommand && window.location.protocol === "https:") {
-  const installerUrl = new URL("/install.sh", window.location.origin);
-  installerUrl.search = "";
-  installerUrl.hash = "";
-  installerCommand.textContent = `curl --proto '=https' --tlsv1.2 -fsSL ${installerUrl.href} | sh -s -- --version ${installerCommand.dataset.installerCommand}`;
-  if (installerNote) {
-    installerNote.textContent = document.body.dataset.installerOriginNote;
-  }
-}
-
 // Copy is offered only when the browser exposes the secure Clipboard API.
 // A failed permission request is reported; there is no silent fallback copy.
 const copyStatus = document.getElementById("copy-status");

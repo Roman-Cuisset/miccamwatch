@@ -49,8 +49,7 @@ in their supplied layout.
 
 ## Signing, privacy and qualification limits
 
-Windows candidate executables and MSI are prepared without Authenticode. Check
-the signature status on the final bytes. The macOS application has an ad-hoc
+The published Windows executables and MSI are unsigned. The macOS application has an ad-hoc
 seal and has no Developer ID signature or notarization. Neither a checksum nor
 build provenance grants OS authorization. Respect the permissions and security
 rules on your system.
@@ -64,3 +63,14 @@ sleep, notification banner display or persistent permission, complete screen
 reader workflows, physical monitor removal, Linux hardware GPU acceleration
 or resource use with physical microphone and camera capture. See the exact
 evidence and scope in the [candidate report](HYBRID_STAGE5_RELEASE_CANDIDATE.md).
+
+## Checking for updates in Flutter
+
+The version check in Tools consults public release metadata. Use the MSI or
+the complete platform bundle to migrate from v0.21.0.
+
+## Special thanks
+
+A special thank you to [@repentandliveholy](https://github.com/repentandliveholy) for testing MicCamWatch on macOS, providing valuable feedback, reporting issues, and helping improve the application.
+
+Your support and contribution are greatly appreciated!
