@@ -7,7 +7,7 @@ if (installerCommand && window.location.protocol === "https:") {
   const installerUrl = new URL("/install.sh", window.location.origin);
   installerUrl.search = "";
   installerUrl.hash = "";
-  installerCommand.textContent = `curl --proto '=https' --tlsv1.2 -fsSL ${installerUrl.href} | sh`;
+  installerCommand.textContent = `curl --proto '=https' --tlsv1.2 -fsSL ${installerUrl.href} | sh -s -- --version ${installerCommand.dataset.installerCommand}`;
   if (installerNote) {
     installerNote.textContent = document.body.dataset.installerOriginNote;
   }
