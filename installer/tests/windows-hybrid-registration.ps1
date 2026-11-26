@@ -1,4 +1,5 @@
 # Read-only observer for the other account's per-user unmanaged MSI context.
+if (-not ('McwMsiRegistration' -as [type])) {
 Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
@@ -15,6 +16,7 @@ public static class McwMsiRegistration {
         StringBuilder product, out uint actualContext, StringBuilder actualSid, ref uint sidLength);
 }
 '@
+}
 
 function Get-McwMsiProperty([string]$Code, [string]$Sid, [string]$Property) {
     $buffer = [Text.StringBuilder]::new(512)

@@ -11,6 +11,7 @@ param(
     [switch]$ObserveRegistration,
     [string]$ExpectedMsiSha256,
     [string]$RustMsiTest,
+    [string]$BaselineMsi,
     [switch]$SampleDesktopResources
 )
 $ErrorActionPreference = 'Stop'
@@ -43,6 +44,7 @@ if ($LocalDisposableVm) {
     $policy = Get-ItemProperty -LiteralPath 'HKLM:\Software\Policies\Microsoft\Windows\Installer' -ErrorAction SilentlyContinue
     if ($policy.DisableMSI -in 1,2) { throw "The guest policy DisableMsi=$($policy.DisableMSI) disallows this fixture." }
     $Candidate = $candidatePath
+    if ($ObserveRegistration) { $StandardAccountSid = $identity.User.Value }
 } elseif ($FixtureRoot -or $ExpectedMsiSha256) {
     throw 'FixtureRoot and ExpectedMsiSha256 require LocalDisposableVm mode.'
 } elseif ($standard) {
@@ -78,18 +80,20 @@ if ($LocalDisposableVm) {
 } elseif ($env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or $env:GITHUB_ACTIONS -cne 'true') {
     throw 'This scenario requires a disposable GitHub-hosted Windows runner.'
 }
-if ($PositiveLifecycleOnly -and ($HybridRollbackOnly -or !$ObserveRegistration -or $env:PROCESSOR_ARCHITECTURE -cne 'ARM64')) {
-    throw 'The positive-only replay is confined to its ordinary Windows-on-ARM fixture.'
+if ($BaselineMsi -and !$LocalDisposableVm) { throw 'An offline baseline is confined to the admitted local VM.' }
+if ($PositiveLifecycleOnly -and ($HybridRollbackOnly -or !$ObserveRegistration -or
+    (!$LocalDisposableVm -and $env:PROCESSOR_ARCHITECTURE -cne 'ARM64'))) {
+    throw 'The positive-only replay requires an independently observed standard-account fixture.'
 }
 if ($HybridRollbackOnly -and !$LocalDisposableVm -and (!$ObserveRegistration -or $env:PROCESSOR_ARCHITECTURE -cne 'ARM64')) {
     throw 'The separate hybrid rollback needs a disposable Windows-on-ARM runner or an admitted local VM.'
 }
-if ($ObserveRegistration -and (!$StandardAccountSid -or $LocalDisposableVm -or
-    $env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or $env:GITHUB_ACTIONS -cne 'true')) {
+if ($ObserveRegistration -and (!$StandardAccountSid -or (!$LocalDisposableVm -and
+    ($env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or $env:GITHUB_ACTIONS -cne 'true')))) {
     throw 'The independent observer requires the disposable standard-account wrapper.'
 }
 if ($SourceRevision -notmatch '^[0-9a-f]{40}$') { throw 'Exact source revision required' }
-if ($SampleDesktopResources -and ($standard -or !$isAdmin -or
+if ($SampleDesktopResources -and !$LocalDisposableVm -and ($standard -or !$isAdmin -or
     $env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or $env:GITHUB_ACTIONS -cne 'true')) {
     throw 'Desktop resource sampling requires the disposable native administrator runner.'
 }
@@ -141,12 +145,23 @@ $report = [ordered]@{status='running'; source=$SourceRevision; uacExercised=$fal
     rollbackInjected=!$PositiveLifecycleOnly; localDisposableVm=[bool]$LocalDisposableVm; sessionId=[Diagnostics.Process]::GetCurrentProcess().SessionId}
 
 function Invoke-Msi([string]$Operation, [string]$Payload, [string]$Label, [int]$ExpectedCode = 0) {
+    if ($LocalDisposableVm) {
+        $null = Assert-McwDisposableFixtureHost -RequireStandardUser -LocalDisposableVm -FixtureRoot $FixtureRoot
+        $service = Get-CimInstance Win32_Service -Filter "Name='msiserver'"
+        if (@(Get-CimInstance Win32_Process -Filter "Name='msiexec.exe'" |
+              Where-Object ProcessId -ne $service.ProcessId).Count) {
+            throw 'Another MSI client remains active in the guest.'
+        }
+    }
     $log = Join-Path $Proof "$Label.log"
-    $arguments = '{0} "{1}" /qn /norestart /l*v "{2}"' -f $Operation,$Payload,$log
+    # The real standard-account desktop can receive legitimate UAC prompts.
+    $ui = if ($LocalDisposableVm) { '/qb' } else { '/qn' }
+    $arguments = '{0} "{1}" {2} /norestart /l*v "{3}"' -f $Operation,$Payload,$ui,$log
     $process = Start-Process -FilePath "$env:WINDIR\System32\msiexec.exe" -WindowStyle Hidden -PassThru -ArgumentList $arguments
     $transaction = [ordered]@{ pid=$process.Id; parent=$PID; firstUtc=[DateTime]::UtcNow.ToString('O') }
     $report["transaction-$Label"] = $transaction
-    if (!$process.WaitForExit(180000)) { throw "MSI timed out. Retained live fixture; inspect $log." }
+    $timeout = if ($LocalDisposableVm) { 600000 } else { 180000 }
+    if (!$process.WaitForExit($timeout)) { throw "MSI timed out. Retained live fixture; inspect $log." }
     $transaction.lastUtc = [DateTime]::UtcNow.ToString('O')
     $transaction.exitCode = $process.ExitCode
     if ($process.ExitCode -ne $ExpectedCode) { throw "MSI $Label returned $($process.ExitCode), expected $ExpectedCode" }
@@ -453,7 +468,16 @@ try {
         }
     }
     $stable = Join-Path $Proof 'baseline-v0.21.0.msi'
-    Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/Roman-Cuisset/miccamwatch/releases/download/v0.21.0/miccamwatch-windows-x86_64.msi' -OutFile $stable
+    if ($BaselineMsi) {
+        $offline = Get-Item -LiteralPath $BaselineMsi -Force
+        if ($offline.PSIsContainer -or ($offline.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
+            !$offline.FullName.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+            throw 'Offline baseline escaped the admitted guest fixture root.'
+        }
+        Copy-Item -LiteralPath $offline.FullName -Destination $stable
+    } else {
+        Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/Roman-Cuisset/miccamwatch/releases/download/v0.21.0/miccamwatch-windows-x86_64.msi' -OutFile $stable
+    }
     $stableSha = (Get-FileHash -LiteralPath $stable -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($stableSha -cne '4e6145a4e48bff47f08c8341c24c14e7fab563146e36b8338f46441f7f4da3df') { throw 'Public v0.21.0 digest changed' }
     $oldCode = Identity $stable '0.21.0'
