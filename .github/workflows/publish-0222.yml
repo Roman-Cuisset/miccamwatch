@@ -1,0 +1,126 @@
+name: Publish the qualified v0.22.2
+on: workflow_call
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    concurrency: miccamwatch-v0.22.2-publication
+    permissions:
+      actions: read
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      SOURCE: bfb699b2a86f8610d785112c1ffdbfdf06485d7d
+      BUILD_RUN: '45957355443'
+      VERSION: v0.22.2
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: bfb699b2a86f8610d785112c1ffdbfdf06485d7d
+          path: source
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: miccamwatch-hybrid-*-${{ env.SOURCE }}
+          run-id: '45957355443'
+          github-token: ${{ github.token }}
+          path: candidate-input
+      - name: Collect and pin the eight qualified packages
+        run: |
+          (cd source && python3 -B installer/release_candidate.py "$SOURCE" ../candidate-input ../dist)
+          cd dist
+          sha256sum miccamwatch-* > qualified.sha256
+          echo '546c7f0d353fea57d6976cc280e55378c0b268b0ac4840144d7053cfcb9c8d17  qualified.sha256' | sha256sum --strict -c
+      - uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          path: source
+          format: spdx-json
+          output-file: dist/miccamwatch-sbom.spdx.json
+          upload-release-assets: false
+          upload-artifact: false
+      - name: Record SBOM and assembly provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          (cd source && python3 -B installer/candidate_sbom.py ../dist/miccamwatch-sbom.spdx.json "$SOURCE")
+          cd dist
+          sha256sum miccamwatch-* > SHA256SUMS
+          sha256sum --strict -c SHA256SUMS
+          test "$(wc -l < SHA256SUMS)" -eq 9
+          repo="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
+          run="$repo/actions/runs/$GITHUB_RUN_ID"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$BUILD_RUN/artifacts" --paginate --slurp |
+            jq -e --arg suffix "-$SOURCE" --arg repo "$repo" --arg build "$BUILD_RUN" --arg source "$SOURCE" \
+              --arg run "$run" --arg workflow "$repo/.github/workflows/publish-0222.yml@$GITHUB_SHA" '
+              [.[].artifacts[] | select(.name | startswith("miccamwatch-hybrid-") and endswith($suffix))] as $artifacts |
+              if ($artifacts | map(.id) | sort) != [15178888624,15179472587,15179752784,15179880574,15180195042]
+                 or any($artifacts[]; .workflow_run.head_sha != $source or
+                    ((.digest // "") | test("^sha256:[a-f0-9]{64}$") | not))
+              then error("unexpected source artifact metadata") else
+              {buildDefinition: {
+                buildType: ($repo + "/release-assembly/v1"),
+                externalParameters: {sourceRun: ($repo + "/actions/runs/" + $build), version: "v0.22.2"},
+                resolvedDependencies: ([{uri: ("git+" + $repo + ".git"), digest: {gitCommit: $source}}] +
+                  [$artifacts[] | {name: .name, uri: ($repo + "/actions/runs/" + $build + "/artifacts/" + (.id | tostring)),
+                    digest: {sha256: (.digest | sub("^sha256:"; ""))}}])
+              }, runDetails: {builder: {id: $workflow}, metadata: {invocationId: $run}}} end' > ../assembly-provenance.json
+      - uses: actions/attest@daf44fb950173508f38bd2406030372c1d1162b1 # v3
+        with:
+          subject-path: dist/miccamwatch-*
+          predicate-type: https://slsa.dev/provenance/v1
+          predicate-path: assembly-provenance.json
+      - name: Verify the nine signed subjects
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for file in dist/miccamwatch-*; do
+            gh attestation verify "$file" --repo "$GITHUB_REPOSITORY" --deny-self-hosted-runners \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/publish-0222.yml" \
+              --source-digest "$GITHUB_SHA" --signer-digest "$GITHUB_SHA"
+          done
+      - name: Publish the verified draft as stable and latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$VERSION" --json tagName >/dev/null 2>&1; then
+            echo "::error::Release already exists. Inspect it before attempting publication."
+            exit 1
+          fi
+          # Refs created with GITHUB_TOKEN do not dispatch the legacy tag release workflow.
+          gh api "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$VERSION" -f sha="$SOURCE" --silent
+          gh release create "$VERSION" --verify-tag --draft --title "$VERSION" \
+            --notes-file docs/RELEASE_0.22.2_NOTES.md dist/miccamwatch-* dist/SHA256SUMS
+          gh release view "$VERSION" --json assets --jq '.assets[] | [.name,.state] | @tsv' | sort > actual-assets
+          (printf '%s\t%s\n' SHA256SUMS uploaded; for file in dist/miccamwatch-*; do printf '%s\tuploaded\n' "${file##*/}"; done) | sort > expected-assets
+          diff -u expected-assets actual-assets
+          mkdir staged-download
+          gh release download "$VERSION" --pattern '*' --dir staged-download
+          cmp dist/SHA256SUMS staged-download/SHA256SUMS
+          (cd staged-download && sha256sum --strict -c SHA256SUMS)
+          gh release edit "$VERSION" --draft=false --latest
+      - name: Verify public bytes and latest version
+        run: |
+          public="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$VERSION"
+          mkdir public-download
+          cd public-download
+          while read -r hash asset; do
+            curl --fail --silent --show-error --location --retry 4 "$public/$asset" -o "$asset"
+          done < ../dist/SHA256SUMS
+          curl --fail --silent --show-error --location --retry 4 "$public/SHA256SUMS" -o SHA256SUMS
+          cmp ../dist/SHA256SUMS SHA256SUMS
+          sha256sum --strict -c SHA256SUMS
+          curl -fsSL --retry 4 "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/latest" |
+            jq -e --arg version "$VERSION" '.tag_name == $version and (.draft or .prerelease | not)'
+          curl -fsSL --retry 4 "https://codeload.github.com/$GITHUB_REPOSITORY/tar.gz/refs/tags/$VERSION" -o source.tar.gz
+          sha256sum source.tar.gz SHA256SUMS miccamwatch-sbom.spdx.json | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: publication-0222
+          path: |
+            dist/SHA256SUMS
+            assembly-provenance.json
+          if-no-files-found: error
