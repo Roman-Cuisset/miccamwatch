@@ -14,6 +14,7 @@ jobs:
       SOURCE: bfb699b2a86f8610d785112c1ffdbfdf06485d7d
       BUILD_RUN: '45957355443'
       VERSION: v0.22.2
+      PREDICATE: https://github.com/Roman-Cuisset/miccamwatch/release-assembly/v1
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -71,7 +72,7 @@ jobs:
       - uses: actions/attest@daf44fb950173508f38bd2406030372c1d1162b1 # v3
         with:
           subject-path: dist/miccamwatch-*
-          predicate-type: https://slsa.dev/provenance/v1
+          predicate-type: ${{ env.PREDICATE }}
           predicate-path: assembly-provenance.json
       - name: Verify the nine signed subjects
         env:
@@ -79,6 +80,7 @@ jobs:
         run: |
           for file in dist/miccamwatch-*; do
             gh attestation verify "$file" --repo "$GITHUB_REPOSITORY" --deny-self-hosted-runners \
+              --predicate-type "$PREDICATE" \
               --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/publish-0222.yml" \
               --source-digest "$GITHUB_SHA" --signer-digest "$GITHUB_SHA"
           done
