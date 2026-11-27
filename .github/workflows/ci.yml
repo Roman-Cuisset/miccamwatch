@@ -299,7 +299,6 @@ jobs:
         include:
           - { runner: ubuntu-22.04, target: linux-x86_64, file: linux-x86_64.tar.gz }
           - { runner: ubuntu-22.04-arm, target: linux-aarch64, file: linux-aarch64.tar.gz }
-          - { runner: macos-15-intel, target: macos-x86_64, file: macos-x86_64.dmg }
           - { runner: macos-15, target: macos-arm64, file: macos-aarch64.dmg }
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
