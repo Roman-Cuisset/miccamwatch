@@ -296,10 +296,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - { runner: ubuntu-22.04, target: linux-x86_64, file: linux-x86_64.tar.gz }
-          - { runner: ubuntu-22.04-arm, target: linux-aarch64, file: linux-aarch64.tar.gz }
-          - { runner: macos-15, target: macos-arm64, file: macos-aarch64.dmg }
+        include: ${{ fromJSON(inputs.flutter-arm-only && '[{"runner":"macos-15","target":"macos-arm64","file":"macos-aarch64.dmg"}]' || '[{"runner":"ubuntu-22.04","target":"linux-x86_64","file":"linux-x86_64.tar.gz"},{"runner":"ubuntu-22.04-arm","target":"linux-aarch64","file":"linux-aarch64.tar.gz"},{"runner":"macos-15","target":"macos-arm64","file":"macos-aarch64.dmg"}]') }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
     permissions:
@@ -326,9 +323,11 @@ jobs:
           root="$RUNNER_TEMP/mcw-entrypoint-replay"
           mkdir -m 700 "$root"
           gh run download "$BUILD_RUN" --repo "$GITHUB_REPOSITORY" --name "miccamwatch-hybrid-$TARGET-$BUILD_SHA" --dir "$root"
+          if [[ "$TARGET" == macos-* ]]; then root="$root/distribution"; fi
           cd "$root"
           [[ -f "$PACKAGE" && -f SHA256SUMS ]]
           shasum -a 256 -c SHA256SUMS
+          printf 'MCW_REPLAY_PACKAGE=%s/%s\n' "$root" "$PACKAGE" >> "$GITHUB_ENV"
       - name: Open the signed macOS app from Finder and select the actual native menu item
         if: runner.os == 'macOS'
         shell: bash
@@ -336,7 +335,7 @@ jobs:
           set -euo pipefail
           root="$RUNNER_TEMP/mcw-entrypoint-replay"
           swiftc desktop/qualification/macos_entrypoint.swift -o "$root/entrypoint"
-          python3 -B installer/tests/macos-hybrid-installed.py "$root/$PACKAGE" \
+          python3 -B installer/tests/macos-hybrid-installed.py "$MCW_REPLAY_PACKAGE" \
             --system-open-only --window-probe "$root/entrypoint" --expected-revision "$BUILD_SHA" \
             --proof "$RUNNER_TEMP/mcw-entrypoint-proof"
       - name: Open the Linux app by the installed menu action
@@ -350,7 +349,7 @@ jobs:
             libgtk-3-0 libx11-dev libpipewire-0.3-0 libgl1-mesa-dri libegl1-mesa libgles2
           dbus-run-session -- xvfb-run -a -s '-screen 0 1280x1000x24' \
             bash desktop/qualification/linux_candidate_smoke.sh \
-            "$RUNNER_TEMP/mcw-entrypoint-replay/$PACKAGE" "$BUILD_SHA" "$RUNNER_TEMP/mcw-entrypoint-proof"
+            "$MCW_REPLAY_PACKAGE" "$BUILD_SHA" "$RUNNER_TEMP/mcw-entrypoint-proof"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
