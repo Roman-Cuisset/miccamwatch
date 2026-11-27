@@ -2048,13 +2048,18 @@ impl Drop for FlutterFrontend {
 }
 
 #[cfg(feature = "flutter-desktop")]
-fn show_desktop(flutter: &mut FlutterFrontend, native: &mut DesktopHost) -> Result<()> {
+fn show_desktop(
+    flutter: &mut FlutterFrontend,
+    native: &mut DesktopHost,
+    feedback: &mut Option<String>,
+) -> Result<()> {
     match flutter.open("system") {
         Ok(()) => Ok(()),
         Err(error) => {
             // A synchronous failure is handled here, not again on the next poll.
             let _ = flutter.take_open_failure();
             eprintln!("MicCamWatch Flutter unavailable, opening native desktop: {error:#}");
+            *feedback = Some(format!("Flutter: {error:#}"));
             native.show_window()
         }
     }
@@ -2459,7 +2464,7 @@ fn run_flutter_development(
                     // Exercise the same native Open handler as menu-bar status,
                     // then consume its Status event in this supervisor loop.
                     host.check()?;
-                    host.show_window()?;
+                    host.stdin.write(b"{\"kind\":\"qualify_open\"}\n")?;
                 } else {
                     open = true;
                 }
@@ -2581,9 +2586,10 @@ pub fn run_tray(
         initial,
         lifecycle.window_input.clone(),
     )?;
+    let mut feedback = None;
     #[cfg(feature = "flutter-desktop")]
     if initial_window {
-        show_desktop(&mut flutter, &mut host)?;
+        show_desktop(&mut flutter, &mut host, &mut feedback)?;
     }
     #[cfg(all(target_os = "macos", not(feature = "flutter-desktop")))]
     if initial_window {
@@ -2608,7 +2614,6 @@ pub fn run_tray(
     let mut applied_profile = settings.profile;
     let mut lock_previous = SessionLockState::Unknown;
     let mut lock_intent = false;
-    let mut feedback = None;
     let mut action_error = false;
     let mut summary = words(lang).degraded.to_owned();
     let mut visual = "error";
@@ -2646,6 +2651,8 @@ pub fn run_tray(
                     eprintln!(
                         "MicCamWatch Flutter failed before ready, opening native desktop: {error}"
                     );
+                    feedback = Some(format!("Flutter: {error}"));
+                    action_error = true;
                     if let Err(error) = host.show_window() {
                         feedback = Some(format!("{}: {error:#}", words(lang).failed));
                         action_error = true;
@@ -2661,14 +2668,14 @@ pub fn run_tray(
             }
             if lifecycle.open_requested.swap(false, Ordering::AcqRel) {
                 #[cfg(feature = "flutter-desktop")]
-                let opened = show_desktop(&mut flutter, &mut host);
+                let opened = show_desktop(&mut flutter, &mut host, &mut feedback);
                 #[cfg(not(feature = "flutter-desktop"))]
                 let opened = host.show_window();
                 if let Err(error) = opened {
                     feedback = Some(format!("{}: {error:#}", words(lang).failed));
                     action_error = true;
-                    next_poll = Instant::now();
                 }
+                next_poll = Instant::now();
             }
             #[cfg(target_os = "macos")]
             if inspection.poll() {
@@ -2880,14 +2887,14 @@ pub fn run_tray(
                     }
                     if matches!(command, Command::Status) {
                         #[cfg(feature = "flutter-desktop")]
-                        let opened = show_desktop(&mut flutter, &mut host);
+                        let opened = show_desktop(&mut flutter, &mut host, &mut feedback);
                         #[cfg(not(feature = "flutter-desktop"))]
                         let opened = host.show_window();
                         if let Err(error) = opened {
                             feedback = Some(format!("{}: {error:#}", words(lang).failed));
                             action_error = true;
-                            next_poll = Instant::now();
                         }
+                        next_poll = Instant::now();
                         continue;
                     }
                     #[cfg(target_os = "linux")]

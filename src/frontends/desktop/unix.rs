@@ -107,6 +107,10 @@ impl Outbox {
 /// A root-owned sticky common ancestor (for example /tmp) cannot be used by
 /// another user to replace a child owned by this account.
 pub(crate) fn pin_directory_chain(path: &Path) -> Result<Vec<File>> {
+    pin_directory_chain_for(path, false)
+}
+
+fn pin_directory_chain_for(path: &Path, system_applications: bool) -> Result<Vec<File>> {
     use std::{
         ffi::CString,
         os::unix::{ffi::OsStrExt, io::FromRawFd},
@@ -137,17 +141,52 @@ pub(crate) fn pin_directory_chain(path: &Path) -> Result<Vec<File>> {
         );
         let directory = unsafe { File::from_raw_fd(descriptor) };
         let metadata = directory.metadata()?;
-        let root_sticky = metadata.uid() == 0 && metadata.mode() & 0o1000 != 0;
         ensure!(
-            trusted_owner(&metadata) && (metadata.mode() & 0o022 == 0 || root_sticky),
-            "unsafe directory ownership or permissions: {}",
-            path.display()
+            trusted_owner(&metadata)
+                && trusted_directory_mode(
+                    metadata.uid(),
+                    metadata.gid(),
+                    metadata.mode(),
+                    system_applications && pins.len() == 1 && name.as_bytes() == b"Applications",
+                ),
+            "unsafe directory ownership or permissions: {} (component {:?}, uid {}, gid {}, mode {:04o})",
+            path.display(),
+            name,
+            metadata.uid(),
+            metadata.gid(),
+            metadata.mode() & 0o7777
         );
         #[cfg(target_os = "macos")]
         check_directory_acl(&directory, false)?;
         pins.push(directory);
     }
     Ok(pins)
+}
+
+fn trusted_directory_mode(uid: u32, gid: u32, mode: u32, system_applications: bool) -> bool {
+    // The system's local application domain is administered by root and the
+    // macOS admin group (GID 80). Only this exact ancestor of a packaged app
+    // can use those group write bits. All payload and ACL checks still apply.
+    mode & 0o022 == 0
+        || (uid == 0 && mode & 0o1000 != 0)
+        || (cfg!(target_os = "macos")
+            && system_applications
+            && uid == 0
+            && gid == 80
+            && mode & 0o002 == 0)
+}
+
+#[cfg(target_os = "macos")]
+fn system_macos_frontend(path: &Path) -> bool {
+    use std::path::Component;
+    let Ok(relative) = path.strip_prefix("/Applications") else {
+        return false;
+    };
+    let mut components = relative.components();
+    matches!(components.next(), Some(Component::Normal(app))
+        if Path::new(app).extension().is_some_and(|extension| extension == "app"))
+        && components.as_path()
+            == Path::new("Contents/Helpers/MicCamWatch.app/Contents/MacOS/MicCamWatch")
 }
 
 fn trusted_owner(metadata: &std::fs::Metadata) -> bool {
@@ -243,6 +282,9 @@ impl Bundle {
     fn open(path: &Path) -> Result<Self> {
         ensure!(path.is_absolute(), "desktop executable must be absolute");
         let parent = path.parent().context("desktop has no directory")?;
+        #[cfg(target_os = "macos")]
+        let ancestors = pin_directory_chain_for(parent, system_macos_frontend(path))?;
+        #[cfg(target_os = "linux")]
         let ancestors = pin_directory_chain(parent)?;
         #[cfg(target_os = "linux")]
         let root = parent.to_path_buf();
@@ -1285,6 +1327,25 @@ mod tests {
         symlink(&ancestor, &alias).unwrap();
         assert!(pin_directory_chain(&alias.join("private")).is_err());
         assert!(pin_directory_chain(&ancestor.join("../ancestor/private")).is_err());
+    }
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn system_applications_exception_is_limited_to_the_administrative_ancestor() {
+        let tail = "Contents/Helpers/MicCamWatch.app/Contents/MacOS/MicCamWatch";
+        assert!(system_macos_frontend(
+            &Path::new("/Applications/MicCamWatch.app").join(tail)
+        ));
+        assert!(!system_macos_frontend(
+            &Path::new("/tmp/Applications/MicCamWatch.app").join(tail)
+        ));
+        assert!(!system_macos_frontend(Path::new(
+            "/Applications/MicCamWatch.app/Contents/MacOS/MicCamWatch"
+        )));
+        assert!(trusted_directory_mode(0, 80, 0o775, true));
+        assert!(!trusted_directory_mode(0, 80, 0o775, false));
+        assert!(!trusted_directory_mode(501, 80, 0o775, true));
+        assert!(!trusted_directory_mode(0, 20, 0o775, true));
+        assert!(!trusted_directory_mode(0, 80, 0o777, true));
     }
     fn await_completion(process: &mut OwnedProcess) -> std::process::ExitStatus {
         let deadline = Instant::now() + Duration::from_secs(5);

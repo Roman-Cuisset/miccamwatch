@@ -127,6 +127,9 @@ fn compile_macos_helper() {
         _ => panic!("unsupported macOS helper architecture: {target}"),
     };
     let mut compiler = Command::new("swiftc");
+    if env::var_os("CARGO_FEATURE_FLUTTER_DESKTOP").is_some() {
+        compiler.args(["-D", "MCW_FLUTTER_DESKTOP"]);
+    }
     compiler
         .args(["-target", &format!("{arch}-apple-macosx15.0"), "-O"])
         .arg(&entrypoint)

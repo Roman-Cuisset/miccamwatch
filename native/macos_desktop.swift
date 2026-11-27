@@ -9,7 +9,8 @@ import Darwin
 // Desktop protocol v4: UTF-8 newline-delimited JSON, maximum frame 65536 bytes.
 // State carries bounded observations, explicit protection facts and localized UI
 // language/version. Only profile has children (four direct checked choices).
-// show opens the existing consultation window; stop retires the desktop.
+// show opens the native consultation window; stop retires the desktop.
+// qualify_open invokes the menu's Open item in the isolated harness.
 // Local consultation/About never emit a device action. Advanced controls remain
 // explicit actions in the consultation window, never implicit during refresh.
 private struct DesktopCodingKey: CodingKey {
@@ -125,7 +126,7 @@ struct DesktopFrame: Decodable {
         kind = try fields.decode(String.self, forKey: .kind)
         let keys = ["kind", "summary", "diagnostics", "limited", "visual", "items", "language", "version", "protection", "overview", "preferences", "feedback"]
         try desktopFields(decoder, allowed: kind == "state" ? keys : ["kind"])
-        guard ["state", "show", "stop"].contains(kind) else {
+        guard ["state", "show", "qualify_open", "stop"].contains(kind) else {
             throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "unknown desktop frame kind"))
         }
         if kind == "state" {
@@ -1081,9 +1082,18 @@ final class DesktopMenu: NSObject {
     }
 
     @objc private func showConsultation(_ sender: Any?) {
-        if qualificationBridge {
-            desktopEmit(DesktopEvent(kind: "action", action: "status"))
-        } else { consultation.show() }
+        requestConsultation()
+    }
+    func requestConsultation() {
+        #if MCW_FLUTTER_DESKTOP
+        desktopEmit(DesktopEvent(kind: "action", action: "status"))
+        #else
+        consultation.show()
+        #endif
+    }
+    func qualificationOpen() {
+        guard qualificationBridge else { return }
+        menu.performActionForItem(at: 0)
     }
     func qualificationExit() {
         guard qualificationBridge,
@@ -1157,7 +1167,11 @@ private final class DesktopDelegate: NSObject, NSApplicationDelegate {
                             RunLoop.main.perform(inModes: [.common]) { [weak self] in
                                 defer { applied.signal() }
                                 if decoded.kind == "show" {
-                                    self?.showConsultation()
+                                    self?.showNativeConsultation()
+                                } else if decoded.kind == "qualify_open" {
+                                    if self?.qualificationRegistrationReady() == true {
+                                        self?.menuContent?.qualificationOpen()
+                                    }
                                 } else { self?.apply(decoded) }
                             }
                             CFRunLoopWakeUp(CFRunLoopGetMain())
@@ -1217,13 +1231,15 @@ private final class DesktopDelegate: NSObject, NSApplicationDelegate {
         desktopDiagnostic("qualification registration ready pid=\(getpid()) protocol=4 visible=\(item.isVisible)")
         return true
     }
+    private func showNativeConsultation() {
+        guard initialized, !stopping else { return }
+        trackingMenu?.cancelTracking()
+        consultation.show()
+    }
     private func showConsultation() {
         guard initialized, !stopping else { return }
         trackingMenu?.cancelTracking()
-        if menuContent?.qualificationBridge == true {
-            guard qualificationRegistrationReady() else { return }
-            desktopEmit(DesktopEvent(kind: "action", action: "status"))
-        } else { consultation.show() }
+        menuContent?.requestConsultation()
     }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         showConsultation()

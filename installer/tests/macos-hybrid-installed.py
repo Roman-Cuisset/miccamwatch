@@ -156,13 +156,11 @@ def until(probe, explanation):
     raise RuntimeError(explanation)
 
 
-def run_app(app, env, proof):
+def run_app(app, env, proof, route="direct"):
     engine = app / "Contents/MacOS/mcw"
     launcher = app / "Contents/MacOS/MicCamWatch"
     flutter = app / "Contents/Helpers/MicCamWatch.app/Contents/MacOS/MicCamWatch"
     with proof.open("xb") as log:
-        command(launcher, env=env, stdout=log, stderr=subprocess.STDOUT)
-
         def ready():
             current = list(processes())
             owners = [pid for pid, _, path in current if path == engine]
@@ -176,24 +174,83 @@ def run_app(app, env, proof):
                 return False
             return owners[0], children[0]
 
+        menu_owner = None
         try:
+            if route == "finder":
+                variables = ["HOME", "LANG", "LC_ALL", "XDG_RUNTIME_DIR",
+                             "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"]
+                options = [part for key in variables for part in ("--env", f"{key}={env[key]}")]
+                command("/usr/bin/open", "-n", "--stderr", proof, *options, app, env=env)
+            elif route == "menu":
+                # Only the owned menu's selector runs. No accessibility consent,
+                # global input, or mutation commands are needed for the fixture.
+                env = dict(env, MCW_MACOS_QUALIFICATION_TRAY="1")
+                menu_owner = subprocess.Popen([engine, "--read-only-development"], env=env,
+                                              stdout=log, stderr=subprocess.STDOUT)
+                until(lambda: "MCW_MACOS_NATIVE event=ready" in proof.read_text(errors="replace"),
+                      "AppKit menu did not register")
+                command(engine, "tray", "open", env=env)
+            else:
+                command(launcher, env=env, stdout=log, stderr=subprocess.STDOUT)
             owner, child = until(ready, "installed app did not establish authenticated Flutter readiness")
+            if menu_owner is not None:
+                require(owner == menu_owner.pid, "menu changed the native owner")
             command(engine, "tray", "status", env=env)
         finally:
             if any(path == engine for _, _, path in processes()):
                 command(engine, "tray", "stop", env=env)
                 until(lambda: not any(path.is_relative_to(app) for _, _, path in processes()),
                       "installed app left owned bundle processes")
-        return {"owner": owner, "flutter": child, "rust_acknowledged_ready": True,
+            if menu_owner is not None:
+                menu_owner.wait(timeout=5)
+        return {"route": route, "owner": owner, "flutter": child, "rust_acknowledged_ready": True,
                 "owner_quit": "cooperative CLI", "processes_released": True}
+
+def isolated_profile(work):
+    profile = work / "home"
+    profile.mkdir(mode=0o700)
+    env = dict(os.environ, HOME=str(profile), LANG="en_US.UTF-8", LC_ALL="en_US.UTF-8")
+    for kind in ("CONFIG", "DATA", "STATE", "CACHE"):
+        env[f"XDG_{kind}_HOME"] = str(profile / kind.lower())
+    env["XDG_RUNTIME_DIR"] = str(profile / "run")
+    Path(env["XDG_RUNTIME_DIR"]).mkdir(mode=0o700)
+    return env
+
+
+def system_open_smoke(candidate, applications, work, proof, source):
+    metadata = applications.lstat()
+    require(not applications.is_symlink() and metadata.st_uid == 0 and metadata.st_gid == 80
+            and metadata.st_mode & 0o022 == 0o020, "system Applications fixture lacks root:admin group write")
+    # A unique sibling puts the app below the real system directory without
+    # replacing any installed copy or changing system modes and ACLs.
+    with tempfile.TemporaryDirectory(prefix="MCW-Flutter-Smoke-", suffix=".app", dir=applications) as path:
+        installed = Path(path)
+        with attached(candidate, work / "candidate-mount") as app:
+            command("/usr/bin/ditto", app, installed)
+        installed_version = version(installed)
+        manifest = json.loads((installed / "Contents/Resources/miccamwatch-bundle.json").read_bytes())
+        require((manifest["revision"], manifest["version"], manifest["ipc"]) == (source, installed_version, 10),
+                "unexpected package revision, version or IPC")
+        env = isolated_profile(work)
+        config = Path(env["XDG_CONFIG_HOME"]) / "MicCamWatch"
+        config.mkdir(parents=True, mode=0o700)
+        (config / "settings.toml").write_text(
+            "notifications_enabled = false\nsound_enabled = false\nhistory_enabled = false\nmute_on_lock = false\n")
+        Path(env["XDG_DATA_HOME"]).mkdir(mode=0o700)
+        finder = run_app(installed, env, proof / "installed-finder.log", route="finder")
+        menu = run_app(installed, env, proof / "installed-menu.log", route="menu")
+        return [finder, menu]
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("dmg", type=Path)
-    parser.add_argument("--direct-engine", type=Path, required=True)
+    parser.add_argument("--direct-engine", type=Path)
     parser.add_argument("--proof", type=Path, required=True)
+    parser.add_argument("--system-open-only", action="store_true")
     args = parser.parse_args()
+    if not args.system_open_only and not args.direct_engine:
+        parser.error("--direct-engine is required for the full installed lifecycle")
     require(os.environ.get("RUNNER_ENVIRONMENT") == "github-hosted"
             and platform.system() == "Darwin" and os.getuid() != 0, "disposable Mac required")
     arch = "aarch64" if platform.machine() == "arm64" else platform.machine()
@@ -212,6 +269,11 @@ def main():
                                          "symlink": applications.is_symlink()}
         with (proof / "system-applications-acl.log").open("xb") as log:
             command("/bin/ls", "-ldeO", applications, stdout=log)
+        if args.system_open_only:
+            report.update(candidate_sha256=digest(candidate),
+                          opened=system_open_smoke(candidate, applications, work, proof, source))
+            report.update(status="passed", scenario="system-applications-finder-and-menu")
+            return
         command("/usr/bin/curl", "--fail", "--location", "--silent", "--show-error", "--output", stable,
                 f"https://github.com/Roman-Cuisset/miccamwatch/releases/download/v0.21.0/miccamwatch-macos-{arch}.dmg")
         require(digest(stable) == STABLE[arch], "public stable disk image checksum mismatch")
@@ -236,13 +298,8 @@ def main():
         report["altered_seal_refused"] = True
         metadata = json.loads((staged / "Contents/Resources/miccamwatch-bundle.json").read_bytes())
         require(metadata["revision"] == source and metadata["ipc"] == 10, "unexpected package revision or IPC")
+        env = isolated_profile(work)
         profile = work / "home"
-        profile.mkdir(mode=0o700)
-        env = dict(os.environ, HOME=str(profile), LANG="en_US.UTF-8", LC_ALL="en_US.UTF-8")
-        for kind in ("CONFIG", "DATA", "STATE", "CACHE"):
-            env[f"XDG_{kind}_HOME"] = str(profile / kind.lower())
-        env["XDG_RUNTIME_DIR"] = str(profile / "run")
-        Path(env["XDG_RUNTIME_DIR"]).mkdir(mode=0o700)
         config = profile / "config/MicCamWatch/settings.toml"
         history = profile / "data/MicCamWatch/history.jsonl"
         for file in (config, history):
