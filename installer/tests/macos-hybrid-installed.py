@@ -195,6 +195,8 @@ def run_app(app, env, proof, route="direct", probe=None):
                                               stdout=log, stderr=subprocess.STDOUT)
                 until(lambda: "statusItem registered visible=true" in proof.read_text(errors="replace"),
                       "AppKit menu did not register")
+                observed = {}
+
                 def menu_helper():
                     children = [(pid, path) for pid, parent, path in processes() if parent == menu_owner.pid]
                     require(not any(path == flutter for _, path in children), "Background tray already opened Flutter")
@@ -202,12 +204,19 @@ def run_app(app, env, proof, route="direct", probe=None):
                     for pid, path in children:
                         if path.name != "MicCamWatchHelper":
                             continue
-                        result = subprocess.run(["/bin/ps", "-p", str(pid), "-o", "args="],
+                        result = subprocess.run(["/bin/ps", "-ww", "-p", str(pid), "-o", "args="],
                                                 capture_output=True, text=True, timeout=3)
-                        if result.returncode == 0 and result.stdout.strip() == f"{path} desktop":
+                        observed[pid] = (str(path), result.stdout.strip())
+                        # Darwin can report a different argv[0] spelling for the same executable.
+                        if result.returncode == 0 and result.stdout.rstrip().endswith(" desktop"):
                             helpers.append((pid, path))
                     return helpers[0] if len(helpers) == 1 else False
-                helper_pid, helper_path = until(menu_helper, "No unique persistent AppKit menu host")
+
+                try:
+                    helper_pid, helper_path = until(menu_helper, "No unique persistent AppKit menu host")
+                except RuntimeError:
+                    proof.with_name("menu-helper-observed.json").write_text(json.dumps(observed, indent=2) + "\n")
+                    raise
                 embedded = app / "Contents/Helpers/MicCamWatchHelper.app/Contents/MacOS/MicCamWatchHelper"
                 require(digest(helper_path) == digest(embedded), "Owned AppKit host bytes differ")
                 command(probe, "menu", helper_pid, helper_path)
