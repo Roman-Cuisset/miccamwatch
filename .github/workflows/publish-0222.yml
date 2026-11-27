@@ -7,7 +7,7 @@ jobs:
     concurrency: miccamwatch-v0.22.2-publication
     permissions:
       actions: read
-      contents: write
+      contents: read
       id-token: write
       attestations: write
     env:
@@ -84,45 +84,11 @@ jobs:
               --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/publish-0222.yml" \
               --source-digest "$GITHUB_SHA" --signer-digest "$GITHUB_SHA"
           done
-      - name: Publish the verified draft as stable and latest
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          if gh release view "$VERSION" --json tagName >/dev/null 2>&1; then
-            echo "::error::Release already exists. Inspect it before attempting publication."
-            exit 1
-          fi
-          # Refs created with GITHUB_TOKEN do not dispatch the legacy tag release workflow.
-          gh api "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$VERSION" -f sha="$SOURCE" --silent
-          gh release create "$VERSION" --verify-tag --draft --title "$VERSION" \
-            --notes-file docs/RELEASE_0.22.2_NOTES.md dist/miccamwatch-* dist/SHA256SUMS
-          gh release view "$VERSION" --json assets --jq '.assets[] | [.name,.state] | @tsv' | sort > actual-assets
-          (printf '%s\t%s\n' SHA256SUMS uploaded; for file in dist/miccamwatch-*; do printf '%s\tuploaded\n' "${file##*/}"; done) | sort > expected-assets
-          diff -u expected-assets actual-assets
-          mkdir staged-download
-          gh release download "$VERSION" --pattern '*' --dir staged-download
-          cmp dist/SHA256SUMS staged-download/SHA256SUMS
-          (cd staged-download && sha256sum --strict -c SHA256SUMS)
-          gh release edit "$VERSION" --draft=false --latest
-      - name: Verify public bytes and latest version
-        run: |
-          public="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$VERSION"
-          mkdir public-download
-          cd public-download
-          while read -r hash asset; do
-            curl --fail --silent --show-error --location --retry 4 "$public/$asset" -o "$asset"
-          done < ../dist/SHA256SUMS
-          curl --fail --silent --show-error --location --retry 4 "$public/SHA256SUMS" -o SHA256SUMS
-          cmp ../dist/SHA256SUMS SHA256SUMS
-          sha256sum --strict -c SHA256SUMS
-          curl -fsSL --retry 4 "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/latest" |
-            jq -e --arg version "$VERSION" '.tag_name == $version and (.draft or .prerelease | not)'
-          curl -fsSL --retry 4 "https://codeload.github.com/$GITHUB_REPOSITORY/tar.gz/refs/tags/$VERSION" -o source.tar.gz
-          sha256sum source.tar.gz SHA256SUMS miccamwatch-sbom.spdx.json | tee -a "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: publication-0222
           path: |
             dist/SHA256SUMS
+            dist/miccamwatch-sbom.spdx.json
             assembly-provenance.json
           if-no-files-found: error
