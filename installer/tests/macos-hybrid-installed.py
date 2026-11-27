@@ -156,7 +156,7 @@ def until(probe, explanation):
     raise RuntimeError(explanation)
 
 
-def run_app(app, env, proof, route="direct"):
+def run_app(app, env, proof, route="direct", probe=None):
     engine = app / "Contents/MacOS/mcw"
     launcher = app / "Contents/MacOS/MicCamWatch"
     flutter = app / "Contents/Helpers/MicCamWatch.app/Contents/MacOS/MicCamWatch"
@@ -169,9 +169,18 @@ def run_app(app, env, proof, route="direct"):
             children = [pid for pid, parent, path in current if parent == owners[0] and path == flutter]
             if len(children) != 1:
                 return False
-            if not re.search(rf"desktop event=ready endpoint=parent_received pid={children[0]} ",
-                             proof.read_text(errors="replace")):
+            if route != "finder" and not re.search(
+                rf"desktop event=ready endpoint=parent_received pid={children[0]} ",
+                proof.read_text(errors="replace"),
+            ):
                 return False
+            if probe is not None:
+                window = subprocess.run([probe, "window", str(children[0]), flutter],
+                                        capture_output=True, text=True, timeout=5)
+                if window.returncode != 0:
+                    return False
+                evidence = json.loads(window.stdout)
+                require(evidence["pid"] == children[0] and evidence["on_screen"], "Wrong visible owner")
             return owners[0], children[0]
 
         menu_owner = None
@@ -180,19 +189,28 @@ def run_app(app, env, proof, route="direct"):
                 variables = ["HOME", "LANG", "LC_ALL", "XDG_RUNTIME_DIR",
                              "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"]
                 options = [part for key in variables for part in ("--env", f"{key}={env[key]}")]
-                command("/usr/bin/open", "-n", "--stderr", proof, *options, app, env=env)
+                command("/usr/bin/open", "-n", *options, app, env=env)
             elif route == "menu":
-                # Only the owned menu's selector runs. No accessibility consent,
-                # global input, or mutation commands are needed for the fixture.
-                env = dict(env, MCW_MACOS_QUALIFICATION_TRAY="1")
-                menu_owner = subprocess.Popen([engine, "--read-only-development"], env=env,
+                menu_owner = subprocess.Popen([engine, "tray", "run"], env=env,
                                               stdout=log, stderr=subprocess.STDOUT)
-                until(lambda: "MCW_MACOS_NATIVE event=ready" in proof.read_text(errors="replace"),
+                until(lambda: "statusItem registered visible=true" in proof.read_text(errors="replace"),
                       "AppKit menu did not register")
-                command(engine, "tray", "open", env=env)
+                children = [(pid, path) for pid, parent, path in processes() if parent == menu_owner.pid]
+                require(not any(path == flutter for _, path in children), "Background tray already opened Flutter")
+                helpers = [(pid, path) for pid, path in children if path.name == "MicCamWatchHelper"]
+                require(len(helpers) == 1, "No unique owned AppKit menu host")
+                helper_pid, helper_path = helpers[0]
+                embedded = app / "Contents/Helpers/MicCamWatchHelper.app/Contents/MacOS/MicCamWatchHelper"
+                require(digest(helper_path) == digest(embedded), "Owned AppKit host bytes differ")
+                command(probe, "menu", helper_pid, helper_path)
             else:
                 command(launcher, env=env, stdout=log, stderr=subprocess.STDOUT)
             owner, child = until(ready, "installed app did not establish authenticated Flutter readiness")
+            if route == "finder":
+                # LaunchServices gets no redirected stderr. The same visible
+                # child must survive the Rust supervisor's 15-second ready gate.
+                time.sleep(16)
+                require(ready() == (owner, child), "Finder child did not survive the readiness deadline")
             if menu_owner is not None:
                 require(owner == menu_owner.pid, "menu changed the native owner")
             command(engine, "tray", "status", env=env)
@@ -203,7 +221,10 @@ def run_app(app, env, proof, route="direct"):
                       "installed app left owned bundle processes")
             if menu_owner is not None:
                 menu_owner.wait(timeout=5)
-        return {"route": route, "owner": owner, "flutter": child, "rust_acknowledged_ready": True,
+        return {"route": route, "owner": owner, "flutter": child,
+                "rust_acknowledged_ready": None if route == "finder" else True,
+                "on_screen": True if probe is not None else None,
+                "survived_readiness_gate": True if route == "finder" else None,
                 "owner_quit": "cooperative CLI", "processes_released": True}
 
 def isolated_profile(work):
@@ -217,7 +238,7 @@ def isolated_profile(work):
     return env
 
 
-def system_open_smoke(candidate, applications, work, proof, source):
+def system_open_smoke(candidate, applications, work, proof, source, probe):
     metadata = applications.lstat()
     require(not applications.is_symlink() and metadata.st_uid == 0 and metadata.st_gid == 80
             and metadata.st_mode & 0o022 == 0o020, "system Applications fixture lacks root:admin group write")
@@ -237,8 +258,9 @@ def system_open_smoke(candidate, applications, work, proof, source):
         (config / "settings.toml").write_text(
             "notifications_enabled = false\nsound_enabled = false\nhistory_enabled = false\nmute_on_lock = false\n")
         Path(env["XDG_DATA_HOME"]).mkdir(mode=0o700)
-        finder = run_app(installed, env, proof / "installed-finder.log", route="finder")
-        menu = run_app(installed, env, proof / "installed-menu.log", route="menu")
+        finder = run_app(installed, env, proof / "installed-finder.log", route="finder", probe=probe)
+        (proof / "finder-result.json").write_text(json.dumps(finder, indent=2) + "\n")
+        menu = run_app(installed, env, proof / "installed-menu.log", route="menu", probe=probe)
         return [finder, menu]
 
 
@@ -248,9 +270,12 @@ def main():
     parser.add_argument("--direct-engine", type=Path)
     parser.add_argument("--proof", type=Path, required=True)
     parser.add_argument("--system-open-only", action="store_true")
+    parser.add_argument("--window-probe", type=Path)
     args = parser.parse_args()
     if not args.system_open_only and not args.direct_engine:
         parser.error("--direct-engine is required for the full installed lifecycle")
+    if args.system_open_only and not args.window_probe:
+        parser.error("--window-probe is required for the system Applications smoke")
     require(os.environ.get("RUNNER_ENVIRONMENT") == "github-hosted"
             and platform.system() == "Darwin" and os.getuid() != 0, "disposable Mac required")
     arch = "aarch64" if platform.machine() == "arm64" else platform.machine()
@@ -271,7 +296,8 @@ def main():
             command("/bin/ls", "-ldeO", applications, stdout=log)
         if args.system_open_only:
             report.update(candidate_sha256=digest(candidate),
-                          opened=system_open_smoke(candidate, applications, work, proof, source))
+                          opened=system_open_smoke(candidate, applications, work, proof, source,
+                                                   args.window_probe.resolve(strict=True)))
             report.update(status="passed", scenario="system-applications-finder-and-menu")
             return
         command("/usr/bin/curl", "--fail", "--location", "--silent", "--show-error", "--output", stable,

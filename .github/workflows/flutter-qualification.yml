@@ -32,6 +32,9 @@ on:
         default: false
   workflow_call:
     inputs:
+      startup-only:
+        type: boolean
+        default: false
       runtime-replay:
         type: boolean
         default: false
@@ -192,7 +195,7 @@ jobs:
           python3 -c 'import json,os; p=json.load(open(os.environ["RUNNER_TEMP"]+"/mcw-flutter-macos/flutter-version.json")); assert p["frameworkVersion"]=="3.47.8" and p["frameworkRevision"]=="737ba8f885dc774b53b442759999a312c9461e4e" and p["dartSdkVersion"].split()[0]=="3.13.7",p'
           flutter doctor -v 2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/flutter-doctor.log"
       - name: Check shared Rust commands ownership and settings without hardware actions
-        if: ${{ !inputs.runtime-replay }}
+        if: ${{ !inputs.startup-only && !inputs.runtime-replay }}
         run: |
           set -euo pipefail
           cargo clippy --all-targets --locked --features flutter-desktop -- -D warnings \
@@ -232,12 +235,14 @@ jobs:
         run: |
           set -euo pipefail
           flutter pub get --enforce-lockfile 2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/pub.log"
-          flutter analyze --no-pub 2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/flutter-analyze.log"
-          flutter test --no-pub 2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/flutter-tests.log"
+          if [[ '${{ inputs.startup-only }}' != true ]]; then
+            flutter analyze --no-pub 2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/flutter-analyze.log"
+            flutter test --no-pub 2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/flutter-tests.log"
+          fi
           flutter build macos --release --no-pub 2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/flutter-build.log"
           /usr/bin/ditto build/macos/Build/Products/Release/MicCamWatch.app "$RUNNER_TEMP/mcw-flutter-macos/release/MicCamWatch.app"
       - name: Build separately identified native-window instrumentation (same release sandbox)
-        if: ${{ !inputs.runtime-replay }}
+        if: ${{ !inputs.startup-only && !inputs.runtime-replay }}
         working-directory: desktop/flutter
         run: |
           set -euo pipefail
@@ -252,7 +257,7 @@ jobs:
             CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual build \
             2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/instrumented-build.log"
       - name: Build separately identified Flutter quit confirmation with native window proof
-        if: ${{ !inputs.runtime-replay }}
+        if: ${{ !inputs.startup-only && !inputs.runtime-replay }}
         working-directory: desktop/flutter
         run: |
           set -euo pipefail
@@ -267,7 +272,7 @@ jobs:
             CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual build \
             2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/quit-build.log"
       - name: Preserve complete built products before any graphical qualification
-        if: ${{ !inputs.runtime-replay }}
+        if: ${{ !inputs.startup-only && !inputs.runtime-replay }}
         run: |
           set -euo pipefail
           root="$RUNNER_TEMP/mcw-flutter-macos"
@@ -283,7 +288,7 @@ jobs:
           tar -C "$root" -czf "$root/built-products.tar.gz" built-products
           shasum -a256 "$root/built-products.tar.gz" > "$root/built-products.SHA256SUMS"
       - name: Upload frozen build proof before any graphical process can fail
-        if: ${{ !inputs.runtime-replay }}
+        if: ${{ !inputs.startup-only && !inputs.runtime-replay }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: flutter-macos-${{ matrix.architecture }}-${{ github.sha }}-built-products
@@ -305,7 +310,7 @@ jobs:
             --flutter "$root/release/MicCamWatch.app" --revision "$GITHUB_SHA" --output "$root/distribution" \
             2>&1 | tee "$root/distribution-build.log"
       - name: Exercise the installed hybrid app, whole-app rollback and removal
-        if: ${{ !inputs.runtime-replay }}
+        if: ${{ !inputs.startup-only && !inputs.runtime-replay }}
         run: |
           set -euo pipefail
           root="$RUNNER_TEMP/mcw-flutter-macos"
@@ -314,6 +319,17 @@ jobs:
           python3 -B installer/tests/macos-hybrid-installed.py "$root/distribution/miccamwatch-hybrid-macos-$arch.dmg" \
             --direct-engine target/release/mcw \
             --proof "$root/distribution/installed-lifecycle"
+      - name: Open the installed release app from LaunchServices and its operational menu
+        if: ${{ inputs.startup-only }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/mcw-flutter-macos"
+          arch="$EXPECTED_ARCH"
+          if [[ "$arch" == arm64 ]]; then arch=aarch64; fi
+          swiftc desktop/qualification/macos_entrypoint.swift -o "$root/entrypoint"
+          python3 -B installer/tests/macos-hybrid-installed.py "$root/distribution/miccamwatch-hybrid-macos-$arch.dmg" \
+            --system-open-only --window-probe "$root/entrypoint" \
+            --proof "$root/distribution/system-open"
       - name: Preserve exact macOS hybrid distribution artifacts
         if: ${{ always() && !inputs.runtime-replay }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -325,6 +341,7 @@ jobs:
             ${{ runner.temp }}/mcw-flutter-macos/distribution/**
             ${{ runner.temp }}/mcw-flutter-macos/distribution-build.log
       - name: Inspect bundle seals architectures ACLs and run owned Aqua smoke when available
+        if: ${{ !inputs.startup-only }}
         timeout-minutes: ${{ inputs.macos-replay-build-run != '' && 15 || 10 }}
         run: |
           set -euo pipefail
@@ -339,7 +356,7 @@ jobs:
             "$@" \
             2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/qualification.log"
       - name: Verify rendered Flutter quit confirmation and permanent native owner teardown
-        if: ${{ !inputs.runtime-replay || inputs.macos-replay-build-run != '' }}
+        if: ${{ !inputs.startup-only && (!inputs.runtime-replay || inputs.macos-replay-build-run != '') }}
         run: |
           set -euo pipefail
           python3 -B desktop/qualification/macos_quit.py \
@@ -348,7 +365,7 @@ jobs:
             --proof "$RUNNER_TEMP/mcw-flutter-macos/evidence/flutter-quit" \
             2>&1 | tee "$RUNNER_TEMP/mcw-flutter-macos/quit-qualification.log"
       - name: Summarize observed graphical status (never infer from a successful build)
-        if: always()
+        if: ${{ always() && !inputs.startup-only }}
         timeout-minutes: 1
         run: |
           set -euo pipefail
@@ -363,7 +380,7 @@ jobs:
             printf '\n```\n\nNo release, deploy, physical capture, Developer ID or notarization claim.\n'
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Preserve Unix modes and symlinks and verify restored bundle seals
-        if: always()
+        if: ${{ always() && !inputs.startup-only }}
         timeout-minutes: 3
         run: |
           set -euo pipefail
@@ -382,7 +399,7 @@ jobs:
             done
           fi
       - name: Preserve exact qualification logs captures and development payload identities
-        if: always()
+        if: ${{ always() && !inputs.startup-only }}
         timeout-minutes: 5
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -446,7 +463,7 @@ jobs:
             clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libstdc++-12-dev \
             libpipewire-0.3-dev libclang-dev python3 binutils libx11-dev \
             dbus-x11 xvfb xauth openbox xfce4-panel xfconf at-spi2-core libatspi2.0-0 libatk-adaptor fonts-noto-core \
-            libgl1-mesa-dri libegl1-mesa libgl1 mesa-utils \
+            libgl1-mesa-dri libegl1-mesa libgles2 libgl1 mesa-utils \
             2>&1 | tee "$RUNNER_TEMP/mcw-flutter-linux-setup/apt-install.log"
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
         if: ${{ !inputs.runtime-replay }}
@@ -497,7 +514,7 @@ jobs:
         if: ${{ !inputs.runtime-replay }}
         run: |
           set -euo pipefail
-          bash desktop/qualification/linux_hosted.sh "$MCW_LINUX_OUTPUT" \
+          MCW_STARTUP_ONLY='${{ inputs.startup-only }}' bash desktop/qualification/linux_hosted.sh "$MCW_LINUX_OUTPUT" \
             2>&1 | tee "$RUNNER_TEMP/mcw-flutter-linux-setup/build.log"
       - name: Restore exact pinned B5 baseline products without recompilation
         if: ${{ inputs.runtime-replay }}
@@ -510,6 +527,7 @@ jobs:
           python3 -B desktop/qualification/replay_products.py --platform linux \
             --root "$MCW_LINUX_OUTPUT" "${extra[@]}"
       - name: Exercise owned X11 lifecycle native SNI and safe preferences in private virtual desktop
+        if: ${{ !inputs.startup-only }}
         run: |
           set -euo pipefail
           command=(dbus-run-session -- xvfb-run -a -s '-screen 0 1280x1000x24'
@@ -528,7 +546,7 @@ jobs:
               2>&1 | tee "$RUNNER_TEMP/mcw-flutter-linux-setup/runtime.log"
           fi
       - name: Summarize observed baseline bundle and hosted desktop evidence
-        if: always()
+        if: ${{ always() && !inputs.startup-only }}
         run: |
           python3 - <<'PY'
           import json, os, pathlib
@@ -539,12 +557,23 @@ jobs:
               summary.write('## Linux x64 Ubuntu22.04 baseline qualification\n\n```json\n' + json.dumps(value, indent=2) + '\n```\n\nQualification artifact only. Xvfb/software graphics is not physical Mint/GPU qualification. No ARM, hardware-control, release or deploy claim.\n')
           PY
       - name: Exercise managed Linux install, rollback and guarded uninstall
-        if: ${{ !inputs.runtime-replay }}
+        if: ${{ !inputs.startup-only && !inputs.runtime-replay }}
         run: |
           set -euo pipefail
           bash installer/tests/linux-hybrid-hosted.sh \
             "$MCW_LINUX_OUTPUT/distribution/miccamwatch-hybrid-linux-x86_64.tar.gz" \
             "$MCW_LINUX_OUTPUT/distribution/installed-lifecycle.json"
+      - name: Open the installed x86_64 release from the real SNI menu
+        if: ${{ inputs.startup-only }}
+        run: |
+          set -euo pipefail
+          if [[ "$(uname -m)" == aarch64 ]]; then
+            sudo apt-get install -y --no-install-recommends dbus-x11 xvfb xauth openbox xfce4-panel xfconf libgl1-mesa-dri libegl1-mesa libgles2
+          fi
+          distribution="$MCW_LINUX_OUTPUT/distribution"
+          dbus-run-session -- xvfb-run -a -s '-screen 0 1280x1000x24' \
+            bash desktop/qualification/linux_candidate_smoke.sh \
+            "$distribution/miccamwatch-hybrid-linux-x86_64.tar.gz" "$GITHUB_SHA" "$distribution/startup"
       - name: Preserve complete Linux distribution and ABI evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -554,6 +583,7 @@ jobs:
           retention-days: 14
           path: |
             ${{ env.MCW_LINUX_OUTPUT }}/distribution/*.tar.gz
+            ${{ env.MCW_LINUX_OUTPUT }}/distribution/startup/**
             ${{ env.MCW_LINUX_OUTPUT }}/distribution/SHA256SUMS
             ${{ env.MCW_LINUX_OUTPUT }}/distribution/elf-abi.json
             ${{ env.MCW_LINUX_OUTPUT }}/distribution/bundle/miccamwatch-bundle.json
@@ -627,14 +657,25 @@ jobs:
         run: |
           set -euo pipefail
           python3 -B desktop/qualification/linux_b4_arm.py \
-            --sdk "$MCW_ARM_SDK/flutter" --out "$MCW_ARM_OUTPUT"
+            --sdk "$MCW_ARM_SDK/flutter" --out "$MCW_ARM_OUTPUT" ${{ inputs.startup-only && '--startup-only' || '' }}
       - name: Exercise managed Linux install, rollback and guarded uninstall
-        if: ${{ !inputs.runtime-replay }}
+        if: ${{ !inputs.startup-only && !inputs.runtime-replay }}
         run: |
           set -euo pipefail
           bash installer/tests/linux-hybrid-hosted.sh \
             "$MCW_ARM_OUTPUT/distribution/miccamwatch-hybrid-linux-aarch64.tar.gz" \
             "$MCW_ARM_OUTPUT/distribution/installed-lifecycle.json"
+      - name: Open the installed aarch64 release from the real SNI menu
+        if: ${{ inputs.startup-only }}
+        run: |
+          set -euo pipefail
+          if [[ "$(uname -m)" == aarch64 ]]; then
+            sudo apt-get install -y --no-install-recommends dbus-x11 xvfb xauth openbox xfce4-panel xfconf libgl1-mesa-dri libegl1-mesa libgles2
+          fi
+          distribution="$MCW_ARM_OUTPUT/distribution"
+          dbus-run-session -- xvfb-run -a -s '-screen 0 1280x1000x24' \
+            bash desktop/qualification/linux_candidate_smoke.sh \
+            "$distribution/miccamwatch-hybrid-linux-aarch64.tar.gz" "$GITHUB_SHA" "$distribution/startup"
       - name: Preserve complete Linux distribution and ABI evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -644,13 +685,14 @@ jobs:
           retention-days: 14
           path: |
             ${{ env.MCW_ARM_OUTPUT }}/distribution/*.tar.gz
+            ${{ env.MCW_ARM_OUTPUT }}/distribution/startup/**
             ${{ env.MCW_ARM_OUTPUT }}/distribution/SHA256SUMS
             ${{ env.MCW_ARM_OUTPUT }}/distribution/elf-abi.json
             ${{ env.MCW_ARM_OUTPUT }}/distribution/bundle/miccamwatch-bundle.json
             ${{ env.MCW_ARM_OUTPUT }}/distribution/installed-lifecycle.json
             ${{ env.MCW_ARM_OUTPUT }}/distribution/hosted-install.log
       - name: Preserve provenance logs native ELFs and qualification-only package
-        if: always()
+        if: ${{ always() && !inputs.startup-only }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: flutter-linux-arm64-native-${{ github.sha }}

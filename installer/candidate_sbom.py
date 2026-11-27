@@ -4,6 +4,7 @@ import argparse
 import json
 from pathlib import Path
 import re
+from hybrid_payload import release_metadata
 
 
 FRAMEWORK = "737ba8f885dc774b53b442759999a312c9461e4e"
@@ -24,14 +25,15 @@ def enrich(path, revision):
             raise ValueError(f"Missing lockfile package catalog: {kind}")
 
     source = f"https://github.com/Roman-Cuisset/miccamwatch/tree/{revision}"
+    package_version, _ = release_metadata()
     components = (
-        ("rust", "MicCamWatch Rust monitor and CLI", "0.22.0", source, "MIT",
+        ("rust", "MicCamWatch Rust monitor and CLI", package_version, source, "MIT",
          "mcw.exe on Windows and mcw on GNU/Linux and macOS"),
-        ("win-tray", "MicCamWatch native Windows tray", "0.22.0", source, "MIT",
+        ("win-tray", "MicCamWatch native Windows tray", package_version, source, "MIT",
          "mcw-tray.exe in Windows MSI and ZIP"),
-        ("mac-native", "MicCamWatch native macOS launcher and notification helper", "0.22.0",
+        ("mac-native", "MicCamWatch native macOS launcher and notification helper", package_version,
          source, "MIT", "AppKit launcher and MicCamWatchHelper.app in the sealed macOS bundle"),
-        ("linux-helper", "MicCamWatch Linux camera helper", "0.22.0", source, "MIT",
+        ("linux-helper", "MicCamWatch Linux camera helper", package_version, source, "MIT",
          "mcw-camera-helper and its install script and Polkit policy"),
         ("framework", "Flutter framework", "3.47.8",
          f"https://github.com/flutter/flutter/tree/{FRAMEWORK}", "NOASSERTION",

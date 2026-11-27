@@ -20,6 +20,19 @@ export CARGO_TARGET_DIR="$target"
 [[ $(rustc --version) == rustc\ 1.98.1\ * ]] || { echo 'Wrong Rust SDK' >&2; exit 1; }
 flutter --version --machine > "$out/flutter-sdk.json"
 python3 -c 'import json,os; from pathlib import Path; p=Path(os.environ["MCW_B3_OUTPUT"]); v=json.loads((p/"flutter-sdk.json").read_text()); assert v["frameworkVersion"]=="3.47.8" and v["frameworkRevision"]=="737ba8f885dc774b53b442759999a312c9461e4e",v'
+build_distribution() {
+  cargo build --locked --release --features packaged-desktop,linux-camera-helper --bin mcw --bin mcw-camera-helper
+  python3 -B installer/hybrid_payload.py --target linux-x86_64 --native "$CARGO_TARGET_DIR/release" \
+    --flutter desktop/flutter/build/linux/x64/release/bundle --revision "$GITHUB_SHA" --output "$out/distribution"
+  python3 -B installer/hybrid_linux_abi.py --arch x86_64 "$out/distribution/bundle" --receipt "$out/distribution/elf-abi.json"
+}
+if [[ ${MCW_STARTUP_ONLY:-false} == true ]]; then
+  {
+    (cd desktop/flutter && flutter pub get --enforce-lockfile && flutter build linux --release --no-pub)
+    build_distribution
+  } 2>&1 | tee "$out/build.log"
+  exit 0
+fi
 {
   cargo clippy --all-targets --locked --features flutter-desktop -- -D warnings
   cargo test --lib --locked --features flutter-desktop frontends::desktop
@@ -62,8 +75,5 @@ PY
   python3 desktop/qualification/linux.py check --prefix "$out/bundle" > "$out/runtime-preflight.json"
   tar -C "$out" -czf "$out/miccamwatch-b3-linux-x64-qualification.tar.gz" bundle
   sha256sum "$out/miccamwatch-b3-linux-x64-qualification.tar.gz" > "$out/archive.SHA256SUMS"
-  cargo build --locked --release --features packaged-desktop,linux-camera-helper --bin mcw --bin mcw-camera-helper
-  python3 -B installer/hybrid_payload.py --target linux-x86_64 --native "$CARGO_TARGET_DIR/release" \
-    --flutter desktop/flutter/build/linux/x64/release/bundle --revision "$GITHUB_SHA" --output "$out/distribution"
-  python3 -B installer/hybrid_linux_abi.py --arch x86_64 "$out/distribution/bundle" --receipt "$out/distribution/elf-abi.json"
+  build_distribution
 } 2>&1 | tee "$out/build.log"

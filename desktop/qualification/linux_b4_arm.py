@@ -98,6 +98,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--sdk', type=Path, required=True)
     parser.add_argument('--out', type=Path, required=True)
+    parser.add_argument('--startup-only', action='store_true',
+                        help='Build only the audited distribution and skip development bundles and suites')
     parser.add_argument('--bootstrap-receipt', type=Path,
                         help='Defaults to SDK parent/bootstrap-receipt.json')
     args = parser.parse_args()
@@ -169,13 +171,31 @@ def main():
     revision = run(['git', 'rev-parse', 'HEAD'], cwd=repo).strip()
     status = run(['git', 'status', '--porcelain'], cwd=repo)
     save(out / 'source-receipt.json', {'source_revision': revision, 'source_status': status})
+    desktop = repo / 'desktop/flutter'
+    distribution = out / 'distribution'
+
+    def build_distribution():
+        build(['cargo', 'build', '--locked', '--release', '--features', 'packaged-desktop,linux-camera-helper',
+               '--bin', 'mcw', '--bin', 'mcw-camera-helper'], out / 'cargo-distribution.log', repo, env)
+        build([sys.executable, '-B', repo / 'installer/hybrid_payload.py', '--target', 'linux-aarch64',
+               '--native', out / 'cargo-target/release', '--flutter', desktop / 'build/linux/arm64/release/bundle',
+               '--revision', revision, '--output', distribution], out / 'distribution-build.log', repo, env)
+        build([sys.executable, '-B', repo / 'installer/hybrid_linux_abi.py', '--arch', 'aarch64',
+               distribution / 'bundle', '--receipt', distribution / 'elf-abi.json'],
+              out / 'distribution-abi.log', repo, env)
+
+    if args.startup_only:
+        build([flutter, 'pub', 'get', '--enforce-lockfile'], out / 'flutter-pub.log', desktop, env)
+        build([flutter, 'build', 'linux', '--release', '--no-pub', '--target-platform=linux-arm64'],
+              out / 'flutter-build.log', desktop, env)
+        build_distribution()
+        return
     build(['cargo', 'clippy', '--all-targets', '--locked', '--features', 'flutter-desktop', '--', '-D', 'warnings'], out / 'cargo-clippy.log', repo, env)
     for name in ('frontends::desktop', 'watcher::enforcement::', 'platform::linux::control::tests',
                  'privacy::', 'history::', 'autostart::tests', 'settings::tests'):
         build(['cargo', 'test', '--lib', '--locked', '--features', 'flutter-desktop', name],
               out / ('rust-tests-' + name.replace('::', '-') + '.log'), repo, env)
     build(['cargo', 'build', '--locked', '--release', '--features', 'flutter-desktop', '--bin', 'mcw'], out / 'cargo-build.log', repo, env)
-    desktop = repo / 'desktop/flutter'
     build([flutter, 'pub', 'get', '--enforce-lockfile'], out / 'flutter-pub.log', desktop, env)
     build([flutter, 'analyze', '--no-pub'], out / 'flutter-analyze.log', desktop, env)
     build([flutter, 'test', '--no-pub'], out / 'flutter-tests.log', desktop, env)
@@ -211,15 +231,7 @@ def main():
     with tarfile.open(archive, 'w:gz') as stream:
         stream.add(prefix, arcname='bundle')
     (out / 'archive.SHA256SUMS').write_text(f'{b3.sha(archive)}  {archive.name}\n')
-    build(['cargo', 'build', '--locked', '--release', '--features', 'packaged-desktop,linux-camera-helper',
-           '--bin', 'mcw', '--bin', 'mcw-camera-helper'], out / 'cargo-distribution.log', repo, env)
-    distribution = out / 'distribution'
-    build([sys.executable, '-B', repo / 'installer/hybrid_payload.py', '--target', 'linux-aarch64',
-           '--native', out / 'cargo-target/release', '--flutter', desktop / 'build/linux/arm64/release/bundle',
-           '--revision', revision, '--output', distribution], out / 'distribution-build.log', repo, env)
-    build([sys.executable, '-B', repo / 'installer/hybrid_linux_abi.py', '--arch', 'aarch64',
-           distribution / 'bundle', '--receipt', distribution / 'elf-abi.json'],
-          out / 'distribution-abi.log', repo, env)
+    build_distribution()
     print(json.dumps({'bundle': str(prefix), 'archive': str(archive), 'runtime_executed': False}, indent=2))
 
 

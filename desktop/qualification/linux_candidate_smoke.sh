@@ -1,15 +1,18 @@
 #!/usr/bin/env bash
-# Test the installed, unmodified ARM64 release archive on a disposable desktop.
+# Test the installed release archive and the actual SNI menu on a disposable desktop.
 set -euo pipefail
 umask 077
-[[ "$RUNNER_ENVIRONMENT" == github-hosted && $(uname -m) == aarch64 && $(id -u) != 0 ]]
+[[ "$RUNNER_ENVIRONMENT" == github-hosted && $(id -u) != 0 ]]
+arch=$(uname -m)
+[[ "$arch" == aarch64 || "$arch" == x86_64 ]]
 [[ $# == 3 && -n "$DISPLAY" && -n "$DBUS_SESSION_BUS_ADDRESS" ]]
 archive=$(realpath "$1")
 revision=$2
 proof=$(realpath -m "$3")
 [[ "$revision" =~ ^[0-9a-f]{40}$ && ! -e "$proof" ]]
 mkdir "$proof"
-fixture=$(mktemp -d "$HOME/mcw-arm-gui.XXXXXXXX")
+fixture=$(mktemp -d "$HOME/mcw-release-gui.XXXXXXXX")
+export LANG=C LC_ALL=C
 export XDG_CONFIG_HOME="$fixture/config" XDG_DATA_HOME="$fixture/data"
 export XDG_CACHE_HOME="$fixture/cache" XDG_STATE_HOME="$fixture/state" XDG_RUNTIME_DIR="$fixture/runtime"
 mkdir -p "$XDG_CONFIG_HOME/MicCamWatch" "$XDG_DATA_HOME" "$XDG_CACHE_HOME" "$XDG_STATE_HOME" "$XDG_RUNTIME_DIR"
@@ -22,17 +25,29 @@ digest=${digest%% *}
 python3 -B installer/hybrid_linux_install.py --root "$fixture/install" install "$archive" --sha256 "$digest" \
     | tee "$proof/install.log"
 payload="$fixture/install/bundle"
-python3 -B - "$payload/miccamwatch-bundle.json" "$revision" <<'PY'
+python3 -B - "$payload/miccamwatch-bundle.json" "$revision" "$arch" <<'PY'
 import json, sys
+sys.path.insert(0, "installer")
+from hybrid_payload import release_metadata
 with open(sys.argv[1]) as stream:
     manifest = json.load(stream)
+version, ipc = release_metadata()
 if (manifest["revision"], manifest["target"], manifest["version"], manifest["ipc"]) != (
-    sys.argv[2], "linux-aarch64", "0.22.0", 10
+    sys.argv[2], "linux-" + sys.argv[3], version, ipc
 ):
-    raise ValueError("Unexpected installed ARM64 candidate")
+    raise ValueError("Unexpected installed Linux candidate")
 PY
 engine="$payload/mcw"
 frontend="$payload/desktop/miccamwatch_desktop"
+{
+    ldconfig -p | grep -E 'lib(EGL|GLESv2)\.so\.'
+    ldd "$engine"
+    ldd "$frontend"
+    ldd "$payload/desktop/lib/libflutter_linux_gtk.so"
+} > "$proof/dependencies.log"
+grep -Fq 'libEGL.so.1' "$proof/dependencies.log"
+grep -Fq 'libGLESv2.so.2' "$proof/dependencies.log"
+if grep -Fq 'not found' "$proof/dependencies.log"; then exit 1; fi
 cc desktop/qualification/linux_xwindow.c -O2 -Wall -Wextra -Werror -lX11 -o "$fixture/xwindow"
 openbox > "$proof/openbox.log" 2>&1 &
 manager=$!
@@ -64,11 +79,13 @@ for attempt in $(seq 1 40); do
     sleep 0.5
 done
 [[ -s "$proof/sni-ready.log" ]]
-"$engine" tray open > "$proof/owner.log" 2>&1 &
+"$engine" tray run > "$proof/owner.log" 2>&1 &
 owner=$!
 
 owned_child() {
-    for pid in $(cat "/proc/$owner/task/$owner/children" 2>/dev/null); do
+    local pids
+    pids=$(cat "/proc/$owner"/task/*/children 2>/dev/null || true)
+    for pid in $pids; do
         if [[ $(readlink "/proc/$pid/exe" 2>/dev/null) == "$frontend" ]]; then
             printf '%s\n' "$pid"
         fi
@@ -76,6 +93,27 @@ owned_child() {
 }
 
 for cycle in 1 2; do
+    [[ -z "$(owned_child)" ]]
+    python3 -B - "$owner" > "$proof/menu-$cycle.json" <<'PY'
+import os, re, subprocess, sys, time, json
+sys.path.insert(0, "desktop/qualification")
+from linux import sni_owned
+pid = int(sys.argv[1])
+for _ in range(40):
+    item = sni_owned(pid, os.environ)
+    if item is not None:
+        break
+    time.sleep(.25)
+else:
+    raise RuntimeError("Installed owner did not register its StatusNotifierItem")
+labels = re.findall(r"\((\d+), \{[^{}]*'label': <'Open MicCamWatch…'>", item["raw_menu"])
+if len(labels) != 1:
+    raise RuntimeError("Installed native menu did not expose exactly one Open action")
+subprocess.run(["gdbus", "call", "--session", "--dest", item["service"],
+                "--object-path", item["menu_path"], "--method", "com.canonical.dbusmenu.Event",
+                labels[0], "clicked", "<0>", "0"], check=True, capture_output=True, timeout=5)
+print(json.dumps({"pid": pid, "action": "Open MicCamWatch…", "menu_id": int(labels[0])}))
+PY
     child=
     for attempt in $(seq 1 80); do
         [[ $(readlink "/proc/$owner/exe" 2>/dev/null) == "$engine" ]] || break
@@ -97,10 +135,9 @@ for cycle in 1 2; do
     [[ ! -e "/proc/$child" && $(readlink "/proc/$owner/exe") == "$engine" ]]
     "$engine" tray status | tee "$proof/tray-after-close-$cycle.log"
     grep -Fx running "$proof/tray-after-close-$cycle.log"
-    if [[ "$cycle" == 1 ]]; then timeout 20 "$engine" tray open; fi
 done
 timeout 20 "$engine" tray stop
 wait "$owner"
 # Package removal is qualified separately on the fresh native container.
 # This hosted image's /usr/share ownership is rejected by the root helper guard.
-printf 'status=passed\nsource=%s\narchive_sha256=%s\ncycles=2\nrenderer=hosted-Xvfb\n' "$revision" "$digest" > "$proof/result.txt"
+printf 'status=passed\nsource=%s\narchive_sha256=%s\ncycles=2\nentrypoint=native-SNI-menu\nrenderer=hosted-Xvfb\n' "$revision" "$digest" > "$proof/result.txt"

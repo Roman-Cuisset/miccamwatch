@@ -69,7 +69,7 @@ def collect(source, output, revision):
         raise ValueError("Candidate source must be a full Git SHA")
     version, ipc = release_metadata()
     if ipc != 10:
-        raise ValueError("The v0.22.0 package set requires IPC 10")
+        raise ValueError("The hybrid package set requires IPC 10")
     files = {}
     for artifact, (target, suffixes) in PACKAGES.items():
         root = source / f"miccamwatch-hybrid-{artifact}-{revision}"
