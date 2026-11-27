@@ -22,6 +22,7 @@ on:
           - flutter-windows
           - release-candidate
           - release-candidate-focused
+          - release-candidate-menu-replay
           - release-candidate-arm-runtime
           - release-candidate-windows-startup
       candidate-build-run:
@@ -289,6 +290,75 @@ jobs:
           retention-days: 30
           path: dist/*
 
+  release-candidate-menu-replay:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.native-platform == 'release-candidate-menu-replay' }}
+    name: Replay installed menu on ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-22.04, target: linux-x86_64, file: linux-x86_64.tar.gz }
+          - { runner: ubuntu-22.04-arm, target: linux-aarch64, file: linux-aarch64.tar.gz }
+          - { runner: macos-15-intel, target: macos-x86_64, file: macos-x86_64.dmg }
+          - { runner: macos-15, target: macos-arm64, file: macos-aarch64.dmg }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    env:
+      BUILD_RUN: ${{ inputs.candidate-build-run }}
+      BUILD_SHA: ${{ inputs.candidate-build-sha }}
+      TARGET: ${{ matrix.target }}
+      PACKAGE: miccamwatch-hybrid-${{ matrix.file }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Fetch only the named candidate from its original source run
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "$RUNNER_ENVIRONMENT" == github-hosted && "$BUILD_RUN" =~ ^[0-9]+$ && "$BUILD_SHA" =~ ^[a-f0-9]{40}$ ]]
+          gh run view "$BUILD_RUN" --repo "$GITHUB_REPOSITORY" --json headSha,headBranch,event,workflowName |
+            jq -e --arg sha "$BUILD_SHA" '.headSha == $sha and .headBranch == "work/qualify-0222" and .event == "workflow_dispatch" and .workflowName == "CI"'
+          root="$RUNNER_TEMP/mcw-entrypoint-replay"
+          mkdir -m 700 "$root"
+          gh run download "$BUILD_RUN" --repo "$GITHUB_REPOSITORY" --name "miccamwatch-hybrid-$TARGET-$BUILD_SHA" --dir "$root"
+          cd "$root"
+          [[ -f "$PACKAGE" && -f SHA256SUMS ]]
+          shasum -a 256 -c SHA256SUMS
+      - name: Open the signed macOS app from Finder and select the actual native menu item
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/mcw-entrypoint-replay"
+          swiftc desktop/qualification/macos_entrypoint.swift -o "$root/entrypoint"
+          python3 -B installer/tests/macos-hybrid-installed.py "$root/$PACKAGE" \
+            --system-open-only --window-probe "$root/entrypoint" --expected-revision "$BUILD_SHA" \
+            --proof "$RUNNER_TEMP/mcw-entrypoint-proof"
+      - name: Open the Linux app by the installed menu action
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            dbus-x11 xvfb xauth openbox xfce4-panel xfconf at-spi2-core python3-gi \
+            libgtk-3-0 libx11-dev libpipewire-0.3-0 libgl1-mesa-dri libegl1-mesa libgles2
+          dbus-run-session -- xvfb-run -a -s '-screen 0 1280x1000x24' \
+            bash desktop/qualification/linux_candidate_smoke.sh \
+            "$RUNNER_TEMP/mcw-entrypoint-replay/$PACKAGE" "$BUILD_SHA" "$RUNNER_TEMP/mcw-entrypoint-proof"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: candidate-entrypoint-${{ matrix.target }}-${{ inputs.candidate-build-sha }}
+          path: ${{ runner.temp }}/mcw-entrypoint-proof
+          if-no-files-found: warn
+
   release-candidate-arm-runtime:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.native-platform == 'release-candidate-arm-runtime' }}
     runs-on: ubuntu-22.04-arm
@@ -317,7 +387,7 @@ jobs:
           set -euo pipefail
           [[ "$RUNNER_ENVIRONMENT" == github-hosted && $(uname -m) == aarch64 ]]
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends dbus-x11 xvfb xauth openbox xfce4-panel xfconf at-spi2-core libgtk-3-0 libx11-dev libpipewire-0.3-0 libgl1-mesa-dri libegl1-mesa libgles2
+          sudo apt-get install -y --no-install-recommends dbus-x11 xvfb xauth openbox xfce4-panel xfconf at-spi2-core python3-gi libgtk-3-0 libx11-dev libpipewire-0.3-0 libgl1-mesa-dri libegl1-mesa libgles2
           dbus-run-session -- xvfb-run -a -s '-screen 0 1280x1000x24' \
             bash desktop/qualification/linux_candidate_smoke.sh \
             "$RUNNER_TEMP/mcw-arm-stage5-input/miccamwatch-hybrid-linux-aarch64.tar.gz" \
@@ -360,7 +430,7 @@ jobs:
           path: ${{ runner.temp }}/native-windows-profiles
 
   windows:
-    if: ${{ !inputs.native-only && !inputs.windows-native-profiles-only && inputs.native-platform != 'flutter' && inputs.native-platform != 'flutter-windows' && inputs.native-platform != 'release-candidate' && inputs.native-platform != 'release-candidate-focused' && inputs.native-platform != 'release-candidate-arm-runtime' && inputs.native-platform != 'release-candidate-windows-startup' }}
+    if: ${{ !inputs.native-only && !inputs.windows-native-profiles-only && inputs.native-platform != 'flutter' && inputs.native-platform != 'flutter-windows' && inputs.native-platform != 'release-candidate' && inputs.native-platform != 'release-candidate-focused' && inputs.native-platform != 'release-candidate-menu-replay' && inputs.native-platform != 'release-candidate-arm-runtime' && inputs.native-platform != 'release-candidate-windows-startup' }}
     runs-on: windows-latest
     permissions:
       contents: read
@@ -516,7 +586,7 @@ jobs:
           path: ${{ runner.temp }}/windows-application-proof
 
   portable:
-    if: ${{ inputs.native-platform != 'windows' && inputs.native-platform != 'flutter' && inputs.native-platform != 'flutter-windows' && inputs.native-platform != 'release-candidate' && inputs.native-platform != 'release-candidate-focused' && inputs.native-platform != 'release-candidate-arm-runtime' && inputs.native-platform != 'release-candidate-windows-startup' }}
+    if: ${{ inputs.native-platform != 'windows' && inputs.native-platform != 'flutter' && inputs.native-platform != 'flutter-windows' && inputs.native-platform != 'release-candidate' && inputs.native-platform != 'release-candidate-focused' && inputs.native-platform != 'release-candidate-menu-replay' && inputs.native-platform != 'release-candidate-arm-runtime' && inputs.native-platform != 'release-candidate-windows-startup' }}
     strategy:
       fail-fast: false
       matrix:

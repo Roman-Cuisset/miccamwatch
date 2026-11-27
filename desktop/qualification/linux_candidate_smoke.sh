@@ -94,8 +94,9 @@ owned_child() {
 
 for cycle in 1 2; do
     [[ -z "$(owned_child)" ]]
-    python3 -B - "$owner" > "$proof/menu-$cycle.json" <<'PY'
-import os, re, subprocess, sys, time, json
+    /usr/bin/python3 -B - "$owner" > "$proof/menu-$cycle.json" <<'PY'
+import os, sys, time, json
+from gi.repository import Gio, GLib
 sys.path.insert(0, "desktop/qualification")
 from linux import sni_owned
 pid = int(sys.argv[1])
@@ -106,13 +107,21 @@ for _ in range(40):
     time.sleep(.25)
 else:
     raise RuntimeError("Installed owner did not register its StatusNotifierItem")
-labels = re.findall(r"\((\d+), \{[^{}]*'label': <'Open MicCamWatch…'>", item["raw_menu"])
-if len(labels) != 1:
-    raise RuntimeError("Installed native menu did not expose exactly one Open action")
-subprocess.run(["gdbus", "call", "--session", "--dest", item["service"],
-                "--object-path", item["menu_path"], "--method", "com.canonical.dbusmenu.Event",
-                labels[0], "clicked", "<0>", "0"], check=True, capture_output=True, timeout=5)
-print(json.dumps({"pid": pid, "action": "Open MicCamWatch…", "menu_id": int(labels[0])}))
+bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+def call(method, args, reply=None):
+    return bus.call_sync(item["service"], item["menu_path"], "com.canonical.dbusmenu",
+                         method, args, reply, Gio.DBusCallFlags.NONE, 5000, None)
+
+layout = call("GetLayout", GLib.Variant("(iias)", (0, 1, [])),
+              GLib.VariantType.new("(u(ia{sv}av))")).unpack()[1]
+labels = [(row[0], row[1].get("label")) for row in layout[2]]
+# This is the first item in LinuxTray::menu, populated from the product's
+# localized Open label. Reject any unrelated or duplicate item.
+matches = [ident for ident, label in labels if label == "Open MicCamWatch…"]
+if len(matches) != 1 or not labels or matches[0] != labels[0][0]:
+    raise RuntimeError(f"Installed native Open action not found: {labels!r}")
+call("Event", GLib.Variant("(isvu)", (matches[0], "clicked", GLib.Variant("i", 0), 0)))
+print(json.dumps({"pid": pid, "action": "Open MicCamWatch…", "menu_id": matches[0]}))
 PY
     child=
     for attempt in $(seq 1 80); do

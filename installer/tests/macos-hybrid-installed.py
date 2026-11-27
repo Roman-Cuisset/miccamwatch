@@ -195,11 +195,19 @@ def run_app(app, env, proof, route="direct", probe=None):
                                               stdout=log, stderr=subprocess.STDOUT)
                 until(lambda: "statusItem registered visible=true" in proof.read_text(errors="replace"),
                       "AppKit menu did not register")
-                children = [(pid, path) for pid, parent, path in processes() if parent == menu_owner.pid]
-                require(not any(path == flutter for _, path in children), "Background tray already opened Flutter")
-                helpers = [(pid, path) for pid, path in children if path.name == "MicCamWatchHelper"]
-                require(len(helpers) == 1, "No unique owned AppKit menu host")
-                helper_pid, helper_path = helpers[0]
+                def menu_helper():
+                    children = [(pid, path) for pid, parent, path in processes() if parent == menu_owner.pid]
+                    require(not any(path == flutter for _, path in children), "Background tray already opened Flutter")
+                    helpers = []
+                    for pid, path in children:
+                        if path.name != "MicCamWatchHelper":
+                            continue
+                        result = subprocess.run(["/bin/ps", "-p", str(pid), "-o", "args="],
+                                                capture_output=True, text=True, timeout=3)
+                        if result.returncode == 0 and result.stdout.strip() == f"{path} desktop":
+                            helpers.append((pid, path))
+                    return helpers[0] if len(helpers) == 1 else False
+                helper_pid, helper_path = until(menu_helper, "No unique persistent AppKit menu host")
                 embedded = app / "Contents/Helpers/MicCamWatchHelper.app/Contents/MacOS/MicCamWatchHelper"
                 require(digest(helper_path) == digest(embedded), "Owned AppKit host bytes differ")
                 command(probe, "menu", helper_pid, helper_path)
@@ -271,6 +279,7 @@ def main():
     parser.add_argument("--proof", type=Path, required=True)
     parser.add_argument("--system-open-only", action="store_true")
     parser.add_argument("--window-probe", type=Path)
+    parser.add_argument("--expected-revision", help="Exact source SHA for replaying existing package bytes")
     args = parser.parse_args()
     if not args.system_open_only and not args.direct_engine:
         parser.error("--direct-engine is required for the full installed lifecycle")
@@ -284,7 +293,8 @@ def main():
     work = Path(tempfile.mkdtemp(prefix="mcw-hybrid-", dir=Path.home())).resolve()
     stable = work / "stable.dmg"
     candidate = args.dmg.resolve(strict=True)
-    source = os.environ["GITHUB_SHA"]
+    source = args.expected_revision or os.environ["GITHUB_SHA"]
+    require(re.fullmatch(r"[a-f0-9]{40}", source), "exact package source revision required")
     report = {"status": "failed", "source": source, "target": arch}
     try:
         applications = Path("/Applications")
