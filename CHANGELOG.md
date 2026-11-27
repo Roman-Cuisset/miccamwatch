@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.22.2 — 2026-11-27
+
+- Open the packaged Flutter window from Finder and the macOS menu on Intel and Apple Silicon.
+- Reunite Windows, Linux and macOS releases under one stable version while preserving the Windows v0.22.1 fix.
+
+[Release notes and limits](docs/RELEASE_0.22.2_NOTES.md).
+
 ## v0.22.1
 
 - Fixed Windows Flutter startup when MicCamWatch runs from the tray or a

@@ -81,7 +81,7 @@
       <p class="small-text">{{ home.p.small-text }}</p>
       <nav class="os-tabs" aria-label="{{@ home.aria-label.os-tabs }}"><a href="#windows" data-os="windows">{{ home.a.windows-x64 }}</a><a href="#linux" data-os="linux">{{ home.a.linux-x64 }}</a><a href="#macos" data-os="macos">{{ home.a.macos-arm-intel }}</a></nav>
       <div class="os-panels">
-        <section class="os-panel" id="windows" aria-labelledby="windows-title"><div class="panel-heading"><h3 id="windows-title">{{ home.h3.windows-title }}</h3><span class="badge">v__MCW_WINDOWS_VERSION__ · {{ home.text.badge-2 }}</span></div><p>{{ home.hybrid.win }}</p><div class="button-row"><a class="button" href="https://github.com/Roman-Cuisset/miccamwatch/releases/download/v__MCW_WINDOWS_VERSION__/miccamwatch-hybrid-windows-x86_64.msi">{{ home.a.button-2 }}</a><a class="button button-secondary" href="https://github.com/Roman-Cuisset/miccamwatch/releases/download/v__MCW_WINDOWS_VERSION__/miccamwatch-hybrid-windows-x86_64.zip">{{ home.a.button-button-secondary-2 }}</a></div><p class="small-text">{{ home.hybrid.zip }}</p><div class="button-row"><a class="button button-secondary" href="https://github.com/Roman-Cuisset/miccamwatch/releases/download/v__MCW_WINDOWS_VERSION__/SHA256SUMS">SHA256SUMS</a><a class="button button-secondary" href="https://github.com/Roman-Cuisset/miccamwatch/releases/download/v__MCW_WINDOWS_VERSION__/windows-build-provenance.json">{{ home.hybrid.windowsprovenance }}</a></div><div class="code-block"><pre><code id="windows-check">mcw --version
+        <section class="os-panel" id="windows" aria-labelledby="windows-title"><div class="panel-heading"><h3 id="windows-title">{{ home.h3.windows-title }}</h3><span class="badge">v__MCW_WINDOWS_VERSION__ · {{ home.text.badge-2 }}</span></div><p>{{ home.hybrid.win }}</p><div class="button-row"><a class="button" href="https://github.com/Roman-Cuisset/miccamwatch/releases/download/v__MCW_WINDOWS_VERSION__/miccamwatch-hybrid-windows-x86_64.msi">{{ home.a.button-2 }}</a><a class="button button-secondary" href="https://github.com/Roman-Cuisset/miccamwatch/releases/download/v__MCW_WINDOWS_VERSION__/miccamwatch-hybrid-windows-x86_64.zip">{{ home.a.button-button-secondary-2 }}</a></div><p class="small-text">{{ home.hybrid.zip }}</p><div class="button-row"><a class="button button-secondary" href="https://github.com/Roman-Cuisset/miccamwatch/releases/download/v__MCW_WINDOWS_VERSION__/SHA256SUMS">SHA256SUMS</a><a class="button button-secondary" href="#attest-command">{{ home.hybrid.windowsprovenance }}</a></div><div class="code-block"><pre><code id="windows-check">mcw --version
 mcw doctor
 mcw status --lang __MCW_LANG__
 mcw top</code></pre><button type="button" class="copy-button" data-copy="windows-check" hidden>{{ home.button.copy-button-2 }}</button></div><aside class="inline-warning">{{ home.aside.inline-warning }}</aside></section>
@@ -112,8 +112,9 @@ python3 miccamwatch-v__MCW_VERSION__/installer/hybrid_linux_install.py \
         <p>{{ home.p.les-attestations-github-renseignent-la-provenance-de-build }}</p>
         <div class="code-block"><pre><code id="attest-command">gh attestation verify ./miccamwatch-hybrid-linux-x86_64.tar.gz \
   --repo Roman-Cuisset/miccamwatch \
-  --signer-workflow Roman-Cuisset/miccamwatch/.github/workflows/ci.yml \
-  --source-ref refs/heads/work/flutter-hybrid-0220 \
+  --signer-workflow Roman-Cuisset/miccamwatch/.github/workflows/publish-0222.yml \
+  --source-ref refs/heads/work/qualify-0222 \
+  --predicate-type https://github.com/Roman-Cuisset/miccamwatch/release-assembly/v1 \
   --source-digest __MCW_ASSEMBLY__ \
   --signer-digest __MCW_ASSEMBLY__ \
   --deny-self-hosted-runners</code></pre><button type="button" class="copy-button" data-copy="attest-command" hidden>{{ home.button.copy-button-6 }}</button></div>

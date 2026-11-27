@@ -86,8 +86,7 @@ test("theme and platform versions are present in all seven catalogs", () => {
     }
     const page = localizedPage(template, current, "index.html");
     const announcement = page.split('class="upcoming shell"')[1].split("</section>")[0];
-    assert.match(announcement, /Windows v__MCW_WINDOWS_VERSION__/);
-    assert.match(announcement, /macOS v__MCW_VERSION__/);
+    assert.match(announcement, /v__MCW_VERSION__.*Windows.*Linux.*macOS/);
     assert.match(announcement, /Flutter.*|.*Flutter/);
     assert.deepEqual([...announcement.matchAll(/href="([^"]*)"/g)].map((match) => match[1]), ["#installer"]);
     const downloads = [...page.matchAll(/href="[^"]*\/download\/v([^/]+)\/(miccamwatch-hybrid-[^"]+)"/g)];

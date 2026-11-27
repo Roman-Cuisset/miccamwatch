@@ -40,16 +40,15 @@ screenshots of the 0.21.0 windows. Their
 
 | Channel | What is available |
 | --- | --- |
-| **Windows x64: [v0.22.1](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.22.1)** | Corrective release for Flutter startup and Windows tray translations. |
-| **Linux and macOS: [v0.22.0](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.22.0)** | Complete hybrid packages for Linux x64/ARM64 and macOS Apple Silicon/Intel. |
+| **[v0.22.2](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.22.2)** | Windows x64, Linux x64/ARM64, and macOS Apple Silicon/Intel. |
 | **Previous release: [v0.21.0](https://github.com/Roman-Cuisset/miccamwatch/releases/tag/v0.21.0)** | Native Win32, GTK and AppKit consultation windows. |
 
 The consultation window runs in a separate Flutter process. Rust owns
 monitoring, controls, the tray and local data. Closing the window leaves the
 tray and monitor running. When upgrading from v0.21.0, use the per-user MSI
 or replace the complete archive or application bundle for your system.
-[Release notes](docs/RELEASE_0.22.0_NOTES.md) ·
-[Qualification and source provenance](docs/HYBRID_STAGE5_RELEASE_CANDIDATE.md).
+[Release notes](docs/RELEASE_0.22.2_NOTES.md) ·
+[Qualification and source provenance](https://github.com/Roman-Cuisset/miccamwatch/actions/runs/45957355443).
 
 ## Features
 
@@ -66,7 +65,7 @@ media recorder. Runtime requirements and permissions differ by platform.
 
 ## Supported Operating Systems
 
-The following platforms are supported in v0.22.0:
+The following platforms are supported in v0.22.2:
 
 | Platform | Monitoring | Controls and prerequisites |
 | --- | --- | --- |
@@ -87,11 +86,10 @@ See [platform limits](docs/USAGE.md#observation-and-control-limits).
 
 ### Windows — MSI or portable ZIP
 
-Download the [v0.22.1 MSI](https://github.com/Roman-Cuisset/miccamwatch/releases/download/v0.22.1/miccamwatch-hybrid-windows-x86_64.msi)
+Download the [v0.22.2 MSI](https://github.com/Roman-Cuisset/miccamwatch/releases/download/v0.22.2/miccamwatch-hybrid-windows-x86_64.msi)
 for a per-user installation, PATH registration, and a Start Menu entry.
-To apply the fix to v0.22.0, run the MSI over the existing MSI installation.
-The shared in-app release check still reports v0.22.0. For a portable
-installation, use the [complete v0.22.1 ZIP](https://github.com/Roman-Cuisset/miccamwatch/releases/download/v0.22.1/miccamwatch-hybrid-windows-x86_64.zip)
+To upgrade an existing MSI installation, run the new MSI. For a portable
+installation, use the [complete v0.22.2 ZIP](https://github.com/Roman-Cuisset/miccamwatch/releases/download/v0.22.2/miccamwatch-hybrid-windows-x86_64.zip)
 in a separate user-owned folder.
 Open a new terminal after MSI installation; for a ZIP, run the executables from
 its extracted directory or configure PATH explicitly.
@@ -110,11 +108,11 @@ consultation. Autostart launches the tray in the background.
 
 ### macOS — native application
 
-Choose the matching v0.22.0 DMG.
-[Apple Silicon](https://github.com/Roman-Cuisset/miccamwatch/releases/download/v0.22.0/miccamwatch-hybrid-macos-aarch64.dmg) ·
-[Intel](https://github.com/Roman-Cuisset/miccamwatch/releases/download/v0.22.0/miccamwatch-hybrid-macos-x86_64.dmg).
+Choose the matching v0.22.2 DMG.
+[Apple Silicon](https://github.com/Roman-Cuisset/miccamwatch/releases/download/v0.22.2/miccamwatch-hybrid-macos-aarch64.dmg) ·
+[Intel](https://github.com/Roman-Cuisset/miccamwatch/releases/download/v0.22.2/miccamwatch-hybrid-macos-x86_64.dmg).
 Mount it, drag `MicCamWatch.app` to Applications, then open the copied application.
-The menu-bar icon provides access to the native consultation and controls.
+The menu-bar icon opens the Flutter consultation window and provides access to native controls.
 
 The DMG does not install the CLI on PATH or enable autostart implicitly.
 Bundles are ad-hoc sealed, **not Developer ID signed or notarized**;
@@ -124,9 +122,9 @@ Do not bypass Gatekeeper or quarantine protections.
 ### Linux — managed hybrid bundle
 
 Choose the matching archive and verify it against the release's
-[`SHA256SUMS`](https://github.com/Roman-Cuisset/miccamwatch/releases/download/v0.22.0/SHA256SUMS).
-[x64](https://github.com/Roman-Cuisset/miccamwatch/releases/download/v0.22.0/miccamwatch-hybrid-linux-x86_64.tar.gz) ·
-[ARM64](https://github.com/Roman-Cuisset/miccamwatch/releases/download/v0.22.0/miccamwatch-hybrid-linux-aarch64.tar.gz).
+[`SHA256SUMS`](https://github.com/Roman-Cuisset/miccamwatch/releases/download/v0.22.2/SHA256SUMS).
+[x64](https://github.com/Roman-Cuisset/miccamwatch/releases/download/v0.22.2/miccamwatch-hybrid-linux-x86_64.tar.gz) ·
+[ARM64](https://github.com/Roman-Cuisset/miccamwatch/releases/download/v0.22.2/miccamwatch-hybrid-linux-aarch64.tar.gz).
 
 Use the reviewed Python installer from the tagged source to install the complete
 bundle under your user account. The legacy one-line Unix installer serves the
